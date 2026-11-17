@@ -22,9 +22,14 @@ pub fn resolve_tool_book_id(
     params_book_id: Option<&str>,
     active_book_id: Option<&str>,
 ) -> Result<String, String> {
-    let resolved = params_book_id.or(active_book_id).map(str::trim).filter(|v| !v.is_empty());
+    let resolved = params_book_id
+        .or(active_book_id)
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
     let Some(book_id) = resolved else {
-        return Err(format!("{tool_name} requires bookId when there is no active book."));
+        return Err(format!(
+            "{tool_name} requires bookId when there is no active book."
+        ));
     };
     if !crate::interaction::session::is_safe_book_id(book_id) {
         return Err(format!("Invalid {tool_name}.bookId: \"{book_id}\""));
@@ -60,7 +65,10 @@ pub async fn load_chapters_from_path(
         }
         entries.sort();
         if entries.is_empty() {
-            return Err(format!("No .md or .txt files found in {}.", source_path.display()));
+            return Err(format!(
+                "No .md or .txt files found in {}.",
+                source_path.display()
+            ));
         }
         let mut chapters = Vec::new();
         for name in entries {
@@ -97,7 +105,11 @@ fn dir_file_title(name: &str) -> String {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 /// `import_chapters` 执行器：守卫 → 源装载 → 导入全链（abort：链内安全点
@@ -244,7 +256,6 @@ pub fn import_chapters_schema() -> Value {
     })
 }
 
-
 // ── 注册模块（R38b）：import_chapters 单件——生产变更面（TS
 //    PRODUCTION_MUTATION_TOOL_NAMES 九件之一，后台生产剔除）。 ──
 
@@ -252,14 +263,24 @@ crate::interaction::registry::tool_def!(
     ImportChapters,
     "import_chapters",
     MutationKind::ProductionMutation,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[import_chapters_schema()], "import_chapters") },
     schema_parameters(&[import_chapters_schema()], "import_chapters"),
     ctx.import_deps.is_some(),
-    { {
-        let deps = ctx.import_deps.as_ref().expect("available 门控");
-        tool_import_chapters(deps.runtime, ctx.root, deps.active_book_id, args, deps.abort.as_ref()).await
-    } }
+    {
+        {
+            let deps = ctx.import_deps.as_ref().expect("available 门控");
+            tool_import_chapters(
+                deps.runtime,
+                ctx.root,
+                deps.active_book_id,
+                args,
+                deps.abort.as_ref(),
+            )
+            .await
+        }
+    }
 );
 
 /// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
@@ -277,14 +298,29 @@ mod tests {
             resolve_tool_book_id("import_chapters", Some(" b1 "), Some("b1")).unwrap(),
             "b1"
         );
-        assert_eq!(resolve_tool_book_id("import_chapters", None, Some("b1")).unwrap(), "b1");
-        assert_eq!(resolve_tool_book_id("import_chapters", Some("b1"), None).unwrap(), "b1");
+        assert_eq!(
+            resolve_tool_book_id("import_chapters", None, Some("b1")).unwrap(),
+            "b1"
+        );
+        assert_eq!(
+            resolve_tool_book_id("import_chapters", Some("b1"), None).unwrap(),
+            "b1"
+        );
         let missing = resolve_tool_book_id("import_chapters", None, None).unwrap_err();
-        assert_eq!(missing, "import_chapters requires bookId when there is no active book.");
+        assert_eq!(
+            missing,
+            "import_chapters requires bookId when there is no active book."
+        );
         let mismatch = resolve_tool_book_id("import_chapters", Some("b2"), Some("b1")).unwrap_err();
-        assert_eq!(mismatch, "import_chapters.bookId must match the active book.");
+        assert_eq!(
+            mismatch,
+            "import_chapters.bookId must match the active book."
+        );
         let unsafe_id = resolve_tool_book_id("import_chapters", Some("../evil"), None).unwrap_err();
-        assert!(unsafe_id.contains("Invalid import_chapters.bookId"), "{unsafe_id}");
+        assert!(
+            unsafe_id.contains("Invalid import_chapters.bookId"),
+            "{unsafe_id}"
+        );
     }
 
     #[test]
@@ -314,18 +350,34 @@ mod tests {
         let empty = root.join("empty_src");
         std::fs::create_dir_all(&empty).unwrap();
         let error = load_chapters_from_path(&empty, None).await.unwrap_err();
-        assert!(error.starts_with("No .md or .txt files found in"), "{error}");
+        assert!(
+            error.starts_with("No .md or .txt files found in"),
+            "{error}"
+        );
         // 单文件：默认切分 + 无章错误。
-        std::fs::write(root.join("novel.txt"), "# 第一章 风起\n\n正文一。\n\n# 第二章 云涌\n\n正文二。").unwrap();
-        let single = load_chapters_from_path(&root.join("novel.txt"), None).await.unwrap();
+        std::fs::write(
+            root.join("novel.txt"),
+            "# 第一章 风起\n\n正文一。\n\n# 第二章 云涌\n\n正文二。",
+        )
+        .unwrap();
+        let single = load_chapters_from_path(&root.join("novel.txt"), None)
+            .await
+            .unwrap();
         assert_eq!(single.len(), 2);
         assert_eq!(single[0].title, "风起");
         std::fs::write(root.join("plain.txt"), "没有任何章节标题的散文。").unwrap();
-        let no_chapters = load_chapters_from_path(&root.join("plain.txt"), None).await.unwrap_err();
-        assert!(no_chapters.contains("No chapters found in"), "{no_chapters}");
+        let no_chapters = load_chapters_from_path(&root.join("plain.txt"), None)
+            .await
+            .unwrap_err();
+        assert!(
+            no_chapters.contains("No chapters found in"),
+            "{no_chapters}"
+        );
         assert!(no_chapters.contains("第X章/第X回"), "{no_chapters}");
         // 缺失文件。
-        let missing = load_chapters_from_path(&root.join("ghost.txt"), None).await.unwrap_err();
+        let missing = load_chapters_from_path(&root.join("ghost.txt"), None)
+            .await
+            .unwrap_err();
         assert!(missing.contains("read failed"), "{missing}");
     }
 }

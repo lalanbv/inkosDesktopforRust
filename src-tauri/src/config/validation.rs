@@ -1,7 +1,7 @@
 //! 配置验证逻辑
 
-use anyhow::{bail, Result};
 use crate::config::types::{AppConfig, VersionPolicy};
+use anyhow::{bail, Result};
 use semver::{Version, VersionReq};
 
 impl AppConfig {
@@ -44,7 +44,10 @@ impl AppConfig {
         if let Some(ref proxy) = self.network.proxy {
             // 简单 URL 格式验证（http://host:port 或 https://host:port）
             if !proxy.starts_with("http://") && !proxy.starts_with("https://") {
-                bail!("无效的代理 URL: {}（必须以 http:// 或 https:// 开头）", proxy);
+                bail!(
+                    "无效的代理 URL: {}（必须以 http:// 或 https:// 开头）",
+                    proxy
+                );
             }
         }
         Ok(())
@@ -78,9 +81,8 @@ impl AppConfig {
     fn validate_version_policy(&self) -> Result<()> {
         match &self.engine.version_policy {
             VersionPolicy::Fixed(v) => {
-                Version::parse(v).map_err(|_| {
-                    anyhow::anyhow!("无效的锁定版本: {}（需 semver，如 0.4.0）", v)
-                })?;
+                Version::parse(v)
+                    .map_err(|_| anyhow::anyhow!("无效的锁定版本: {}（需 semver，如 0.4.0）", v))?;
             }
             VersionPolicy::Range(r) => {
                 VersionReq::parse(r).map_err(|_| {
@@ -114,9 +116,9 @@ impl AppConfig {
                 // M3: 公钥必须是合法 Ed25519 点（挡全零等无效值，避免首 fetch 时含糊失败）
                 let pk_bytes = crate::updater::sig::decode_hex(pubkey)
                     .map_err(|e| anyhow::anyhow!("注册表 pubkey 解码失败: {e}"))?;
-                let arr: [u8; 32] = pk_bytes.try_into().map_err(|_| {
-                    anyhow::anyhow!("注册表 pubkey 长度异常（期望 32 字节）")
-                })?;
+                let arr: [u8; 32] = pk_bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("注册表 pubkey 长度异常（期望 32 字节）"))?;
                 ed25519_dalek::VerifyingKey::from_bytes(&arr)
                     .map_err(|e| anyhow::anyhow!("注册表 pubkey 非合法 Ed25519 点: {e}"))?;
                 Ok(())
@@ -128,7 +130,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::config::types::*;
 
     #[test]
@@ -179,7 +181,8 @@ mod tests {
     fn test_validate_zero_numerics_rejected() {
         let mut cfg = AppConfig::default();
         cfg.logging.retention_days = 0;
-        assert!(cfg.validate()
+        assert!(cfg
+            .validate()
             .unwrap_err()
             .to_string()
             .contains("日志保留天数"));
@@ -197,7 +200,8 @@ mod tests {
     fn test_validate_invalid_version_policy_rejected() {
         let mut cfg = AppConfig::default();
         cfg.engine.version_policy = VersionPolicy::Fixed("not-a-version".to_string());
-        assert!(cfg.validate()
+        assert!(cfg
+            .validate()
             .unwrap_err()
             .to_string()
             .contains("无效的锁定版本"));

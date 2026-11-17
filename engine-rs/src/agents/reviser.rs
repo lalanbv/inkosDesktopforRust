@@ -26,13 +26,9 @@ use crate::agents::rules_reader::{read_book_language, read_book_rules, read_genr
 use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::models::book_rules::BookRules;
 use crate::models::genre_profile::GenreProfile;
-use crate::models::input_governance::{
-    ChapterIntent, ChapterMemo, ContextPackage, RuleStack,
-};
+use crate::models::input_governance::{ChapterIntent, ChapterMemo, ContextPackage, RuleStack};
 use crate::models::length_governance::LengthSpec;
-use crate::prompts::prompt_pack::{
-    append_prompt_pack_guidance, LoadPromptPackPromptInput,
-};
+use crate::prompts::prompt_pack::{append_prompt_pack_guidance, LoadPromptPackPromptInput};
 use crate::state::store::StateStore;
 use crate::utils::context_filter::filter_summaries;
 use crate::utils::governed_context::build_governed_memory_evidence_blocks;
@@ -311,7 +307,11 @@ pub fn parse_reviser_output(
     let make_result = |revised_content: String, applied: bool| ReviseOutput {
         // TS revisedContent.length：UTF-16 码元数。
         word_count: utf16_len(&revised_content) as u64,
-        fixed_issues: if applied { fixed_issues.clone() } else { Vec::new() },
+        fixed_issues: if applied {
+            fixed_issues.clone()
+        } else {
+            Vec::new()
+        },
         revised_content,
         token_usage: None,
     };
@@ -374,7 +374,11 @@ pub fn parse_reviser_output(
     let revised = extract_tag(content, "REVISED_CONTENT");
     let applied = !revised.is_empty();
     make_result(
-        if applied { revised } else { original_chapter.to_string() },
+        if applied {
+            revised
+        } else {
+            original_chapter.to_string()
+        },
         applied,
     )
 }
@@ -399,7 +403,18 @@ pub async fn revise_chapter(
     let chapter_summaries_path = story.join("chapter_summaries.md");
     let parent_canon_path = story.join("parent_canon.md");
     let fanfic_canon_path = story.join("fanfic_canon.md");
-    let (current_state, ledger, hooks, style_guide_raw, volume_outline, story_bible, character_matrix, chapter_summaries, parent_canon, fanfic_canon) = tokio::join!(
+    let (
+        current_state,
+        ledger,
+        hooks,
+        style_guide_raw,
+        volume_outline,
+        story_bible,
+        character_matrix,
+        chapter_summaries,
+        parent_canon,
+        fanfic_canon,
+    ) = tokio::join!(
         // Phase 5 整合：current_state.md 仍是架构师占位时从 roles + 种子 hook 推导。
         read_current_state_with_fallback(book_dir, MISSING_FILE),
         read_file_safe(&particle_ledger_path),
@@ -438,7 +453,11 @@ pub async fn revise_chapter(
     };
 
     let is_english = book_language.as_deref().unwrap_or(gp.language.as_str()) == "en";
-    let resolved_language = if is_english { WritingLanguage::En } else { WritingLanguage::Zh };
+    let resolved_language = if is_english {
+        WritingLanguage::En
+    } else {
+        WritingLanguage::Zh
+    };
 
     let issue_list = if mode == ReviseMode::Auto {
         build_tiered_issue_list(issues, is_english)
@@ -505,16 +524,22 @@ pub async fn revise_chapter(
         && options.context_package.is_some()
         && options.rule_stack.is_some();
 
-    let governed_package = if governed_mode { options.context_package } else { None };
+    let governed_package = if governed_mode {
+        options.context_package
+    } else {
+        None
+    };
     let hooks_working_set = if let Some(package) = governed_package {
-        build_governed_hook_working_set(&crate::utils::governed_working_set::GovernedHookWorkingSetInput {
-            hooks_markdown: &hooks,
-            context_package: package,
-            chapter_intent: options.chapter_intent,
-            chapter_number,
-            language: resolved_language,
-            keep_recent: None,
-        })
+        build_governed_hook_working_set(
+            &crate::utils::governed_working_set::GovernedHookWorkingSetInput {
+                hooks_markdown: &hooks,
+                context_package: package,
+                chapter_intent: options.chapter_intent,
+                chapter_number,
+                language: resolved_language,
+                keep_recent: None,
+            },
+        )
     } else {
         hooks.clone()
     };
@@ -646,7 +671,7 @@ pub async fn revise_chapter(
     // 字数护栏仅 legacy——auto 模式交给 normalize。
     let length_guidance_block = if mode != ReviseMode::Auto {
         if let Some(spec) = options.length_spec {
-        format!(
+            format!(
             "\n## 字数护栏\n目标字数：{}\n允许区间：{}-{}\n极限区间：{}-{}\n如果修正后超出允许区间，请优先压缩冗余解释、重复动作和弱信息句，不得新增支线或删掉核心事实。\n",
             spec.target, spec.soft_min, spec.soft_max, spec.hard_min, spec.hard_max
         )
@@ -674,8 +699,18 @@ pub async fn revise_chapter(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.3,
         )
@@ -691,9 +726,10 @@ pub async fn revise_chapter(
     );
     let merged_output = output;
     let word_count = match options.length_spec {
-        Some(spec) => {
-            u64::from(count_chapter_length(&merged_output.revised_content, spec.counting_mode))
-        }
+        Some(spec) => u64::from(count_chapter_length(
+            &merged_output.revised_content,
+            spec.counting_mode,
+        )),
         None => merged_output.word_count,
     };
     Ok(ReviseOutput {
@@ -754,7 +790,11 @@ pub fn build_reduced_control_block(
     };
     // memo 叙事块优先；回退 legacy intent markdown。
     let narrative_block = if let Some(memo) = memo {
-        render_memo_as_narrative_block(memo, intent.and_then(|i| i.arc_context.as_deref()), WritingLanguage::Zh)
+        render_memo_as_narrative_block(
+            memo,
+            intent.and_then(|i| i.arc_context.as_deref()),
+            WritingLanguage::Zh,
+        )
     } else if let Some(chapter_intent) = chapter_intent {
         build_narrative_intent_brief(chapter_intent, WritingLanguage::Zh)
     } else {
@@ -958,7 +998,12 @@ fn _unused(_p: PathBuf) {}
 mod tests {
     use super::*;
 
-    fn issue(severity: AuditSeverity, category: &str, description: &str, scope: Option<RepairScope>) -> AuditIssue {
+    fn issue(
+        severity: AuditSeverity,
+        category: &str,
+        description: &str,
+        scope: Option<RepairScope>,
+    ) -> AuditIssue {
         AuditIssue {
             severity,
             category: category.to_string(),
@@ -989,7 +1034,12 @@ mod tests {
         assert_eq!(resolve_auto_output_mode(&[]), AllowFull);
 
         // repairScope 优先：structural → rewrite-only。
-        let scoped = vec![issue(AuditSeverity::Critical, "X", "d", Some(RepairScope::Structural))];
+        let scoped = vec![issue(
+            AuditSeverity::Critical,
+            "X",
+            "d",
+            Some(RepairScope::Structural),
+        )];
         assert_eq!(resolve_auto_output_mode(&scoped), RewriteOnly);
 
         // 全部 local（scoped 占满 blocking）→ patch-only。
@@ -1000,11 +1050,21 @@ mod tests {
         assert_eq!(resolve_auto_output_mode(&all_local), PatchOnly);
 
         // 无 scope：正则分类。结构类（人设）→ rewrite-only。
-        let structural = vec![issue(AuditSeverity::Critical, "Character Fidelity", "崩", None)];
+        let structural = vec![issue(
+            AuditSeverity::Critical,
+            "Character Fidelity",
+            "崩",
+            None,
+        )];
         assert_eq!(resolve_auto_output_mode(&structural), RewriteOnly);
 
         // 全局部类 → patch-only。
-        let local = vec![issue(AuditSeverity::Warning, "Fatigue word", "高疲劳词", None)];
+        let local = vec![issue(
+            AuditSeverity::Warning,
+            "Fatigue word",
+            "高疲劳词",
+            None,
+        )];
         assert_eq!(resolve_auto_output_mode(&local), PatchOnly);
 
         // 只有 info → patch-only。
@@ -1019,8 +1079,17 @@ mod tests {
     #[test]
     fn parse_output_extracts_tags_with_lookahead_equivalent() {
         let content = "=== FIXED_ISSUES ===\n修正A\n修正B\n\n=== REVISED_CONTENT ===\n新正文内容\n\n=== UPDATED_STATE ===\n新状态\n=== UPDATED_HOOKS ===\n新伏笔池";
-        let out = parse_reviser_output(content, true, ReviseMode::Rewrite, "旧正文", AutoOutputMode::AllowFull);
-        assert_eq!(out.fixed_issues, vec!["修正A".to_string(), "修正B".to_string()]);
+        let out = parse_reviser_output(
+            content,
+            true,
+            ReviseMode::Rewrite,
+            "旧正文",
+            AutoOutputMode::AllowFull,
+        );
+        assert_eq!(
+            out.fixed_issues,
+            vec!["修正A".to_string(), "修正B".to_string()]
+        );
         assert_eq!(out.revised_content, "新正文内容");
         assert_eq!(out.word_count, 5); // 「新正文内容」5 个 UTF-16 码元
         assert!(out.fixed_issues.len() == 2);
@@ -1028,7 +1097,13 @@ mod tests {
 
     #[test]
     fn parse_output_legacy_falls_back_to_original() {
-        let out = parse_reviser_output("没有任何标记", false, ReviseMode::Polish, "原章", AutoOutputMode::AllowFull);
+        let out = parse_reviser_output(
+            "没有任何标记",
+            false,
+            ReviseMode::Polish,
+            "原章",
+            AutoOutputMode::AllowFull,
+        );
         assert_eq!(out.revised_content, "原章");
         assert!(out.fixed_issues.is_empty());
     }
@@ -1037,7 +1112,13 @@ mod tests {
     fn parse_output_auto_rewrite_only_rejects_patches() {
         // rewrite-only 且只有 PATCHES → 原样返回（不回退补丁）。
         let content = "=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n新句\n--- END PATCH ---";
-        let out = parse_reviser_output(content, false, ReviseMode::Auto, "含原句的正文", AutoOutputMode::RewriteOnly);
+        let out = parse_reviser_output(
+            content,
+            false,
+            ReviseMode::Auto,
+            "含原句的正文",
+            AutoOutputMode::RewriteOnly,
+        );
         assert_eq!(out.revised_content, "含原句的正文");
         assert!(out.fixed_issues.is_empty());
     }
@@ -1045,7 +1126,13 @@ mod tests {
     #[test]
     fn parse_output_auto_patch_only_applies_patches() {
         let content = "=== FIXED_ISSUES ===\n修了原句\n\n=== PATCHES ===\n--- PATCH 1 ---\nTARGET_TEXT:\n原句\nREPLACEMENT_TEXT:\n替换句\n--- END PATCH ---";
-        let out = parse_reviser_output(content, false, ReviseMode::Auto, "开头。原句。结尾。", AutoOutputMode::PatchOnly);
+        let out = parse_reviser_output(
+            content,
+            false,
+            ReviseMode::Auto,
+            "开头。原句。结尾。",
+            AutoOutputMode::PatchOnly,
+        );
         assert_eq!(out.revised_content, "开头。替换句。结尾。");
         assert_eq!(out.fixed_issues, vec!["修了原句".to_string()]);
     }
@@ -1058,12 +1145,28 @@ mod tests {
             numerical_system: true,
             ..Default::default()
         };
-        let zh = build_auto_system_prompt("", &gp, "\n\n主角人设锁定：林动。", "\n3. 数值规则", WritingLanguage::Zh, None, AutoOutputMode::RewriteOnly);
+        let zh = build_auto_system_prompt(
+            "",
+            &gp,
+            "\n\n主角人设锁定：林动。",
+            "\n3. 数值规则",
+            WritingLanguage::Zh,
+            None,
+            AutoOutputMode::RewriteOnly,
+        );
         assert!(zh.contains("你是一位专业的都市网络小说修稿编辑"));
         assert!(zh.contains("主角人设锁定：林动。"));
         assert!(zh.contains("分流指令"));
 
-        let en = build_auto_system_prompt("【LANGUAGE OVERRIDE】", &gp, "", "", WritingLanguage::En, None, AutoOutputMode::PatchOnly);
+        let en = build_auto_system_prompt(
+            "【LANGUAGE OVERRIDE】",
+            &gp,
+            "",
+            "",
+            WritingLanguage::En,
+            None,
+            AutoOutputMode::PatchOnly,
+        );
         assert!(en.starts_with("【LANGUAGE OVERRIDE】You are a professional 都市"));
         assert!(en.contains("ROUTING: The reviewer's blocking issues are local"));
     }
@@ -1093,12 +1196,15 @@ mod tests {
                 rank: None,
             }],
         };
-        let rule_stack = crate::utils::context_assembly::build_governed_rule_stack(
-            &["禁止降智".into()],
-            &[],
-            3,
+        let rule_stack =
+            crate::utils::context_assembly::build_governed_rule_stack(&["禁止降智".into()], &[], 3);
+        let out = build_reduced_control_block(
+            None,
+            None,
+            Some("# Chapter Intent\n## Goal\n目标"),
+            &package,
+            &rule_stack,
         );
-        let out = build_reduced_control_block(None, None, Some("# Chapter Intent\n## Goal\n目标"), &package, &rule_stack);
         assert!(out.contains("## 本章控制输入（由 Planner/Composer 编译）"));
         assert!(out.contains("### 已选上下文\n"));
         assert!(out.contains("- 硬护栏："));

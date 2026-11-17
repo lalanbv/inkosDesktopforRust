@@ -8,9 +8,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::utils::language::WritingLanguage;
+use std::sync::OnceLock;
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::sync::OnceLock;
 
 /// 拆分出的单个章节。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,7 +148,15 @@ pub fn read_chapter_heading(line: &str) -> Option<(u32, String, WritingLanguage)
         .or_else(|| captures.get(5))
         .map(|text| text.as_str().trim().to_string())
         .unwrap_or_default();
-    Some((number, title, if is_zh { WritingLanguage::Zh } else { WritingLanguage::En }))
+    Some((
+        number,
+        title,
+        if is_zh {
+            WritingLanguage::Zh
+        } else {
+            WritingLanguage::En
+        },
+    ))
 }
 
 /// TS 中文序数解析（零〇○Ｏ０一二三四五六七八九十百千万 + 十/百/千/万 单位制；

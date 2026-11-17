@@ -15,28 +15,40 @@ pub async fn write_translation_export(
     let manifest = load_translation_manifest(project_root, project_id)
         .await
         .map_err(|e| match e {
-            LoadManifestError::NotFound => format!("translation project not found for {project_id}"),
+            LoadManifestError::NotFound => {
+                format!("translation project not found for {project_id}")
+            }
             LoadManifestError::BadPayload(message) => message,
         })?;
     let output_path: PathBuf = match output_path {
         Some(path) => project_root.join(path),
         None => translation_project_dir(project_root, project_id)
             .join("exports")
-            .join(format!("{}.{}", safe_filename(&manifest.title), format_str(format))),
+            .join(format!(
+                "{}.{}",
+                safe_filename(&manifest.title),
+                format_str(format)
+            )),
     };
     if let Some(parent) = output_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     let chapters = load_chapters(project_root, &manifest).await?;
     match format {
         TranslationExportFormat::Epub => {
             let bytes = build_epub(&manifest, &chapters)?;
-            crate::utils::atomic_file_set::write_file_atomic_bytes(&output_path, &bytes).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic_bytes(&output_path, &bytes)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         format => {
             let rendered = render_text_export(&manifest, &chapters, format);
-            crate::utils::atomic_file_set::write_file_atomic(&output_path, &rendered).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(&output_path, &rendered)
+                .await
+                .map_err(|e| e.to_string())?;
         }
     }
 
@@ -44,7 +56,11 @@ pub async fn write_translation_export(
         output_path: to_posix_path(project_root, &output_path),
         format,
         chapters_exported: manifest.chapters.len(),
-        export_source_paths: manifest.chapters.iter().map(|chapter| chapter.translated_path.clone()).collect(),
+        export_source_paths: manifest
+            .chapters
+            .iter()
+            .map(|chapter| chapter.translated_path.clone())
+            .collect(),
     })
 }
 
@@ -78,11 +94,17 @@ fn render_text_export(
     if is_md {
         lines.push(format!("# {}", manifest.title));
         lines.push(String::new());
-        lines.push(format!("> {} -> {}", manifest.source_language, manifest.target_language));
+        lines.push(format!(
+            "> {} -> {}",
+            manifest.source_language, manifest.target_language
+        ));
         lines.push(String::new());
     } else {
         lines.push(manifest.title.clone());
-        lines.push(format!("{} -> {}", manifest.source_language, manifest.target_language));
+        lines.push(format!(
+            "{} -> {}",
+            manifest.source_language, manifest.target_language
+        ));
         lines.push(String::new());
     }
     for chapter in chapters {
@@ -188,7 +210,11 @@ fn build_epub(
     // TS `<%= (new Date()).toISOString().split(".")[0]+"Z" %>` / `<%= date %>`：
     // modified=秒级 ISO，date=毫秒级 ISO（均运行时生成）。
     let now_millis = crate::utils::utc_time::utc_now_iso();
-    let modified = now_millis.split('.').next().map(|s| format!("{s}Z")).unwrap_or_default();
+    let modified = now_millis
+        .split('.')
+        .next()
+        .map(|s| format!("{s}Z"))
+        .unwrap_or_default();
 
     // 章节文件名（TS `content.filename` = `${index}_.xhtml`）。
     let mut xhtml_files: Vec<(String, String)> = Vec::new();
@@ -286,11 +312,14 @@ fn build_epub(
     {
         let mut writer = zip::ZipWriter::new(&mut buffer);
         // 846 号：zip 9 的 FileOptions 多一个生命周期参数——改用跨版本稳定的 SimpleFileOptions 别名。
-        let stored: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        let deflated: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-        let mut push = |name: &str, options: zip::write::SimpleFileOptions, body: &[u8]| -> Result<(), String> {
+        let stored: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        let deflated: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        let mut push = |name: &str,
+                        options: zip::write::SimpleFileOptions,
+                        body: &[u8]|
+         -> Result<(), String> {
             writer
                 .start_file(name, options)
                 .map_err(|e| e.to_string())?;
@@ -349,14 +378,20 @@ mod golden_tests {
 
     /// 时间戳/uuid/年份非确定面归一（TS modified=秒级 ISO；date=毫秒级 ISO；uuid v4）。
     fn normalize(text: &str) -> String {
-        let uuid_re = regex::Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+        let uuid_re =
+            regex::Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+                .unwrap();
         let millis_re = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z").unwrap();
         let secs_re = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z").unwrap();
         let year_re = regex::Regex::new(r"Copyright &#x00A9; \d{4} by").unwrap();
         let step1 = uuid_re.replace_all(text, "UUID").to_string();
-        let step2 = millis_re.replace_all(&step1, "TIMESTAMP_MILLIS").to_string();
+        let step2 = millis_re
+            .replace_all(&step1, "TIMESTAMP_MILLIS")
+            .to_string();
         let step3 = secs_re.replace_all(&step2, "TIMESTAMP_SECS").to_string();
-        year_re.replace_all(&step3, "Copyright &#x00A9; YEAR by").to_string()
+        year_re
+            .replace_all(&step3, "Copyright &#x00A9; YEAR by")
+            .to_string()
     }
 
     /// golden 结构对比：容器逐字节一致、OPF 骨架行与 TS 对齐、NCX navPoint 形、
@@ -411,8 +446,18 @@ mod golden_tests {
                 source_language: "en".into(),
                 target_language: "zh".into(),
                 segments: vec![
-                    TranslationSegment { index: 1, source: "a".into(), target: Some("林动握紧了拳。".into()), notes: None },
-                    TranslationSegment { index: 2, source: "b".into(), target: Some("灵气涌动。".into()), notes: None },
+                    TranslationSegment {
+                        index: 1,
+                        source: "a".into(),
+                        target: Some("林动握紧了拳。".into()),
+                        notes: None,
+                    },
+                    TranslationSegment {
+                        index: 2,
+                        source: "b".into(),
+                        target: Some("灵气涌动。".into()),
+                        notes: None,
+                    },
                 ],
             },
             TranslationChapterFile {
@@ -420,7 +465,12 @@ mod golden_tests {
                 title: "第二章 云涌".into(),
                 source_language: "en".into(),
                 target_language: "zh".into(),
-                segments: vec![TranslationSegment { index: 1, source: "c".into(), target: Some("天南大陆。".into()), notes: None }],
+                segments: vec![TranslationSegment {
+                    index: 1,
+                    source: "c".into(),
+                    target: Some("天南大陆。".into()),
+                    notes: None,
+                }],
             },
         ];
         let rust = build_epub(&manifest, &chapters).unwrap();
@@ -429,12 +479,23 @@ mod golden_tests {
         let rust_unpacked = unpack(&rust);
         // 文件名集：双章输入 → 两章节文件 + toc.xhtml（与 TS 参考 3 个 xhtml 同数）。
         assert_eq!(
-            rust_unpacked.names.iter().filter(|n| n.ends_with(".xhtml")).count(),
+            rust_unpacked
+                .names
+                .iter()
+                .filter(|n| n.ends_with(".xhtml"))
+                .count(),
             3,
             "双章输入 → 两章节文件 + toc.xhtml：{:?}",
             rust_unpacked.names
         );
-        for name in ["mimetype", "META-INF/container.xml", "OEBPS/style.css", "OEBPS/content.opf", "OEBPS/toc.ncx", "OEBPS/toc.xhtml"] {
+        for name in [
+            "mimetype",
+            "META-INF/container.xml",
+            "OEBPS/style.css",
+            "OEBPS/content.opf",
+            "OEBPS/toc.ncx",
+            "OEBPS/toc.xhtml",
+        ] {
             assert!(rust_unpacked.files.contains_key(name), "{name} 在场");
             assert!(ts.files.contains_key(name), "TS 参考 {name} 在场");
         }
@@ -450,9 +511,14 @@ mod golden_tests {
             String::from_utf8(ts.files["OEBPS/style.css"].clone()).unwrap()
         );
         // OPF：归一化（uuid/时间戳/年份）后骨架行与 TS 对齐；章节条目 1 条（单章输入）。
-        let rust_opf = normalize(&String::from_utf8(rust_unpacked.files["OEBPS/content.opf"].clone()).unwrap());
+        let rust_opf = normalize(
+            &String::from_utf8(rust_unpacked.files["OEBPS/content.opf"].clone()).unwrap(),
+        );
         let ts_opf = normalize(&String::from_utf8(ts.files["OEBPS/content.opf"].clone()).unwrap());
-        assert!(rust_opf.contains("version=\"3.0\""), "EPUB 3 OPF：{rust_opf}");
+        assert!(
+            rust_opf.contains("version=\"3.0\""),
+            "EPUB 3 OPF：{rust_opf}"
+        );
         assert!(rust_opf.contains("unique-identifier=\"BookId\""));
         assert!(rust_opf.contains("properties=\"nav\""));
         assert!(rust_opf.contains("id=\"content_0_item_0\""));
@@ -469,10 +535,15 @@ mod golden_tests {
                 .filter(|line| !line.is_empty())
                 .collect()
         };
-        assert_eq!(skeleton(&rust_opf), skeleton(&ts_opf), "OPF 骨架行与 TS 对齐");
+        assert_eq!(
+            skeleton(&rust_opf),
+            skeleton(&ts_opf),
+            "OPF 骨架行与 TS 对齐"
+        );
 
         // NCX：归一化后 navPoint 序（目录 + 章节）与 head 五 meta/docAuthor 形一致。
-        let rust_ncx = normalize(&String::from_utf8(rust_unpacked.files["OEBPS/toc.ncx"].clone()).unwrap());
+        let rust_ncx =
+            normalize(&String::from_utf8(rust_unpacked.files["OEBPS/toc.ncx"].clone()).unwrap());
         let ts_ncx = normalize(&String::from_utf8(ts.files["OEBPS/toc.ncx"].clone()).unwrap());
         assert!(rust_ncx.contains("dtb:uid"), "ncx head 五 meta");
         assert!(rust_ncx.contains("dtb:generator\" content=\"epub-gen\""));
@@ -481,16 +552,32 @@ mod golden_tests {
         assert!(rust_ncx.contains("<docAuthor>"), "docAuthor anonymous 面");
         let ts_nav_count = ts_ncx.matches("<navPoint").count();
         let rust_nav_count = rust_ncx.matches("<navPoint").count();
-        assert_eq!(rust_nav_count, ts_nav_count, "双章输入 navPoint 数与 TS 参考一致（目录+2）");
+        assert_eq!(
+            rust_nav_count, ts_nav_count,
+            "双章输入 navPoint 数与 TS 参考一致（目录+2）"
+        );
 
         // 章节 xhtml：头模板逐字节（title 内容不同）+ 段落 CJK 数字引用 + h1 原样。
-        let rust_chapter = String::from_utf8(rust_unpacked.files["OEBPS/0_.xhtml"].clone()).unwrap();
+        let rust_chapter =
+            String::from_utf8(rust_unpacked.files["OEBPS/0_.xhtml"].clone()).unwrap();
         let ts_chapter = String::from_utf8(ts.files["OEBPS/0_.xhtml"].clone()).unwrap();
         let chapter_head = |xhtml: &str| -> String {
-            xhtml.split("<body>").next().unwrap().to_string().replace("第一章 风起", "TITLE")
+            xhtml
+                .split("<body>")
+                .next()
+                .unwrap()
+                .to_string()
+                .replace("第一章 风起", "TITLE")
         };
-        assert_eq!(chapter_head(&rust_chapter), chapter_head(&ts_chapter), "章节头模板逐字节");
-        assert!(rust_chapter.contains("&#x6797;"), "段落 CJK 数字引用：{rust_chapter}");
+        assert_eq!(
+            chapter_head(&rust_chapter),
+            chapter_head(&ts_chapter),
+            "章节头模板逐字节"
+        );
+        assert!(
+            rust_chapter.contains("&#x6797;"),
+            "段落 CJK 数字引用：{rust_chapter}"
+        );
         assert!(rust_chapter.contains("<h1>第一章 风起</h1>"), "h1 保留原样");
     }
 }

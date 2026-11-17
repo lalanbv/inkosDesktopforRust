@@ -18,10 +18,7 @@
 //! 不读网络/环境，只处理命令行参数 → 适合 CI 沙箱（同 sign-bundle）。
 
 use anyhow::{bail, Context, Result};
-use inkos_desktop::plugin::{
-    manifest::PluginManifest,
-    registry::RegistryEntry,
-};
+use inkos_desktop::plugin::{manifest::PluginManifest, registry::RegistryEntry};
 use inkos_desktop::updater::sig::{decode_hex, encode_hex, sign, PUBKEY_LEN};
 use sha2::{Digest, Sha256};
 use std::{env, fs, process::ExitCode};
@@ -57,11 +54,14 @@ fn run() -> Result<String> {
     let min_host_version = args.get(5).cloned().unwrap_or_else(|| "0.0.0".to_string());
 
     if !download_url.starts_with("https://") {
-        bail!("download_url 必须为 https://（消费侧条目校验强制）: {}", download_url);
+        bail!(
+            "download_url 必须为 https://（消费侧条目校验强制）: {}",
+            download_url
+        );
     }
 
-    let bundle = fs::read(bundle_path)
-        .with_context(|| format!("读取 bundle 失败: {}", bundle_path))?;
+    let bundle =
+        fs::read(bundle_path).with_context(|| format!("读取 bundle 失败: {}", bundle_path))?;
     let manifest_str = fs::read_to_string(manifest_path)
         .with_context(|| format!("读取 plugin.toml 失败: {}", manifest_path))?;
     let manifest: PluginManifest =
@@ -79,7 +79,13 @@ fn run() -> Result<String> {
     key_arr.copy_from_slice(&key_bytes);
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&key_arr);
 
-    let entry = build_entry(&bundle, &manifest, &signing_key, download_url, &min_host_version)?;
+    let entry = build_entry(
+        &bundle,
+        &manifest,
+        &signing_key,
+        download_url,
+        &min_host_version,
+    )?;
     let entry_toml = toml::to_string(&entry).context("序列化注册表条目失败")?;
     let pubkey = signing_key.verifying_key();
     Ok(format!(

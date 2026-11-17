@@ -384,7 +384,11 @@ pub fn build_planner_user_message(input: &PlannerUserMessageInput<'_>) -> String
         build_chapter_context_block(input.chapter_context.unwrap_or(""), language);
 
     let chapter_number = input.chapter_number.to_string();
-    let golden_text = if input.is_golden_opening { yes_text } else { no_text };
+    let golden_text = if input.is_golden_opening {
+        yes_text
+    } else {
+        no_text
+    };
     let budget = &input.length_budget;
     let (length_target, length_soft_min, length_soft_max, length_hard_min, length_hard_max) = (
         budget.target.to_string(),
@@ -460,10 +464,7 @@ fn build_chapter_context_block(chapter_context: &str, language: WritingLanguage)
 
 /// 黄金三章散文指引（chapterNumber ≤ 3 条件追加；无新 schema、无运行时分支；
 /// 连贯段落而非清单）。
-pub fn build_golden_opening_guidance(
-    chapter_number: u32,
-    language: WritingLanguage,
-) -> String {
+pub fn build_golden_opening_guidance(chapter_number: u32, language: WritingLanguage) -> String {
     if chapter_number > 3 {
         return String::new();
     }
@@ -562,7 +563,13 @@ mod tests {
         assert!(PLANNER_MEMO_SYSTEM_PROMPT.contains("圆心法同场多视角"));
         assert!(PLANNER_MEMO_SYSTEM_PROMPT.contains("硬底线是\"揭 1 埋 1\""));
         assert!(PLANNER_MEMO_SYSTEM_PROMPT_EN.contains("Reveal 1, bury 2 (recommended)"));
-        assert_eq!(get_planner_memo_system_prompt(WritingLanguage::Zh), PLANNER_MEMO_SYSTEM_PROMPT);
-        assert_eq!(get_planner_memo_system_prompt(WritingLanguage::En), PLANNER_MEMO_SYSTEM_PROMPT_EN);
+        assert_eq!(
+            get_planner_memo_system_prompt(WritingLanguage::Zh),
+            PLANNER_MEMO_SYSTEM_PROMPT
+        );
+        assert_eq!(
+            get_planner_memo_system_prompt(WritingLanguage::En),
+            PLANNER_MEMO_SYSTEM_PROMPT_EN
+        );
     }
 }

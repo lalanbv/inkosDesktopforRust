@@ -44,7 +44,10 @@ pub fn extract_pov_from_outline(volume_outline: &str, chapter_number: u32) -> Op
     for line in &lines {
         if p1.is_match(line) || p2.is_match(line) || p3.is_match(line) {
             in_chapter_section = true;
-        } else if in_chapter_section && line.starts_with(['#', '-']) && !line.contains(&chapter_number.to_string()) {
+        } else if in_chapter_section
+            && line.starts_with(['#', '-'])
+            && !line.contains(&chapter_number.to_string())
+        {
             break;
         }
         if in_chapter_section {
@@ -97,7 +100,11 @@ pub fn filter_matrix_by_pov(character_matrix: &str, pov_character: &str) -> Stri
                 .iter()
                 .filter(|l| {
                     l.starts_with('|')
-                        && (l.contains("---") || l.contains("角色") || l.contains("Character") || l.contains("已知") || l.contains("Known"))
+                        && (l.contains("---")
+                            || l.contains("角色")
+                            || l.contains("Character")
+                            || l.contains("已知")
+                            || l.contains("Known"))
                 })
                 .collect();
             let data_lines: Vec<&&str> = lines
@@ -111,14 +118,24 @@ pub fn filter_matrix_by_pov(character_matrix: &str, pov_character: &str) -> Stri
                         && !l.contains("Known")
                 })
                 .collect();
-            let pov_rows: Vec<&&str> = data_lines.iter().copied().filter(|l| l.contains(pov_character)).collect();
+            let pov_rows: Vec<&&str> = data_lines
+                .iter()
+                .copied()
+                .filter(|l| l.contains(pov_character))
+                .collect();
             let other_char_count = data_lines.len().saturating_sub(pov_rows.len());
 
-            let section_header = lines.iter().find(|l| l.starts_with("###")).copied().unwrap_or("### 信息边界");
+            let section_header = lines
+                .iter()
+                .find(|l| l.starts_with("###"))
+                .copied()
+                .unwrap_or("### 信息边界");
             let mut result = String::new();
             result.push_str(section_header);
             result.push('\n');
-            result.push_str(&format!("（当前视角：{pov_character}，其他 {other_char_count} 个角色的信息边界已隐藏）"));
+            result.push_str(&format!(
+                "（当前视角：{pov_character}，其他 {other_char_count} 个角色的信息边界已隐藏）"
+            ));
             result.push('\n');
             for h in &header_lines {
                 result.push_str(h);
@@ -208,13 +225,19 @@ mod tests {
     #[test]
     fn extract_pov_finds_zh_declaration() {
         let outline = "第3章 觉醒\nPOV: 林动\n内容...\n第4章 离开";
-        assert_eq!(extract_pov_from_outline(outline, 3), Some("林动".to_string()));
+        assert_eq!(
+            extract_pov_from_outline(outline, 3),
+            Some("林动".to_string())
+        );
     }
 
     #[test]
     fn extract_pov_finds_en_chapter() {
         let outline = "Chapter 5 Confrontation\nPOV: Alice\n...";
-        assert_eq!(extract_pov_from_outline(outline, 5), Some("Alice".to_string()));
+        assert_eq!(
+            extract_pov_from_outline(outline, 5),
+            Some("Alice".to_string())
+        );
     }
 
     #[test]
@@ -226,7 +249,10 @@ mod tests {
 
     #[test]
     fn filter_matrix_passes_through_uncreated() {
-        assert_eq!(filter_matrix_by_pov("(文件尚未创建)", "林动"), "(文件尚未创建)");
+        assert_eq!(
+            filter_matrix_by_pov("(文件尚未创建)", "林动"),
+            "(文件尚未创建)"
+        );
         assert_eq!(filter_matrix_by_pov("matrix", ""), "matrix");
     }
 
@@ -245,7 +271,10 @@ mod tests {
 
     #[test]
     fn filter_hooks_passes_through_uncreated() {
-        assert_eq!(filter_hooks_by_pov("(文件尚未创建)", "林动", ""), "(文件尚未创建)");
+        assert_eq!(
+            filter_hooks_by_pov("(文件尚未创建)", "林动", ""),
+            "(文件尚未创建)"
+        );
     }
 
     #[test]

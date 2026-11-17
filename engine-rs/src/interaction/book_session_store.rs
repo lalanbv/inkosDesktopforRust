@@ -23,7 +23,9 @@ use crate::interaction::session_transcript::{
 
 /// `loadBookSession`：transcript derive → legacy 读取 + 就地迁移。
 pub async fn load_book_session(project_root: &Path, session_id: &str) -> Option<BookSession> {
-    if let Some(transcript_session) = derive_book_session_from_transcript(project_root, session_id).await {
+    if let Some(transcript_session) =
+        derive_book_session_from_transcript(project_root, session_id).await
+    {
         return Some(transcript_session);
     }
     let legacy_session = read_legacy_book_session(project_root, session_id).await?;
@@ -254,24 +256,34 @@ pub async fn derive_branch_points(
         return None;
     }
     let chain: Vec<&TranscriptEvent> = active_chain_events(&events);
-    let chain_seqs: std::collections::HashSet<u64> = chain.iter().map(|event| event.seq()).collect();
+    let chain_seqs: std::collections::HashSet<u64> =
+        chain.iter().map(|event| event.seq()).collect();
     let started_inputs: std::collections::HashMap<&str, &str> = events
         .iter()
         .filter_map(|event| match event {
-            TranscriptEvent::RequestStarted { request_id, input, .. } => {
-                Some((request_id.as_str(), input.as_str()))
-            }
+            TranscriptEvent::RequestStarted {
+                request_id, input, ..
+            } => Some((request_id.as_str(), input.as_str())),
             _ => None,
         })
         .collect();
     let mut points = Vec::new();
     for event in &events {
-        if let TranscriptEvent::RequestCommitted { seq, timestamp, request_id, .. } = event {
+        if let TranscriptEvent::RequestCommitted {
+            seq,
+            timestamp,
+            request_id,
+            ..
+        } = event
+        {
             points.push(SessionBranchPoint {
                 seq: *seq,
                 request_id: request_id.clone(),
                 timestamp: *timestamp,
-                preview: started_inputs.get(request_id.as_str()).map(|s| (*s).to_string()).unwrap_or_default(),
+                preview: started_inputs
+                    .get(request_id.as_str())
+                    .map(|s| (*s).to_string())
+                    .unwrap_or_default(),
                 on_active_chain: chain_seqs.contains(seq),
             });
         }
@@ -470,10 +482,17 @@ pub async fn load_project_session(project_root: &Path) -> Value {
     let obj = parsed.as_object_mut().unwrap();
     obj.entry("automationMode".to_string())
         .or_insert_with(|| json!("semi"));
-    obj.entry("messages".to_string()).or_insert_with(|| json!([]));
-    obj.entry("draftRounds".to_string()).or_insert_with(|| json!([]));
+    obj.entry("messages".to_string())
+        .or_insert_with(|| json!([]));
+    obj.entry("draftRounds".to_string())
+        .or_insert_with(|| json!([]));
     obj.entry("events".to_string()).or_insert_with(|| json!([]));
-    if !obj.get("sessionId").and_then(Value::as_str).map(|s| !s.is_empty()).unwrap_or(false) {
+    if !obj
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
         obj.insert("sessionId".to_string(), json!(format!("{}", utc_now_ms())));
     }
     if !obj
@@ -491,10 +510,7 @@ pub async fn load_project_session(project_root: &Path) -> Value {
 }
 
 /// `resolveSessionActiveBook`：activeBookId 在册 → 返回；唯一书 → 返回；否则 None。
-pub async fn resolve_session_active_book(
-    project_root: &Path,
-    session: &Value,
-) -> Option<String> {
+pub async fn resolve_session_active_book(project_root: &Path, session: &Value) -> Option<String> {
     let mut book_ids: Vec<String> = Vec::new();
     let Ok(mut entries) = tokio::fs::read_dir(project_root.join("books")).await else {
         return None;
@@ -554,7 +570,10 @@ mod tests {
                     parent_seq: None,
                     version: 1,
                     session_id: session_id.to_string(),
-                    seq: { seq += 1; seq - 1 },
+                    seq: {
+                        seq += 1;
+                        seq - 1
+                    },
                     timestamp: now,
                     request_id: request_id.to_string(),
                     session_kind: None,
@@ -564,7 +583,10 @@ mod tests {
                     parent_seq: None,
                     version: 1,
                     session_id: session_id.to_string(),
-                    seq: { seq += 1; seq - 1 },
+                    seq: {
+                        seq += 1;
+                        seq - 1
+                    },
                     timestamp: now,
                     request_id: request_id.to_string(),
                     uuid: user_uuid.clone(),
@@ -583,7 +605,10 @@ mod tests {
                     parent_seq: None,
                     version: 1,
                     session_id: session_id.to_string(),
-                    seq: { seq += 1; seq - 1 },
+                    seq: {
+                        seq += 1;
+                        seq - 1
+                    },
                     timestamp: now,
                     request_id: request_id.to_string(),
                     uuid: format!("u-{request_id}-assistant"),
@@ -649,7 +674,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = root_of(&dir);
         let path = transcript_path(&root, "s1");
-        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
         // 直接写 raw JSONL（绕过 append 助手）——模拟 R36 之前的旧文件形态。
         let legacy = [
             r#"{"type":"request_started","version":1,"sessionId":"s1","requestId":"r1","seq":1,"timestamp":1,"input":"旧一问"}"#,
@@ -658,7 +685,9 @@ mod tests {
             r#"{"type":"request_committed","version":1,"sessionId":"s1","requestId":"r1","seq":4,"timestamp":1}"#,
         ]
         .join("\n");
-        tokio::fs::write(&path, format!("{legacy}\n")).await.unwrap();
+        tokio::fs::write(&path, format!("{legacy}\n"))
+            .await
+            .unwrap();
 
         let events = read_transcript_events(&root, "s1").await;
         assert_eq!(events.len(), 4);
@@ -682,7 +711,9 @@ mod tests {
         let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
         append_committed_round(&root, "s1", "r2", "第二问（弃）", "第二答（弃）").await;
 
-        let result = branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        let result = branch_book_session(&root, "s1", Some(commit1_seq))
+            .await
+            .unwrap();
         assert_eq!(result.head, Some(commit1_seq));
         assert_eq!(result.branch_count, 1);
 
@@ -696,7 +727,10 @@ mod tests {
         assert_eq!(texts, vec!["第一问", "第一答", "第二问", "第二答"]);
         assert!(!texts.join("").contains("弃"));
         // 重启 replay：head 从落盘事件流重建
-        assert_eq!(transcript_head(after.iter()), after.last().unwrap().seq().into());
+        assert_eq!(
+            transcript_head(after.iter()),
+            after.last().unwrap().seq().into()
+        );
     }
 
     #[tokio::test]
@@ -705,12 +739,15 @@ mod tests {
         let root = root_of(&dir);
         let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
 
-        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
-        let r1a_commit =
-            append_committed_round(&root, "s1", "r1a", "（占位）", "（占位答）").await;
+        branch_book_session(&root, "s1", Some(commit1_seq))
+            .await
+            .unwrap();
+        let r1a_commit = append_committed_round(&root, "s1", "r1a", "（占位）", "（占位答）").await;
         // 事件流里 r1a 的 started seq = r1a_commit - 3
         let r1a_started = r1a_commit - 3;
-        let second = branch_book_session(&root, "s1", Some(r1a_started)).await.unwrap();
+        let second = branch_book_session(&root, "s1", Some(r1a_started))
+            .await
+            .unwrap();
         assert_eq!(second.head, Some(r1a_started));
         assert_eq!(second.branch_count, 2);
         append_committed_round(&root, "s1", "r1b", "改写一问", "改写一答").await;
@@ -782,7 +819,9 @@ mod tests {
         assert_eq!(restored_texts(&root, "s1").await, vec!["第二问", "第二答"]);
 
         // 分支回 r1 之后：compaction 在弃用路径上，新分支恢复全量
-        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        branch_book_session(&root, "s1", Some(commit1_seq))
+            .await
+            .unwrap();
         append_committed_round(&root, "s1", "r1b", "分支新问", "分支新答").await;
         assert_eq!(
             restored_texts(&root, "s1").await,
@@ -796,12 +835,18 @@ mod tests {
         let root = root_of(&dir);
         let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
         append_committed_round(&root, "s1", "r2", "第二问", "第二答").await;
-        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        branch_book_session(&root, "s1", Some(commit1_seq))
+            .await
+            .unwrap();
         append_committed_round(&root, "s1", "r2b", "第二问", "第二答").await;
 
         let session = load_book_session(&root, "s1").await.unwrap();
         assert_eq!(session.branch_count, 1);
-        let last_seq = read_transcript_events(&root, "s1").await.last().unwrap().seq();
+        let last_seq = read_transcript_events(&root, "s1")
+            .await
+            .last()
+            .unwrap()
+            .seq();
         assert_eq!(session.head, Some(last_seq));
         // active 路径：r1 + r2b（弃用 r2 不在 derive 消息里）
         let user_texts: Vec<String> = session
@@ -826,9 +871,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = root_of(&dir);
         let commit1_seq = append_committed_round(&root, "s1", "r1", "第一问", "第一答").await;
-        branch_book_session(&root, "s1", Some(commit1_seq)).await.unwrap();
+        branch_book_session(&root, "s1", Some(commit1_seq))
+            .await
+            .unwrap();
 
-        let raw = tokio::fs::read_to_string(transcript_path(&root, "s1")).await.unwrap();
+        let raw = tokio::fs::read_to_string(transcript_path(&root, "s1"))
+            .await
+            .unwrap();
         let branch_line = raw
             .lines()
             .find(|line| line.contains("branch_moved"))
@@ -875,7 +924,9 @@ mod tests {
         let before = derive_branch_points(&root, "s1").await.unwrap();
         let first_commit_seq = before.points[0].seq;
 
-        branch_book_session(&root, "s1", Some(first_commit_seq)).await.unwrap();
+        branch_book_session(&root, "s1", Some(first_commit_seq))
+            .await
+            .unwrap();
         append_committed_round(&root, "s1", "r2b", "第二轮重写", "重写答").await;
 
         let after = derive_branch_points(&root, "s1").await.unwrap();
@@ -921,7 +972,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = root_of(&dir);
         let path = transcript_path(&root, "s1");
-        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(
             &path,
             format!(
@@ -971,5 +1024,4 @@ mod tests {
         assert!(point.get("seq").is_some());
         assert!(point.get("preview").is_some());
     }
-
 }

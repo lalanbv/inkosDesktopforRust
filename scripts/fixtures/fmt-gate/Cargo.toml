@@ -1,0 +1,9 @@
+[package]
+name = "fmt_gate_fixture"
+version = "0.1.0"
+edition = "2021"
+
+# 1487：fmt-gate 必红自检夹具——故意保持未格式化形态（lib.rs 两行密集
+# 排版）。门禁脚本每次先对本夹具跑 --check：预期红（检出漂移）=检测器
+# 活着；若本夹具跑出绿=检测器失效，门禁以码 3 拒绝放行（847 纪律：
+# 门禁缺失不应静默绿灯）。同族先例=audit-rust 的 known-vulnerable 锁。

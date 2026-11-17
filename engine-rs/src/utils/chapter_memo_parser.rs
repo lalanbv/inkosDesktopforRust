@@ -37,15 +37,51 @@ struct RequiredSection {
 
 const REQUIRED_SECTIONS: &[RequiredSection] = &[
     // 131 号合并同步：场景与篇幅预算成为 memo 必备节（planner 篇幅治理面）。
-    RequiredSection { zh: "## 场景与篇幅预算", en: "## Scene and length budget", min_content_chars: 20 },
-    RequiredSection { zh: "## 当前任务", en: "## Current task", min_content_chars: 20 },
-    RequiredSection { zh: "## 读者此刻在等什么", en: "## What the reader is waiting for right now", min_content_chars: 20 },
-    RequiredSection { zh: "## 该兑现的 / 暂不掀的", en: "## To pay off / to keep buried", min_content_chars: 20 },
-    RequiredSection { zh: "## 日常/过渡承担什么任务", en: "## What the slow / transitional beats carry", min_content_chars: 20 },
-    RequiredSection { zh: "## 关键抉择过三连问", en: "## Three-question check on the key choice", min_content_chars: 20 },
-    RequiredSection { zh: "## 章尾必须发生的改变", en: "## Required end-of-chapter change", min_content_chars: 20 },
-    RequiredSection { zh: "## 本章 hook 账", en: "## Hook ledger for this chapter", min_content_chars: 20 },
-    RequiredSection { zh: "## 不要做", en: "## Do not", min_content_chars: 1 },
+    RequiredSection {
+        zh: "## 场景与篇幅预算",
+        en: "## Scene and length budget",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 当前任务",
+        en: "## Current task",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 读者此刻在等什么",
+        en: "## What the reader is waiting for right now",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 该兑现的 / 暂不掀的",
+        en: "## To pay off / to keep buried",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 日常/过渡承担什么任务",
+        en: "## What the slow / transitional beats carry",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 关键抉择过三连问",
+        en: "## Three-question check on the key choice",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 章尾必须发生的改变",
+        en: "## Required end-of-chapter change",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 本章 hook 账",
+        en: "## Hook ledger for this chapter",
+        min_content_chars: 20,
+    },
+    RequiredSection {
+        zh: "## 不要做",
+        en: "## Do not",
+        min_content_chars: 1,
+    },
 ];
 
 const GOAL_HEADINGS: &[&str] = &["## 本章目标", "## Chapter goal"];
@@ -109,13 +145,18 @@ fn extract_section_content(body: &str, heading: &str) -> String {
         Some(m) => &after[..m.start()],
         None => after,
     };
-    ws_collapse_re().replace_all(section_raw, " ").trim().to_string()
+    ws_collapse_re()
+        .replace_all(section_raw, " ")
+        .trim()
+        .to_string()
 }
 
 fn strip_wrapping_fence(raw: &str) -> String {
     let trimmed = raw.trim();
     if let Some(caps) = fence_re().captures(trimmed) {
-        caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| trimmed.to_string())
+        caps.get(1)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_else(|| trimmed.to_string())
     } else {
         trimmed.to_string()
     }
@@ -238,7 +279,10 @@ fn match_contract_field(line: &str, labels: &[&str]) -> Option<String> {
     let caps = contract_field_re().captures(line)?;
     let label = caps.get(1)?.as_str().trim().to_lowercase();
     // 对齐 TS：双端 toLowerCase 后比较（en 标签为驼峰，需归一小写）。
-    if !labels.iter().any(|candidate| candidate.to_lowercase() == label) {
+    if !labels
+        .iter()
+        .any(|candidate| candidate.to_lowercase() == label)
+    {
         return None;
     }
     Some(caps.get(2)?.as_str().trim().to_string())
@@ -290,7 +334,11 @@ fn extract_reader_experience(body: &str) -> Option<ReaderExperience> {
 
     let get = |key: &str| -> String {
         utf16_truncate(
-            values.iter().find(|(k, _)| *k == key).map(|(_, v)| v.as_str()).unwrap_or(""),
+            values
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or(""),
             CONTRACT_MAX_FIELD_UNITS,
         )
     };
@@ -333,7 +381,12 @@ fn make_display_goal(goal: &str) -> String {
     format!("{trimmed}...")
 }
 
-fn prepend_full_goal_if_needed(markdown: &str, body: &str, full_goal: &str, display_goal: &str) -> String {
+fn prepend_full_goal_if_needed(
+    markdown: &str,
+    body: &str,
+    full_goal: &str,
+    display_goal: &str,
+) -> String {
     if full_goal == display_goal {
         return body.to_string();
     }
@@ -350,14 +403,20 @@ fn prepend_full_goal_if_needed(markdown: &str, body: &str, full_goal: &str, disp
 /// 严格校验 LLM 拥有的必备小节（缺/空均抛错）；caller 拥有的字段（chapter /
 /// is_golden_opening）由入参传入而非取自模型。长目标保留全文进 body，仅 schema
 /// 字段截短为 ≤50 码元的显示标签。
-pub fn parse_memo(raw: &str, expected_chapter: u32, is_golden_opening: bool) -> Result<ChapterMemo, PlannerParseError> {
+pub fn parse_memo(
+    raw: &str,
+    expected_chapter: u32,
+    is_golden_opening: bool,
+) -> Result<ChapterMemo, PlannerParseError> {
     let markdown = drop_leading_prose(&strip_wrapping_fence(raw));
     let goal = extract_goal(&markdown);
     let body = extract_memo_body(&markdown);
     let thread_refs = extract_thread_refs(&markdown);
 
     if goal.is_empty() {
-        return Err(PlannerParseError("goal must be a non-empty string".to_string()));
+        return Err(PlannerParseError(
+            "goal must be a non-empty string".to_string(),
+        ));
     }
     let display_goal = make_display_goal(&goal);
 
@@ -368,7 +427,10 @@ pub fn parse_memo(raw: &str, expected_chapter: u32, is_golden_opening: bool) -> 
         .map(|s| s.zh)
         .collect();
     if !missing.is_empty() {
-        return Err(PlannerParseError(format!("missing sections: {}", missing.join(", "))));
+        return Err(PlannerParseError(format!(
+            "missing sections: {}",
+            missing.join(", ")
+        )));
     }
 
     // 空小节检测（内容 < minContentChars）
@@ -385,7 +447,10 @@ pub fn parse_memo(raw: &str, expected_chapter: u32, is_golden_opening: bool) -> 
         })
         .collect();
     if !empty.is_empty() {
-        return Err(PlannerParseError(format!("empty sections: {}", empty.join(", "))));
+        return Err(PlannerParseError(format!(
+            "empty sections: {}",
+            empty.join(", ")
+        )));
     }
 
     let final_body = prepend_full_goal_if_needed(&markdown, &body, &goal, &display_goal);
@@ -456,7 +521,12 @@ mod tests {
         let longer = format!("{long_goal}{long_goal}"); // 80 chars
         let raw = full_memo(&longer);
         let m = parse_memo(&raw, 1, false).unwrap();
-        assert!(utf16_len(&m.goal) <= 50, "goal 应 ≤50 码元，实际 {} ({})", utf16_len(&m.goal), m.goal);
+        assert!(
+            utf16_len(&m.goal) <= 50,
+            "goal 应 ≤50 码元，实际 {} ({})",
+            utf16_len(&m.goal),
+            m.goal
+        );
         assert!(m.goal.ends_with("..."));
         // body 保留完整目标
         assert!(m.body.contains(&longer));
@@ -467,7 +537,10 @@ mod tests {
         let mut raw = full_memo("目标");
         raw.push_str("\n\n## 关联线索\nT1 T2 T1 FOO3\n");
         let m = parse_memo(&raw, 1, false).unwrap();
-        assert_eq!(m.thread_refs, vec!["T1".to_string(), "T2".into(), "FOO3".into()]);
+        assert_eq!(
+            m.thread_refs,
+            vec!["T1".to_string(), "T2".into(), "FOO3".into()]
+        );
     }
 
     #[test]

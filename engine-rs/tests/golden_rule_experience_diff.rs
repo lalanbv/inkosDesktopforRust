@@ -42,7 +42,10 @@ fn validate_matches_shared_vectors() {
         );
         if let Some(field) = vector["errorField"].as_str() {
             assert!(
-                result.errors.iter().any(|message| message.starts_with(field)),
+                result
+                    .errors
+                    .iter()
+                    .any(|message| message.starts_with(field)),
                 "validate vector '{}' error field drifted",
                 vector["name"].as_str().unwrap()
             );
@@ -63,7 +66,8 @@ fn scan_matches_shared_vectors() {
         let got = scan_anti_ai_rules(vector["text"].as_str().unwrap(), &rules);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "scan vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -73,13 +77,21 @@ fn scan_matches_shared_vectors() {
 #[test]
 fn fix_guidance_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["fixGuidance"].as_array().expect("fixGuidance array") {
+    for vector in vectors["fixGuidance"]
+        .as_array()
+        .expect("fixGuidance array")
+    {
         let hits: Vec<AntiAiHit> =
             serde_json::from_value(vector["hits"].clone()).expect("hits shape");
-        let got = render_anti_ai_fix_guidance(&hits, language_of(vector["language"].as_str().unwrap()));
+        let got =
+            render_anti_ai_fix_guidance(&hits, language_of(vector["language"].as_str().unwrap()));
         let expected = &vector["expected"];
         if expected.is_null() {
-            assert!(got.is_none(), "fix vector '{}' should be none", vector["name"].as_str().unwrap());
+            assert!(
+                got.is_none(),
+                "fix vector '{}' should be none",
+                vector["name"].as_str().unwrap()
+            );
             continue;
         }
         assert_eq!(
@@ -94,7 +106,10 @@ fn fix_guidance_matches_shared_vectors() {
 #[test]
 fn anti_ai_guidance_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["antiAiGuidance"].as_array().expect("guidance array") {
+    for vector in vectors["antiAiGuidance"]
+        .as_array()
+        .expect("guidance array")
+    {
         let rules: Vec<AntiAiRule> = vector["rules"]
             .as_array()
             .unwrap()
@@ -102,7 +117,11 @@ fn anti_ai_guidance_matches_shared_vectors() {
             .map(as_rule)
             .collect();
         let max_chars = vector["maxChars"].as_u64().map(|value| value as usize);
-        let got = compose_anti_ai_guidance(&rules, language_of(vector["language"].as_str().unwrap()), max_chars);
+        let got = compose_anti_ai_guidance(
+            &rules,
+            language_of(vector["language"].as_str().unwrap()),
+            max_chars,
+        );
         assert_eq!(
             got.as_deref(),
             vector["expected"].as_str(),
@@ -146,7 +165,11 @@ fn experience_matches_shared_vectors() {
             .map(|raw| serde_json::from_value(raw.clone()).expect("entry shape"))
             .collect();
         let max_chars = vector["maxChars"].as_u64().map(|value| value as usize);
-        let got = render_experience_guidance(&entries, language_of(vector["language"].as_str().unwrap()), max_chars);
+        let got = render_experience_guidance(
+            &entries,
+            language_of(vector["language"].as_str().unwrap()),
+            max_chars,
+        );
         assert_eq!(
             got.as_deref(),
             vector["expected"].as_str(),
@@ -247,10 +270,12 @@ fn seed_fallback_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     for vector in vectors["seedFallback"].as_array().expect("fallback array") {
         let name = vector["name"].as_str().unwrap();
-        let parsed: Option<Vec<AntiAiRule>> = vector["parsed"].as_array().map(|items| items
-                    .iter()
-                    .map(|raw| serde_json::from_value(raw.clone()).expect("rule shape"))
-                    .collect());
+        let parsed: Option<Vec<AntiAiRule>> = vector["parsed"].as_array().map(|items| {
+            items
+                .iter()
+                .map(|raw| serde_json::from_value(raw.clone()).expect("rule shape"))
+                .collect()
+        });
         let got = resolve_anti_ai_rules_with_seeds(parsed.clone());
         assert_eq!(
             got.seeded,

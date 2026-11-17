@@ -28,7 +28,12 @@ pub struct WebhookPayload {
 }
 
 /// `sendTelegram`：POST api.telegram.org sendMessage；markdown 才带 parse_mode。
-async fn send_telegram(config_bot_token: &str, chat_id: &str, message: &str, format: NotifyFormat) -> Result<(), String> {
+async fn send_telegram(
+    config_bot_token: &str,
+    chat_id: &str,
+    message: &str,
+    format: NotifyFormat,
+) -> Result<(), String> {
     let url = format!("https://api.telegram.org/bot{config_bot_token}/sendMessage");
     let mut body = serde_json::json!({ "chat_id": chat_id, "text": message });
     if format == NotifyFormat::Markdown {
@@ -38,7 +43,12 @@ async fn send_telegram(config_bot_token: &str, chat_id: &str, message: &str, for
 }
 
 /// `sendFeishu`：text → msg_type text；markdown → interactive 卡片（blue 模板）。
-async fn send_feishu(webhook_url: &str, title: &str, content: &str, format: NotifyFormat) -> Result<(), String> {
+async fn send_feishu(
+    webhook_url: &str,
+    title: &str,
+    content: &str,
+    format: NotifyFormat,
+) -> Result<(), String> {
     let payload = if format == NotifyFormat::Text {
         serde_json::json!({
             "msg_type": "text",
@@ -57,7 +67,11 @@ async fn send_feishu(webhook_url: &str, title: &str, content: &str, format: Noti
 }
 
 /// `sendWechatWork`：msgtype text/markdown。
-async fn send_wechat_work(webhook_url: &str, content: &str, format: NotifyFormat) -> Result<(), String> {
+async fn send_wechat_work(
+    webhook_url: &str,
+    content: &str,
+    format: NotifyFormat,
+) -> Result<(), String> {
     let payload = if format == NotifyFormat::Text {
         serde_json::json!({ "msgtype": "text", "text": { "content": content } })
     } else {
@@ -68,7 +82,12 @@ async fn send_wechat_work(webhook_url: &str, content: &str, format: NotifyFormat
 
 /// `sendWebhook`：事件订阅过滤 + HMAC-SHA256 签名（`X-InkOS-Signature:
 /// sha256={hex}`）+ POST JSON。
-pub async fn send_webhook(url: &str, secret: Option<&str>, events: &[String], payload: &WebhookPayload) -> Result<(), String> {
+pub async fn send_webhook(
+    url: &str,
+    secret: Option<&str>,
+    events: &[String],
+    payload: &WebhookPayload,
+) -> Result<(), String> {
     if !events.is_empty() && !events.iter().any(|event| event == &payload.event) {
         return Ok(());
     }
@@ -86,7 +105,10 @@ pub async fn send_webhook(url: &str, secret: Option<&str>, events: &[String], pa
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Webhook POST to {url} failed: {} {body}", status.as_u16()));
+        return Err(format!(
+            "Webhook POST to {url} failed: {} {body}",
+            status.as_u16()
+        ));
     }
     Ok(())
 }
@@ -138,19 +160,46 @@ pub async fn dispatch_notification(channels: &[NotifyChannel], message: &NotifyM
     let plain_text = format!("{}\n\n{}", message.title, plain_body);
     for channel in channels {
         let result = match channel {
-            NotifyChannel::Telegram { bot_token, chat_id, format } => {
-                let message_text = if *format == NotifyFormat::Text { &plain_text } else { &markdown_text };
+            NotifyChannel::Telegram {
+                bot_token,
+                chat_id,
+                format,
+            } => {
+                let message_text = if *format == NotifyFormat::Text {
+                    &plain_text
+                } else {
+                    &markdown_text
+                };
                 send_telegram(bot_token, chat_id, message_text, *format).await
             }
-            NotifyChannel::Feishu { webhook_url, format } => {
-                let content = if *format == NotifyFormat::Text { &plain_body } else { &message.body };
+            NotifyChannel::Feishu {
+                webhook_url,
+                format,
+            } => {
+                let content = if *format == NotifyFormat::Text {
+                    &plain_body
+                } else {
+                    &message.body
+                };
                 send_feishu(webhook_url, &message.title, content, *format).await
             }
-            NotifyChannel::WechatWork { webhook_url, format } => {
-                let content = if *format == NotifyFormat::Text { &plain_text } else { &markdown_text };
+            NotifyChannel::WechatWork {
+                webhook_url,
+                format,
+            } => {
+                let content = if *format == NotifyFormat::Text {
+                    &plain_text
+                } else {
+                    &markdown_text
+                };
                 send_wechat_work(webhook_url, content, *format).await
             }
-            NotifyChannel::Webhook { url, secret, events, format } => {
+            NotifyChannel::Webhook {
+                url,
+                secret,
+                events,
+                format,
+            } => {
                 send_webhook(
                     url,
                     secret.as_deref(),
@@ -179,7 +228,13 @@ pub async fn dispatch_notification(channels: &[NotifyChannel], message: &NotifyM
 /// `dispatchWebhookEvent`：结构化事件只发 webhook 型通道。
 pub async fn dispatch_webhook_event(channels: &[NotifyChannel], payload: &WebhookPayload) {
     for channel in channels {
-        if let NotifyChannel::Webhook { url, secret, events, .. } = channel {
+        if let NotifyChannel::Webhook {
+            url,
+            secret,
+            events,
+            ..
+        } = channel
+        {
             if let Err(error) = send_webhook(url, secret.as_deref(), events, payload).await {
                 eprintln!("[webhook] {url} failed: {error}");
             }
@@ -223,9 +278,23 @@ mod tests {
             { "type": "webhook", "url": "https://h.example/cb", "secret": "s", "events": ["pipeline-complete"] },
         ])));
         assert_eq!(channels.len(), 4);
-        assert!(matches!(&channels[0], NotifyChannel::Telegram { format: NotifyFormat::Markdown, .. }));
-        assert!(matches!(&channels[2], NotifyChannel::WechatWork { format: NotifyFormat::Text, .. }));
-        assert!(matches!(&channels[3], NotifyChannel::Webhook { secret: Some(_), events, .. } if events == &vec!["pipeline-complete".to_string()]));
+        assert!(matches!(
+            &channels[0],
+            NotifyChannel::Telegram {
+                format: NotifyFormat::Markdown,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &channels[2],
+            NotifyChannel::WechatWork {
+                format: NotifyFormat::Text,
+                ..
+            }
+        ));
+        assert!(
+            matches!(&channels[3], NotifyChannel::Webhook { secret: Some(_), events, .. } if events == &vec!["pipeline-complete".to_string()])
+        );
         // 非法条目剔除、缺 notify → 空。
         assert!(parse_notify_channels(Some(&serde_json::json!([{ "type": "nope" }]))).is_empty());
         assert!(parse_notify_channels(None).is_empty());

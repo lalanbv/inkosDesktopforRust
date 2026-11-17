@@ -40,8 +40,7 @@ fn bench_execute(c: &mut Criterion) {
         // 自举编译示例 component（而非静默空跑），让 bench 在干净环境也能跑。
         // 需 wasm32-wasip2 target；编译失败才 skip（不静默隐藏问题）。
         eprintln!("[bench] 示例 component 未编译，自举编译...");
-        let plugin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/wasm-plugin");
+        let plugin_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/wasm-plugin");
         let status = std::process::Command::new("cargo")
             .args(["build", "--target", "wasm32-wasip2", "--release"])
             .current_dir(&plugin_dir)

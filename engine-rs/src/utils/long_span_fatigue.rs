@@ -17,12 +17,14 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::utils::cadence_policy::{window_defaults, CadencePressure};
-use crate::utils::chapter_cadence::{analyze_chapter_cadence, CadenceSummaryRow, ChapterCadenceAnalysis};
+use crate::utils::chapter_cadence::{
+    analyze_chapter_cadence, CadenceSummaryRow, ChapterCadenceAnalysis,
+};
 use crate::utils::language::WritingLanguage;
 
 const ENGLISH_STOP_WORDS_LSF: &[&str] = &[
-    "the", "and", "but", "with", "from", "into", "that", "this", "there",
-    "again", "while", "after", "before", "were", "was", "had", "has", "have", "kept",
+    "the", "and", "but", "with", "from", "into", "that", "this", "there", "again", "while",
+    "after", "before", "were", "was", "had", "has", "have", "kept",
 ];
 
 /// 中文字符与标点（移植 TS CHINESE_PUNCTUATION）。
@@ -115,27 +117,37 @@ pub enum Boundary {
 }
 
 /// 句式归一化：英文 lower + 去非字母数字；中文去标点 + lower。
-pub fn normalize_sentence(sentence: &str, language: crate::utils::language::WritingLanguage) -> String {
+pub fn normalize_sentence(
+    sentence: &str,
+    language: crate::utils::language::WritingLanguage,
+) -> String {
     match language {
         crate::utils::language::WritingLanguage::En => english_punct_re()
             .replace_all(&sentence.to_lowercase(), "")
             .trim()
             .to_string(),
-        crate::utils::language::WritingLanguage::Zh => chinese_punct_re()
-            .replace_all(sentence, "")
-            .to_lowercase(),
+        crate::utils::language::WritingLanguage::Zh => {
+            chinese_punct_re().replace_all(sentence, "").to_lowercase()
+        }
     }
 }
 
 /// 句式摘要：英文前 6 词；中文前 12 字符（去标点后）。
-pub fn summarize_sentence(sentence: &str, language: crate::utils::language::WritingLanguage) -> String {
+pub fn summarize_sentence(
+    sentence: &str,
+    language: crate::utils::language::WritingLanguage,
+) -> String {
     match language {
         crate::utils::language::WritingLanguage::En => {
             let lower = sentence.to_lowercase();
             let cleaned = english_punct_re().replace_all(&lower, " ");
             let words: Vec<&str> = cleaned.split_whitespace().take(6).collect();
             let joined = words.join(" ");
-            if !joined.is_empty() { joined } else { sentence.chars().take(32).collect() }
+            if !joined.is_empty() {
+                joined
+            } else {
+                sentence.chars().take(32).collect()
+            }
         }
         crate::utils::language::WritingLanguage::Zh => {
             let collapsed: String = chinese_punct_re().replace_all(sentence, "").into_owned();
@@ -177,16 +189,16 @@ pub async fn build_english_variance_brief(
         return None;
     }
 
-    let summary_rows = load_summary_rows(
-        &book_dir.join("story").join("chapter_summaries.md"),
-    )
-    .await;
+    let summary_rows =
+        load_summary_rows(&book_dir.join("story").join("chapter_summaries.md")).await;
     let mut recent_rows: Vec<CadenceSummaryRow> = summary_rows
         .into_iter()
         .filter(|row| row.chapter < chapter_number)
         .collect();
     recent_rows.sort_by_key(|row| row.chapter);
-    let start = recent_rows.len().saturating_sub(window_defaults::SUMMARY_LOOKBACK as usize);
+    let start = recent_rows
+        .len()
+        .saturating_sub(window_defaults::SUMMARY_LOOKBACK as usize);
     let recent_rows = recent_rows[start..].to_vec();
 
     let high_frequency_phrases = collect_repeated_english_phrases(&chapter_bodies);
@@ -280,10 +292,7 @@ async fn load_previous_chapter_bodies(
 
 /// 对齐 JS `Number.parseInt(value, 10)`：前导数字前缀解析，无数字 → None。
 fn parse_int_prefix(value: &str) -> Option<u32> {
-    let digits: String = value
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let digits: String = value.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
         return None;
     }
@@ -353,7 +362,12 @@ fn collect_repeated_english_phrases(chapter_bodies: &[String]) -> Vec<String> {
 
         if tokens.len() >= 3 {
             for index in 0..=tokens.len() - 3 {
-                let phrase = format!("{} {} {}", tokens[index], tokens[index + 1], tokens[index + 2]);
+                let phrase = format!(
+                    "{} {} {}",
+                    tokens[index],
+                    tokens[index + 1],
+                    tokens[index + 2]
+                );
                 seen.insert(phrase);
             }
         }
@@ -368,7 +382,10 @@ fn collect_repeated_english_phrases(chapter_bodies: &[String]) -> Vec<String> {
 
 /// 首尾句式前 4 词重复模式（跨章计数 ≥2 取前 3）。对齐 TS
 /// `collectRepeatedBoundaryPatterns`。
-fn collect_repeated_boundary_patterns(chapter_bodies: &[String], boundary: Boundary) -> Vec<String> {
+fn collect_repeated_boundary_patterns(
+    chapter_bodies: &[String],
+    boundary: Boundary,
+) -> Vec<String> {
     let mut counts: HashMap<String, u32> = HashMap::new();
 
     for body in chapter_bodies {
@@ -396,7 +413,10 @@ fn collect_repeated_boundary_patterns(chapter_bodies: &[String], boundary: Bound
 /// 计数 ≥2 → 频次降序 → 短语升序 → 前 3。对齐 TS
 /// `.filter(count >= 2).sort(b[1]-a[1] || a[0].localeCompare(b[0])).slice(0, 3)`。
 fn sorted_top_phrases(counts: HashMap<String, u32>) -> Vec<String> {
-    let mut entries: Vec<(String, u32)> = counts.into_iter().filter(|(_, count)| *count >= 2).collect();
+    let mut entries: Vec<(String, u32)> = counts
+        .into_iter()
+        .filter(|(_, count)| *count >= 2)
+        .collect();
     entries.sort_by(|(left_phrase, left_count), (right_phrase, right_count)| {
         right_count
             .cmp(left_count)
@@ -470,40 +490,64 @@ mod tests {
     #[test]
     fn extract_boundary_opening_ending() {
         let content = "# 标题\n第一句开头。第二句。最后结尾。";
-        assert_eq!(extract_boundary_sentence(content, Boundary::Opening).unwrap(), "第一句开头。");
-        assert_eq!(extract_boundary_sentence(content, Boundary::Ending).unwrap(), "最后结尾。");
+        assert_eq!(
+            extract_boundary_sentence(content, Boundary::Opening).unwrap(),
+            "第一句开头。"
+        );
+        assert_eq!(
+            extract_boundary_sentence(content, Boundary::Ending).unwrap(),
+            "最后结尾。"
+        );
     }
 
     #[test]
     fn extract_boundary_skips_headers() {
         let content = "# H1\n## H2\n真正的第一句。后续。";
-        assert_eq!(extract_boundary_sentence(content, Boundary::Opening).unwrap(), "真正的第一句。");
+        assert_eq!(
+            extract_boundary_sentence(content, Boundary::Opening).unwrap(),
+            "真正的第一句。"
+        );
     }
 
     #[test]
     fn normalize_zh_strips_punct() {
-        let n = normalize_sentence("他，走了过来。", crate::utils::language::WritingLanguage::Zh);
+        let n = normalize_sentence(
+            "他，走了过来。",
+            crate::utils::language::WritingLanguage::Zh,
+        );
         assert_eq!(n, "他走了过来");
     }
 
     #[test]
     fn normalize_en_lower_and_strip() {
-        let n = normalize_sentence("He, walked! Over?", crate::utils::language::WritingLanguage::En);
+        let n = normalize_sentence(
+            "He, walked! Over?",
+            crate::utils::language::WritingLanguage::En,
+        );
         assert_eq!(n, "hewalkedover");
     }
 
     #[test]
     fn summarize_en_first_words() {
-        let s = summarize_sentence("The quick brown fox jumps over", crate::utils::language::WritingLanguage::En);
+        let s = summarize_sentence(
+            "The quick brown fox jumps over",
+            crate::utils::language::WritingLanguage::En,
+        );
         assert_eq!(s, "the quick brown fox jumps over");
         // 截断到 6 词
-        let s2 = summarize_sentence("one two three four five six seven eight", crate::utils::language::WritingLanguage::En);
+        let s2 = summarize_sentence(
+            "one two three four five six seven eight",
+            crate::utils::language::WritingLanguage::En,
+        );
         assert_eq!(s2, "one two three four five six");
     }
 
     #[test]
     fn summarize_zh_first_chars() {
-        let s = summarize_sentence("他静静地走向那扇古老的门", crate::utils::language::WritingLanguage::Zh);
+        let s = summarize_sentence(
+            "他静静地走向那扇古老的门",
+            crate::utils::language::WritingLanguage::Zh,
+        );
         assert_eq!(s.chars().count(), 12);
     }
 
@@ -512,7 +556,9 @@ mod tests {
     async fn variance_fixture() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("临时目录");
         let chapters = dir.path().join("chapters");
-        tokio::fs::create_dir_all(&chapters).await.expect("建 chapters");
+        tokio::fs::create_dir_all(&chapters)
+            .await
+            .expect("建 chapters");
         // 两章共享首句（"The night was cold."）与内容三词短语 "veiled lantern light"。
         tokio::fs::write(
             chapters.join("0001_ch1.md"),
@@ -551,12 +597,18 @@ mod tests {
             .await
             .expect("应产出简报");
         assert!(
-            brief.high_frequency_phrases.iter().any(|p| p == "veiled lantern light"),
+            brief
+                .high_frequency_phrases
+                .iter()
+                .any(|p| p == "veiled lantern light"),
             "phrases: {:?}",
             brief.high_frequency_phrases
         );
         assert!(
-            brief.repeated_opening_patterns.iter().any(|p| p == "the night was cold"),
+            brief
+                .repeated_opening_patterns
+                .iter()
+                .any(|p| p == "the night was cold"),
             "openings: {:?}",
             brief.repeated_opening_patterns
         );
@@ -571,7 +623,9 @@ mod tests {
     async fn variance_brief_scene_pressure_takes_priority() {
         let dir = tempfile::tempdir().expect("临时目录");
         let chapters = dir.path().join("chapters");
-        tokio::fs::create_dir_all(&chapters).await.expect("建 chapters");
+        tokio::fs::create_dir_all(&chapters)
+            .await
+            .expect("建 chapters");
         for num in [1u32, 2, 3] {
             tokio::fs::write(
                 chapters.join(format!("{num:04}_c{num}.md")),
@@ -608,8 +662,7 @@ mod tests {
         assert!(parse_summary_row("| 章节 | 标题 |").is_none());
         assert!(parse_summary_row("|---|---|").is_none());
         assert!(parse_summary_row("不是表格行").is_none());
-        let row = parse_summary_row("| 3 | 标题 | a | b | c | d | 紧张 | 推进 |")
-            .expect("应解析");
+        let row = parse_summary_row("| 3 | 标题 | a | b | c | d | 紧张 | 推进 |").expect("应解析");
         assert_eq!(row.chapter, 3);
         assert_eq!(row.chapter_type, "推进");
         // < 8 列 → None。
@@ -746,20 +799,13 @@ pub async fn analyze_long_span_fatigue(
         }
     }
 
-    let bodies = load_recent_chapter_bodies(
-        input.book_dir,
-        input.chapter_number,
-        input.chapter_content,
-    )
-    .await;
-    if let Some(issue) =
-        build_sentence_pattern_issue(&bodies, Boundary::Opening, input.language)
-    {
+    let bodies =
+        load_recent_chapter_bodies(input.book_dir, input.chapter_number, input.chapter_content)
+            .await;
+    if let Some(issue) = build_sentence_pattern_issue(&bodies, Boundary::Opening, input.language) {
         issues.push(issue);
     }
-    if let Some(issue) =
-        build_sentence_pattern_issue(&bodies, Boundary::Ending, input.language)
-    {
+    if let Some(issue) = build_sentence_pattern_issue(&bodies, Boundary::Ending, input.language) {
         issues.push(issue);
     }
 
@@ -821,11 +867,10 @@ fn build_sentence_pattern_issue(
         .iter()
         .map(|sentence| normalize_sentence(sentence, language))
         .collect();
-    if normalized
-        .iter()
-        .any(|sentence| sentence.chars().count()
-            < long_span_fatigue_thresholds::BOUNDARY_SENTENCE_MIN_LENGTH as usize)
-    {
+    if normalized.iter().any(|sentence| {
+        sentence.chars().count()
+            < long_span_fatigue_thresholds::BOUNDARY_SENTENCE_MIN_LENGTH as usize
+    }) {
         return None;
     }
 
@@ -847,14 +892,30 @@ fn build_sentence_pattern_issue(
             (Boundary::Ending, false) => "结尾同构".to_string(),
         },
         description: if en {
-            let position = if boundary == Boundary::Opening { "openings" } else { "endings" };
-            let boundary_label = if boundary == Boundary::Opening { "opening" } else { "ending" };
+            let position = if boundary == Boundary::Opening {
+                "openings"
+            } else {
+                "endings"
+            };
+            let boundary_label = if boundary == Boundary::Opening {
+                "opening"
+            } else {
+                "ending"
+            };
             format!(
                 "The last 3 chapter {position} are highly similar (adjacent similarity {pair_text}), which risks a formulaic rhythm. Current {boundary_label} signature: \"{sample}\"."
             )
         } else {
-            let position = if boundary == Boundary::Opening { "开头" } else { "结尾" };
-            let tail = if boundary == Boundary::Opening { "开篇" } else { "章尾" };
+            let position = if boundary == Boundary::Opening {
+                "开头"
+            } else {
+                "结尾"
+            };
+            let tail = if boundary == Boundary::Opening {
+                "开篇"
+            } else {
+                "章尾"
+            };
             format!(
                 "最近3章{position}句式高度相似（相邻相似度{pair_text}），容易形成模板化{tail}。当前句式近似“{sample}”。"
             )
@@ -863,12 +924,14 @@ fn build_sentence_pattern_issue(
             if en {
                 "Change the next chapter opening vector. Start from action, consequence, or surprise instead of repeating the same camera move.".to_string()
             } else {
-                "下一章换一个开篇入口，用动作、后果或异常信息切入，不要连续沿用同一种抬镜句。".to_string()
+                "下一章换一个开篇入口，用动作、后果或异常信息切入，不要连续沿用同一种抬镜句。"
+                    .to_string()
             }
         } else if en {
             "Change the next chapter landing pattern. End on consequence, decision, or a new variable instead of repeating the same explanatory cadence.".to_string()
         } else {
-            "下一章换一个收束方式，用行动后果、角色决断或新变量落板，不要连续用解释性句子收尾。".to_string()
+            "下一章换一个收束方式，用行动后果、角色决断或新变量落板，不要连续用解释性句子收尾。"
+                .to_string()
         },
     })
 }
@@ -917,7 +980,10 @@ mod fatigue_tests {
         for n in [1u32, 2] {
             tokio::fs::write(
                 chapters.join(format!("{n:04}_章.md")),
-                format!("{opening}\n\n正文填充{noto}。\n\n{ending}", noto = "内容".repeat(8)),
+                format!(
+                    "{opening}\n\n正文填充{noto}。\n\n{ending}",
+                    noto = "内容".repeat(8)
+                ),
             )
             .await
             .unwrap();
@@ -934,10 +1000,22 @@ mod fatigue_tests {
         .await;
 
         let categories: Vec<&str> = issues.iter().map(|i| i.category.as_str()).collect();
-        assert!(categories.contains(&"节奏单调"), "categories: {categories:?}");
-        assert!(categories.contains(&"情绪单调"), "categories: {categories:?}");
-        assert!(categories.contains(&"开头同构"), "categories: {categories:?}");
-        assert!(categories.contains(&"结尾同构"), "categories: {categories:?}");
+        assert!(
+            categories.contains(&"节奏单调"),
+            "categories: {categories:?}"
+        );
+        assert!(
+            categories.contains(&"情绪单调"),
+            "categories: {categories:?}"
+        );
+        assert!(
+            categories.contains(&"开头同构"),
+            "categories: {categories:?}"
+        );
+        assert!(
+            categories.contains(&"结尾同构"),
+            "categories: {categories:?}"
+        );
         assert!(issues.iter().all(|i| i.severity == "warning"));
         // chapterSummary 同章节号替换：3 号行不重复计数。
         let pacing = issues.iter().find(|i| i.category == "节奏单调").unwrap();
@@ -948,6 +1026,8 @@ mod fatigue_tests {
     fn boundary_issue_requires_three_bodies() {
         // 两体不足三——直接 None。
         let bodies = vec!["a".to_string(), "b".to_string()];
-        assert!(build_sentence_pattern_issue(&bodies, Boundary::Opening, WritingLanguage::Zh).is_none());
+        assert!(
+            build_sentence_pattern_issue(&bodies, Boundary::Opening, WritingLanguage::Zh).is_none()
+        );
     }
 }

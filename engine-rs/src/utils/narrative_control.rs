@@ -56,15 +56,23 @@ pub fn sanitize_narrative_control_text(text: &str, language: WritingLanguage) ->
         WritingLanguage::En => "this thread",
         WritingLanguage::Zh => "这条线索",
     };
-    result = hook_id_re().replace_all(&result, hook_replacement).into_owned();
-    result = hook_slug_re().replace_all(&result, hook_replacement).into_owned();
+    result = hook_id_re()
+        .replace_all(&result, hook_replacement)
+        .into_owned();
+    result = hook_slug_re()
+        .replace_all(&result, hook_replacement)
+        .into_owned();
 
     let chapter_ref_replacement = match language {
         WritingLanguage::En => "an earlier scene",
         WritingLanguage::Zh => "此前",
     };
-    result = chapter_ref_word_re().replace_all(&result, chapter_ref_replacement).into_owned();
-    result = chapter_ref_zh_re().replace_all(&result, chapter_ref_replacement).into_owned();
+    result = chapter_ref_word_re()
+        .replace_all(&result, chapter_ref_replacement)
+        .into_owned();
+    result = chapter_ref_zh_re()
+        .replace_all(&result, chapter_ref_replacement)
+        .into_owned();
 
     for (pat, rep) in ZH_REPLACEMENTS.iter().chain(EN_REPLACEMENTS.iter()) {
         // EN 模式带 (?i) 前缀
@@ -89,17 +97,33 @@ pub fn render_memo_as_narrative_block(
     let is_en = matches!(language, WritingLanguage::En);
     let mut sections: Vec<String> = Vec::new();
 
-    sections.push(format!("## {}\n- {}", if is_en { "Goal" } else { "目标" }, s(&memo.goal)));
+    sections.push(format!(
+        "## {}\n- {}",
+        if is_en { "Goal" } else { "目标" },
+        s(&memo.goal)
+    ));
 
     if let Some(arc) = arc_context {
         if !arc.is_empty() {
-            sections.push(format!("## {}\n- {}", if is_en { "Arc Context" } else { "弧线背景" }, s(arc)));
+            sections.push(format!(
+                "## {}\n- {}",
+                if is_en { "Arc Context" } else { "弧线背景" },
+                s(arc)
+            ));
         }
     }
 
     if !memo.thread_refs.is_empty() {
-        let threads: Vec<String> = memo.thread_refs.iter().map(|id| format!("- {id}")).collect();
-        sections.push(format!("## {}\n{}", if is_en { "Thread Refs" } else { "关联线索" }, threads.join("\n")));
+        let threads: Vec<String> = memo
+            .thread_refs
+            .iter()
+            .map(|id| format!("- {id}"))
+            .collect();
+        sections.push(format!(
+            "## {}\n{}",
+            if is_en { "Thread Refs" } else { "关联线索" },
+            threads.join("\n")
+        ));
     }
 
     // R1 读者体验合同（357 号）：memo 携带结构化合同时，把它升级为顶层任务块，
@@ -107,13 +131,55 @@ pub fn render_memo_as_narrative_block(
     // 逐字段对齐 TS renderMemoAsNarrativeBlock（标签/全角冒号/分隔符一致）。
     if let Some(re) = &memo.reader_experience {
         let fields: [(&str, &str); 7] = [
-            (if is_en { "previousHandoff" } else { "开头承接" }, &re.previous_handoff),
-            (if is_en { "readerQuestion" } else { "读者问题" }, &re.reader_question),
-            (if is_en { "promisePayoff" } else { "承诺兑现" }, &re.promise_payoff),
-            (if is_en { "protagonistWant" } else { "主角欲求" }, &re.protagonist_want),
-            (if is_en { "protagonistObstacle" } else { "主角障碍" }, &re.protagonist_obstacle),
+            (
+                if is_en {
+                    "previousHandoff"
+                } else {
+                    "开头承接"
+                },
+                &re.previous_handoff,
+            ),
+            (
+                if is_en {
+                    "readerQuestion"
+                } else {
+                    "读者问题"
+                },
+                &re.reader_question,
+            ),
+            (
+                if is_en {
+                    "promisePayoff"
+                } else {
+                    "承诺兑现"
+                },
+                &re.promise_payoff,
+            ),
+            (
+                if is_en {
+                    "protagonistWant"
+                } else {
+                    "主角欲求"
+                },
+                &re.protagonist_want,
+            ),
+            (
+                if is_en {
+                    "protagonistObstacle"
+                } else {
+                    "主角障碍"
+                },
+                &re.protagonist_obstacle,
+            ),
             (if is_en { "sceneTurn" } else { "场景转折" }, &re.scene_turn),
-            (if is_en { "endingNetChange" } else { "章末净变化" }, &re.ending_net_change),
+            (
+                if is_en {
+                    "endingNetChange"
+                } else {
+                    "章末净变化"
+                },
+                &re.ending_net_change,
+            ),
         ];
         let mut lines: Vec<String> = fields
             .iter()
@@ -122,13 +188,21 @@ pub fn render_memo_as_narrative_block(
         if !re.title_candidates.is_empty() {
             lines.push(format!(
                 "- {}：{}",
-                if is_en { "titleCandidates" } else { "章名候选" },
+                if is_en {
+                    "titleCandidates"
+                } else {
+                    "章名候选"
+                },
                 re.title_candidates.join(" ｜ ")
             ));
         }
         sections.push(format!(
             "## {}\n{}",
-            if is_en { "Reader Experience Contract" } else { "读者体验合同" },
+            if is_en {
+                "Reader Experience Contract"
+            } else {
+                "读者体验合同"
+            },
             lines.join("\n")
         ));
     }
@@ -136,8 +210,16 @@ pub fn render_memo_as_narrative_block(
     if memo.is_golden_opening {
         sections.push(format!(
             "## {}\n- {}",
-            if is_en { "Golden Opening" } else { "黄金开场" },
-            if is_en { "This is a golden opening chapter — prioritize hook-dense, high-tempo pacing." } else { "本章是黄金开场章——优先钩子密集、高节奏。" }
+            if is_en {
+                "Golden Opening"
+            } else {
+                "黄金开场"
+            },
+            if is_en {
+                "This is a golden opening chapter — prioritize hook-dense, high-tempo pacing."
+            } else {
+                "本章是黄金开场章——优先钩子密集、高节奏。"
+            }
         ));
     }
 
@@ -153,11 +235,21 @@ pub fn build_narrative_intent_brief(chapter_intent: &str, language: WritingLangu
     let is_en = matches!(language, WritingLanguage::En);
     let sections: [(&str, &str); 6] = [
         ("## Goal", if is_en { "Goal" } else { "目标" }),
-        ("## Outline Node", if is_en { "Outline Node" } else { "当前节点" }),
+        (
+            "## Outline Node",
+            if is_en {
+                "Outline Node"
+            } else {
+                "当前节点"
+            },
+        ),
         ("## Must Keep", if is_en { "Keep" } else { "保留" }),
         ("## Must Avoid", if is_en { "Avoid" } else { "避免" }),
         ("## Style Emphasis", if is_en { "Style" } else { "风格" }),
-        ("## Structured Directives", if is_en { "Directives" } else { "指令" }),
+        (
+            "## Structured Directives",
+            if is_en { "Directives" } else { "指令" },
+        ),
     ];
 
     let rendered: Vec<String> = sections
@@ -175,7 +267,13 @@ pub fn build_narrative_intent_brief(chapter_intent: &str, language: WritingLangu
             }
             lines = lines
                 .into_iter()
-                .map(|l| if let Some(stripped) = l.strip_prefix("- ") { stripped.to_string() } else { l })
+                .map(|l| {
+                    if let Some(stripped) = l.strip_prefix("- ") {
+                        stripped.to_string()
+                    } else {
+                        l
+                    }
+                })
                 .map(|l| sanitize_narrative_control_text(&l, language))
                 .filter(|l| !l.is_empty())
                 .map(|l| format!("- {l}"))
@@ -188,10 +286,19 @@ pub fn build_narrative_intent_brief(chapter_intent: &str, language: WritingLangu
 }
 
 /// 渲染选定上下文条目为证据块。
-pub fn render_narrative_selected_context(entries: &[ContextSourceRef], language: WritingLanguage) -> String {
-    let heading = matches!(language, WritingLanguage::En).then_some("Evidence").unwrap_or("证据");
-    let reason_label = matches!(language, WritingLanguage::En).then_some("reason").unwrap_or("原因");
-    let detail_label = matches!(language, WritingLanguage::En).then_some("detail").unwrap_or("细节");
+pub fn render_narrative_selected_context(
+    entries: &[ContextSourceRef],
+    language: WritingLanguage,
+) -> String {
+    let heading = matches!(language, WritingLanguage::En)
+        .then_some("Evidence")
+        .unwrap_or("证据");
+    let reason_label = matches!(language, WritingLanguage::En)
+        .then_some("reason")
+        .unwrap_or("原因");
+    let detail_label = matches!(language, WritingLanguage::En)
+        .then_some("detail")
+        .unwrap_or("细节");
 
     entries
         .iter()
@@ -199,10 +306,16 @@ pub fn render_narrative_selected_context(entries: &[ContextSourceRef], language:
         .map(|(i, entry)| {
             let mut lines = vec![
                 format!("### {heading} {}", i + 1),
-                format!("- {reason_label}: {}", sanitize_narrative_control_text(entry.reason, language)),
+                format!(
+                    "- {reason_label}: {}",
+                    sanitize_narrative_control_text(entry.reason, language)
+                ),
             ];
             if let Some(excerpt) = entry.excerpt {
-                lines.push(format!("- {detail_label}: {}", sanitize_narrative_control_text(excerpt, language)));
+                lines.push(format!(
+                    "- {detail_label}: {}",
+                    sanitize_narrative_control_text(excerpt, language)
+                ));
             }
             lines.join("\n")
         })
@@ -211,9 +324,14 @@ pub fn render_narrative_selected_context(entries: &[ContextSourceRef], language:
 }
 
 /// 净化证据块：先把 story/runtime 路径源替换为 "evidence:"，再 sanitize。
-pub fn sanitize_narrative_evidence_block(block: Option<&str>, language: WritingLanguage) -> Option<String> {
+pub fn sanitize_narrative_evidence_block(
+    block: Option<&str>,
+    language: WritingLanguage,
+) -> Option<String> {
     let block = block?;
-    let without_sources = evidence_source_re().replace_all(block, "- evidence: ").into_owned();
+    let without_sources = evidence_source_re()
+        .replace_all(block, "- evidence: ")
+        .into_owned();
     Some(sanitize_narrative_control_text(&without_sources, language))
 }
 
@@ -248,7 +366,10 @@ mod tests {
 
     #[test]
     fn sanitize_replaces_hook_ids_and_refs() {
-        let s = sanitize_narrative_control_text("见 H123 与 hook-thread-one，第5章提及", WritingLanguage::Zh);
+        let s = sanitize_narrative_control_text(
+            "见 H123 与 hook-thread-one，第5章提及",
+            WritingLanguage::Zh,
+        );
         assert!(s.contains("这条线索"));
         assert!(!s.contains("H123"));
         assert!(s.contains("此前"));
@@ -280,7 +401,14 @@ mod tests {
 
     #[test]
     fn render_memo_golden_opening() {
-        let memo = ChapterMemo { chapter: 1, goal: "g".into(), is_golden_opening: true, body: "".into(), thread_refs: vec![], reader_experience: None };
+        let memo = ChapterMemo {
+            chapter: 1,
+            goal: "g".into(),
+            is_golden_opening: true,
+            body: "".into(),
+            thread_refs: vec![],
+            reader_experience: None,
+        };
         let out = render_memo_as_narrative_block(&memo, None, WritingLanguage::Zh);
         assert!(out.contains("## 黄金开场"));
     }
@@ -300,8 +428,14 @@ mod tests {
     #[test]
     fn render_selected_context() {
         let entries = vec![
-            ContextSourceRef { reason: "见 H1", excerpt: Some("片段") },
-            ContextSourceRef { reason: "另一条", excerpt: None },
+            ContextSourceRef {
+                reason: "见 H1",
+                excerpt: Some("片段"),
+            },
+            ContextSourceRef {
+                reason: "另一条",
+                excerpt: None,
+            },
         ];
         let out = render_narrative_selected_context(&entries, WritingLanguage::Zh);
         assert!(out.contains("### 证据 1"));

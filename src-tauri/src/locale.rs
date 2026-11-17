@@ -140,9 +140,7 @@ pub(crate) mod tests {
                     in_script
                 })
                 .filter(|(_, line)| {
-                    let has_cjk = line
-                        .chars()
-                        .any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
+                    let has_cjk = line.chars().any(|c| ('\u{4E00}'..='\u{9FFF}').contains(&c));
                     if !has_cjk {
                         return false;
                     }

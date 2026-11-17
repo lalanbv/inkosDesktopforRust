@@ -8,9 +8,8 @@ use inkos_engine::utils::author_error_catalog::{
 };
 use serde_json::Value;
 
-const VECTORS: &str = include_str!(
-    "../../packages/core/src/__tests__/golden/author-error-catalog-vectors.json"
-);
+const VECTORS: &str =
+    include_str!("../../packages/core/src/__tests__/golden/author-error-catalog-vectors.json");
 
 fn language_of(raw: &str) -> CatalogLanguage {
     match raw {
@@ -30,7 +29,8 @@ fn resolve_matches_shared_vectors() {
         );
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "resolve vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -40,7 +40,10 @@ fn resolve_matches_shared_vectors() {
 #[test]
 fn next_actions_match_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["nextActionFor"].as_array().expect("nextActionFor array") {
+    for vector in vectors["nextActionFor"]
+        .as_array()
+        .expect("nextActionFor array")
+    {
         let got = next_action_for(
             vector["severity"].as_str().unwrap(),
             language_of(vector["language"].as_str().unwrap()),
@@ -63,7 +66,11 @@ fn catalog_data_matches_shared_contract() {
         vectors["catalog"]["count"].as_u64().unwrap() as usize,
         "catalog count drifted"
     );
-    let mut got_codes: Vec<String> = catalog.errors.iter().map(|entry| entry.code.clone()).collect();
+    let mut got_codes: Vec<String> = catalog
+        .errors
+        .iter()
+        .map(|entry| entry.code.clone())
+        .collect();
     got_codes.sort();
     let mut expected_codes: Vec<String> = vectors["catalog"]["codes"]
         .as_array()

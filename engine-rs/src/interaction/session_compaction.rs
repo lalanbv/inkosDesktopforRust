@@ -22,7 +22,9 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::interaction::session_restore::restore_committed_dialogue_scan;
-use crate::interaction::session_transcript::{append_transcript_events, read_transcript_events, TranscriptEvent};
+use crate::interaction::session_transcript::{
+    append_transcript_events, read_transcript_events, TranscriptEvent,
+};
 use crate::llm::agent_router::AgentRouter;
 use crate::llm::provider::LLMMessage;
 
@@ -147,7 +149,10 @@ fn assistant_usage_from_raw(raw: &Value) -> Option<u64> {
         return None;
     }
     let usage = raw.get("usage")?;
-    let total = usage.get("totalTokens").and_then(Value::as_u64).unwrap_or(0);
+    let total = usage
+        .get("totalTokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     if total > 0 {
         return Some(total);
     }
@@ -184,8 +189,7 @@ pub fn estimate_context_tokens(messages: &[LLMMessage], raws: &[Value]) -> Conte
             last_usage_index: None,
         };
     };
-    let usage_tokens =
-        assistant_usage_from_raw(&raws[index]).expect("usage index validated above");
+    let usage_tokens = assistant_usage_from_raw(&raws[index]).expect("usage index validated above");
     let trailing_tokens: u64 = messages[index + 1..].iter().map(estimate_tokens).sum();
     ContextUsageEstimate {
         tokens: usage_tokens + trailing_tokens,
@@ -196,7 +200,11 @@ pub fn estimate_context_tokens(messages: &[LLMMessage], raws: &[Value]) -> Conte
 }
 
 /// 上游 `shouldCompact`：`contextTokens > contextWindow − reserveTokens`。
-pub fn should_compact(context_tokens: u64, context_window: u64, settings: &CompactionSettings) -> bool {
+pub fn should_compact(
+    context_tokens: u64,
+    context_window: u64,
+    settings: &CompactionSettings,
+) -> bool {
     if !settings.enabled {
         return false;
     }
@@ -209,12 +217,23 @@ pub fn should_compact(context_tokens: u64, context_window: u64, settings: &Compa
 
 /// 上游 `find_valid_cut_points`：合法切点 = user/assistant 消息（toolResult/
 /// 其他不可切；本仓扫描消息仅 user/assistant/system，system 不合法同上游）。
-fn find_valid_cut_points(raw_roles: &[Option<&str>], start_index: usize, end_index: usize) -> Vec<usize> {
+fn find_valid_cut_points(
+    raw_roles: &[Option<&str>],
+    start_index: usize,
+    end_index: usize,
+) -> Vec<usize> {
     let mut cut_points = Vec::new();
     for index in start_index..end_index {
         if matches!(
             raw_roles.get(index).copied().flatten(),
-            Some("user" | "assistant" | "bashExecution" | "custom" | "branchSummary" | "compactionSummary")
+            Some(
+                "user"
+                    | "assistant"
+                    | "bashExecution"
+                    | "custom"
+                    | "branchSummary"
+                    | "compactionSummary"
+            )
         ) {
             cut_points.push(index);
         }
@@ -223,7 +242,11 @@ fn find_valid_cut_points(raw_roles: &[Option<&str>], start_index: usize, end_ind
 }
 
 /// 上游 `find_turn_start_index`：回溯到包含该条目的轮次起始 user 消息。
-fn find_turn_start_index(raw_roles: &[Option<&str>], entry_index: usize, start_index: usize) -> Option<usize> {
+fn find_turn_start_index(
+    raw_roles: &[Option<&str>],
+    entry_index: usize,
+    start_index: usize,
+) -> Option<usize> {
     (start_index..=entry_index)
         .rev()
         .find(|&index| raw_roles.get(index).copied().flatten() == Some("user"))
@@ -258,7 +281,9 @@ pub fn find_cut_point(
     let mut accumulated_tokens: u64 = 0;
     let mut cut_index = cut_points[0];
     for index in (start_index..end_index).rev() {
-        let Some(message) = messages.get(index) else { continue };
+        let Some(message) = messages.get(index) else {
+            continue;
+        };
         // 上游只对 type:"message" 条目累积；本仓全部条目皆消息。
         accumulated_tokens += estimate_tokens(message);
         if accumulated_tokens >= keep_recent_tokens {
@@ -307,10 +332,15 @@ pub fn serialize_conversation(messages: &[LLMMessage]) -> String {
 
 /// 摘要 prompt 组装（上游 generateSummaryWithRequest 内联模板镜像，
 /// golden promptAssemblyVectors 锁定）。
-pub fn build_summary_prompt(serialized_conversation: &str, previous_summary: Option<&str>) -> String {
+pub fn build_summary_prompt(
+    serialized_conversation: &str,
+    previous_summary: Option<&str>,
+) -> String {
     let mut prompt_text = format!("<conversation>\n{serialized_conversation}\n</conversation>\n\n");
     if let Some(previous) = previous_summary {
-        prompt_text.push_str(&format!("<previous-summary>\n{previous}\n</previous-summary>\n\n"));
+        prompt_text.push_str(&format!(
+            "<previous-summary>\n{previous}\n</previous-summary>\n\n"
+        ));
     }
     prompt_text.push_str(if previous_summary.is_some() {
         UPDATE_SUMMARIZATION_PROMPT
@@ -348,14 +378,26 @@ pub async fn scan_session_for_compaction(
         use std::collections::HashMap;
         let mut by_uuid: HashMap<&str, &Value> = HashMap::new();
         for event in &events {
-            if let TranscriptEvent::Message { uuid, message, role, .. } = event {
+            if let TranscriptEvent::Message {
+                uuid,
+                message,
+                role,
+                ..
+            } = event
+            {
                 if role != "toolResult" {
                     by_uuid.insert(uuid.as_str(), message);
                 }
             }
         }
         for uuid in &scan.uuids {
-            raws.push(by_uuid.get(uuid.as_str()).copied().cloned().unwrap_or(Value::Null));
+            raws.push(
+                by_uuid
+                    .get(uuid.as_str())
+                    .copied()
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
         }
     }
     CompactionScan {
@@ -367,7 +409,11 @@ pub async fn scan_session_for_compaction(
 }
 
 /// threshold 判定（无效窗口短路同 TS）。
-pub fn should_compact_session(scan: &CompactionScan, context_window: u64, settings: &CompactionSettings) -> bool {
+pub fn should_compact_session(
+    scan: &CompactionScan,
+    context_window: u64,
+    settings: &CompactionSettings,
+) -> bool {
     if !settings.enabled || scan.messages.is_empty() {
         return false;
     }
@@ -386,7 +432,10 @@ pub struct CompactionPlan {
     pub tokens_before: u64,
 }
 
-pub fn plan_compaction(scan: &CompactionScan, settings: &CompactionSettings) -> Option<CompactionPlan> {
+pub fn plan_compaction(
+    scan: &CompactionScan,
+    settings: &CompactionSettings,
+) -> Option<CompactionPlan> {
     if scan.messages.is_empty() || scan.uuids.len() != scan.messages.len() {
         return None;
     }
@@ -435,7 +484,13 @@ pub async fn maybe_compact_session(
     trigger: &'static str,
 ) -> Option<CompactionOutcome> {
     let scan = scan_session_for_compaction(project_root, session_id, session_kind).await;
-    if trigger == "threshold" && !should_compact_session(&scan, router.default_context_window(), &DEFAULT_COMPACTION_SETTINGS) {
+    if trigger == "threshold"
+        && !should_compact_session(
+            &scan,
+            router.default_context_window(),
+            &DEFAULT_COMPACTION_SETTINGS,
+        )
+    {
         return None;
     }
     let plan = plan_compaction(&scan, &DEFAULT_COMPACTION_SETTINGS)?;
@@ -449,8 +504,18 @@ pub async fn maybe_compact_session(
     let serialized = serialize_conversation(&plan.messages_to_summarize);
     let user_prompt = build_summary_prompt(&serialized, previous_summary);
     let summary_messages = vec![
-        LLMMessage { role: crate::llm::provider::LLMRole::System, content: SUMMARIZATION_SYSTEM_PROMPT.to_string(), tool_calls: None, tool_call_id: None },
-        LLMMessage { role: crate::llm::provider::LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+        LLMMessage {
+            role: crate::llm::provider::LLMRole::System,
+            content: SUMMARIZATION_SYSTEM_PROMPT.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        LLMMessage {
+            role: crate::llm::provider::LLMRole::User,
+            content: user_prompt,
+            tool_calls: None,
+            tool_call_id: None,
+        },
     ];
     let completion = router
         .chat_maintenance(summary_messages, SUMMARY_MAX_TOKENS as u32)
@@ -476,38 +541,42 @@ pub async fn maybe_compact_session(
     let events = append_transcript_events(project_root, session_id, {
         let request_id = request_id.to_string();
         move |_events, next_seq| {
-        vec![TranscriptEvent::Compaction {
-            parent_seq: None,
-            version: 1,
-            session_id: session_id_owned,
-            request_id,
-            seq: next_seq,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
-            summary,
-            first_kept_uuid,
-            tokens_before,
-            trigger: trigger.to_string(),
-        }]
+            vec![TranscriptEvent::Compaction {
+                parent_seq: None,
+                version: 1,
+                session_id: session_id_owned,
+                request_id,
+                seq: next_seq,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0),
+                summary,
+                first_kept_uuid,
+                tokens_before,
+                trigger: trigger.to_string(),
+            }]
         }
     })
     .await;
     events
         .iter()
         .find_map(|event| match event {
-            TranscriptEvent::Compaction { summary, first_kept_uuid, tokens_before, trigger, .. } => {
-                Some(CompactionOutcome {
-                    summary: summary.clone(),
-                    first_kept_uuid: first_kept_uuid.clone(),
-                    tokens_before: *tokens_before,
-                    trigger: match trigger.as_str() {
-                        "overflow" => "overflow",
-                        _ => "threshold",
-                    },
-                })
-            }
+            TranscriptEvent::Compaction {
+                summary,
+                first_kept_uuid,
+                tokens_before,
+                trigger,
+                ..
+            } => Some(CompactionOutcome {
+                summary: summary.clone(),
+                first_kept_uuid: first_kept_uuid.clone(),
+                tokens_before: *tokens_before,
+                trigger: match trigger.as_str() {
+                    "overflow" => "overflow",
+                    _ => "threshold",
+                },
+            }),
             _ => None,
         })
         .or(Some(outcome))
@@ -518,18 +587,32 @@ mod compaction_tests {
     use super::*;
 
     fn user_msg(content: &str) -> LLMMessage {
-        LLMMessage { role: crate::llm::provider::LLMRole::User, content: content.into(), tool_calls: None, tool_call_id: None }
+        LLMMessage {
+            role: crate::llm::provider::LLMRole::User,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
 
     fn assistant_msg(content: &str) -> LLMMessage {
-        LLMMessage { role: crate::llm::provider::LLMRole::Assistant, content: content.into(), tool_calls: None, tool_call_id: None }
+        LLMMessage {
+            role: crate::llm::provider::LLMRole::Assistant,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
 
     #[test]
     fn settings_match_ts_constants() {
         assert_eq!(
             DEFAULT_COMPACTION_SETTINGS,
-            CompactionSettings { enabled: true, reserve_tokens: 16_384, keep_recent_tokens: 20_000 }
+            CompactionSettings {
+                enabled: true,
+                reserve_tokens: 16_384,
+                keep_recent_tokens: 20_000
+            }
         );
         assert_eq!(SUMMARY_MAX_TOKENS, 13_107);
     }
@@ -561,7 +644,11 @@ mod compaction_tests {
 
     #[test]
     fn estimate_context_falls_back_to_estimate() {
-        let messages = vec![user_msg("u1x"), assistant_msg("resp"), user_msg("tail msg here")];
+        let messages = vec![
+            user_msg("u1x"),
+            assistant_msg("resp"),
+            user_msg("tail msg here"),
+        ];
         let raws = vec![
             Value::Null,
             serde_json::json!({ "stopReason": "stop", "usage": { "totalTokens": 0, "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 } }),
@@ -575,9 +662,24 @@ mod compaction_tests {
 
     #[test]
     fn should_compact_matches_ts() {
-        assert!(should_compact(120_004, 128_000, &DEFAULT_COMPACTION_SETTINGS));
-        assert!(!should_compact(90_004, 128_000, &DEFAULT_COMPACTION_SETTINGS));
-        assert!(!should_compact(999_999, 128_000, &CompactionSettings { enabled: false, ..DEFAULT_COMPACTION_SETTINGS }));
+        assert!(should_compact(
+            120_004,
+            128_000,
+            &DEFAULT_COMPACTION_SETTINGS
+        ));
+        assert!(!should_compact(
+            90_004,
+            128_000,
+            &DEFAULT_COMPACTION_SETTINGS
+        ));
+        assert!(!should_compact(
+            999_999,
+            128_000,
+            &CompactionSettings {
+                enabled: false,
+                ..DEFAULT_COMPACTION_SETTINGS
+            }
+        ));
         assert!(!should_compact(999_999, 0, &DEFAULT_COMPACTION_SETTINGS));
     }
 
@@ -642,7 +744,9 @@ mod compaction_tests {
     #[test]
     fn summary_prompt_assembly() {
         let first = build_summary_prompt("[User]: u1\n\n[Assistant]: a1", None);
-        assert!(first.starts_with("<conversation>\n[User]: u1\n\n[Assistant]: a1\n</conversation>\n\n"));
+        assert!(
+            first.starts_with("<conversation>\n[User]: u1\n\n[Assistant]: a1\n</conversation>\n\n")
+        );
         assert!(first.ends_with(SUMMARIZATION_PROMPT));
         let iterative = build_summary_prompt("[User]: u2", Some("PREV"));
         assert!(iterative.contains("<previous-summary>\nPREV\n</previous-summary>\n\n"));

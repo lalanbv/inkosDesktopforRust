@@ -3,8 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// 应用配置（TOML schema）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub engine: EngineConfig,
@@ -21,7 +20,6 @@ pub struct AppConfig {
     #[serde(default)]
     pub registry: PluginRegistryConfig,
 }
-
 
 /// Engine 配置
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -56,8 +54,7 @@ fn default_auto_download() -> bool {
 ///
 /// serde 数据判别器（TOML/IPC 外部契约值 `rust`/`node`），与 `ConfigLayer`
 /// 同理不适用 `None=0`/`Max` 占位约定——那会引入非法后端值污染配置契约。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum EngineBackend {
     /// inkos-engine-server（Rust 全量移植，strangler duel 8/8 验证）。
@@ -172,12 +169,11 @@ pub struct PluginRegistryConfig {
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum VersionPolicy {
-    Fixed(String),      // 锁定版本（企业部署）
+    Fixed(String), // 锁定版本（企业部署）
     #[default]
-    Latest,             // 总是最新（默认）
-    Range(String),      // 语义化版本范围（^0.4.0）
+    Latest, // 总是最新（默认）
+    Range(String), // 语义化版本范围（^0.4.0）
 }
-
 
 /// 配置层级（合并优先级：System < User < Workspace < Project，后者覆盖前者）
 ///
@@ -189,10 +185,10 @@ pub enum VersionPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConfigLayer {
-    System,     // 系统默认（硬编码 AppConfig::default()，只读，不从文件加载）
-    User,       // 用户全局（app_data/config/user.toml，settings 面板常驻可写层）
-    Workspace,  // 工作区级（app_data/config/workspace-{id}/config.toml）
-    Project,    // 项目级（project/.inkos/config.toml）
+    System,    // 系统默认（硬编码 AppConfig::default()，只读，不从文件加载）
+    User,      // 用户全局（app_data/config/user.toml，settings 面板常驻可写层）
+    Workspace, // 工作区级（app_data/config/workspace-{id}/config.toml）
+    Project,   // 项目级（project/.inkos/config.toml）
 }
 
 #[cfg(test)]
@@ -237,9 +233,14 @@ auto_download = false
             "默认配置应显式落 rust（用户可见的当前选择）"
         );
         let node_cfg = toml::from_str::<EngineConfig>("[backend]\n");
-        assert!(node_cfg.is_err(), "backend 须为裸字符串枚举值，表形态应拒绝");
-        let parsed: EngineConfig =
-            toml::from_str("backend = \"node\"\nversion_policy = \"latest\"\nauto_download = true\n").unwrap();
+        assert!(
+            node_cfg.is_err(),
+            "backend 须为裸字符串枚举值，表形态应拒绝"
+        );
+        let parsed: EngineConfig = toml::from_str(
+            "backend = \"node\"\nversion_policy = \"latest\"\nauto_download = true\n",
+        )
+        .unwrap();
         assert_eq!(parsed.backend, EngineBackend::Node);
     }
 
@@ -313,7 +314,10 @@ auto_download = false
             ),
         ] {
             let json = serde_json::to_string(&policy).unwrap();
-            assert_eq!(json, expect, "形态变更须同步 settings.html 的 fillConfigForm");
+            assert_eq!(
+                json, expect,
+                "形态变更须同步 settings.html 的 fillConfigForm"
+            );
             let v: serde_json::Value = serde_json::from_str(&json).unwrap();
             let obj = v.as_object().expect("元组变体须为 JSON 对象");
             assert_eq!(obj.len(), 1, "须为单键对象（UI 用 `key in vp` 判别）");

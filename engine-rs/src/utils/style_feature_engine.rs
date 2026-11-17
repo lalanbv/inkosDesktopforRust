@@ -39,7 +39,9 @@ pub fn derive_feature_pool(profile: &StyleProfile) -> Vec<StyleFeature> {
         kind: "metric",
         label: "sentence-length".into(),
         guidance_zh: format!("单句平均长度控制在约 {sentence_length} 字（允许小幅波动）。"),
-        guidance_en: format!("Keep the average sentence length near {sentence_length} (small variance allowed)."),
+        guidance_en: format!(
+            "Keep the average sentence length near {sentence_length} (small variance allowed)."
+        ),
     });
     let paragraph_low = profile.paragraph_length_range.min.round();
     let paragraph_high = profile.paragraph_length_range.max.round();
@@ -48,7 +50,9 @@ pub fn derive_feature_pool(profile: &StyleProfile) -> Vec<StyleFeature> {
         kind: "metric",
         label: "paragraph-length".into(),
         guidance_zh: format!("单段长度大致落在 {paragraph_low}–{paragraph_high} 字区间。"),
-        guidance_en: format!("Keep paragraph lengths roughly within {paragraph_low}–{paragraph_high} characters."),
+        guidance_en: format!(
+            "Keep paragraph lengths roughly within {paragraph_low}–{paragraph_high} characters."
+        ),
     });
     let diversity_pct = (profile.vocabulary_diversity * 100.0).round() as i64;
     features.push(StyleFeature {
@@ -56,7 +60,9 @@ pub fn derive_feature_pool(profile: &StyleProfile) -> Vec<StyleFeature> {
         kind: "metric",
         label: "vocabulary-diversity".into(),
         guidance_zh: format!("保持词汇多样性约 {diversity_pct}%（TTR），避免高频重复用词。"),
-        guidance_en: format!("Keep vocabulary diversity near {diversity_pct}% (TTR); avoid repeated word choices."),
+        guidance_en: format!(
+            "Keep vocabulary diversity near {diversity_pct}% (TTR); avoid repeated word choices."
+        ),
     });
     for pattern in &profile.top_patterns {
         features.push(StyleFeature {
@@ -87,11 +93,19 @@ pub fn apply_feature_selection(
 ) -> Vec<StyleFeature> {
     if let Some(enabled) = enabled_ids.filter(|ids| !ids.is_empty()) {
         let whitelist: std::collections::HashSet<&String> = enabled.iter().collect();
-        return pool.iter().filter(|f| whitelist.contains(&f.id)).cloned().collect();
+        return pool
+            .iter()
+            .filter(|f| whitelist.contains(&f.id))
+            .cloned()
+            .collect();
     }
     if let Some(disabled) = disabled_ids.filter(|ids| !ids.is_empty()) {
         let blacklist: std::collections::HashSet<&String> = disabled.iter().collect();
-        return pool.iter().filter(|f| !blacklist.contains(&f.id)).cloned().collect();
+        return pool
+            .iter()
+            .filter(|f| !blacklist.contains(&f.id))
+            .cloned()
+            .collect();
     }
     pool.to_vec()
 }
@@ -115,7 +129,11 @@ pub fn compose_style_guidance(
     for feature in enabled.iter().take(GUIDANCE_ITEM_LIMIT) {
         lines.push(format!(
             "- {}",
-            if is_en { &feature.guidance_en } else { &feature.guidance_zh }
+            if is_en {
+                &feature.guidance_en
+            } else {
+                &feature.guidance_zh
+            }
         ));
     }
     let text = lines.join("\n");
@@ -261,7 +279,10 @@ pub fn detect_proper_noun_leak(
             }
         }
         if occurrences >= min_occurrences {
-            hits.push(ProperNounLeakHit { name: name.clone(), occurrences });
+            hits.push(ProperNounLeakHit {
+                name: name.clone(),
+                occurrences,
+            });
         }
     }
     hits.sort_by(|a, b| b.occurrences.cmp(&a.occurrences).then(a.name.cmp(&b.name)));

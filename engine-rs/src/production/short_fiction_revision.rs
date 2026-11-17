@@ -10,8 +10,7 @@
 use serde_json::Value;
 
 use super::short_fiction::{
-    ShortFictionBatchDraft, ShortDraftChapterSubmission, ShortFictionChapter,
-    ShortRevisionPlan,
+    ShortDraftChapterSubmission, ShortFictionBatchDraft, ShortFictionChapter, ShortRevisionPlan,
 };
 use super::short_fiction_agents::WriteDraftInput;
 use super::structured_agent::{run_structured_tool, StructuredToolError, WorkerToolSpec};
@@ -44,7 +43,11 @@ pub struct RevisionPlanError {
 }
 
 fn plan_error(code: &'static str, message: impl Into<String>) -> RevisionPlanError {
-    RevisionPlanError { code, message: message.into(), details: None }
+    RevisionPlanError {
+        code,
+        message: message.into(),
+        details: None,
+    }
 }
 
 fn plan_error_details(code: &'static str, details: Value) -> RevisionPlanError {
@@ -78,14 +81,21 @@ pub fn validate_revision_plan(
         }
     }
     if let Some(chapter_numbers) = context.chapter_numbers {
-        if plan.chapters.iter().any(|chapter| !chapter_numbers.contains(&chapter.number)) {
+        if plan
+            .chapters
+            .iter()
+            .any(|chapter| !chapter_numbers.contains(&chapter.number))
+        {
             return Err(plan_error(
                 "SHORT_REVISION_OUT_OF_SCOPE",
                 "The plan changes a chapter outside the author's selected scope.",
             ));
         }
     }
-    if let Some(_chapter_numbers) = context.chapter_numbers.filter(|numbers| !numbers.is_empty()) {
+    if let Some(_chapter_numbers) = context
+        .chapter_numbers
+        .filter(|numbers| !numbers.is_empty())
+    {
         if !context.author_scope_opening {
             if let Some(opening) = &plan.opening_hook {
                 if opening.trim() != context.draft_opening_hook.unwrap_or("") {
@@ -137,7 +147,12 @@ pub fn validate_revision_plan(
             "Select an authorized change to the book title, chapters, opening scene or outline.",
         ));
     }
-    if plan.chapters.iter().map(|chapter| chapter.number).collect::<std::collections::BTreeSet<_>>().len()
+    if plan
+        .chapters
+        .iter()
+        .map(|chapter| chapter.number)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
         != plan.chapters.len()
         || plan.chapters.iter().any(|chapter| {
             chapter.number == 0
@@ -152,7 +167,10 @@ pub fn validate_revision_plan(
                     .map(str::trim)
                     .map(str::is_empty)
                     .unwrap_or(true)
-                        && (chapter.source_number.map(|source| source == 0).unwrap_or(true))
+                    && (chapter
+                        .source_number
+                        .map(|source| source == 0)
+                        .unwrap_or(true))
         })
     {
         return Err(plan_error(
@@ -163,11 +181,21 @@ pub fn validate_revision_plan(
     // 源章节多目标复制检查（copies map → duplicates）。
     let mut copies: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
     for number in 1..=context.chapter_count {
-        let item = plan.chapters.iter().find(|chapter| chapter.number == number);
-        if item.and_then(|chapter| chapter.instruction.as_deref()).map(str::trim).map(|text| !text.is_empty()).unwrap_or(false) {
+        let item = plan
+            .chapters
+            .iter()
+            .find(|chapter| chapter.number == number);
+        if item
+            .and_then(|chapter| chapter.instruction.as_deref())
+            .map(str::trim)
+            .map(|text| !text.is_empty())
+            .unwrap_or(false)
+        {
             continue;
         }
-        let source = item.and_then(|chapter| chapter.source_number).unwrap_or(number);
+        let source = item
+            .and_then(|chapter| chapter.source_number)
+            .unwrap_or(number);
         if source > source_count as u32 {
             return Err(RevisionPlanError {
                 code: "SHORT_REVISION_PLAN_INVALID",
@@ -197,10 +225,18 @@ pub fn validate_revision_plan(
     }
     let restructuring = context.chapter_count != source_count as u32
         || plan.chapters.iter().any(|chapter| {
-            chapter.source_number.map(|source| source != chapter.number).unwrap_or(false)
+            chapter
+                .source_number
+                .map(|source| source != chapter.number)
+                .unwrap_or(false)
         });
     if restructuring
-        && plan.outline_markdown.as_deref().map(str::trim).map(str::is_empty).unwrap_or(true)
+        && plan
+            .outline_markdown
+            .as_deref()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true)
     {
         return Err(plan_error(
             "SHORT_REVISION_OUTLINE_REQUIRED",
@@ -214,14 +250,22 @@ pub fn validate_revision_plan(
 
 /// TS async `onRevisionProgress` 的共享回调形态（validate 候选改良与逐章完成）。
 pub type RevisionProgressCallback = Arc<
-    dyn Fn(&ShortFictionBatchDraft, &[u32]) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
+    dyn Fn(
+            &ShortFictionBatchDraft,
+            &[u32],
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>
         + Send
         + Sync,
 >;
 
 /// compress 回退的 boxed future（闭包返回型别名）。
 type CompressOutcomeFuture = std::pin::Pin<
-    Box<dyn std::future::Future<Output = Result<(String, Vec<String>, ShortFictionChapter), RevisionPlanError>> + Send>,
+    Box<
+        dyn std::future::Future<
+                Output = Result<(String, Vec<String>, ShortFictionChapter), RevisionPlanError>,
+            > + Send,
+    >,
 >;
 
 /// ReviserAgent.reviseChapter 的注入请求（892 号装配面——compress 分支消费；
@@ -336,8 +380,14 @@ fn validate_single_chapter_submission(
             format!("Submit only chapter {number}"),
         ));
     }
-    let title = bound.get("title").and_then(Value::as_str).unwrap_or_default();
-    let content = bound.get("content").and_then(Value::as_str).unwrap_or_default();
+    let title = bound
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let content = bound
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if title.is_empty() || content.is_empty() {
         return Err(fail(
             "SHORT_BATCH_INVALID",
@@ -396,7 +446,9 @@ async fn merge_improved_candidates(
     for candidate in candidates {
         let count = count_chapter_length(candidate, mode);
         let improves = {
-            let mut draft = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut draft = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let current = draft
                 .chapters
                 .iter()
@@ -420,7 +472,10 @@ async fn merge_improved_candidates(
             improves
         };
         if improves {
-            let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+            let snapshot = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
             on_revision_progress(&snapshot, completed)
                 .await
                 .map_err(|message| RevisionPlanError {
@@ -454,7 +509,11 @@ pub async fn apply_revision_plan(
                 .as_ref()
                 .and_then(|scope| scope.story_title)
                 .unwrap_or(false),
-            author_scope_opening: context.author_scope.as_ref().map(|scope| scope.opening).unwrap_or(false),
+            author_scope_opening: context
+                .author_scope
+                .as_ref()
+                .map(|scope| scope.opening)
+                .unwrap_or(false),
             outline_markdown: context.outline_markdown,
             opening_hook_chars: context.opening_hook_chars,
             language: context.language,
@@ -485,7 +544,10 @@ pub async fn apply_revision_plan(
         Arc::new(std::sync::Mutex::new(draft));
     let restructuring = context.chapter_count as usize != original.chapters.len()
         || plan.chapters.iter().any(|chapter| {
-            chapter.source_number.map(|source| source != chapter.number).unwrap_or(false)
+            chapter
+                .source_number
+                .map(|source| source != chapter.number)
+                .unwrap_or(false)
         });
     // TS：scoped = authorSource && authorScope && (!wholeManuscript || !restructuring)。
     let scoped_active = context.author_source.is_some()
@@ -517,15 +579,26 @@ pub async fn apply_revision_plan(
         // ── scoped 执行分支（TS L291-328）──
         if scoped_active {
             let scope = context.author_scope.as_ref().expect("scoped_active 已保证");
-            let author_source = context.author_source.as_ref().expect("scoped_active 已保证");
-            let Some(author_original) = author_source.draft.chapters.iter().find(|item| item.number == number).cloned() else {
+            let author_source = context
+                .author_source
+                .as_ref()
+                .expect("scoped_active 已保证");
+            let Some(author_original) = author_source
+                .draft
+                .chapters
+                .iter()
+                .find(|item| item.number == number)
+                .cloned()
+            else {
                 return Err(plan_error(
                     "SHORT_REVISION_OUT_OF_SCOPE",
                     "The authorized chapter is absent from the original manuscript.",
                 ));
             };
             let mut content = {
-                let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let guard = draft_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard
                     .chapters
                     .iter()
@@ -538,13 +611,18 @@ pub async fn apply_revision_plan(
             let prose_authorized = scope.chapter_numbers.contains(&number)
                 || (scope.whole_manuscript && scope.chapter_numbers.is_empty());
             if prose_authorized {
-                let revise = context.revise_chapter.clone().ok_or_else(|| RevisionPlanError {
-                    code: "SHORT_REVISION_SUBMIT_FAILED",
-                    message: "scoped revision requires a wired ReviserAgent".into(),
-                    details: None,
-                })?;
+                let revise = context
+                    .revise_chapter
+                    .clone()
+                    .ok_or_else(|| RevisionPlanError {
+                        code: "SHORT_REVISION_SUBMIT_FAILED",
+                        message: "scoped revision requires a wired ReviserAgent".into(),
+                        details: None,
+                    })?;
                 let other_chapters: Vec<ShortFictionChapter> = {
-                    let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let guard = draft_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     guard
                         .chapters
                         .iter()
@@ -596,10 +674,15 @@ pub async fn apply_revision_plan(
                     )
                 };
                 // guard 临时不跨 await（for 头临时活整个循环——先取 owned）。
-                let candidates = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+                let candidates = sink
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
                 for candidate in candidates {
                     let (current_content, original_content) = {
-                        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let guard = draft_state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         let current = guard
                             .chapters
                             .iter()
@@ -612,16 +695,27 @@ pub async fn apply_revision_plan(
                         || distance(&candidate) < distance(&current_content);
                     if improves {
                         {
-                            let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                            if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
+                            let mut guard = draft_state
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if let Some(slot) =
+                                guard.chapters.iter_mut().find(|item| item.number == number)
+                            {
                                 slot.content = candidate.clone();
                                 slot.char_count = count_chapter_length(&candidate, mode);
                             }
                         }
-                        let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-                        (context.on_revision_progress)(&snapshot, &[]).await.map_err(|message| {
-                            RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
-                        })?;
+                        let snapshot = draft_state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .clone();
+                        (context.on_revision_progress)(&snapshot, &[])
+                            .await
+                            .map_err(|message| RevisionPlanError {
+                                code: "SHORT_REVISION_PROGRESS_FAILED",
+                                message,
+                                details: None,
+                            })?;
                     }
                 }
             }
@@ -633,7 +727,8 @@ pub async fn apply_revision_plan(
             {
                 // 章题提交（TS L315-321 逐字）。
                 let current_title = draft_state
-                    .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .chapters
                     .iter()
                     .find(|item| item.number == number)
@@ -697,7 +792,11 @@ pub async fn apply_revision_plan(
                     .to_string();
             }
             // 严格单章校验（TS L323）+ 并槽 + 进度。
-            let story_title = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).story_title.clone();
+            let story_title = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .story_title
+                .clone();
             let bound = serde_json::json!({
                 "storyTitle": story_title,
                 "number": number,
@@ -713,7 +812,9 @@ pub async fn apply_revision_plan(
                 true,
             )?;
             {
-                let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut guard = draft_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                     slot.title = title;
                     slot.content = content;
@@ -721,30 +822,40 @@ pub async fn apply_revision_plan(
                 }
             }
             let completed: Vec<u32> = {
-                let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let guard = draft_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 plan.chapters
                     .iter()
                     .filter(|item| {
-                        guard
-                            .chapters
-                            .iter()
-                            .any(|slot| slot.number == item.number && !slot.content.trim().is_empty())
+                        guard.chapters.iter().any(|slot| {
+                            slot.number == item.number && !slot.content.trim().is_empty()
+                        })
                     })
                     .map(|item| item.number)
                     .collect()
             };
             {
-                let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-                (context.on_revision_progress)(&snapshot, &completed).await.map_err(|message| {
-                    RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
-                })?;
+                let snapshot = draft_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                (context.on_revision_progress)(&snapshot, &completed)
+                    .await
+                    .map_err(|message| RevisionPlanError {
+                        code: "SHORT_REVISION_PROGRESS_FAILED",
+                        message,
+                        details: None,
+                    })?;
             }
             continue;
         }
         if !has_instruction {
             // 无 instruction 且非 scoped：原章复制（TS 非 scoped 复制分支）。
             if let Some(source_chapter) = original_chapter {
-                let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut guard = draft_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                     slot.title = source_chapter.title;
                     slot.content = source_chapter.content;
@@ -755,7 +866,9 @@ pub async fn apply_revision_plan(
         }
         let instruction = chapter_plan.instruction.clone().unwrap_or_default();
         let (chapter, story_title, other_chapters) = {
-            let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let current = guard
                 .chapters
                 .iter()
@@ -770,13 +883,19 @@ pub async fn apply_revision_plan(
                 .collect();
             (current, guard.story_title.clone(), others)
         };
-        let original_destination = original.chapters.iter().find(|item| item.number == number).cloned();
+        let original_destination = original
+            .chapters
+            .iter()
+            .find(|item| item.number == number)
+            .cloned();
         let completed_for_progress: Vec<u32> = plan
             .chapters
             .iter()
             .filter(|item| item.number != number)
             .filter(|item| {
-                let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let guard = draft_state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard
                     .chapters
                     .iter()
@@ -787,17 +906,24 @@ pub async fn apply_revision_plan(
 
         // compress 回退（TS compressCandidate——ReviserAgent spot-fix 受控改写）。
         let compress_candidate = || -> Result<CompressOutcomeFuture, RevisionPlanError> {
-            let revise = context.revise_chapter.clone().ok_or_else(|| RevisionPlanError {
-                code: "SHORT_REVISION_SUBMIT_FAILED",
-                message: "SHORT_CHAPTER_TOO_LONG requires a wired ReviserAgent".into(),
-                details: None,
-            })?;
-            let max = context.max_chapter_length.ok_or_else(|| RevisionPlanError {
-                code: "SHORT_REVISION_SUBMIT_FAILED",
-                message: "SHORT_CHAPTER_TOO_LONG requires maxChapterLength".into(),
-                details: None,
-            })?;
-            let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let revise = context
+                .revise_chapter
+                .clone()
+                .ok_or_else(|| RevisionPlanError {
+                    code: "SHORT_REVISION_SUBMIT_FAILED",
+                    message: "SHORT_CHAPTER_TOO_LONG requires a wired ReviserAgent".into(),
+                    details: None,
+                })?;
+            let max = context
+                .max_chapter_length
+                .ok_or_else(|| RevisionPlanError {
+                    code: "SHORT_REVISION_SUBMIT_FAILED",
+                    message: "SHORT_CHAPTER_TOO_LONG requires maxChapterLength".into(),
+                    details: None,
+                })?;
+            let guard = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let pending = guard
                 .chapters
                 .iter()
@@ -805,7 +931,8 @@ pub async fn apply_revision_plan(
                 .cloned()
                 .expect("padding 已保证槽位在场");
             drop(guard);
-            let sink: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let sink: Arc<std::sync::Mutex<Vec<String>>> =
+                Arc::new(std::sync::Mutex::new(Vec::new()));
             let request = ReviseChapterRequest {
                 chapter_number: number,
                 pending_content: pending.content.clone(),
@@ -830,7 +957,11 @@ pub async fn apply_revision_plan(
                     message,
                     details: None,
                 })?;
-                Ok((outcome.revised_content, outcome.accepted_candidates, pending))
+                Ok((
+                    outcome.revised_content,
+                    outcome.accepted_candidates,
+                    pending,
+                ))
             }))
         };
 
@@ -843,39 +974,78 @@ pub async fn apply_revision_plan(
         let current_length = count_chapter_length(&chapter.content, mode);
         let mut user_payload = serde_json::Map::new();
         user_payload.insert("storyTitle".into(), Value::String(story_title));
-        user_payload.insert("userRequest".into(), Value::String(context.direction.to_string()));
+        user_payload.insert(
+            "userRequest".into(),
+            Value::String(context.direction.to_string()),
+        );
         user_payload.insert("chapterNumber".into(), Value::from(number));
         user_payload.insert("currentLength".into(), Value::from(current_length));
-        user_payload.insert("targetLength".into(), Value::from(context.chars_per_chapter));
+        user_payload.insert(
+            "targetLength".into(),
+            Value::from(context.chars_per_chapter),
+        );
         user_payload.insert(
             "minLength".into(),
-            context.min_chapter_length.map(Value::from).unwrap_or(Value::Null),
+            context
+                .min_chapter_length
+                .map(Value::from)
+                .unwrap_or(Value::Null),
         );
         user_payload.insert(
             "maxLength".into(),
-            context.max_chapter_length.map(Value::from).unwrap_or(Value::Null),
+            context
+                .max_chapter_length
+                .map(Value::from)
+                .unwrap_or(Value::Null),
         );
-        user_payload.insert("corrections".into(), Value::String(plan.revision_brief.clone()));
+        user_payload.insert(
+            "corrections".into(),
+            Value::String(plan.revision_brief.clone()),
+        );
         user_payload.insert(
             "outline".into(),
-            Value::String(plan.outline_markdown.clone().unwrap_or_else(|| context.outline_markdown.to_string())),
+            Value::String(
+                plan.outline_markdown
+                    .clone()
+                    .unwrap_or_else(|| context.outline_markdown.to_string()),
+            ),
         );
         user_payload.insert("instruction".into(), Value::String(instruction));
         // TS 条件 spread：sourceNumber 映射非本章时携带 originalChapter。
         if let Some(source) = &original_chapter {
-            if chapter_plan.source_number.map(|source_number| source_number != number).unwrap_or(false) {
-                user_payload.insert("originalChapter".into(), serde_json::to_value(source).unwrap_or(Value::Null));
+            if chapter_plan
+                .source_number
+                .map(|source_number| source_number != number)
+                .unwrap_or(false)
+            {
+                user_payload.insert(
+                    "originalChapter".into(),
+                    serde_json::to_value(source).unwrap_or(Value::Null),
+                );
             }
         }
-        user_payload.insert("currentChapter".into(), serde_json::to_value(&chapter).unwrap_or(Value::Null));
+        user_payload.insert(
+            "currentChapter".into(),
+            serde_json::to_value(&chapter).unwrap_or(Value::Null),
+        );
         user_payload.insert(
             "otherChapters".into(),
             serde_json::to_value(&other_chapters).unwrap_or(Value::Null),
         );
         let user_payload = Value::Object(user_payload);
         let messages = vec![
-            LLMMessage { role: crate::llm::provider::LLMRole::System, content: system_content.into(), tool_calls: None, tool_call_id: None },
-            LLMMessage { role: crate::llm::provider::LLMRole::User, content: user_payload.to_string(), tool_calls: None, tool_call_id: None },
+            LLMMessage {
+                role: crate::llm::provider::LLMRole::System,
+                content: system_content.into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: crate::llm::provider::LLMRole::User,
+                content: user_payload.to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
         ];
         let schema = serde_json::json!({
             "type": "object",
@@ -894,8 +1064,9 @@ pub async fn apply_revision_plan(
         let min_for_validate = context.min_chapter_length;
         let max_for_validate = context.max_chapter_length;
         let chapter_count_for_validate = context.chapter_count;
-        let original_destination_for_validate =
-            original_destination.as_ref().map(|item| item.content.clone());
+        let original_destination_for_validate = original_destination
+            .as_ref()
+            .map(|item| item.content.clone());
         let validate: Option<super::structured_agent::ValidateFn> =
             Some(Arc::new(move |value: Value| {
                 let draft_state = Arc::clone(&draft_for_validate);
@@ -903,9 +1074,21 @@ pub async fn apply_revision_plan(
                 let completed = completed_for_validate.clone();
                 let original_content = original_destination_for_validate.clone();
                 Box::pin(async move {
-                    let title = value.get("title").and_then(Value::as_str).unwrap_or_default().to_string();
-                    let content = value.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
-                    let story_title = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).story_title.clone();
+                    let title = value
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let content = value
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    let story_title = draft_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .story_title
+                        .clone();
                     let bound = serde_json::json!({
                         "storyTitle": story_title,
                         "number": number,
@@ -923,7 +1106,9 @@ pub async fn apply_revision_plan(
                     .map_err(|error| StructuredToolError::coded(error.code, error.message))?;
                     // 候选改良（TS L368-384）：distance 改善即并入。
                     let candidate = {
-                        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let guard = draft_state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         super::short_fiction::merge_short_fiction_batch(
                             Some(&guard),
                             &guard.story_title,
@@ -974,7 +1159,9 @@ pub async fn apply_revision_plan(
                         )
                     };
                     let (current_content, original_snapshot) = {
-                        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let guard = draft_state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         let current = guard
                             .chapters
                             .iter()
@@ -991,20 +1178,33 @@ pub async fn apply_revision_plan(
                     let first_replacement = current_content.trim().is_empty()
                         || original_snapshot.as_deref() == Some(current_content.as_str());
                     if distance(&changed.content) > 0
-                        && (first_replacement || distance(&changed.content) < distance(&current_content))
+                        && (first_replacement
+                            || distance(&changed.content) < distance(&current_content))
                     {
                         {
-                            let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                            if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
+                            let mut guard = draft_state
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            if let Some(slot) =
+                                guard.chapters.iter_mut().find(|item| item.number == number)
+                            {
                                 slot.title = changed.title.clone();
                                 slot.content = changed.content.clone();
                                 slot.char_count = changed.char_count;
                             }
                         }
-                        let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-                        on_revision_progress(&snapshot, &completed).await.map_err(|message| {
-                            StructuredToolError::coded("SHORT_REVISION_PROGRESS_FAILED", message)
-                        })?;
+                        let snapshot = draft_state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .clone();
+                        on_revision_progress(&snapshot, &completed)
+                            .await
+                            .map_err(|message| {
+                                StructuredToolError::coded(
+                                    "SHORT_REVISION_PROGRESS_FAILED",
+                                    message,
+                                )
+                            })?;
                     }
                     // 严格终验（TS L385-386）。
                     validate_single_chapter_submission(
@@ -1018,13 +1218,25 @@ pub async fn apply_revision_plan(
                     .map_err(|error| StructuredToolError::coded(error.code, error.message))?;
                     super::short_fiction::validate_short_fiction_draft_for_final(
                         &super::short_fiction::ShortFictionBatchDraft {
-                            story_title: bound.get("storyTitle").and_then(Value::as_str).unwrap_or_default().into(),
+                            story_title: bound
+                                .get("storyTitle")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .into(),
                             opening_hook: None,
                             raw_content: String::new(),
                             chapters: vec![super::short_fiction::ShortFictionChapter {
                                 number,
-                                title: bound.get("title").and_then(Value::as_str).unwrap_or_default().into(),
-                                content: bound.get("content").and_then(Value::as_str).unwrap_or_default().into(),
+                                title: bound
+                                    .get("title")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .into(),
+                                content: bound
+                                    .get("content")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .into(),
                                 char_count: 0,
                             }],
                         },
@@ -1064,15 +1276,32 @@ pub async fn apply_revision_plan(
         );
         let (title, content) = match submit.await {
             Ok(outcome) => {
-                let title = outcome.result.get("title").and_then(Value::as_str).unwrap_or_default().to_string();
-                let content = outcome.result.get("content").and_then(Value::as_str).unwrap_or_default().to_string();
+                let title = outcome
+                    .result
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let content = outcome
+                    .result
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
                 (title, content)
             }
             Err(error) => {
                 // TS catch：SHORT_CHAPTER_TOO_LONG 且 pending 超上限 → compress 回退。
                 let too_long_pending = {
-                    let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                    let pending = guard.chapters.iter().find(|item| item.number == number).cloned().unwrap();
+                    let guard = draft_state
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let pending = guard
+                        .chapters
+                        .iter()
+                        .find(|item| item.number == number)
+                        .cloned()
+                        .unwrap();
                     context
                         .max_chapter_length
                         .map(|max| count_chapter_length(&pending.content, mode) > max)
@@ -1080,7 +1309,11 @@ pub async fn apply_revision_plan(
                 };
                 if error.code != "SHORT_CHAPTER_TOO_LONG" || !too_long_pending {
                     return Err(RevisionPlanError {
-                        code: if error.code == "SHORT_CHAPTER_TOO_LONG" { "SHORT_CHAPTER_TOO_LONG" } else { "SHORT_REVISION_SUBMIT_FAILED" },
+                        code: if error.code == "SHORT_CHAPTER_TOO_LONG" {
+                            "SHORT_CHAPTER_TOO_LONG"
+                        } else {
+                            "SHORT_REVISION_SUBMIT_FAILED"
+                        },
                         message: error.message,
                         details: None,
                     });
@@ -1115,7 +1348,9 @@ pub async fn apply_revision_plan(
             }
         };
         {
-            let mut guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut guard = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(slot) = guard.chapters.iter_mut().find(|item| item.number == number) {
                 slot.title = title;
                 slot.content = content;
@@ -1123,7 +1358,9 @@ pub async fn apply_revision_plan(
             }
         }
         let completed: Vec<u32> = {
-            let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let guard = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             plan.chapters
                 .iter()
                 .filter(|item| {
@@ -1136,14 +1373,23 @@ pub async fn apply_revision_plan(
                 .collect()
         };
         {
-            let snapshot = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-            (context.on_revision_progress)(&snapshot, &completed).await.map_err(|message| {
-                RevisionPlanError { code: "SHORT_REVISION_PROGRESS_FAILED", message, details: None }
-            })?;
+            let snapshot = draft_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone();
+            (context.on_revision_progress)(&snapshot, &completed)
+                .await
+                .map_err(|message| RevisionPlanError {
+                    code: "SHORT_REVISION_PROGRESS_FAILED",
+                    message,
+                    details: None,
+                })?;
         }
     }
     let mut final_draft = {
-        let guard = draft_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let guard = draft_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         guard.clone()
     };
     final_draft.story_title = plan
@@ -1153,15 +1399,21 @@ pub async fn apply_revision_plan(
     final_draft.opening_hook = plan
         .opening_hook
         .as_deref()
-        .map(|hook| if hook.trim().is_empty() { None } else { Some(hook.trim().to_string()) })
+        .map(|hook| {
+            if hook.trim().is_empty() {
+                None
+            } else {
+                Some(hook.trim().to_string())
+            }
+        })
         .unwrap_or(final_draft.opening_hook.clone());
     final_draft.raw_content =
         super::short_fiction::render_short_fiction_draft_markdown(&final_draft, context.language)
             .map_err(|error| RevisionPlanError {
-                code: "SHORT_REVISION_RENDER_FAILED",
-                message: error.message,
-                details: None,
-            })?;
+            code: "SHORT_REVISION_RENDER_FAILED",
+            message: error.message,
+            details: None,
+        })?;
     Ok(ApplyRevisionPlanOutcome {
         draft: final_draft,
         outline_markdown: plan

@@ -86,9 +86,7 @@ fn safe_relative_path(relative_path: &str) -> Result<String, AtomicFileSetError>
         || normalized == ".."
         || normalized.starts_with("../")
     {
-        return Err(AtomicFileSetError::UnsafePath(
-            relative_path.to_string(),
-        ));
+        return Err(AtomicFileSetError::UnsafePath(relative_path.to_string()));
     }
     Ok(normalized)
 }
@@ -105,9 +103,7 @@ async fn path_exists(path: &Path) -> io::Result<bool> {
 /// rm -r -f 等价（文件或目录均可，不存在吞错）。对齐 TS `rm(p, { recursive: true, force: true })`。
 async fn rm_any(path: &Path) -> io::Result<()> {
     match tokio::fs::metadata(path).await {
-        Ok(meta) if meta.is_dir() => {
-            tokio::fs::remove_dir_all(path).await
-        }
+        Ok(meta) if meta.is_dir() => tokio::fs::remove_dir_all(path).await,
         Ok(_) => tokio::fs::remove_file(path).await,
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),
@@ -445,8 +441,14 @@ mod tests {
             deletes: vec![],
         };
         commit_atomic_file_set(&set).await.expect("提交");
-        assert_eq!(read(&dir.path().join("chapters/0001_第一章.md")).await, "# 第1章");
-        assert_eq!(read(&dir.path().join("story/current_state.md")).await, "状态");
+        assert_eq!(
+            read(&dir.path().join("chapters/0001_第一章.md")).await,
+            "# 第1章"
+        );
+        assert_eq!(
+            read(&dir.path().join("story/current_state.md")).await,
+            "状态"
+        );
     }
 
     #[tokio::test]
@@ -495,12 +497,16 @@ mod tests {
     async fn commit_rolls_back_on_failure() {
         let dir = tempfile::tempdir().expect("临时目录");
         // rootDir/x 是文件，写 x/y.md 时 mkdir(x) 失败 → 触发回滚。
-        tokio::fs::write(dir.path().join("x"), "占位文件").await.expect("写占位");
+        tokio::fs::write(dir.path().join("x"), "占位文件")
+            .await
+            .expect("写占位");
         let preserved = dir.path().join("story/current_state.md");
         tokio::fs::create_dir_all(preserved.parent().unwrap())
             .await
             .expect("建目录");
-        tokio::fs::write(&preserved, "原有内容").await.expect("写原状态");
+        tokio::fs::write(&preserved, "原有内容")
+            .await
+            .expect("写原状态");
 
         let set = AtomicFileSet {
             root_dir: dir.path(),
@@ -600,7 +606,9 @@ mod tests {
             deletes: vec![],
         };
         commit_atomic_file_set(&set).await.expect("提交");
-        let raw = tokio::fs::read(dir.path().join("bin.dat")).await.expect("读取");
+        let raw = tokio::fs::read(dir.path().join("bin.dat"))
+            .await
+            .expect("读取");
         assert_eq!(raw, vec![1, 2, 3, 255]);
     }
 
@@ -615,7 +623,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("临时目录");
         let target = dir.path().join("book.json");
         tokio::fs::write(&target, "旧内容").await.unwrap();
-        write_file_atomic(&target, "{ \"完整新内容\" }").await.unwrap();
+        write_file_atomic(&target, "{ \"完整新内容\" }")
+            .await
+            .unwrap();
         let content = tokio::fs::read_to_string(&target).await.unwrap();
         assert_eq!(content, "{ \"完整新内容\" }");
         // 目录里不留孤儿临时文件。
@@ -646,7 +656,10 @@ mod tests {
         let target = dir.path().join("graph.json");
         std::fs::write(&target, "旧内容").unwrap();
         write_file_atomic_sync(&target, "{ \"完整新内容\" }".as_bytes()).unwrap();
-        assert_eq!(std::fs::read_to_string(&target).unwrap(), "{ \"完整新内容\" }");
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "{ \"完整新内容\" }"
+        );
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
@@ -728,7 +741,11 @@ mod tests {
         let first = atomic_tmp_path(target);
         let second = atomic_tmp_path(target);
         assert_eq!(first.parent(), Some(Path::new("/some/dir")));
-        assert!(first.file_name().unwrap().to_string_lossy().starts_with(".state.json.tmp-"));
+        assert!(first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with(".state.json.tmp-"));
         assert_ne!(first, second, "同目标连续两次取临时路径必须不同");
     }
 }

@@ -6,9 +6,9 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
@@ -54,7 +54,10 @@ pub fn parse_spot_fix_patches(raw: &str) -> Vec<SpotFixPatch> {
             replacement_text: trim_field(&caps[2]),
         });
     }
-    patches.into_iter().filter(|p| !p.target_text.is_empty()).collect()
+    patches
+        .into_iter()
+        .filter(|p| !p.target_text.is_empty())
+        .collect()
 }
 
 /// 对原文应用补丁（每补丁独立精确/模糊匹配，失败跳过）。
@@ -85,7 +88,11 @@ pub fn apply_spot_fix_patches(original: &str, patches: &[SpotFixPatch]) -> SpotF
     SpotFixPatchApplyResult {
         applied: applied > 0 && current != original,
         revised_content: current,
-        rejected_reason: if applied == 0 { Some("No patches could be matched to the chapter content.".into()) } else { None },
+        rejected_reason: if applied == 0 {
+            Some("No patches could be matched to the chapter content.".into())
+        } else {
+            None
+        },
         applied_patch_count: applied,
         skipped_patch_count: skipped,
         touched_chars: touched,
@@ -205,7 +212,7 @@ fn build_norm_to_orig_map(orig_chars: &[char]) -> Vec<usize> {
         } else {
             if in_ws {
                 map.push(oi); // 归一化的空格对应原始的「下一非空白字符起点」前一个位置近似
-                // 注：归一化空格是逻辑插入，映射到当前非空白字符起点（用于边界）
+                              // 注：归一化空格是逻辑插入，映射到当前非空白字符起点（用于边界）
             }
             map.push(oi);
             in_ws = false;
@@ -243,7 +250,10 @@ mod tests {
     #[test]
     fn apply_exact_unique_match() {
         let original = "开头 中间文本 结尾";
-        let patches = vec![SpotFixPatch { target_text: "中间文本".into(), replacement_text: "替换".into() }];
+        let patches = vec![SpotFixPatch {
+            target_text: "中间文本".into(),
+            replacement_text: "替换".into(),
+        }];
         let r = apply_spot_fix_patches(original, &patches);
         assert!(r.applied);
         assert_eq!(r.revised_content, "开头 替换 结尾");
@@ -254,7 +264,10 @@ mod tests {
     #[test]
     fn apply_skips_non_unique_match() {
         let original = "重复 重复 其他";
-        let patches = vec![SpotFixPatch { target_text: "重复".into(), replacement_text: "X".into() }];
+        let patches = vec![SpotFixPatch {
+            target_text: "重复".into(),
+            replacement_text: "X".into(),
+        }];
         let r = apply_spot_fix_patches(original, &patches);
         assert!(!r.applied);
         assert_eq!(r.skipped_patch_count, 1);
@@ -264,7 +277,10 @@ mod tests {
     fn apply_fuzzy_whitespace_normalized() {
         // 归一化后 ≥10 字符（fuzzy 阈值）
         let original = "他\n慢慢地  走了过来。";
-        let patches = vec![SpotFixPatch { target_text: "他 慢慢地 走了过来".into(), replacement_text: "他来了".into() }];
+        let patches = vec![SpotFixPatch {
+            target_text: "他 慢慢地 走了过来".into(),
+            replacement_text: "他来了".into(),
+        }];
         let r = apply_spot_fix_patches(original, &patches);
         assert!(r.applied, "应通过模糊匹配应用");
         assert!(r.revised_content.contains("他来了"));

@@ -87,7 +87,10 @@ pub struct MemorySemanticSelectionRequest<'a> {
 /// 语义精简器端口（TS `MemorySemanticSelector`——LLM 从 BM25 候选中精选）。
 #[async_trait::async_trait]
 pub trait MemorySemanticSelector: Send + Sync {
-    async fn select(&self, request: &MemorySemanticSelectionRequest<'_>) -> Result<Vec<String>, String>;
+    async fn select(
+        &self,
+        request: &MemorySemanticSelectionRequest<'_>,
+    ) -> Result<Vec<String>, String>;
 }
 
 /// 检索溯源（TS `MemoryRetrievalTrace` 对应面）。
@@ -130,10 +133,37 @@ async fn read_file_or_empty(path: &Path) -> String {
 }
 
 const STOP_WORDS: &[&str] = &[
-    "bring", "focus", "back", "chapter", "clear", "narrative", "before", "opening",
-    "track", "the", "with", "from", "that", "this", "into", "still", "cannot",
-    "current", "state", "advance", "conflict", "story", "keep", "must", "local",
-    "does", "not", "only", "just", "then", "than",
+    "bring",
+    "focus",
+    "back",
+    "chapter",
+    "clear",
+    "narrative",
+    "before",
+    "opening",
+    "track",
+    "the",
+    "with",
+    "from",
+    "that",
+    "this",
+    "into",
+    "still",
+    "cannot",
+    "current",
+    "state",
+    "advance",
+    "conflict",
+    "story",
+    "keep",
+    "must",
+    "local",
+    "does",
+    "not",
+    "only",
+    "just",
+    "then",
+    "than",
 ];
 
 async fn read_structured_state<T: DeserializeOwned>(path: &Path) -> Option<T> {
@@ -226,8 +256,7 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
 
     // Send 纪律：rusqlite Connection 非 Sync——不得跨 await 持有。
     // markdown 预读提前到 DB 打开之前，DB 分支收敛为纯同步段。
-    let summaries_markdown =
-        read_file_or_empty(&story_dir.join("chapter_summaries.md")).await;
+    let summaries_markdown = read_file_or_empty(&story_dir.join("chapter_summaries.md")).await;
 
     // 回填数据源与下方选取投影同源（structured rows 或 markdown 解析），
     // 物化一次后克隆给阻塞闭包；选取路径继续用原值。
@@ -262,12 +291,8 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
     .await;
 
     let volume_summaries = parse_volume_summaries_markdown(&volume_summaries_markdown);
-    let documents = build_memory_search_documents(
-        &summaries,
-        &searchable_hooks,
-        &facts,
-        &volume_summaries,
-    );
+    let documents =
+        build_memory_search_documents(&summaries, &searchable_hooks, &facts, &volume_summaries);
     // 520 号：磁盘索引（对齐 TS retrieveMemorySelection 用 story/memory.db 的
     // FTS 表并顺带重建）——此前用 :memory: 临时索引，磁盘 FTS 表永远无人写入，
     // hybrid-search / 检索面板等磁盘索引消费端在 Rust 侧恒空命中（差分器实证）。
@@ -322,7 +347,9 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
     let ranked_hits: Vec<crate::utils::local_search::SearchHit> = match &semantic_selected {
         Some(selected) => {
             let set: std::collections::HashSet<&String> = selected.iter().collect();
-            hits.into_iter().filter(|hit| set.contains(&hit.id)).collect()
+            hits.into_iter()
+                .filter(|hit| set.contains(&hit.id))
+                .collect()
         }
         None => hits,
     };
@@ -351,7 +378,6 @@ pub async fn retrieve_memory_selection(params: &RetrieveMemoryParams<'_>) -> Mem
     }
 }
 
-
 // ---- 陈旧 hook 回收判定（纯函数，golden 守门） ----
 
 /// 有回收压力的 hook（planner 必须本章处置）。
@@ -362,7 +388,9 @@ pub fn compute_recyclable_hooks(hooks: &[HookRecord], chapter_number: u32) -> Ve
     let mut scored: Vec<(HookRecord, i64)> = hooks
         .iter()
         .filter(|hook| !is_recycle_terminal_status(hook_status_text(hook)))
-        .filter(|hook| !is_future_planned_hook(hook, chapter_number, DEFAULT_HOOK_LOOKAHEAD_CHAPTERS))
+        .filter(|hook| {
+            !is_future_planned_hook(hook, chapter_number, DEFAULT_HOOK_LOOKAHEAD_CHAPTERS)
+        })
         .map(|hook| {
             let silence = hook_silence(hook, chapter_number);
             (hook.clone(), silence)
@@ -417,7 +445,9 @@ fn hook_silence(hook: &HookRecord, chapter_number: u32) -> i64 {
     if last_touch == 0 {
         return i64::from(chapter_number);
     }
-    i64::from(chapter_number).saturating_sub(i64::from(last_touch)).max(0)
+    i64::from(chapter_number)
+        .saturating_sub(i64::from(last_touch))
+        .max(0)
 }
 
 fn recycle_threshold(hook: &HookRecord) -> u32 {
@@ -433,7 +463,9 @@ fn recycle_threshold(hook: &HookRecord) -> u32 {
 
 fn pressured_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"pressured|near[_\s-]?payoff|progressing|重大推进|持续推进").unwrap())
+    R.get_or_init(|| {
+        Regex::new(r"pressured|near[_\s-]?payoff|progressing|重大推进|持续推进").unwrap()
+    })
 }
 
 // ---- 检索词提取（纯函数，golden 守门） ----
@@ -722,7 +754,9 @@ fn build_memory_search_documents(
 }
 
 /// TS `buildRankScores`：命中序位 × 10（越前越高）。
-fn build_rank_scores(hits: &[crate::utils::local_search::SearchHit]) -> std::collections::HashMap<String, i64> {
+fn build_rank_scores(
+    hits: &[crate::utils::local_search::SearchHit],
+) -> std::collections::HashMap<String, i64> {
     hits.iter()
         .enumerate()
         .map(|(index, hit)| (hit.id.clone(), (hits.len() - index) as i64 * 10))
@@ -785,14 +819,12 @@ fn select_relevant_summaries(
         .filter(|summary| summary.chapter < chapter_number)
         .map(|summary| {
             let age = (chapter_number - summary.chapter).max(0);
-            let retrieval_score =
-                rank_scores.get(&summary_document_id(summary.chapter)).copied().unwrap_or(0);
+            let retrieval_score = rank_scores
+                .get(&summary_document_id(summary.chapter))
+                .copied()
+                .unwrap_or(0);
             let score = retrieval_score + (12 - age).max(0);
-            (
-                summary.clone(),
-                score,
-                retrieval_score > 0,
-            )
+            (summary.clone(), score, retrieval_score > 0)
         })
         .collect();
 
@@ -802,15 +834,22 @@ fn select_relevant_summaries(
         .filter(|(summary, _, _)| summary.chapter >= chapter_number_u32 as i64 - 3)
         .collect();
     recent.sort_by(|left, right| right.0.chapter.cmp(&left.0.chapter));
-    let recent: Vec<StoredSummary> =
-        recent.iter().take(3).map(|(summary, _, _)| summary.clone()).collect();
+    let recent: Vec<StoredSummary> = recent
+        .iter()
+        .take(3)
+        .map(|(summary, _, _)| summary.clone())
+        .collect();
 
     let mut recalled_ranked: Vec<&(StoredSummary, i64, bool)> = ranked
         .iter()
         .filter(|(_, _, retrieved)| *retrieved)
         .collect();
-    recalled_ranked
-        .sort_by(|left, right| right.1.cmp(&left.1).then(right.0.chapter.cmp(&left.0.chapter)));
+    recalled_ranked.sort_by(|left, right| {
+        right
+            .1
+            .cmp(&left.1)
+            .then(right.0.chapter.cmp(&left.0.chapter))
+    });
     let recalled: Vec<StoredSummary> = recalled_ranked
         .iter()
         .take(1)
@@ -834,19 +873,19 @@ fn select_relevant_hooks(
     rank_scores: &std::collections::HashMap<String, i64>,
     chapter_number: u32,
 ) -> Vec<HookRecord> {
-    let active_hook_ids: std::collections::HashSet<&str> =
-        active_hooks.iter().map(|hook| hook.hook_id.as_str()).collect();
+    let active_hook_ids: std::collections::HashSet<&str> = active_hooks
+        .iter()
+        .map(|hook| hook.hook_id.as_str())
+        .collect();
     let ranked: Vec<(HookRecord, i64, bool)> = hooks
         .iter()
         .map(|hook| {
-            let retrieval_score =
-                rank_scores.get(&hook_document_id(&hook.hook_id)).copied().unwrap_or(0);
+            let retrieval_score = rank_scores
+                .get(&hook_document_id(&hook.hook_id))
+                .copied()
+                .unwrap_or(0);
             let score = retrieval_score + (hook.last_advanced_chapter as i64).max(0);
-            (
-                hook.clone(),
-                score,
-                retrieval_score > 0,
-            )
+            (hook.clone(), score, retrieval_score > 0)
         })
         .filter(|(hook, _, retrieved)| {
             *retrieved || active_hook_ids.contains(hook.hook_id.as_str())
@@ -867,13 +906,18 @@ fn select_relevant_hooks(
         })
         .collect();
     primary.sort_by(|left, right| {
-        right
-            .1
-            .cmp(&left.1)
-            .then(right.0.last_advanced_chapter.cmp(&left.0.last_advanced_chapter))
+        right.1.cmp(&left.1).then(
+            right
+                .0
+                .last_advanced_chapter
+                .cmp(&left.0.last_advanced_chapter),
+        )
     });
-    let primary: Vec<HookRecord> =
-        primary.iter().take(6).map(|(hook, _, _)| hook.clone()).collect();
+    let primary: Vec<HookRecord> = primary
+        .iter()
+        .take(6)
+        .map(|(hook, _, _)| hook.clone())
+        .collect();
 
     let selected_ids: std::collections::HashSet<&str> =
         primary.iter().map(|hook| hook.hook_id.as_str()).collect();
@@ -892,8 +936,11 @@ fn select_relevant_hooks(
             .cmp(&right.0.last_advanced_chapter)
             .then(right.1.cmp(&left.1))
     });
-    let stale: Vec<HookRecord> =
-        stale.iter().take(2).map(|(hook, _, _)| hook.clone()).collect();
+    let stale: Vec<HookRecord> = stale
+        .iter()
+        .take(2)
+        .map(|(hook, _, _)| hook.clone())
+        .collect();
 
     primary.into_iter().chain(stale).collect()
 }
@@ -923,8 +970,10 @@ fn select_relevant_facts(
                 Some(priority) => 20 - 2 * priority as i64,
                 None => 5,
             };
-            let retrieval_score =
-                rank_scores.get(&fact_document_id(index)).copied().unwrap_or(0);
+            let retrieval_score = rank_scores
+                .get(&fact_document_id(index))
+                .copied()
+                .unwrap_or(0);
             (
                 fact.clone(),
                 base_score + retrieval_score,
@@ -951,8 +1000,10 @@ fn select_relevant_volume_summaries(
         .iter()
         .enumerate()
         .map(|(index, summary)| {
-            let retrieval_score =
-                rank_scores.get(&volume_summary_document_id(index)).copied().unwrap_or(0);
+            let retrieval_score = rank_scores
+                .get(&volume_summary_document_id(index))
+                .copied()
+                .unwrap_or(0);
             (
                 index,
                 summary.clone(),
@@ -967,7 +1018,10 @@ fn select_relevant_volume_summaries(
     selected.sort_by(|left, right| right.2.cmp(&left.2));
     selected.truncate(2);
     selected.sort_by_key(|(index, _, _, _)| *index);
-    selected.into_iter().map(|(_, summary, _, _)| summary).collect()
+    selected
+        .into_iter()
+        .map(|(_, summary, _, _)| summary)
+        .collect()
 }
 
 fn summary_from_row(row: &ChapterSummaryRow) -> StoredSummary {
@@ -1060,7 +1114,14 @@ mod tests {
     /// 回收压力终态含 deferred（显式延后无回收压力；golden terminal-excluded 锁定）。
     #[test]
     fn terminal_predicates_split_searchable_from_recycle_pressure() {
-        for terminal in ["superseded", " Withdrawn ", "已撤回", "resolved", "closed", "已解决"] {
+        for terminal in [
+            "superseded",
+            " Withdrawn ",
+            "已撤回",
+            "resolved",
+            "closed",
+            "已解决",
+        ] {
             assert!(is_searchable_terminal_status(terminal), "{terminal}");
             assert!(is_recycle_terminal_status(terminal), "{terminal}");
         }
@@ -1069,8 +1130,14 @@ mod tests {
             assert!(!is_recycle_terminal_status(live), "{live}");
         }
         for postponed in ["deferred", "paused", "hold", "延后", "搁置"] {
-            assert!(!is_searchable_terminal_status(postponed), "{postponed} 仍可检索");
-            assert!(is_recycle_terminal_status(postponed), "{postponed} 无回收压力");
+            assert!(
+                !is_searchable_terminal_status(postponed),
+                "{postponed} 仍可检索"
+            );
+            assert!(
+                is_recycle_terminal_status(postponed),
+                "{postponed} 无回收压力"
+            );
         }
     }
 
@@ -1091,7 +1158,9 @@ mod tests {
         )
         .await
         .unwrap();
-        tokio::fs::write(story.join("chapter_summaries.md"), "").await.unwrap();
+        tokio::fs::write(story.join("chapter_summaries.md"), "")
+            .await
+            .unwrap();
 
         let selection = retrieve_memory_selection(&RetrieveMemoryParams {
             book_dir: dir.path(),
@@ -1104,12 +1173,25 @@ mod tests {
         .await;
 
         let selected: Vec<&str> = selection.hooks.iter().map(|h| h.hook_id.as_str()).collect();
-        assert!(selected.contains(&"H02"), "deferred 命中应入选: {selected:?}");
-        assert!(!selected.contains(&"H03"), "resolved 命中不得入选: {selected:?}");
-        let active: Vec<&str> = selection.active_hooks.iter().map(|h| h.hook_id.as_str()).collect();
+        assert!(
+            selected.contains(&"H02"),
+            "deferred 命中应入选: {selected:?}"
+        );
+        assert!(
+            !selected.contains(&"H03"),
+            "resolved 命中不得入选: {selected:?}"
+        );
+        let active: Vec<&str> = selection
+            .active_hooks
+            .iter()
+            .map(|h| h.hook_id.as_str())
+            .collect();
         assert_eq!(active, vec!["H01"], "deferred 不是活跃债务");
         assert!(
-            selection.recyclable_hooks.iter().all(|h| h.hook_id != "H02"),
+            selection
+                .recyclable_hooks
+                .iter()
+                .all(|h| h.hook_id != "H02"),
             "deferred 不进回收压力集"
         );
     }
@@ -1139,7 +1221,10 @@ mod tests {
     fn recycle_threshold_pressured_hits_at_five() {
         // pressured：沉默 5 章即回收（TS recycleThreshold → 5）。
         let pressured = hook("H01", 1, 4, HookStatus::Open, "pressured");
-        assert_eq!(compute_recyclable_hooks(std::slice::from_ref(&pressured), 9).len(), 1);
+        assert_eq!(
+            compute_recyclable_hooks(std::slice::from_ref(&pressured), 9).len(),
+            1
+        );
         assert!(compute_recyclable_hooks(&[pressured], 8).is_empty());
     }
 
@@ -1148,7 +1233,11 @@ mod tests {
         // near_payoff / "near payoff" / near-payoff 三种写法都命中 5 章阈值。
         for raw in ["near_payoff", "near payoff", "near-payoff"] {
             let h = hook("H01", 1, 2, HookStatus::Open, raw);
-            assert_eq!(compute_recyclable_hooks(std::slice::from_ref(&h), 7).len(), 1, "{raw}");
+            assert_eq!(
+                compute_recyclable_hooks(std::slice::from_ref(&h), 7).len(),
+                1,
+                "{raw}"
+            );
         }
     }
 
@@ -1156,12 +1245,18 @@ mod tests {
     fn recycle_threshold_default_ten_and_core_eight() {
         let open = hook("H01", 1, 0, HookStatus::Open, "open");
         assert!(compute_recyclable_hooks(std::slice::from_ref(&open), 10).is_empty());
-        assert_eq!(compute_recyclable_hooks(std::slice::from_ref(&open), 11).len(), 1);
+        assert_eq!(
+            compute_recyclable_hooks(std::slice::from_ref(&open), 11).len(),
+            1
+        );
 
         let mut core = hook("H02", 1, 0, HookStatus::Open, "open");
         core.core_hook = Some(true);
         assert!(compute_recyclable_hooks(std::slice::from_ref(&core), 8).is_empty());
-        assert_eq!(compute_recyclable_hooks(std::slice::from_ref(&core), 9).len(), 1);
+        assert_eq!(
+            compute_recyclable_hooks(std::slice::from_ref(&core), 9).len(),
+            1
+        );
     }
 
     #[test]
@@ -1190,7 +1285,11 @@ mod tests {
         // 不加整词，只留 2..4 字尾部窗口。
         assert_eq!(
             terms,
-            vec!["推进".to_string(), "起推进".to_string(), "崛起推进".to_string()]
+            vec![
+                "推进".to_string(),
+                "起推进".to_string(),
+                "崛起推进".to_string()
+            ]
         );
     }
 
@@ -1229,7 +1328,10 @@ mod tests {
     fn strip_negative_guidance_truncates_at_boundary() {
         // 英文否定引导词截断（\b 语义：CJK 紧邻 ASCII 也算边界）。
         assert_eq!(strip_negative_guidance("守住城池，不要弃城"), "守住城池，");
-        assert_eq!(strip_negative_guidance("能不能do not retreat further"), "能不能");
+        assert_eq!(
+            strip_negative_guidance("能不能do not retreat further"),
+            "能不能"
+        );
     }
 
     #[test]
@@ -1280,12 +1382,16 @@ mod tests {
         let active: Vec<HookRecord> = hooks.clone();
         let out = select_relevant_hooks(&hooks, &active, &rank_scores, 10);
         assert_eq!(out.len(), 8, "主选 6 + 陈旧 2");
-        assert_eq!(out[0].hook_id, "H07", "primary 按分数 DESC，freshness 最高在前");
+        assert_eq!(
+            out[0].hook_id, "H07",
+            "primary 按分数 DESC，freshness 最高在前"
+        );
     }
 
     #[test]
     fn parse_volume_summaries_and_slugify() {
-        let md = "# 卷摘要\n\n## 第一卷 觉醒\n林动初入宗门。\n\n## 第二卷: 大比\nhostile 氏族登场。\n";
+        let md =
+            "# 卷摘要\n\n## 第一卷 觉醒\n林动初入宗门。\n\n## 第二卷: 大比\nhostile 氏族登场。\n";
         let sections = parse_volume_summaries_markdown(md);
         assert_eq!(sections.len(), 2);
         assert_eq!(sections[0].heading, "第一卷 觉醒");

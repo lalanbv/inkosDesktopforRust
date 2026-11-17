@@ -5,8 +5,7 @@
 use sha2::{Digest, Sha256};
 
 use super::author_edit_scope::{
-    author_text_scope_contract, AuthorTextEditContract, AuthorTextScope,
-    AuthorTextScopeSelection,
+    author_text_scope_contract, AuthorTextEditContract, AuthorTextScope, AuthorTextScopeSelection,
 };
 use super::text_range_edits::{text_range_edit_contract, TextEditRange};
 use crate::utils::source_text::split_source_lines;
@@ -24,7 +23,13 @@ pub struct AuthorPermissionError {
 
 impl AuthorPermissionError {
     fn plain(message: impl Into<String>) -> Self {
-        Self { code: None, message: message.into(), work_id: None, artifact_id: None, revision_id: None }
+        Self {
+            code: None,
+            message: message.into(),
+            work_id: None,
+            artifact_id: None,
+            revision_id: None,
+        }
     }
 
     fn coded(code: &str, message: impl Into<String>, identity: (&str, &str, &str)) -> Self {
@@ -132,20 +137,27 @@ pub fn matches_protected_fragments(content: &str, parts: &[&str]) -> bool {
 /// 片段在当前文重映射（BASELINE_CONFLICT=受保护文本被改、AMBIGUOUS=多重映射）。
 #[allow(clippy::too_many_arguments)]
 pub async fn resolve_author_text_permission(
-    select: impl FnOnce(String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<AuthorTextScope, String>> + Send>>,
+    select: impl FnOnce(
+        String,
+        String,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<AuthorTextScope, String>> + Send>,
+    >,
     input: ResolveAuthorTextPermissionInput<'_>,
 ) -> Result<ResolvedAuthorPermission, AuthorPermissionError> {
     let identity = (input.work_id, input.artifact_id, input.revision_id);
     let mut cache_key_material = String::new();
-    cache_key_material.push_str(&serde_json::to_string(&serde_json::json!({
-        "version": input.selector_version,
-        "workId": input.work_id,
-        "artifactId": input.artifact_id,
-        "revisionId": input.revision_id,
-        "originalContent": input.original_content,
-        "authorRequest": input.author_request,
-    }))
-    .unwrap_or_default());
+    cache_key_material.push_str(
+        &serde_json::to_string(&serde_json::json!({
+            "version": input.selector_version,
+            "workId": input.work_id,
+            "artifactId": input.artifact_id,
+            "revisionId": input.revision_id,
+            "originalContent": input.original_content,
+            "authorRequest": input.author_request,
+        }))
+        .unwrap_or_default(),
+    );
     let mut hasher = Sha256::new();
     hasher.update(cache_key_material.as_bytes());
     let _cache_key = format!("{:x}", hasher.finalize());
@@ -157,10 +169,8 @@ pub async fn resolve_author_text_permission(
     .await
     .map_err(AuthorPermissionError::plain)?;
     // TS：select 后即合同化（Address 不合法在权限阶段即抛）。
-    let original_contract =
-        author_text_scope_contract(input.original_content, &selected).map_err(|error| {
-            AuthorPermissionError::plain(error.message)
-        })?;
+    let original_contract = author_text_scope_contract(input.original_content, &selected)
+        .map_err(|error| AuthorPermissionError::plain(error.message))?;
     let mut contract = match &original_contract {
         AuthorTextEditContract::Ranges(ranges) => {
             // wholeDocument 且当前文已变 → 以当前文重新合同化（同 scope）。
@@ -199,7 +209,8 @@ pub async fn resolve_author_text_permission(
             match merged.last_mut() {
                 Some(previous) if previous.1 == range.0 => {
                     previous.1 = range.1;
-                    previous.2 = previous.2 && range.2
+                    previous.2 = previous.2
+                        && range.2
                         && !input.original_content[previous.0..previous.1].contains(['\r', '\n']);
                 }
                 _ => merged.push(range),
@@ -221,7 +232,11 @@ pub async fn resolve_author_text_permission(
         }
         let mut left: Vec<usize> = Vec::new();
         cursor = protected_parts[0].len();
-        for part in protected_parts.iter().take(protected_parts.len().saturating_sub(1)).skip(1) {
+        for part in protected_parts
+            .iter()
+            .take(protected_parts.len().saturating_sub(1))
+            .skip(1)
+        {
             let index = input.current_content[cursor..]
                 .find(part)
                 .ok_or_else(|| AuthorPermissionError::plain("protected fragment vanished"))?;
@@ -229,8 +244,14 @@ pub async fn resolve_author_text_permission(
             cursor = cursor + index + part.len();
         }
         let mut right: Vec<usize> = Vec::new();
-        cursor = input.current_content.len().saturating_sub(protected_parts.last().unwrap().len());
-        for part in protected_parts[1..protected_parts.len().saturating_sub(1)].iter().rev() {
+        cursor = input
+            .current_content
+            .len()
+            .saturating_sub(protected_parts.last().unwrap().len());
+        for part in protected_parts[1..protected_parts.len().saturating_sub(1)]
+            .iter()
+            .rev()
+        {
             let index = input.current_content[..cursor]
                 .rfind(part)
                 .ok_or_else(|| AuthorPermissionError::plain("protected fragment vanished"))?;
@@ -253,7 +274,11 @@ pub async fn resolve_author_text_permission(
                 input.current_content.len() - protected_parts.last().unwrap().len()
             };
             projected.push((cursor, end_offset, range.2));
-            cursor = end_offset + protected_parts.get(index + 1).map(|part| part.len()).unwrap_or(0);
+            cursor = end_offset
+                + protected_parts
+                    .get(index + 1)
+                    .map(|part| part.len())
+                    .unwrap_or(0);
         }
         let scoped = super::text_range_edits::text_offset_selection_edit_contract(
             input.current_content,
@@ -263,9 +288,11 @@ pub async fn resolve_author_text_permission(
         contract = AuthorTextEditContract::Scoped(scoped);
     }
     let original_selection_texts: Vec<String> = match &original_contract {
-        AuthorTextEditContract::Ranges(ranges) => {
-            ranges.ranges.iter().map(|range| range.content.clone()).collect()
-        }
+        AuthorTextEditContract::Ranges(ranges) => ranges
+            .ranges
+            .iter()
+            .map(|range| range.content.clone())
+            .collect(),
         AuthorTextEditContract::Scoped(scoped) => {
             scoped.spans.iter().map(|span| span.text.clone()).collect()
         }
@@ -276,7 +303,9 @@ pub async fn resolve_author_text_permission(
     })
 }
 
-fn clone_scoped(scoped: &super::text_range_edits::ScopedSelectionContract) -> super::text_range_edits::ScopedSelectionContract {
+fn clone_scoped(
+    scoped: &super::text_range_edits::ScopedSelectionContract,
+) -> super::text_range_edits::ScopedSelectionContract {
     super::text_range_edits::ScopedSelectionContract {
         content: scoped.content.clone(),
         spans: scoped.spans.clone(),
@@ -300,5 +329,8 @@ pub struct ResolvedAuthorPermission {
 
 /// author_text_permission 模块的 scope 构造辅助（SourceLocatorAgent 输出面）。
 pub fn scope_selection(unit_id: &str, text: &str) -> AuthorTextScopeSelection {
-    AuthorTextScopeSelection { unit_id: unit_id.into(), text: text.into() }
+    AuthorTextScopeSelection {
+        unit_id: unit_id.into(),
+        text: text.into(),
+    }
 }

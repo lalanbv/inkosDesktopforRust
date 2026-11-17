@@ -104,9 +104,15 @@ pub fn build_writer_system_prompt(input: &WriterSystemPromptInput<'_>) -> String
     });
 
     let output_section = match (is_english, mode) {
-        (true, WriterPromptMode::Creative) => build_english_creative_output_format(book, gp, &resolved_length_spec),
-        (true, WriterPromptMode::Full) => build_english_output_format(book, gp, &resolved_length_spec),
-        (false, WriterPromptMode::Creative) => build_creative_output_format(book, gp, &resolved_length_spec),
+        (true, WriterPromptMode::Creative) => {
+            build_english_creative_output_format(book, gp, &resolved_length_spec)
+        }
+        (true, WriterPromptMode::Full) => {
+            build_english_output_format(book, gp, &resolved_length_spec)
+        }
+        (false, WriterPromptMode::Creative) => {
+            build_creative_output_format(book, gp, &resolved_length_spec)
+        }
         (false, WriterPromptMode::Full) => build_output_format(book, gp, &resolved_length_spec),
     };
 
@@ -131,9 +137,7 @@ pub fn build_writer_system_prompt(input: &WriterSystemPromptInput<'_>) -> String
                 .map(|ctx| build_character_voice_profiles(&ctx.fanfic_canon))
                 .unwrap_or_default(),
             fanfic
-                .map(|ctx| {
-                    build_fanfic_mode_instructions(ctx.fanfic_mode, &ctx.allowed_deviations)
-                })
+                .map(|ctx| build_fanfic_mode_instructions(ctx.fanfic_mode, &ctx.allowed_deviations))
                 .unwrap_or_default(),
             // 动笔前自检清单已移至 style_guide.md（v10）
             output_section,
@@ -166,9 +170,7 @@ pub fn build_writer_system_prompt(input: &WriterSystemPromptInput<'_>) -> String
                 .map(|ctx| build_character_voice_profiles(&ctx.fanfic_canon))
                 .unwrap_or_default(),
             fanfic
-                .map(|ctx| {
-                    build_fanfic_mode_instructions(ctx.fanfic_mode, &ctx.allowed_deviations)
-                })
+                .map(|ctx| build_fanfic_mode_instructions(ctx.fanfic_mode, &ctx.allowed_deviations))
                 .unwrap_or_default(),
             // 动笔前自检清单已移至 style_guide.md（v10）
             output_section,
@@ -341,17 +343,16 @@ fn build_full_cast_tracking() -> String {
 
 fn build_genre_rules(gp: &GenreProfile, genre_body: &str) -> String {
     let fatigue_line = if !gp.fatigue_words.is_empty() {
-        format!("- 高疲劳词（{}）单章最多出现1次", gp.fatigue_words.join("、"))
+        format!(
+            "- 高疲劳词（{}）单章最多出现1次",
+            gp.fatigue_words.join("、")
+        )
     } else {
         String::new()
     };
 
     let chapter_types_line = if !gp.chapter_types.is_empty() {
-        let lines: Vec<String> = gp
-            .chapter_types
-            .iter()
-            .map(|t| format!("- {t}"))
-            .collect();
+        let lines: Vec<String> = gp.chapter_types.iter().map(|t| format!("- {t}")).collect();
         format!("动笔前先判断本章类型：\n{}", lines.join("\n"))
     } else {
         String::new()
@@ -380,7 +381,10 @@ fn build_genre_rules(gp: &GenreProfile, genre_body: &str) -> String {
 
 /// 叙事人称是持久用户约束：仅在用户显式设定（book_rules.narrativePerson）时执行；
 /// 未设定时保持沉默让题材默认生效——绝不强加用户没要求的人称。
-fn build_narrative_person_rule(book_rules: Option<&BookRules>, language: WritingLanguage) -> String {
+fn build_narrative_person_rule(
+    book_rules: Option<&BookRules>,
+    language: WritingLanguage,
+) -> String {
     let Some(person) = book_rules.and_then(|rules| rules.narrative_person) else {
         return String::new();
     };
@@ -467,7 +471,11 @@ fn build_style_fingerprint(fingerprint: Option<&str>) -> String {
 
 // --- 输出格式（zh creative / full）-------------------------------------------------------
 
-fn build_creative_output_format(book: &BookConfig, gp: &GenreProfile, length_spec: &LengthSpec) -> String {
+fn build_creative_output_format(
+    book: &BookConfig,
+    gp: &GenreProfile,
+    length_spec: &LengthSpec,
+) -> String {
     let _ = book;
     let pre_write_table = build_zh_pre_write_table(gp);
 
@@ -1023,4 +1031,3 @@ mod tests {
         assert!(!s.contains("UPDATED_LEDGER"));
     }
 }
-

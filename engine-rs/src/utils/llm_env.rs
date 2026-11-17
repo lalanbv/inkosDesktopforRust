@@ -144,7 +144,10 @@ mod tests {
     use super::*;
 
     fn layer(pairs: &[(&str, Option<&str>)]) -> LLMEnvMap {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.map(|s| s.to_string()))).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.map(|s| s.to_string())))
+            .collect()
     }
 
     #[test]
@@ -173,9 +176,15 @@ mod tests {
         assert_eq!(parse_env_value("false"), serde_json::Value::Bool(false));
         assert_eq!(parse_env_value(r#"{"a":1}"#), serde_json::json!({"a": 1}));
         assert_eq!(parse_env_value("[1,2]"), serde_json::json!([1, 2]));
-        assert_eq!(parse_env_value("hello"), serde_json::Value::String("hello".into()));
+        assert_eq!(
+            parse_env_value("hello"),
+            serde_json::Value::String("hello".into())
+        );
         // 非纯数字（含字母）→ string
-        assert_eq!(parse_env_value("12abc"), serde_json::Value::String("12abc".into()));
+        assert_eq!(
+            parse_env_value("12abc"),
+            serde_json::Value::String("12abc".into())
+        );
     }
 
     #[test]

@@ -42,7 +42,9 @@ use crate::models::book::{BookConfig, Platform};
 use crate::server::books_routes::BooksRuntime;
 use crate::utils::chapter_splitter::split_chapters;
 use crate::utils::language::WritingLanguage;
-use crate::utils::length_metrics::{count_chapter_length, default_chapter_length, resolve_length_counting_mode};
+use crate::utils::length_metrics::{
+    count_chapter_length, default_chapter_length, resolve_length_counting_mode,
+};
 use crate::utils::utc_time::utc_now_iso;
 
 type ApiError = (StatusCode, Json<Value>);
@@ -63,7 +65,8 @@ pub struct BookCreateStatus {
 }
 
 fn create_status_map() -> &'static Arc<tokio::sync::Mutex<HashMap<String, BookCreateStatus>>> {
-    static MAP: OnceLock<Arc<tokio::sync::Mutex<HashMap<String, BookCreateStatus>>>> = OnceLock::new();
+    static MAP: OnceLock<Arc<tokio::sync::Mutex<HashMap<String, BookCreateStatus>>>> =
+        OnceLock::new();
     MAP.get_or_init(|| Arc::new(tokio::sync::Mutex::new(HashMap::new())))
 }
 
@@ -80,7 +83,8 @@ fn derive_book_id_from_title(title: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
     for c in lower.chars() {
-        let keep = c.is_ascii_lowercase() || c.is_ascii_digit() || ('\u{4e00}'..='\u{9fff}').contains(&c);
+        let keep =
+            c.is_ascii_lowercase() || c.is_ascii_digit() || ('\u{4e00}'..='\u{9fff}').contains(&c);
         if keep {
             out.push(c);
             last_dash = false;
@@ -122,9 +126,11 @@ fn build_studio_book_config(
         Some("zh") => Some("zh".to_string()),
         _ => None,
     };
-    let default_length = default_chapter_length(
-        if language.as_deref() == Some("en") { WritingLanguage::En } else { WritingLanguage::Zh },
-    );
+    let default_length = default_chapter_length(if language.as_deref() == Some("en") {
+        WritingLanguage::En
+    } else {
+        WritingLanguage::Zh
+    });
     BookConfig {
         id: derive_book_id_from_title(title),
         title: title.to_string(),
@@ -149,7 +155,10 @@ fn build_studio_book_config(
 
 /// 状态机写入（59 号 fanfic/spinoff/imitation 端点用）。
 pub async fn set_create_status(book_id: &str, status: BookCreateStatus) {
-    create_status_map().lock().await.insert(book_id.to_string(), status);
+    create_status_map()
+        .lock()
+        .await
+        .insert(book_id.to_string(), status);
 }
 
 /// 状态机清除（创建成功）。
@@ -173,13 +182,25 @@ pub fn build_studio_book_config_pub(
     chapter_word_count: Option<u32>,
     now: &str,
 ) -> crate::models::book::BookConfig {
-    build_studio_book_config(title, genre, language, platform, target_chapters, chapter_word_count, now)
+    build_studio_book_config(
+        title,
+        genre,
+        language,
+        platform,
+        target_chapters,
+        chapter_word_count,
+        now,
+    )
 }
 
 /// 对齐 TS `completeBookExists`：book.json + story/story_bible.md 双存在。
 pub async fn complete_book_exists(book_dir: &Path) -> bool {
-    tokio::fs::try_exists(book_dir.join("book.json")).await.unwrap_or(false)
-        && tokio::fs::try_exists(book_dir.join("story").join("story_bible.md")).await.unwrap_or(false)
+    tokio::fs::try_exists(book_dir.join("book.json"))
+        .await
+        .unwrap_or(false)
+        && tokio::fs::try_exists(book_dir.join("story").join("story_bible.md"))
+            .await
+            .unwrap_or(false)
 }
 
 // ── init_book（runner.ts initBook 的 Rust 装配） ──────────────────
@@ -203,8 +224,10 @@ pub async fn init_book(
     author_intent: Option<&str>,
     current_focus: Option<&str>,
 ) -> Result<(), String> {
-    let architect_chat =
-        RoutedAgent { router: runtime.effective_router().await, agent: "architect" };
+    let architect_chat = RoutedAgent {
+        router: runtime.effective_router().await,
+        agent: "architect",
+    };
     let reviewer_chat = RoutedAgent {
         router: runtime.effective_router().await,
         agent: "foundation-reviewer",
@@ -311,9 +334,15 @@ async fn generate_and_review_foundation_multi(
     max_retries: usize,
 ) -> Result<crate::agents::architect::ArchitectOutput, String> {
     let mut feedback: Option<String> = None;
-    let mut foundation = generate_foundation(architect_ctx, architect_chat, &book, external_context.as_deref(), feedback.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut foundation = generate_foundation(
+        architect_ctx,
+        architect_chat,
+        &book,
+        external_context.as_deref(),
+        feedback.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     for _ in 0..max_retries {
         let params = ReviewParams {
@@ -329,9 +358,15 @@ async fn generate_and_review_foundation_multi(
             return Ok(foundation);
         }
         feedback = Some(build_foundation_review_feedback(&review, language));
-        foundation = generate_foundation(architect_ctx, architect_chat, &book, external_context.as_deref(), feedback.as_deref())
-            .await
-            .map_err(|e| e.to_string())?;
+        foundation = generate_foundation(
+            architect_ctx,
+            architect_chat,
+            &book,
+            external_context.as_deref(),
+            feedback.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     // 终审（兜底接受——不再重生成）。
@@ -436,21 +471,27 @@ pub(crate) async fn write_director_inspiration_card(
         return Ok(()); // 已有灵感卡不覆盖
     }
     let obj = session.as_object_mut().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "director session is not an object")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "director session is not an object",
+        )
     })?;
     obj.insert("bookId".into(), json!(book_id));
     obj.entry("stage").or_insert_with(|| json!("directions"));
-    obj.insert("inspiration".into(), json!({ "premise": premise, "keywords": [] }));
-    obj.insert("updatedAt".into(), json!(crate::interaction::session::utc_now_ms()));
+    obj.insert(
+        "inspiration".into(),
+        json!({ "premise": premise, "keywords": [] }),
+    );
+    obj.insert(
+        "updatedAt".into(),
+        json!(crate::interaction::session::utc_now_ms()),
+    );
     let serialized = serde_json::to_string_pretty(&session).unwrap_or_default();
     crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await?;
     Ok(())
 }
 
-pub async fn create_book(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn create_book(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };
@@ -459,7 +500,10 @@ pub async fn create_book(
     if title.is_empty() || genre.is_empty() {
         // TS buildStudioBookConfig 不校验；缺 title → id 空 → 400 逐字。
         if title.is_empty() {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Could not derive a valid book id from title" })));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "Could not derive a valid book id from title" })),
+            );
         }
     }
     let now = utc_now_iso();
@@ -468,23 +512,41 @@ pub async fn create_book(
         genre,
         parsed.get("language").and_then(Value::as_str),
         parsed.get("platform").and_then(Value::as_str),
-        parsed.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32),
-        parsed.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32),
+        parsed
+            .get("targetChapters")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32),
+        parsed
+            .get("chapterWordCount")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32),
         &now,
     );
     let book_id = book.id.clone();
     if book_id.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Could not derive a valid book id from title" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Could not derive a valid book id from title" })),
+        );
     }
     if complete_book_exists(&runtime.state.book_dir(&book_id)).await {
-        return (StatusCode::CONFLICT, Json(json!({ "error": format!("Book \"{book_id}\" already exists") })));
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": format!("Book \"{book_id}\" already exists") })),
+        );
     }
 
-    runtime.hub.broadcast("book:creating", &json!({ "bookId": book_id, "title": title }));
-    create_status_map()
-        .lock()
-        .await
-        .insert(book_id.clone(), BookCreateStatus { status: "creating".to_string(), error: None });
+    runtime.hub.broadcast(
+        "book:creating",
+        &json!({ "bookId": book_id, "title": title }),
+    );
+    create_status_map().lock().await.insert(
+        book_id.clone(),
+        BookCreateStatus {
+            status: "creating".to_string(),
+            error: None,
+        },
+    );
 
     // 500 号：灵感卡 premise（blurb 优先，缺省标题）——预提取避免跨 await 借用。
     let premise = parsed
@@ -509,14 +571,23 @@ pub async fn create_book(
                         let error = "Book creation artifact is incomplete on disk.".to_string();
                         create_status_map().lock().await.insert(
                             book_id.clone(),
-                            BookCreateStatus { status: "error".to_string(), error: Some(error.clone()) },
+                            BookCreateStatus {
+                                status: "error".to_string(),
+                                error: Some(error.clone()),
+                            },
                         );
-                        runtime.hub.broadcast("book:error", &json!({ "bookId": book_id, "error": error }));
+                        runtime
+                            .hub
+                            .broadcast("book:error", &json!({ "bookId": book_id, "error": error }));
                         return;
                     }
                     // 500 号：灵感卡写入失败不阻断建书完成。
-                    if let Err(e) =
-                        write_director_inspiration_card(runtime.state.project_root(), &book_id, &premise).await
+                    if let Err(e) = write_director_inspiration_card(
+                        runtime.state.project_root(),
+                        &book_id,
+                        &premise,
+                    )
+                    .await
                     {
                         eprintln!("[book:create] 导演灵感卡写入失败（不阻断）：{e}");
                     }
@@ -527,23 +598,32 @@ pub async fn create_book(
                         .await
                         .ok()
                         .map(|config| json!({ "id": config.id, "title": config.title }));
-                    runtime
-                        .hub
-                        .broadcast("book:created", &json!({ "bookId": book_id, "book": book_summary }));
+                    runtime.hub.broadcast(
+                        "book:created",
+                        &json!({ "bookId": book_id, "book": book_summary }),
+                    );
                 }
                 Err(error) => {
                     create_status_map().lock().await.insert(
                         book_id.clone(),
-                        BookCreateStatus { status: "error".to_string(), error: Some(error.clone()) },
+                        BookCreateStatus {
+                            status: "error".to_string(),
+                            error: Some(error.clone()),
+                        },
                     );
-                    runtime.hub.broadcast("book:error", &json!({ "bookId": book_id, "error": error }));
+                    runtime
+                        .hub
+                        .broadcast("book:error", &json!({ "bookId": book_id, "error": error }));
                 }
             }
         }
     };
     tokio::spawn(background);
 
-    (StatusCode::OK, Json(json!({ "status": "creating", "bookId": book_id })))
+    (
+        StatusCode::OK,
+        Json(json!({ "status": "creating", "bookId": book_id })),
+    )
 }
 
 /// 创建外部指令拼接（blurb/worldPremise/... 八段）。对齐 `buildCreationExternalContext`。
@@ -628,8 +708,15 @@ pub(crate) async fn import_chapters_chain(
     book_id: &str,
     chapters: &[crate::utils::chapter_splitter::SplitChapter],
 ) -> Result<Value, String> {
-    import_chapters_chain_with_resume(runtime, book_id, chapters, 1, ImportMode::Continuation, None)
-        .await
+    import_chapters_chain_with_resume(
+        runtime,
+        book_id,
+        chapters,
+        1,
+        ImportMode::Continuation,
+        None,
+    )
+    .await
 }
 
 /// 导入链中止错误（英文锚文本；确认/聊天执行器据此本地化——与 write_next
@@ -637,7 +724,9 @@ pub(crate) async fn import_chapters_chain(
 pub(crate) const IMPORT_ABORTED_MESSAGE: &str =
     "Operation aborted: the user requested to stop this task.";
 
-fn import_check_aborted(abort: Option<&crate::interaction::agent_loop::AbortHandle>) -> Result<(), String> {
+fn import_check_aborted(
+    abort: Option<&crate::interaction::agent_loop::AbortHandle>,
+) -> Result<(), String> {
     if abort.is_some_and(|flag| *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner())) {
         return Err(IMPORT_ABORTED_MESSAGE.to_string());
     }
@@ -662,7 +751,10 @@ pub(crate) async fn import_chapters_chain_with_resume(
     // 检查点①：入口（TS 2826——锁前即查）。
     import_check_aborted(abort)?;
     let state = &runtime.state;
-    let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
+    let book = state
+        .load_book_config(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let book_dir = state.book_dir(book_id);
     let parsed_genre = crate::agents::rules_reader::read_genre_profile(
         state.project_root(),
@@ -683,8 +775,10 @@ pub(crate) async fn import_chapters_chain_with_resume(
     // Step 1：首次导入（start_from == 1）时全量重建；续放跳过（保留既有地基）。
     if start_from == 1 {
         let foundation_source = build_import_foundation_source(chapters);
-        let architect_chat =
-            RoutedAgent { router: runtime.effective_router().await, agent: "architect" };
+        let architect_chat = RoutedAgent {
+            router: runtime.effective_router().await,
+            agent: "architect",
+        };
         let architect_ctx = ArchitectCtx {
             project_root: state.project_root(),
             builtin_genres_dir: &runtime.builtin_genres_dir,
@@ -724,12 +818,20 @@ pub(crate) async fn import_chapters_chain_with_resume(
             .save_chapter_index_at(&book_dir, &[], true)
             .await
             .map_err(|e| e.to_string())?;
-        state.snapshot_state_at(&book_dir, 0).await.map_err(|e| e.to_string())?;
+        state
+            .snapshot_state_at(&book_dir, 0)
+            .await
+            .map_err(|e| e.to_string())?;
 
         // 风格向导（资料包 ≥500 UTF-16 码元；吞错）。
         if foundation_source.encode_utf16().count() >= 500 {
             let _ = crate::server::style_routes::generate_style_guide_for_book(
-                state, &*runtime.effective_router().await, &runtime.builtin_genres_dir, book_id, &foundation_source, Some(&book.title),
+                state,
+                &*runtime.effective_router().await,
+                &runtime.builtin_genres_dir,
+                book_id,
+                &foundation_source,
+                Some(&book.title),
             )
             .await;
         }
@@ -753,7 +855,11 @@ pub(crate) async fn import_chapters_chain_with_resume(
     let write_agents = agent_ports.agents(&write_settler);
     let write_ctx = write_ports.ctx();
     let governance_config = crate::pipeline::write_next::WriteNextConfig::default();
-    for (index, chapter) in chapters.iter().enumerate().skip(start_from.saturating_sub(1) as usize) {
+    for (index, chapter) in chapters
+        .iter()
+        .enumerate()
+        .skip(start_from.saturating_sub(1) as usize)
+    {
         // 检查点②：每章回放头（TS 2858）。
         import_check_aborted(abort)?;
         let chapter_number = (index + 1) as u32;
@@ -789,8 +895,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
         // 已完整落盘（含索引与快照），本章分析与产物全部丢弃、零残留。
         import_check_aborted(abort)?;
 
-        let chapter_word_count =
-            count_chapter_length(&chapter.content, counting_mode) as u32;
+        let chapter_word_count = count_chapter_length(&chapter.content, counting_mode) as u32;
         // TS `{...output, content, wordCount, postWriteErrors: [], postWriteWarnings: []}`
         // ——分析面补全为落盘面（runtime 工件字段缺省）。
         let persisted = crate::agents::writer::WriteChapterOutput {
@@ -817,9 +922,15 @@ pub(crate) async fn import_chapters_chain_with_resume(
             token_usage: Default::default(),
         };
 
-        crate::agents::writer::save_chapter(&analyzer_ports.writer_ctx(), &book_dir, &persisted, gp.numerical_system, language)
-            .await
-            .map_err(|e| e.to_string())?;
+        crate::agents::writer::save_chapter(
+            &analyzer_ports.writer_ctx(),
+            &book_dir,
+            &persisted,
+            gp.numerical_system,
+            language,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         crate::agents::writer::save_new_truth_files(&book_dir, &persisted, language)
             .await
             .map_err(|e| e.to_string())?;
@@ -834,7 +945,10 @@ pub(crate) async fn import_chapters_chain_with_resume(
         .map_err(|e| e.to_string())?;
 
         // 索引：同号替换（resume），否则追加；status "imported"。
-        let existing = state.load_chapter_index(book_id).await.map_err(|e| e.to_string())?;
+        let existing = state
+            .load_chapter_index(book_id)
+            .await
+            .map_err(|e| e.to_string())?;
         let now = utc_now_iso();
         let new_entry = crate::models::chapter::ChapterMeta {
             number: chapter_number,
@@ -857,8 +971,14 @@ pub(crate) async fn import_chapters_chain_with_resume(
             Some(idx) => updated[idx] = new_entry,
             None => updated.push(new_entry),
         }
-        state.save_chapter_index(book_id, &updated).await.map_err(|e| e.to_string())?;
-        state.snapshot_state(book_id, chapter_number).await.map_err(|e| e.to_string())?;
+        state
+            .save_chapter_index(book_id, &updated)
+            .await
+            .map_err(|e| e.to_string())?;
+        state
+            .snapshot_state(book_id, chapter_number)
+            .await
+            .map_err(|e| e.to_string())?;
 
         imported_count += 1;
         total_words += chapter_word_count as u64;
@@ -888,7 +1008,9 @@ async fn foundation_review_retries(root: &Path) -> usize {
 
 /// 导入地基资料包（章节目录 + 正文）。对齐 `buildImportFoundationSource` 的
 /// 目录形态（TS 实现按章拼接标题与正文）。
-fn build_import_foundation_source(chapters: &[crate::utils::chapter_splitter::SplitChapter]) -> String {
+fn build_import_foundation_source(
+    chapters: &[crate::utils::chapter_splitter::SplitChapter],
+) -> String {
     chapters
         .iter()
         .map(|chapter| format!("# {}\n\n{}", chapter.title, chapter.content))
@@ -903,21 +1025,31 @@ pub async fn import_chapters_endpoint(
 ) -> impl IntoResponse {
     // 273 号：整本小说导入——`Bytes` 提取器 2MB 默认上限截断，改手工读
     //（TS 无上限；此处 64MB 安全上界）。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };
-    let Some(text) = parsed.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
+    let Some(text) = parsed
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "text is required" })),
+        );
     };
     let split_regex = parsed.get("splitRegex").and_then(Value::as_str);
 
-    runtime
-        .hub
-        .broadcast("import:start", &json!({ "bookId": book_id, "type": "chapters" }));
+    runtime.hub.broadcast(
+        "import:start",
+        &json!({ "bookId": book_id, "type": "chapters" }),
+    );
     let chapters = split_chapters(text, split_regex);
     match import_chapters_chain(&runtime, &book_id, &chapters).await {
         Ok(result) => {
@@ -928,9 +1060,10 @@ pub async fn import_chapters_endpoint(
             (StatusCode::OK, Json(result))
         }
         Err(error) => {
-            runtime
-                .hub
-                .broadcast("import:error", &json!({ "bookId": book_id, "error": error }));
+            runtime.hub.broadcast(
+                "import:error",
+                &json!({ "bookId": book_id, "error": error }),
+            );
             flat_internal(error)
         }
     }
@@ -996,9 +1129,18 @@ pub(crate) async fn revise_foundation_chain(
     let backup_tag = if is_phase5 { "phase5" } else { "phase4" };
     let backup_dir = story_dir.join(format!(".backup-{backup_tag}-{timestamp}"));
     let _ = tokio::fs::create_dir_all(&backup_dir).await;
-    for file_name in ["story_bible.md", "volume_outline.md", "book_rules.md", "character_matrix.md"] {
+    for file_name in [
+        "story_bible.md",
+        "volume_outline.md",
+        "book_rules.md",
+        "character_matrix.md",
+    ] {
         if let Ok(content) = tokio::fs::read_to_string(story_dir.join(file_name)).await {
-            let _ = crate::utils::atomic_file_set::write_file_atomic(&backup_dir.join(file_name), &content).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(
+                &backup_dir.join(file_name),
+                &content,
+            )
+            .await;
         }
     }
     if is_phase5 {
@@ -1016,8 +1158,7 @@ async fn revise_foundation_inner(
     is_phase5: bool,
 ) -> Result<(), String> {
     use crate::agents::architect::{
-        generate_foundation_inner, write_foundation_files, ArchitectCtx,
-        FoundationWriteMode,
+        generate_foundation_inner, write_foundation_files, ArchitectCtx, FoundationWriteMode,
     };
     use crate::utils::outline_paths::{read_character_context, read_story_frame, read_volume_map};
 
@@ -1046,7 +1187,10 @@ async fn revise_foundation_inner(
     };
     let old_book_rules = read_or_empty(story_dir.join("book_rules.md")).await;
 
-    let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
+    let book = state
+        .load_book_config(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let architect_chat = crate::llm::agent_router::RoutedAgent {
         router: runtime.effective_router().await,
         agent: "architect",
@@ -1113,7 +1257,13 @@ async fn revise_foundation_inner(
     } else {
         crate::utils::language::WritingLanguage::Zh
     };
-    write_foundation_files(&book_dir, &foundation, language, FoundationWriteMode::Revise).await
+    write_foundation_files(
+        &book_dir,
+        &foundation,
+        language,
+        FoundationWriteMode::Revise,
+    )
+    .await
 }
 
 async fn copy_dir_shallow(src: &std::path::Path, dest: &std::path::Path) {
@@ -1126,7 +1276,8 @@ async fn copy_dir_shallow(src: &std::path::Path, dest: &std::path::Path) {
             continue;
         };
         if let Ok(content) = tokio::fs::read_to_string(src.join(&name)).await {
-            let _ = crate::utils::atomic_file_set::write_file_atomic(&dest.join(name), &content).await;
+            let _ =
+                crate::utils::atomic_file_set::write_file_atomic(&dest.join(name), &content).await;
         }
     }
 }
@@ -1142,7 +1293,11 @@ async fn copy_dir_deep(src: &std::path::Path, dest: &std::path::Path) {
         };
         let src_path = src.join(&name);
         let dest_path = dest.join(name);
-        if tokio::fs::metadata(&src_path).await.map(|m| m.is_dir()).unwrap_or(false) {
+        if tokio::fs::metadata(&src_path)
+            .await
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
             Box::pin(copy_dir_deep(&src_path, &dest_path)).await;
         } else if let Ok(content) = tokio::fs::read_to_string(&src_path).await {
             let _ = crate::utils::atomic_file_set::write_file_atomic(&dest_path, &content).await;
@@ -1163,7 +1318,10 @@ mod director_card_tests {
             .await
             .unwrap();
         let raw = std::fs::read_to_string(
-            root.path().join(".inkos").join("director").join("b-probe.json"),
+            root.path()
+                .join(".inkos")
+                .join("director")
+                .join("b-probe.json"),
         )
         .unwrap();
         let v: Value = serde_json::from_str(&raw).unwrap();
@@ -1184,7 +1342,9 @@ mod director_card_tests {
             r#"{"bookId":"b1","stage":"writing","inspiration":{"premise":"旧灵感","keywords":["保留"]}}"#,
         )
         .unwrap();
-        write_director_inspiration_card(root.path(), "b1", "新灵感").await.unwrap();
+        write_director_inspiration_card(root.path(), "b1", "新灵感")
+            .await
+            .unwrap();
         let raw = std::fs::read_to_string(dir.join("b1.json")).unwrap();
         assert!(raw.contains("旧灵感"), "已有灵感卡必须保留");
         assert!(!raw.contains("新灵感"));

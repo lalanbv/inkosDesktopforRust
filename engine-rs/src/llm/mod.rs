@@ -9,19 +9,19 @@
 //! createStreamMonitor（定时器）/ estimatePiContextTokens（依赖 pi-ai PiContext）/
 //! withTransientLLMRetry / config-migration / service-resolver / secrets
 
-pub mod lookup;
 pub mod agent_router;
 pub mod agent_trajectory;
 pub mod cover;
 pub mod cover_origin;
+pub mod cover_providers;
+pub mod lookup;
+pub mod probe;
 pub mod provider;
 pub mod providers;
 pub mod providers_bank;
 pub mod registry;
 pub mod secrets;
 pub mod service_presets;
-pub mod cover_providers;
-pub mod probe;
 pub mod sse_parser;
 pub mod streaming_client;
 pub mod think_tag_stripper;

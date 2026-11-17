@@ -23,7 +23,9 @@ use std::sync::OnceLock;
 
 use crate::models::book::BookConfig;
 use crate::models::chapter::{ChapterMeta, ChapterStatus};
-use crate::state::state_bootstrap::{bootstrap_structured_state_from_markdown, resolve_durable_story_progress};
+use crate::state::state_bootstrap::{
+    bootstrap_structured_state_from_markdown, resolve_durable_story_progress,
+};
 use crate::state::store::FsStateStore;
 use crate::utils::language::WritingLanguage;
 use crate::utils::utc_time::utc_now_iso;
@@ -47,7 +49,9 @@ pub enum StateManagerError {
 
 impl StateManager {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
-        StateManager { project_root: project_root.into() }
+        StateManager {
+            project_root: project_root.into(),
+        }
     }
 
     pub fn project_root(&self) -> &Path {
@@ -70,7 +74,9 @@ impl StateManager {
     pub async fn load_book_config(&self, book_id: &str) -> Result<BookConfig, StateManagerError> {
         let raw = tokio::fs::read_to_string(self.book_dir(book_id).join("book.json")).await?;
         if raw.trim().is_empty() {
-            return Err(StateManagerError::EmptyBookConfig { book_id: book_id.to_string() });
+            return Err(StateManagerError::EmptyBookConfig {
+                book_id: book_id.to_string(),
+            });
         }
         serde_json::from_str(&raw).map_err(|e| StateManagerError::InvalidBookConfig {
             book_id: book_id.to_string(),
@@ -79,8 +85,13 @@ impl StateManager {
     }
 
     /// 写 book.json（pretty + 递归建目录）。
-    pub async fn save_book_config(&self, book_id: &str, config: &BookConfig) -> Result<(), StateManagerError> {
-        self.save_book_config_at(&self.book_dir(book_id), config).await
+    pub async fn save_book_config(
+        &self,
+        book_id: &str,
+        config: &BookConfig,
+    ) -> Result<(), StateManagerError> {
+        self.save_book_config_at(&self.book_dir(book_id), config)
+            .await
     }
 
     pub async fn save_book_config_at(
@@ -92,13 +103,15 @@ impl StateManager {
         let serialized = serde_json::to_string_pretty(config)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         // 199 号：book.json 损坏 = 整本书不可加载——原子替换写。
-        crate::utils::atomic_file_set::write_file_atomic(&book_dir.join("book.json"), &serialized).await?;
+        crate::utils::atomic_file_set::write_file_atomic(&book_dir.join("book.json"), &serialized)
+            .await?;
         Ok(())
     }
 
     /// 控制文档语言：book.json 的 language 严格等于 "zh" 才 zh；缺失/其余 → en。
     pub async fn resolve_control_document_language(&self, book_id: &str) -> WritingLanguage {
-        let Ok(raw) = tokio::fs::read_to_string(self.book_dir(book_id).join("book.json")).await else {
+        let Ok(raw) = tokio::fs::read_to_string(self.book_dir(book_id).join("book.json")).await
+        else {
             return WritingLanguage::En;
         };
         match serde_json::from_str::<serde_json::Value>(&raw) {
@@ -110,7 +123,11 @@ impl StateManager {
     }
 
     /// 保障控制文档（5 目录 + author_intent/current_focus + style_guide 方法论）。
-    pub async fn ensure_control_documents(&self, book_id: &str, author_intent: Option<&str>) -> Result<(), StateManagerError> {
+    pub async fn ensure_control_documents(
+        &self,
+        book_id: &str,
+        author_intent: Option<&str>,
+    ) -> Result<(), StateManagerError> {
         let language = self.resolve_control_document_language(book_id).await;
         self.ensure_control_documents_at(&self.book_dir(book_id), language, author_intent)
             .await
@@ -128,7 +145,13 @@ impl StateManager {
         let roles_major = story_dir.join("roles").join("主要角色");
         let roles_minor = story_dir.join("roles").join("次要角色");
 
-        for dir in [&story_dir, &runtime_dir, &outline_dir, &roles_major, &roles_minor] {
+        for dir in [
+            &story_dir,
+            &runtime_dir,
+            &outline_dir,
+            &roles_major,
+            &roles_minor,
+        ] {
             tokio::fs::create_dir_all(dir).await?;
         }
 
@@ -137,16 +160,24 @@ impl StateManager {
             _ => default_author_intent(language).to_string(),
         };
         write_if_missing(&story_dir.join("author_intent.md"), &author_intent_content).await?;
-        write_if_missing(&story_dir.join("current_focus.md"), default_current_focus(language)).await?;
+        write_if_missing(
+            &story_dir.join("current_focus.md"),
+            default_current_focus(language),
+        )
+        .await?;
 
         // style_guide 必含方法论（无参照文本也要有）。
         let style_guide_path = story_dir.join("style_guide.md");
         match tokio::fs::read_to_string(&style_guide_path).await {
             Ok(existing) => {
-                if !existing.contains("写作方法论") && !existing.contains("Writing Methodology") {
-                    let updated =
-                        format!("{existing}\n\n{}", build_writing_methodology_section(language));
-                    crate::utils::atomic_file_set::write_file_atomic(&style_guide_path, &updated).await?;
+                if !existing.contains("写作方法论") && !existing.contains("Writing Methodology")
+                {
+                    let updated = format!(
+                        "{existing}\n\n{}",
+                        build_writing_methodology_section(language)
+                    );
+                    crate::utils::atomic_file_set::write_file_atomic(&style_guide_path, &updated)
+                        .await?;
                 }
             }
             Err(_) => {
@@ -164,13 +195,10 @@ impl StateManager {
     pub async fn get_next_chapter_number(&self, book_id: &str) -> Result<u32, StateManagerError> {
         let book_dir = self.book_dir(book_id);
         // 失败按 0 处理（durable 链缺失 = 新书起始）。
-        let durable_chapter = resolve_durable_story_progress(
-            &FsStateStore,
-            &book_dir.to_string_lossy(),
-            None,
-        )
-        .await
-        .unwrap_or(0);
+        let durable_chapter =
+            resolve_durable_story_progress(&FsStateStore, &book_dir.to_string_lossy(), None)
+                .await
+                .unwrap_or(0);
         let _ = bootstrap_structured_state_from_markdown(
             &FsStateStore,
             &book_dir.to_string_lossy(),
@@ -181,7 +209,10 @@ impl StateManager {
     }
 
     /// 已落盘章节数（按前导章号去重；`NNNN_`/`NNNN-`/`NNNN.md` 同列——807 号与重建同口径）。
-    pub async fn get_persisted_chapter_count(&self, book_id: &str) -> Result<usize, StateManagerError> {
+    pub async fn get_persisted_chapter_count(
+        &self,
+        book_id: &str,
+    ) -> Result<usize, StateManagerError> {
         let chapters_dir = self.book_dir(book_id).join("chapters");
         let mut chapter_numbers: std::collections::HashSet<u32> = std::collections::HashSet::new();
         let Ok(mut entries) = tokio::fs::read_dir(&chapters_dir).await else {
@@ -197,12 +228,17 @@ impl StateManager {
     }
 
     /// 读取章节索引（空数组/损坏 → 文件重建兜底）。
-    pub async fn load_chapter_index(&self, book_id: &str) -> Result<Vec<ChapterMeta>, StateManagerError> {
+    pub async fn load_chapter_index(
+        &self,
+        book_id: &str,
+    ) -> Result<Vec<ChapterMeta>, StateManagerError> {
         let index_path = self.book_dir(book_id).join("chapters").join("index.json");
         match tokio::fs::read_to_string(&index_path).await {
             Ok(raw) => {
                 let Ok(parsed) = serde_json::from_str::<Vec<ChapterMeta>>(&raw) else {
-                    let rebuilt = self.rebuild_chapter_index_from_files_at(&self.book_dir(book_id)).await;
+                    let rebuilt = self
+                        .rebuild_chapter_index_from_files_at(&self.book_dir(book_id))
+                        .await;
                     if !rebuilt.is_empty() {
                         return Ok(rebuilt);
                     }
@@ -211,14 +247,18 @@ impl StateManager {
                 if !parsed.is_empty() {
                     return Ok(parsed);
                 }
-                let rebuilt = self.rebuild_chapter_index_from_files_at(&self.book_dir(book_id)).await;
+                let rebuilt = self
+                    .rebuild_chapter_index_from_files_at(&self.book_dir(book_id))
+                    .await;
                 if !rebuilt.is_empty() {
                     return Ok(rebuilt);
                 }
                 Ok(parsed)
             }
             Err(_) => {
-                let rebuilt = self.rebuild_chapter_index_from_files_at(&self.book_dir(book_id)).await;
+                let rebuilt = self
+                    .rebuild_chapter_index_from_files_at(&self.book_dir(book_id))
+                    .await;
                 if !rebuilt.is_empty() {
                     return Ok(rebuilt);
                 }
@@ -263,17 +303,13 @@ impl StateManager {
                     )
                 })
                 .unwrap_or_else(utc_now_iso);
-            let content = tokio::fs::read_to_string(&file_path).await.unwrap_or_default();
+            let content = tokio::fs::read_to_string(&file_path)
+                .await
+                .unwrap_or_default();
             // TS content.replace(/\s+/g, "").length：去全部空白后的码元数。
-            let word_count = content
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .count() as u32;
+            let word_count = content.chars().filter(|c| !c.is_whitespace()).count() as u32;
             // 标题：余部去前导 _、_ → 空格；空 → 第N章。
-            let raw_title = captures
-                .get(2)
-                .map(|m| m.as_str())
-                .unwrap_or("");
+            let raw_title = captures.get(2).map(|m| m.as_str()).unwrap_or("");
             let title = title_from_filename(raw_title, number);
 
             rows.push(ChapterMeta {
@@ -303,7 +339,8 @@ impl StateManager {
         book_id: &str,
         index: &[ChapterMeta],
     ) -> Result<(), StateManagerError> {
-        self.save_chapter_index_at(&self.book_dir(book_id), index, false).await
+        self.save_chapter_index_at(&self.book_dir(book_id), index, false)
+            .await
     }
 
     pub async fn save_chapter_index_at(
@@ -316,20 +353,33 @@ impl StateManager {
         tokio::fs::create_dir_all(&chapters_dir).await?;
         let safe_index: Vec<ChapterMeta> = if index.is_empty() && !allow_empty_with_chapter_files {
             let rebuilt = self.rebuild_chapter_index_from_files_at(book_dir).await;
-            if !rebuilt.is_empty() { rebuilt } else { index.to_vec() }
+            if !rebuilt.is_empty() {
+                rebuilt
+            } else {
+                index.to_vec()
+            }
         } else {
             index.to_vec()
         };
         let serialized = serde_json::to_string_pretty(&safe_index)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         // 199 号：index.json 截断虽可重建自愈，但会丢 reviewNote/审计元数据——原子替换写。
-        crate::utils::atomic_file_set::write_file_atomic(&chapters_dir.join("index.json"), &serialized).await?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &chapters_dir.join("index.json"),
+            &serialized,
+        )
+        .await?;
         Ok(())
     }
 
     /// 状态快照：7 个 markdown 真相文件 + state/*.json → story/snapshots/{n}/。
-    pub async fn snapshot_state(&self, book_id: &str, chapter_number: u32) -> Result<(), StateManagerError> {
-        self.snapshot_state_at(&self.book_dir(book_id), chapter_number).await
+    pub async fn snapshot_state(
+        &self,
+        book_id: &str,
+        chapter_number: u32,
+    ) -> Result<(), StateManagerError> {
+        self.snapshot_state_at(&self.book_dir(book_id), chapter_number)
+            .await
     }
 
     /// 列出 books/ 下含 book.json 的目录名（48 号；对齐 TS listBooks，目录序）。
@@ -339,7 +389,10 @@ impl StateManager {
             return book_ids;
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
-            if tokio::fs::try_exists(entry.path().join("book.json")).await.unwrap_or(false) {
+            if tokio::fs::try_exists(entry.path().join("book.json"))
+                .await
+                .unwrap_or(false)
+            {
                 book_ids.push(entry.file_name().to_string_lossy().into_owned());
             }
         }
@@ -364,7 +417,10 @@ impl StateManager {
             let Ok(content) = tokio::fs::read_to_string(snapshot_dir.join(file)).await else {
                 return false;
             };
-            if crate::utils::atomic_file_set::write_file_atomic(&story_dir.join(file), &content).await.is_err() {
+            if crate::utils::atomic_file_set::write_file_atomic(&story_dir.join(file), &content)
+                .await
+                .is_err()
+            {
                 return false;
             }
         }
@@ -372,7 +428,8 @@ impl StateManager {
             let target = story_dir.join(file);
             match tokio::fs::read_to_string(snapshot_dir.join(file)).await {
                 Ok(content) => {
-                    let _ = crate::utils::atomic_file_set::write_file_atomic(&target, &content).await;
+                    let _ =
+                        crate::utils::atomic_file_set::write_file_atomic(&target, &content).await;
                 }
                 Err(_) => {
                     let _ = tokio::fs::remove_file(&target).await;
@@ -393,7 +450,11 @@ impl StateManager {
                 let _ = tokio::fs::create_dir_all(&state_dir).await;
                 for path in files {
                     if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                        let _ = crate::utils::atomic_file_set::write_file_atomic(&state_dir.join(path.file_name().unwrap_or_default()), &content).await;
+                        let _ = crate::utils::atomic_file_set::write_file_atomic(
+                            &state_dir.join(path.file_name().unwrap_or_default()),
+                            &content,
+                        )
+                        .await;
                     }
                 }
             }
@@ -424,8 +485,16 @@ impl StateManager {
             .await
             .map_err(|e| e.to_string())?;
 
-        let kept: Vec<ChapterMeta> = index.iter().filter(|m| m.number <= target_chapter).cloned().collect();
-        let discarded: Vec<u32> = index.iter().filter(|m| m.number > target_chapter).map(|m| m.number).collect();
+        let kept: Vec<ChapterMeta> = index
+            .iter()
+            .filter(|m| m.number <= target_chapter)
+            .cloned()
+            .collect();
+        let discarded: Vec<u32> = index
+            .iter()
+            .filter(|m| m.number > target_chapter)
+            .map(|m| m.number)
+            .collect();
 
         // 章节正文与草稿（`NNNN_title.md` / legacy `NNNN-title.md` 前缀数字 > target；
         // 807 号：与索引重建同口径，旧章不得逃过删除）。
@@ -433,7 +502,9 @@ impl StateManager {
             if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
                 while let Ok(Some(entry)) = entries.next_entry().await {
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    let Some(num) = leading_number(&name) else { continue };
+                    let Some(num) = leading_number(&name) else {
+                        continue;
+                    };
                     if num > target_chapter {
                         let _ = tokio::fs::remove_file(entry.path()).await;
                     }
@@ -458,8 +529,14 @@ impl StateManager {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let Some(num) = name.strip_prefix("chapter-").and_then(|rest| {
-                    rest.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().ok()
-                }) else { continue };
+                    rest.chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .ok()
+                }) else {
+                    continue;
+                };
                 if num > target_chapter {
                     let _ = tokio::fs::remove_file(entry.path()).await;
                 }
@@ -476,7 +553,11 @@ impl StateManager {
         Ok(discarded)
     }
 
-    pub async fn snapshot_state_at(&self, book_dir: &Path, chapter_number: u32) -> Result<(), StateManagerError> {
+    pub async fn snapshot_state_at(
+        &self,
+        book_dir: &Path,
+        chapter_number: u32,
+    ) -> Result<(), StateManagerError> {
         let story_dir = book_dir.join("story");
         let snapshot_dir = story_dir.join("snapshots").join(chapter_number.to_string());
         tokio::fs::create_dir_all(&snapshot_dir).await?;
@@ -492,7 +573,11 @@ impl StateManager {
         ];
         for file in FILES {
             if let Ok(content) = tokio::fs::read_to_string(story_dir.join(file)).await {
-                crate::utils::atomic_file_set::write_file_atomic(&snapshot_dir.join(file), &content).await?;
+                crate::utils::atomic_file_set::write_file_atomic(
+                    &snapshot_dir.join(file),
+                    &content,
+                )
+                .await?;
             }
         }
 
@@ -507,7 +592,11 @@ impl StateManager {
                 tokio::fs::create_dir_all(&snapshot_state_dir).await?;
                 for file in files {
                     if let Ok(content) = tokio::fs::read_to_string(state_dir.join(&file)).await {
-                        crate::utils::atomic_file_set::write_file_atomic(&snapshot_state_dir.join(file), &content).await?;
+                        crate::utils::atomic_file_set::write_file_atomic(
+                            &snapshot_state_dir.join(file),
+                            &content,
+                        )
+                        .await?;
                     }
                 }
             }
@@ -574,7 +663,8 @@ pub(crate) fn leading_number(name: &str) -> Option<u32> {
 /// 文件名的判定须恒等（TS `chapter-files.ts` 同步注释）。
 fn is_canonical_chapter_file(name: &str) -> bool {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^[0-9]+_.*\.md$").unwrap()).is_match(name)
+    R.get_or_init(|| Regex::new(r"^[0-9]+_.*\.md$").unwrap())
+        .is_match(name)
 }
 
 /// 845 号：同章双形态择优的唯一裁决——`candidate` 是否应取代 `current`：正典 `NNNN_` 优先，
@@ -601,7 +691,9 @@ pub(crate) fn select_chapter_files(names: Vec<String>) -> Vec<String> {
     use std::collections::btree_map::Entry;
     let mut by_number: std::collections::BTreeMap<u32, String> = std::collections::BTreeMap::new();
     for name in names {
-        let Some(number) = leading_number(&name) else { continue };
+        let Some(number) = leading_number(&name) else {
+            continue;
+        };
         if number == 0 {
             continue;
         }
@@ -664,13 +756,18 @@ mod tests {
     async fn book_config_roundtrip_and_empty_guard() {
         let dir = tempfile::tempdir().unwrap();
         let manager = StateManager::new(dir.path());
-        manager.save_book_config("b1", &book_config("b1")).await.unwrap();
+        manager
+            .save_book_config("b1", &book_config("b1"))
+            .await
+            .unwrap();
         let loaded = manager.load_book_config("b1").await.unwrap();
         assert_eq!(loaded.title, "书");
 
         let book_dir = manager.book_dir("b2");
         tokio::fs::create_dir_all(&book_dir).await.unwrap();
-        tokio::fs::write(book_dir.join("book.json"), "   ").await.unwrap();
+        tokio::fs::write(book_dir.join("book.json"), "   ")
+            .await
+            .unwrap();
         assert!(matches!(
             manager.load_book_config("b2").await.unwrap_err(),
             StateManagerError::EmptyBookConfig { .. }
@@ -682,15 +779,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manager = StateManager::new(dir.path());
         // book.json 缺失 → en。
-        assert_eq!(manager.resolve_control_document_language("x").await, WritingLanguage::En);
+        assert_eq!(
+            manager.resolve_control_document_language("x").await,
+            WritingLanguage::En
+        );
 
         let book_dir = manager.book_dir("zh-book");
         tokio::fs::create_dir_all(&book_dir).await.unwrap();
-        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#).await.unwrap();
-        assert_eq!(manager.resolve_control_document_language("zh-book").await, WritingLanguage::Zh);
+        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#)
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.resolve_control_document_language("zh-book").await,
+            WritingLanguage::Zh
+        );
 
-        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"en"}"#).await.unwrap();
-        assert_eq!(manager.resolve_control_document_language("zh-book").await, WritingLanguage::En);
+        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"en"}"#)
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.resolve_control_document_language("zh-book").await,
+            WritingLanguage::En
+        );
     }
 
     /// 807 号：rollback 删章与索引重建同口径——legacy 连字符旧章（`NNNN-标题.md`）
@@ -704,11 +814,21 @@ mod tests {
         let snapshot0 = book_dir.join("story").join("snapshots").join("0");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
         tokio::fs::create_dir_all(&snapshot0).await.unwrap();
-        tokio::fs::write(chapters.join("0001-镜中醒来.md"), "legacy").await.unwrap();
-        tokio::fs::write(chapters.join("0002_续章.md"), "canonical").await.unwrap();
-        tokio::fs::write(chapters.join("0003.md"), "bare").await.unwrap();
-        tokio::fs::write(snapshot0.join("current_state.md"), "# state").await.unwrap();
-        tokio::fs::write(snapshot0.join("pending_hooks.md"), "# hooks").await.unwrap();
+        tokio::fs::write(chapters.join("0001-镜中醒来.md"), "legacy")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0002_续章.md"), "canonical")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0003.md"), "bare")
+            .await
+            .unwrap();
+        tokio::fs::write(snapshot0.join("current_state.md"), "# state")
+            .await
+            .unwrap();
+        tokio::fs::write(snapshot0.join("pending_hooks.md"), "# hooks")
+            .await
+            .unwrap();
         // 索引缺失 → load 走宽容重建，三种命名全部入索引（读侧口径）。
         let before = manager.load_chapter_index("legacy").await.unwrap();
         let mut numbers: Vec<u32> = before.iter().map(|m| m.number).collect();
@@ -722,7 +842,11 @@ mod tests {
             assert!(!chapters.join(name).exists(), "{name} 应被删除");
         }
         // 文件已清空 → 索引为空且不再被重建捞回。
-        assert!(manager.load_chapter_index("legacy").await.unwrap().is_empty());
+        assert!(manager
+            .load_chapter_index("legacy")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// 807 号：已落盘计数与重建同口径（按章号去重，legacy 连字符形态同列）。
@@ -732,10 +856,18 @@ mod tests {
         let manager = StateManager::new(dir.path());
         let chapters = manager.book_dir("b").join("chapters");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
-        tokio::fs::write(chapters.join("0001-旧.md"), "a").await.unwrap();
-        tokio::fs::write(chapters.join("0001_新.md"), "b").await.unwrap(); // 同章双形态=1
-        tokio::fs::write(chapters.join("0002_二.md"), "c").await.unwrap();
-        tokio::fs::write(chapters.join("index.json"), "[]").await.unwrap();
+        tokio::fs::write(chapters.join("0001-旧.md"), "a")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0001_新.md"), "b")
+            .await
+            .unwrap(); // 同章双形态=1
+        tokio::fs::write(chapters.join("0002_二.md"), "c")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("index.json"), "[]")
+            .await
+            .unwrap();
         assert_eq!(manager.get_persisted_chapter_count("b").await.unwrap(), 2);
     }
 
@@ -753,7 +885,11 @@ mod tests {
         ];
         assert_eq!(
             select_chapter_files(names),
-            vec!["0001_新.md".to_string(), "0002-a.md".to_string(), "0003.md".to_string()]
+            vec![
+                "0001_新.md".to_string(),
+                "0002-a.md".to_string(),
+                "0003.md".to_string()
+            ]
         );
     }
 
@@ -764,10 +900,18 @@ mod tests {
         let manager = StateManager::new(dir.path());
         let chapters = manager.book_dir("dup").join("chapters");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
-        tokio::fs::write(chapters.join("0001-旧题.md"), "legacy").await.unwrap();
-        tokio::fs::write(chapters.join("0001_新题.md"), "canonical").await.unwrap();
-        tokio::fs::write(chapters.join("0002.md"), "bare").await.unwrap();
-        let rows = manager.rebuild_chapter_index_from_files_at(&manager.book_dir("dup")).await;
+        tokio::fs::write(chapters.join("0001-旧题.md"), "legacy")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0001_新题.md"), "canonical")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0002.md"), "bare")
+            .await
+            .unwrap();
+        let rows = manager
+            .rebuild_chapter_index_from_files_at(&manager.book_dir("dup"))
+            .await;
         let numbers: Vec<u32> = rows.iter().map(|m| m.number).collect();
         assert_eq!(numbers, vec![1, 2]);
         assert_eq!(rows[0].title, "新题");
@@ -782,24 +926,50 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manager = StateManager::new(dir.path());
         let book_dir = manager.book_dir("b1");
-        tokio::fs::create_dir_all(book_dir.join("chapters")).await.unwrap();
-        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#).await.unwrap();
-        tokio::fs::write(book_dir.join("chapters").join("1_开篇.md"), "正文").await.unwrap();
-        tokio::fs::write(book_dir.join("chapters").join("2_推进.md"), "正文").await.unwrap();
+        tokio::fs::create_dir_all(book_dir.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#)
+            .await
+            .unwrap();
+        tokio::fs::write(book_dir.join("chapters").join("1_开篇.md"), "正文")
+            .await
+            .unwrap();
+        tokio::fs::write(book_dir.join("chapters").join("2_推进.md"), "正文")
+            .await
+            .unwrap();
 
         // legacy 书首读：durable 链权威 → 3；ensure 补齐结构化状态。
         assert_eq!(manager.get_next_chapter_number("b1").await.unwrap(), 3);
         let state_dir = book_dir.join("story").join("state");
-        for file in ["manifest.json", "current_state.json", "hooks.json", "chapter_summaries.json"] {
+        for file in [
+            "manifest.json",
+            "current_state.json",
+            "hooks.json",
+            "chapter_summaries.json",
+        ] {
             assert!(state_dir.join(file).exists(), "ensure 补齐 {file}");
         }
-        let manifest = tokio::fs::read_to_string(state_dir.join("manifest.json")).await.unwrap();
-        assert!(manifest.contains("\"lastAppliedChapter\": 2"), "manifest 记 durable 进度");
+        let manifest = tokio::fs::read_to_string(state_dir.join("manifest.json"))
+            .await
+            .unwrap();
+        assert!(
+            manifest.contains("\"lastAppliedChapter\": 2"),
+            "manifest 记 durable 进度"
+        );
 
         // 二读：快路径零写——manifest mtime 不变。
-        let before = tokio::fs::metadata(state_dir.join("manifest.json")).await.unwrap().modified().unwrap();
+        let before = tokio::fs::metadata(state_dir.join("manifest.json"))
+            .await
+            .unwrap()
+            .modified()
+            .unwrap();
         assert_eq!(manager.get_next_chapter_number("b1").await.unwrap(), 3);
-        let after = tokio::fs::metadata(state_dir.join("manifest.json")).await.unwrap().modified().unwrap();
+        let after = tokio::fs::metadata(state_dir.join("manifest.json"))
+            .await
+            .unwrap()
+            .modified()
+            .unwrap();
         assert_eq!(before, after, "快路径二读零写（mtime 不变）");
     }
 
@@ -809,7 +979,9 @@ mod tests {
         let manager = StateManager::new(dir.path());
         let book_dir = manager.book_dir("b1");
         tokio::fs::create_dir_all(&book_dir).await.unwrap();
-        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#).await.unwrap();
+        tokio::fs::write(book_dir.join("book.json"), r#"{"language":"zh"}"#)
+            .await
+            .unwrap();
 
         manager
             .ensure_control_documents_at(&book_dir, WritingLanguage::Zh, Some("  自定义意图  "))
@@ -837,9 +1009,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(style_again, style);
-        let intent_again = tokio::fs::read_to_string(book_dir.join("story").join("author_intent.md"))
-            .await
-            .unwrap();
+        let intent_again =
+            tokio::fs::read_to_string(book_dir.join("story").join("author_intent.md"))
+                .await
+                .unwrap();
         assert_eq!(intent_again, "自定义意图\n");
     }
 
@@ -849,10 +1022,16 @@ mod tests {
         let manager = StateManager::new(dir.path());
         let chapters = manager.book_dir("b1").join("chapters");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
-        tokio::fs::write(chapters.join("0001_初醒.md"), "# 第1章 初醒\n正文").await.unwrap();
-        tokio::fs::write(chapters.join("0002_风起.md"), "# 第2章 风起\n正文").await.unwrap();
+        tokio::fs::write(chapters.join("0001_初醒.md"), "# 第1章 初醒\n正文")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0002_风起.md"), "# 第2章 风起\n正文")
+            .await
+            .unwrap();
         // 断链：0004 存在 0003 缺失 → durable 到 2。
-        tokio::fs::write(chapters.join("0004_断链.md"), "# 第4章\n正文").await.unwrap();
+        tokio::fs::write(chapters.join("0004_断链.md"), "# 第4章\n正文")
+            .await
+            .unwrap();
         assert_eq!(manager.get_next_chapter_number("b1").await.unwrap(), 3);
         assert_eq!(manager.get_persisted_chapter_count("b1").await.unwrap(), 3);
     }
@@ -863,7 +1042,9 @@ mod tests {
         let manager = StateManager::new(dir.path());
         let chapters = manager.book_dir("b1").join("chapters");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
-        tokio::fs::write(chapters.join("0001_初醒.md"), "# 第1章\n正 文").await.unwrap();
+        tokio::fs::write(chapters.join("0001_初醒.md"), "# 第1章\n正 文")
+            .await
+            .unwrap();
 
         // index.json 缺失 → 重建。
         let index = manager.load_chapter_index("b1").await.unwrap();
@@ -876,9 +1057,12 @@ mod tests {
 
         // 空索引落盘护栏：文件存在时空索引被重建替换。
         manager.save_chapter_index("b1", &[]).await.unwrap();
-        let saved: Vec<ChapterMeta> =
-            serde_json::from_str(&tokio::fs::read_to_string(chapters.join("index.json")).await.unwrap())
-                .unwrap();
+        let saved: Vec<ChapterMeta> = serde_json::from_str(
+            &tokio::fs::read_to_string(chapters.join("index.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(saved.len(), 1);
 
         // 非空索引正常落盘。
@@ -894,18 +1078,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let manager = StateManager::new(dir.path());
         let story = manager.book_dir("b1").join("story");
-        tokio::fs::create_dir_all(story.join("state")).await.unwrap();
-        tokio::fs::write(story.join("current_state.md"), "状态").await.unwrap();
-        tokio::fs::write(story.join("state").join("hooks.json"), "{}").await.unwrap();
+        tokio::fs::create_dir_all(story.join("state"))
+            .await
+            .unwrap();
+        tokio::fs::write(story.join("current_state.md"), "状态")
+            .await
+            .unwrap();
+        tokio::fs::write(story.join("state").join("hooks.json"), "{}")
+            .await
+            .unwrap();
         // 不存在的文件静默跳过。
         manager.snapshot_state("b1", 2).await.unwrap();
         let snapshot = story.join("snapshots").join("2");
         assert_eq!(
-            tokio::fs::read_to_string(snapshot.join("current_state.md")).await.unwrap(),
+            tokio::fs::read_to_string(snapshot.join("current_state.md"))
+                .await
+                .unwrap(),
             "状态"
         );
         assert_eq!(
-            tokio::fs::read_to_string(snapshot.join("state").join("hooks.json")).await.unwrap(),
+            tokio::fs::read_to_string(snapshot.join("state").join("hooks.json"))
+                .await
+                .unwrap(),
             "{}"
         );
         assert!(!snapshot.join("pending_hooks.md").exists());

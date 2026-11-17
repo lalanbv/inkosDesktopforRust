@@ -25,7 +25,10 @@ pub struct StateManifest {
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"open\" | \"progressing\" | \"deferred\" | \"resolved\" | \"superseded\"")
+    ts(
+        export,
+        type = "\"open\" | \"progressing\" | \"deferred\" | \"resolved\" | \"superseded\""
+    )
 )]
 pub enum HookStatus {
     #[serde(rename = "progressing")]
@@ -50,7 +53,10 @@ pub enum HookStatus {
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"immediate\" | \"near-term\" | \"mid-arc\" | \"slow-burn\" | \"endgame\"")
+    ts(
+        export,
+        type = "\"immediate\" | \"near-term\" | \"mid-arc\" | \"slow-burn\" | \"endgame\""
+    )
 )]
 pub enum HookPayoffTiming {
     #[serde(rename = "immediate")]

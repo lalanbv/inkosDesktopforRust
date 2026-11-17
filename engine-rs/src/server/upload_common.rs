@@ -47,8 +47,7 @@ pub(crate) fn safe_upload_filename(value: &str) -> String {
     let mut mapped = String::with_capacity(collapsed.len());
     let mut in_run = false;
     for ch in collapsed.chars() {
-        let allowed =
-            ch.is_alphabetic() || ch.is_numeric() || matches!(ch, '.' | '_' | ' ' | '-');
+        let allowed = ch.is_alphabetic() || ch.is_numeric() || matches!(ch, '.' | '_' | ' ' | '-');
         if allowed {
             mapped.push(ch);
             in_run = false;
@@ -91,7 +90,9 @@ fn invalid_data_url() -> UploadApiError {
 /// TS `parseDataUrl`：`^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$`（dotall）。
 /// mime 段与参数段都禁止逗号，`;base64,` 匹配点之前不得出现逗号；payload
 /// 可含逗号与换行。mime 缺省（空/未提供）→ `application/octet-stream`。
-pub(crate) fn parse_data_url_with_mime(data_url: &str) -> Result<(Vec<u8>, String), UploadApiError> {
+pub(crate) fn parse_data_url_with_mime(
+    data_url: &str,
+) -> Result<(Vec<u8>, String), UploadApiError> {
     let Some(rest) = data_url.strip_prefix("data:") else {
         return Err(invalid_data_url());
     };
@@ -154,14 +155,24 @@ pub(crate) async fn store_project_upload(
         .join(".inkos")
         .join("uploads")
         .join(safe_upload_filename(scope));
-    tokio::fs::create_dir_all(&upload_dir)
-        .await
-        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "failed to create upload directory"))?;
+    tokio::fs::create_dir_all(&upload_dir).await.map_err(|_| {
+        api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "failed to create upload directory",
+        )
+    })?;
     let stored_name = format!("{}-{name}", utc_now_ms());
     let stored_path = upload_dir.join(&stored_name);
     crate::utils::atomic_file_set::write_file_atomic_bytes(&stored_path, &buffer)
         .await
-        .map_err(|_| api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "failed to store upload"))?;
+        .map_err(|_| {
+            api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                "failed to store upload",
+            )
+        })?;
     let stored_rel = stored_path
         .strip_prefix(root)
         .unwrap_or(&stored_path)

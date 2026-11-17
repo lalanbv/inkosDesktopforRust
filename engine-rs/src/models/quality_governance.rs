@@ -146,7 +146,11 @@ pub fn resolve_quality_verdict(input: &QualityVerdictInput) -> QualityVerdict {
 pub struct GovernanceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<GovernancePolicy>,
-    #[serde(default, rename = "maxConsecutiveDebts", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "maxConsecutiveDebts",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_consecutive_debts: Option<u32>,
     /// G11/371 号：多版选优（首版分数低于 minScore 时追加候选重生成）。
     #[serde(default, rename = "bestOfN", skip_serializing_if = "Option::is_none")]
@@ -256,11 +260,18 @@ mod tests {
         };
         assert_eq!(resolve_quality_verdict(&base), QualityVerdict::Accepted);
         assert_eq!(
-            resolve_quality_verdict(&QualityVerdictInput { warning_count: 2, ..base }),
+            resolve_quality_verdict(&QualityVerdictInput {
+                warning_count: 2,
+                ..base
+            }),
             QualityVerdict::ContinueWithWarning
         );
         assert_eq!(
-            resolve_quality_verdict(&QualityVerdictInput { passed: false, consecutive_debts: 2, ..base }),
+            resolve_quality_verdict(&QualityVerdictInput {
+                passed: false,
+                consecutive_debts: 2,
+                ..base
+            }),
             QualityVerdict::ReplanRequired
         );
     }

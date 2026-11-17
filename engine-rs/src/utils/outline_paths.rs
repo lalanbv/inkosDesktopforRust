@@ -45,16 +45,23 @@ pub struct RoleCard {
 
 /// 读文件，任何失败 → fallback。对齐 TS `readOr`。
 async fn read_or(path: &Path, fallback: &str) -> String {
-    fs::read_to_string(path).await.unwrap_or_else(|_| fallback.to_string())
+    fs::read_to_string(path)
+        .await
+        .unwrap_or_else(|_| fallback.to_string())
 }
 
 /// 检测书是否使用 Phase 5 新布局（`story/outline/story_frame.md` 存在）。
 /// 新布局下 story_bible.md / book_rules.md 是兼容 shim；旧布局则它们是真源。
 /// 对齐 TS `isNewLayoutBook`。
 pub async fn is_new_layout_book(book_dir: &Path) -> bool {
-    fs::metadata(book_dir.join("story").join("outline").join("story_frame.md"))
-        .await
-        .is_ok()
+    fs::metadata(
+        book_dir
+            .join("story")
+            .join("outline")
+            .join("story_frame.md"),
+    )
+    .await
+    .is_ok()
 }
 
 /// 书的架构师地基是否已完整落盘。对齐 TS `isBookFoundationComplete`。
@@ -65,7 +72,10 @@ pub async fn is_new_layout_book(book_dir: &Path) -> bool {
 pub async fn is_book_foundation_complete(book_dir: &Path) -> bool {
     let required = [
         book_dir.join("book.json"),
-        book_dir.join("story").join("outline").join("story_frame.md"),
+        book_dir
+            .join("story")
+            .join("outline")
+            .join("story_frame.md"),
         book_dir.join("story").join("outline").join("volume_map.md"),
         book_dir.join("story").join("book_rules.md"),
         book_dir.join("story").join("pending_hooks.md"),
@@ -86,7 +96,8 @@ pub async fn is_book_foundation_complete(book_dir: &Path) -> bool {
             }
         }
     }
-    if let Ok(matrix) = fs::read_to_string(book_dir.join("story").join("character_matrix.md")).await {
+    if let Ok(matrix) = fs::read_to_string(book_dir.join("story").join("character_matrix.md")).await
+    {
         if has_legacy_character_matrix_roles(&matrix) {
             return true;
         }
@@ -129,7 +140,10 @@ fn has_legacy_character_matrix_roles(content: &str) -> bool {
 
 /// 读 story_frame.md，回退 legacy story_bible.md。对齐 TS `readStoryFrame`。
 pub async fn read_story_frame(book_dir: &Path, fallback_placeholder: &str) -> String {
-    let new_path = book_dir.join("story").join("outline").join("story_frame.md");
+    let new_path = book_dir
+        .join("story")
+        .join("outline")
+        .join("story_frame.md");
     let legacy_path = book_dir.join("story").join("story_bible.md");
 
     let new_content = read_or(&new_path, "").await;
@@ -154,7 +168,10 @@ pub async fn read_volume_map(book_dir: &Path, fallback_placeholder: &str) -> Str
 /// 读节奏原则文件（中文或英文变体）。对齐 TS `readRhythmPrinciples`。
 pub async fn read_rhythm_principles(book_dir: &Path) -> String {
     let zh_path = book_dir.join("story").join("outline").join("节奏原则.md");
-    let en_path = book_dir.join("story").join("outline").join("rhythm_principles.md");
+    let en_path = book_dir
+        .join("story")
+        .join("outline")
+        .join("rhythm_principles.md");
 
     let zh = read_or(&zh_path, "").await;
     if !zh.trim().is_empty() {
@@ -286,7 +303,9 @@ pub fn is_current_state_seed_placeholder(raw: &str) -> bool {
     if utf16_len(trimmed) > 600 {
         return false;
     }
-    CURRENT_STATE_SEED_MARKERS.iter().any(|marker| trimmed.contains(marker))
+    CURRENT_STATE_SEED_MARKERS
+        .iter()
+        .any(|marker| trimmed.contains(marker))
 }
 
 /// 从角色卡内容提取「当前现状」节。对齐 TS `extractCurrentStateFromRole`：
@@ -295,9 +314,8 @@ pub fn is_current_state_seed_placeholder(raw: &str) -> bool {
 fn extract_current_state_from_role(content: &str) -> Option<String> {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     static NEXT_HEADING: OnceLock<Regex> = OnceLock::new();
-    let pattern = PATTERN.get_or_init(|| {
-        Regex::new(r"(?im)^##\s*(?:当前现状|Current[_\s]?State)[^\n]*$").unwrap()
-    });
+    let pattern = PATTERN
+        .get_or_init(|| Regex::new(r"(?im)^##\s*(?:当前现状|Current[_\s]?State)[^\n]*$").unwrap());
     let next_heading = NEXT_HEADING.get_or_init(|| Regex::new(r"(?m)^##\s").unwrap());
 
     let m = pattern.find(content)?;
@@ -383,7 +401,10 @@ fn parse_int_prefix(s: &str) -> Option<i64> {
 /// 读 current_state.md；当文件仍是种子占位（第 0 章，整合器未追加任何内容）时，
 /// 从 roles/*.当前现状 + pending_hooks startChapter=0 行派生初始状态块。
 /// 对齐 TS `readCurrentStateWithFallback`。
-pub async fn read_current_state_with_fallback(book_dir: &Path, fallback_placeholder: &str) -> String {
+pub async fn read_current_state_with_fallback(
+    book_dir: &Path,
+    fallback_placeholder: &str,
+) -> String {
     let story_dir = book_dir.join("story");
     let current_state_path = story_dir.join("current_state.md");
     let raw = read_or(&current_state_path, "").await;
@@ -393,10 +414,8 @@ pub async fn read_current_state_with_fallback(book_dir: &Path, fallback_placehol
     }
 
     let pending_hooks_path = story_dir.join("pending_hooks.md");
-    let (cards, pending_hooks) = tokio::join!(
-        read_role_cards(book_dir),
-        read_or(&pending_hooks_path, ""),
-    );
+    let (cards, pending_hooks) =
+        tokio::join!(read_role_cards(book_dir), read_or(&pending_hooks_path, ""),);
 
     let role_lines: Vec<String> = cards
         .iter()
@@ -524,7 +543,10 @@ mod tests {
             ("story/outline/volume_map.md", "b"),
             ("story/book_rules.md", "c"),
             ("story/pending_hooks.md", "d"),
-            ("story/character_matrix.md", "## 主要角色\n\n### 林动\n\n冷静果决\n"),
+            (
+                "story/character_matrix.md",
+                "## 主要角色\n\n### 林动\n\n冷静果决\n",
+            ),
         ])
         .await;
         assert!(is_book_foundation_complete(&book).await);
@@ -620,10 +642,8 @@ mod tests {
         .await;
 
         let cards = read_role_cards(&book).await;
-        let mut names: Vec<(&str, RoleTier)> = cards
-            .iter()
-            .map(|c| (c.name.as_str(), c.tier))
-            .collect();
+        let mut names: Vec<(&str, RoleTier)> =
+            cards.iter().map(|c| (c.name.as_str(), c.tier)).collect();
         // readdir 返回 OS 目录序（与 TS fs.readdir 一致，无排序保证）——按名排序后断言。
         names.sort_by_key(|(name, _)| (*name).to_string());
         assert_eq!(
@@ -657,8 +677,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_character_context_single_group_has_no_separator() {
-        let (_tmp, book) =
-            book_fixture(&[("story/roles/major/Bob.md", "calm")]).await;
+        let (_tmp, book) = book_fixture(&[("story/roles/major/Bob.md", "calm")]).await;
         let out = read_character_context(&book, "P").await;
         assert_eq!(out, "## 主要角色 / Major characters\n\n### Bob\n\ncalm");
     }
@@ -682,7 +701,9 @@ mod tests {
     fn seed_placeholder_detection() {
         assert!(is_current_state_seed_placeholder(""));
         assert!(is_current_state_seed_placeholder("   \n "));
-        assert!(is_current_state_seed_placeholder("# 当前状态\n建书时占位，待整合器追加"));
+        assert!(is_current_state_seed_placeholder(
+            "# 当前状态\n建书时占位，待整合器追加"
+        ));
         assert!(is_current_state_seed_placeholder(
             "# Current State\nSeeded at book creation"
         ));
@@ -731,7 +752,10 @@ mod tests {
                 "story/roles/主要角色/林动.md",
                 "## 档案\n冷静\n\n## 当前现状\n在青云宗\n修炼\n\n## 其他\n略",
             ),
-            ("story/roles/次要角色/苏檀儿.md", "## Current State\nAt home"),
+            (
+                "story/roles/次要角色/苏檀儿.md",
+                "## Current State\nAt home",
+            ),
             ("story/pending_hooks.md", hooks_table),
         ])
         .await;

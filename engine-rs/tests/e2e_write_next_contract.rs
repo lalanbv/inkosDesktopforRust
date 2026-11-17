@@ -14,8 +14,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use inkos_engine::llm::agent_router::{AgentOverride, AgentRouter, FullCycleAuditor, LlmEndpointConfig, RoutedAgent, RoutedSettler};
-use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextAgents, WriteNextConfig, WriteNextCtx};
+use inkos_engine::llm::agent_router::{
+    AgentOverride, AgentRouter, FullCycleAuditor, LlmEndpointConfig, RoutedAgent, RoutedSettler,
+};
+use inkos_engine::pipeline::write_next::{
+    write_next_chapter, WriteNextAgents, WriteNextConfig, WriteNextCtx,
+};
 use inkos_engine::server::sse::BroadcastHub;
 use inkos_engine::server::write_next_route::{write_next, WriteNextRuntime};
 use inkos_engine::state::manager::StateManager;
@@ -68,7 +72,10 @@ async fn mock_llm_chat(
         .as_str()
         .unwrap_or("")
         .to_string();
-    state.lock().unwrap().push(system.chars().take(24).collect());
+    state
+        .lock()
+        .unwrap()
+        .push(system.chars().take(24).collect());
 
     let content = if system.contains("创作总编") {
         PLANNER_RESPONSE.to_string()
@@ -113,8 +120,16 @@ fn fixture_project(root: &std::path::Path) {
     // fixture 手工建书须同款提供，否则修订端点按 TS 语义拒绝）。
     let snapshot0 = book.join("story").join("snapshots").join("0");
     std::fs::create_dir_all(&snapshot0).unwrap();
-    std::fs::write(snapshot0.join("current_state.md"), "# 当前状态\n\n| 项目 | 状态 |\n| --- | --- |\n| 位置 | 青阳镇 |\n").unwrap();
-    std::fs::write(snapshot0.join("pending_hooks.md"), "# 伏笔池\n\n| hook_id | 状态 |\n| --- | --- |\n").unwrap();
+    std::fs::write(
+        snapshot0.join("current_state.md"),
+        "# 当前状态\n\n| 项目 | 状态 |\n| --- | --- |\n| 位置 | 青阳镇 |\n",
+    )
+    .unwrap();
+    std::fs::write(
+        snapshot0.join("pending_hooks.md"),
+        "# 伏笔池\n\n| hook_id | 状态 |\n| --- | --- |\n",
+    )
+    .unwrap();
     std::fs::write(
         root.join("assets").join("genres").join("xianxia.md"),
         "---\nname: 仙侠\nid: xianxia\nchapterTypes: [\"推进章\",\"高潮章\"]\nfatigueWords: [\"震惊\"]\nauditDimensions: [1, 6]\nnumericalSystem: true\n---\n正文指导\n",
@@ -145,11 +160,17 @@ fn build_agents(base_url: &str, root: &std::path::Path) -> WriteNextAgents<'stat
         },
         HashMap::from([(
             "planner".to_string(),
-            AgentOverride { model: Some("plan-model".into()), ..Default::default() },
+            AgentOverride {
+                model: Some("plan-model".into()),
+                ..Default::default()
+            },
         )]),
     );
     let leak = |agent: &'static str| -> &'static RoutedAgent {
-        Box::leak(Box::new(RoutedAgent { router: std::sync::Arc::new(router.clone()), agent }))
+        Box::leak(Box::new(RoutedAgent {
+            router: std::sync::Arc::new(router.clone()),
+            agent,
+        }))
     };
     let settler: &'static RoutedSettler = Box::leak(Box::new(RoutedSettler {
         router: std::sync::Arc::new(router.clone()),
@@ -212,40 +233,41 @@ async fn e2e_write_next_contract_matches_node_shape() {
     let runner_project = project.clone();
     let runner_state = state.clone();
     let runner_url = llm_url.clone();
-    let runner: E2eRunner = Arc::new(move |state, book_id, word_count, temperature, _abort, _ctx| {
-        let project = runner_project.clone();
-        let llm_url = runner_url.clone();
-        let _ = &runner_state;
-        Box::pin(async move {
-            let agents = build_agents(&llm_url, &project);
-            let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
-            let project_ref: &'static std::path::Path =
-                Box::leak(project.into_boxed_path());
-            let builtin: &'static std::path::Path =
-                Box::leak(project_ref.join("assets").join("genres").into_boxed_path());
-            let ctx = WriteNextCtx {
-                project_root: project_ref,
-                builtin_genres_dir: builtin,
-                prompt_store,
-                state_store: prompt_store,
-                context_budget: None,
-                notify: None,
-                timeline_beats: None,
-            };
-            write_next_chapter(
-                &state,
-                &agents,
-                &ctx,
-                &WriteNextConfig::default(),
-                &book_id,
-                word_count,
-                temperature,
-                None,
-            )
-            .await
-            .map_err(|e| e.to_string())
-        })
-    });
+    let runner: E2eRunner = Arc::new(
+        move |state, book_id, word_count, temperature, _abort, _ctx| {
+            let project = runner_project.clone();
+            let llm_url = runner_url.clone();
+            let _ = &runner_state;
+            Box::pin(async move {
+                let agents = build_agents(&llm_url, &project);
+                let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
+                let project_ref: &'static std::path::Path = Box::leak(project.into_boxed_path());
+                let builtin: &'static std::path::Path =
+                    Box::leak(project_ref.join("assets").join("genres").into_boxed_path());
+                let ctx = WriteNextCtx {
+                    project_root: project_ref,
+                    builtin_genres_dir: builtin,
+                    prompt_store,
+                    state_store: prompt_store,
+                    context_budget: None,
+                    notify: None,
+                    timeline_beats: None,
+                };
+                write_next_chapter(
+                    &state,
+                    &agents,
+                    &ctx,
+                    &WriteNextConfig::default(),
+                    &book_id,
+                    word_count,
+                    temperature,
+                    None,
+                )
+                .await
+                .map_err(|e| e.to_string())
+            })
+        },
+    );
 
     let runtime = WriteNextRuntime {
         hub: hub.clone(),
@@ -254,7 +276,10 @@ async fn e2e_write_next_contract_matches_node_shape() {
         project_root: root.clone(),
     };
     let app = axum::Router::new()
-        .route("/api/v1/books/:id/write-next", axum::routing::post(write_next))
+        .route(
+            "/api/v1/books/:id/write-next",
+            axum::routing::post(write_next),
+        )
         .with_state(runtime);
 
     // 请求（Node 契约：body {wordCount?}，响应 {status:"writing", bookId}）。
@@ -265,13 +290,17 @@ async fn e2e_write_next_contract_matches_node_shape() {
                 .method("POST")
                 .uri("/api/v1/books/b1/write-next")
                 .header("content-type", "application/json")
-                .body(axum::body::Body::from(r#"{"wordCount":3000,"sessionId":"sess-e2e"}"#))
+                .body(axum::body::Body::from(
+                    r#"{"wordCount":3000,"sessionId":"sess-e2e"}"#,
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
-    let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(parsed["status"], "writing");
     assert_eq!(parsed["bookId"], "b1");
@@ -452,37 +481,38 @@ async fn e2e_llm_unreachable_pushes_write_error() {
     let hub = Arc::new(BroadcastHub::new());
 
     let runner_project = project.clone();
-    let runner: E2eRunner = Arc::new(move |state, book_id, word_count, temperature, _abort, _ctx| {
-        let project = runner_project.clone();
-        Box::pin(async move {
-            // 端口 9（discard）——不可达端点。
-            let agents = build_agents("http://127.0.0.1:9", &project);
-            let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
-            let project_ref: &'static std::path::Path =
-                Box::leak(project.into_boxed_path());
-            let ctx = WriteNextCtx {
-                project_root: project_ref,
-                builtin_genres_dir: project_ref,
-                prompt_store,
-                state_store: prompt_store,
-                context_budget: None,
-                notify: None,
-                timeline_beats: None,
-            };
-            write_next_chapter(
-                &state,
-                &agents,
-                &ctx,
-                &WriteNextConfig::default(),
-                &book_id,
-                word_count,
-                temperature,
-                None,
-            )
-            .await
-            .map_err(|e| e.to_string())
-        })
-    });
+    let runner: E2eRunner = Arc::new(
+        move |state, book_id, word_count, temperature, _abort, _ctx| {
+            let project = runner_project.clone();
+            Box::pin(async move {
+                // 端口 9（discard）——不可达端点。
+                let agents = build_agents("http://127.0.0.1:9", &project);
+                let prompt_store: &'static FsStateStore = Box::leak(Box::new(FsStateStore));
+                let project_ref: &'static std::path::Path = Box::leak(project.into_boxed_path());
+                let ctx = WriteNextCtx {
+                    project_root: project_ref,
+                    builtin_genres_dir: project_ref,
+                    prompt_store,
+                    state_store: prompt_store,
+                    context_budget: None,
+                    notify: None,
+                    timeline_beats: None,
+                };
+                write_next_chapter(
+                    &state,
+                    &agents,
+                    &ctx,
+                    &WriteNextConfig::default(),
+                    &book_id,
+                    word_count,
+                    temperature,
+                    None,
+                )
+                .await
+                .map_err(|e| e.to_string())
+            })
+        },
+    );
 
     let runtime = WriteNextRuntime {
         hub: hub.clone(),
@@ -491,7 +521,10 @@ async fn e2e_llm_unreachable_pushes_write_error() {
         project_root: dir.path().to_path_buf(),
     };
     let app = axum::Router::new()
-        .route("/api/v1/books/:id/write-next", axum::routing::post(write_next))
+        .route(
+            "/api/v1/books/:id/write-next",
+            axum::routing::post(write_next),
+        )
         .with_state(runtime);
 
     let mut subscriber = hub.subscribe();
@@ -540,8 +573,14 @@ mod audit_e2e {
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
-        let content = if system.contains("审") || system.contains("audit") || system.contains("连续") {
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let content = if system.contains("审")
+            || system.contains("audit")
+            || system.contains("连续")
+        {
             // 维度审计 JSON（parse_audit_result 的 JSON 策略）。
             r#"{"passed": true, "overallScore": 88, "summary": "整体连贯，无硬矛盾。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩过渡。"}]}"#.to_string()
         } else {
@@ -571,7 +610,9 @@ mod audit_e2e {
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
 
         let hub = Arc::new(BroadcastHub::new());
         let runtime = AuditRuntime {
@@ -591,7 +632,10 @@ mod audit_e2e {
             builtin_genres_dir: root.join("assets").join("genres"),
         };
         let route_app = axum::Router::new()
-            .route("/api/v1/books/:id/audit/:chapter", axum::routing::post(audit_chapter))
+            .route(
+                "/api/v1/books/:id/audit/:chapter",
+                axum::routing::post(audit_chapter),
+            )
             .with_state(runtime);
 
         let mut subscriber = hub.subscribe();
@@ -608,7 +652,9 @@ mod audit_e2e {
 
         // 同步契约：200 + AuditResult JSON。
         let status = response.status();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         eprintln!("AUDIT-DEBUG: {status} {}", String::from_utf8_lossy(&body));
         assert_eq!(status, 200);
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
@@ -640,7 +686,10 @@ mod books_e2e {
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let temperature = body["temperature"].as_f64();
         let content = if system.contains("创作总编") {
             PLANNER_RESPONSE.to_string()
@@ -649,7 +698,8 @@ mod books_e2e {
             "=== FIXED_ISSUES ===\n修正了措辞\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺着经脉游走。他攥紧拳头——多年屈辱，今日起一笔一笔讨回来。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
         } else if system.contains("审") || system.contains("连续") {
             if temperature == Some(0.0) {
-                r#"{"passed": true, "overallScore": 91, "summary": "修订后连贯。", "issues": []}"#.to_string()
+                r#"{"passed": true, "overallScore": 91, "summary": "修订后连贯。", "issues": []}"#
+                    .to_string()
             } else {
                 r#"{"passed": false, "overallScore": 70, "summary": "有一处问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "略缓。", "suggestion": "压缩。"}]}"#.to_string()
             }
@@ -668,7 +718,9 @@ mod books_e2e {
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -715,12 +767,17 @@ mod books_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         // TS PlanChapterResult 形状。
         assert_eq!(parsed["bookId"], "b1");
         assert_eq!(parsed["chapterNumber"], 1);
-        assert!(parsed["intentPath"].as_str().unwrap().contains("chapter-0001.intent.md"));
+        assert!(parsed["intentPath"]
+            .as_str()
+            .unwrap()
+            .contains("chapter-0001.intent.md"));
         assert_eq!(parsed["conflicts"], serde_json::json!([]));
         assert!(!parsed["goal"].as_str().unwrap().is_empty());
         // plan.md 持久化落盘。
@@ -739,7 +796,10 @@ mod books_e2e {
         let root = dir.path().to_path_buf();
         fixture_project(&root);
         std::fs::write(
-            root.join("books").join("b1").join("chapters").join("0001_风起.md"),
+            root.join("books")
+                .join("b1")
+                .join("chapters")
+                .join("0001_风起.md"),
             "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
         )
         .unwrap();
@@ -748,7 +808,10 @@ mod books_e2e {
         let hub = runtime.hub.clone();
         let mut subscriber = hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .route(
+                "/api/v1/books/:id/revise/:chapter",
+                axum::routing::post(revise),
+            )
             .with_state(runtime);
 
         let response = app
@@ -757,19 +820,26 @@ mod books_e2e {
                     .method("POST")
                     .uri("/api/v1/books/b1/revise/1")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(r#"{"mode":"polish","brief":"收紧措辞"}"#))
+                    .body(axum::body::Body::from(
+                        r#"{"mode":"polish","brief":"收紧措辞"}"#,
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         // 46 号起为审核环结果（ReviseChainResult 形状）；47 号起 status 对齐
         // TS（post 审计 passed → ready-for-review）。
         assert_eq!(parsed["applied"], true, "body: {parsed}");
         assert_eq!(parsed["status"], "ready-for-review");
-        assert!(parsed["revisedContent"].as_str().unwrap().contains("一笔一笔讨回来"));
+        assert!(parsed["revisedContent"]
+            .as_str()
+            .unwrap()
+            .contains("一笔一笔讨回来"));
         assert_eq!(parsed["fixedIssues"].as_array().unwrap().len(), 1);
 
         // SSE：start → complete。
@@ -792,7 +862,10 @@ mod books46_e2e {
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let temperature = body["temperature"].as_f64();
         let content = if system.contains("创作总编") {
             PLANNER_RESPONSE.to_string()
@@ -802,13 +875,17 @@ mod books46_e2e {
         } else if system.contains("审") || system.contains("连续") {
             // 审计：pre（默认温）1 个 warning；post（temp 0）PASS。
             if temperature == Some(0.0) {
-                r#"{"passed": true, "overallScore": 90, "summary": "修订后连贯。", "issues": []}"#.to_string()
+                r#"{"passed": true, "overallScore": 90, "summary": "修订后连贯。", "issues": []}"#
+                    .to_string()
             } else {
                 r#"{"passed": false, "overallScore": 70, "summary": "有一处节奏问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩。"}]}"#.to_string()
             }
         } else if system.contains("summarizer") {
             "第一卷概括：主角觉醒，进入宗门修行。".to_string()
-        } else if system.contains("校验") || system.contains("validator") || system.contains("continuity validator") {
+        } else if system.contains("校验")
+            || system.contains("validator")
+            || system.contains("continuity validator")
+        {
             "PASS".to_string()
         } else if system.contains("结算") || system.contains("settler") {
             WRITER_RESPONSE.to_string()
@@ -827,7 +904,9 @@ mod books46_e2e {
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -874,14 +953,28 @@ mod books46_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         // ComposeChapterResult 形状。
         assert_eq!(parsed["bookId"], "b1");
-        assert!(parsed["intentPath"].as_str().unwrap().contains("chapter-0001.intent.md"));
-        assert!(parsed["contextPath"].as_str().unwrap().contains("chapter-0001.context.json"));
-        assert!(parsed["ruleStackPath"].as_str().unwrap().contains("chapter-0001.rule-stack.yaml"));
-        assert!(parsed["tracePath"].as_str().unwrap().contains("chapter-0001.trace.json"));
+        assert!(parsed["intentPath"]
+            .as_str()
+            .unwrap()
+            .contains("chapter-0001.intent.md"));
+        assert!(parsed["contextPath"]
+            .as_str()
+            .unwrap()
+            .contains("chapter-0001.context.json"));
+        assert!(parsed["ruleStackPath"]
+            .as_str()
+            .unwrap()
+            .contains("chapter-0001.rule-stack.yaml"));
+        assert!(parsed["tracePath"]
+            .as_str()
+            .unwrap()
+            .contains("chapter-0001.trace.json"));
         // 工件落盘。
         let runtime_dir = root.join("books").join("b1").join("story").join("runtime");
         assert!(runtime_dir.join("chapter-0001.context.json").exists());
@@ -912,7 +1005,10 @@ mod books46_e2e {
         let hub = runtime.hub.clone();
         let mut subscriber = hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/consolidate", axum::routing::post(consolidate_endpoint))
+            .route(
+                "/api/v1/books/:id/consolidate",
+                axum::routing::post(consolidate_endpoint),
+            )
             .with_state(runtime);
 
         let response = app
@@ -926,12 +1022,20 @@ mod books46_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["archivedVolumes"], 1);
         assert_eq!(parsed["retainedChapters"], 1);
-        assert!(parsed["volumeSummaries"].as_str().unwrap().contains("第一卷"));
-        assert_eq!(subscriber.recv().await.unwrap().event, "consolidate:complete");
+        assert!(parsed["volumeSummaries"]
+            .as_str()
+            .unwrap()
+            .contains("第一卷"));
+        assert_eq!(
+            subscriber.recv().await.unwrap().event,
+            "consolidate:complete"
+        );
     }
 
     #[tokio::test]
@@ -940,14 +1044,20 @@ mod books46_e2e {
         let root = dir.path().to_path_buf();
         fixture_project(&root);
         std::fs::write(
-            root.join("books").join("b1").join("chapters").join("0001_风起.md"),
+            root.join("books")
+                .join("b1")
+                .join("chapters")
+                .join("0001_风起.md"),
             "# 第1章 风起\n\n林动睁开双眼。",
         )
         .unwrap();
         let llm = spawn_mock46().await;
         let runtime = rt(&root, &llm);
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/repair-state/:chapter", axum::routing::post(repair_state))
+            .route(
+                "/api/v1/books/:id/repair-state/:chapter",
+                axum::routing::post(repair_state),
+            )
             .with_state(runtime);
 
         // 索引里的 1 号章非降级 → Node 文案错误。
@@ -962,7 +1072,9 @@ mod books46_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 500);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["error"], "Chapter 1 is not state-degraded.");
     }
@@ -983,7 +1095,10 @@ mod books46_e2e {
         let hub = runtime.hub.clone();
         let mut subscriber = hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .route(
+                "/api/v1/books/:id/revise/:chapter",
+                axum::routing::post(revise),
+            )
             .with_state(runtime);
 
         let response = app
@@ -998,13 +1113,18 @@ mod books46_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         // 审核环：pre 有 warning → 修稿 → applied（47 号 status 对齐 TS）。
         assert_eq!(parsed["applied"], true, "body: {parsed}");
         assert_eq!(parsed["status"], "ready-for-review");
         eprintln!("REV46: {parsed}");
-        assert!(parsed["revisedContent"].as_str().unwrap().contains("屈辱自今日起讨回"));
+        assert!(parsed["revisedContent"]
+            .as_str()
+            .unwrap()
+            .contains("屈辱自今日起讨回"));
         assert_eq!(parsed["fixedIssues"].as_array().unwrap().len(), 1);
 
         // 章节文件被改写（标题保留）。
@@ -1031,7 +1151,10 @@ mod books47_e2e {
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let temperature = body["temperature"].as_f64();
         let content = if system.contains("修稿编辑") {
             "=== FIXED_ISSUES ===\n修正了措辞\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——多年屈辱，今日起讨回。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
@@ -1056,7 +1179,9 @@ mod books47_e2e {
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -1133,8 +1258,16 @@ mod books47_e2e {
             .with_state(runtime);
         let response = get(app, "/api/v1/books/b1/analytics").await;
         assert_eq!(response.status(), 200);
-        let content_type = response.headers().get("content-type").unwrap().to_str().unwrap().to_string();
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(content_type.starts_with("application/json"));
         assert_eq!(parsed["bookId"], "b1");
@@ -1161,7 +1294,9 @@ mod books47_e2e {
             .with_state(runtime);
         let response = get(app, "/api/v1/books/b1/eval").await;
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["bookId"], "b1");
         assert_eq!(parsed["totalChapters"], 2);
@@ -1181,7 +1316,9 @@ mod books47_e2e {
             .with_state(runtime);
         let response = get(app, "/api/v1/books/b1/eval?chapters=1").await;
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["totalChapters"], 1);
         assert_eq!(parsed["totalWords"], 100);
@@ -1212,7 +1349,9 @@ mod books47_e2e {
             // 兜底与 filename* 同形。
             "attachment; filename=\"b1.txt\"; filename*=UTF-8''b1.txt"
         );
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.starts_with("测试书\n\n"));
         assert!(text.contains("# 第1章 风起"));
@@ -1228,7 +1367,9 @@ mod books47_e2e {
             response.headers().get("content-type").unwrap(),
             "text/markdown; charset=utf-8"
         );
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.starts_with("# 测试书\n\n---\n"));
 
@@ -1246,7 +1387,9 @@ mod books47_e2e {
             response.headers().get("content-disposition").unwrap(),
             "attachment; filename=\"b1.epub\"; filename*=UTF-8''b1.epub"
         );
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         assert_eq!(&body[..4], &[0x50, 0x4B, 0x03, 0x04]);
 
         // approvedOnly=true：仅 approved 的第 1 章。
@@ -1255,7 +1398,9 @@ mod books47_e2e {
             .with_state(runtime);
         let response = get(app, "/api/v1/books/b1/export?approvedOnly=true").await;
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let text = String::from_utf8(body.to_vec()).unwrap();
         assert!(text.contains("# 第1章 风起"));
         assert!(!text.contains("# 第2章 云涌"));
@@ -1269,7 +1414,10 @@ mod books47_e2e {
         let llm = spawn_mock47().await;
         let runtime = rt47(&root, &llm);
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .route(
+                "/api/v1/books/:id/revise/:chapter",
+                axum::routing::post(revise),
+            )
             .with_state(runtime);
 
         let response = app
@@ -1284,13 +1432,18 @@ mod books47_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         // strict 门控：post 3 critical 变差 → 拒绝。
         assert_eq!(parsed["applied"], false, "body: {parsed}");
         assert_eq!(parsed["status"], "unchanged");
         let reason = parsed["skippedReason"].as_str().unwrap();
-        assert!(reason.starts_with("Manual revision kept original chapter: before blocking="), "{reason}");
+        assert!(
+            reason.starts_with("Manual revision kept original chapter: before blocking="),
+            "{reason}"
+        );
         assert!(reason.contains("critical="));
         assert!(reason.contains("aiTell="));
         let diagnostics = &parsed["revisionDiagnostics"];
@@ -1308,8 +1461,13 @@ mod books47_e2e {
         assert_eq!(remaining[0]["suggestion"], "查证。");
 
         // 拒绝时章节文件保持原文。
-        let saved = std::fs::read_to_string(root.join("books").join("b1").join("chapters").join("0001_风起.md"))
-            .unwrap();
+        let saved = std::fs::read_to_string(
+            root.join("books")
+                .join("b1")
+                .join("chapters")
+                .join("0001_风起.md"),
+        )
+        .unwrap();
         assert!(saved.contains("他推开门，发现灯还亮着。"));
         assert!(!saved.contains("今日起讨回"));
     }
@@ -1330,7 +1488,10 @@ mod books47_e2e {
         let llm = spawn_mock47().await;
         let runtime = rt47(&root, &llm);
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .route(
+                "/api/v1/books/:id/revise/:chapter",
+                axum::routing::post(revise),
+            )
             .with_state(runtime);
 
         let response = app
@@ -1345,13 +1506,20 @@ mod books47_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["applied"], true, "body: {parsed}");
         // 应用路径无 revisionDiagnostics（拒绝路径专属——88 号形态）。
         // 应用后章节文件含修订文本。
-        let saved = std::fs::read_to_string(root.join("books").join("b1").join("chapters").join("0001_风起.md"))
-            .unwrap();
+        let saved = std::fs::read_to_string(
+            root.join("books")
+                .join("b1")
+                .join("chapters")
+                .join("0001_风起.md"),
+        )
+        .unwrap();
         assert!(saved.contains("今日起讨回"), "{saved}");
     }
 }
@@ -1395,20 +1563,49 @@ mod books48_e2e {
         std::fs::create_dir_all(book.join("story").join("outline")).unwrap();
         std::fs::create_dir_all(book.join("story").join("roles").join("主要角色")).unwrap();
         std::fs::create_dir_all(book.join("story").join("runtime")).unwrap();
-        std::fs::write(root.join("inkos.json"), r#"{ "writing": { "reviewMode": "auto" } }"#).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "writing": { "reviewMode": "auto" } }"#,
+        )
+        .unwrap();
         std::fs::write(
             book.join("book.json"),
             r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章 风起\n\n林动睁开双眼。").unwrap();
-        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
-        std::fs::write(book.join("story").join("current_state.md"), "状态v1").unwrap();
-        std::fs::write(book.join("story").join("pending_hooks.md"), "| 伏笔 | 状态 |").unwrap();
-        std::fs::write(book.join("story").join("outline").join("volume_map.md"), "# 卷册地图").unwrap();
-        std::fs::write(book.join("story").join("roles").join("主要角色").join("林动.md"), "# 林动").unwrap();
         std::fs::write(
-            book.join("story").join("runtime").join("chapter-0001.plan.md"),
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0002_云涌.md"),
+            "# 第2章 云涌\n\n正文二。",
+        )
+        .unwrap();
+        std::fs::write(book.join("story").join("current_state.md"), "状态v1").unwrap();
+        std::fs::write(
+            book.join("story").join("pending_hooks.md"),
+            "| 伏笔 | 状态 |",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("outline").join("volume_map.md"),
+            "# 卷册地图",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story")
+                .join("roles")
+                .join("主要角色")
+                .join("林动.md"),
+            "# 林动",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story")
+                .join("runtime")
+                .join("chapter-0001.plan.md"),
             "# plan",
         )
         .unwrap();
@@ -1422,7 +1619,11 @@ mod books48_e2e {
         };
         std::fs::write(
             book.join("chapters").join("index.json"),
-            serde_json::to_string(&vec![meta(1, "ready-for-review"), meta(2, "ready-for-review")]).unwrap(),
+            serde_json::to_string(&vec![
+                meta(1, "ready-for-review"),
+                meta(2, "ready-for-review"),
+            ])
+            .unwrap(),
         )
         .unwrap();
     }
@@ -1430,12 +1631,27 @@ mod books48_e2e {
     fn app48(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
             .route("/api/v1/books", axum::routing::get(list_books))
-            .route("/api/v1/books/:id", axum::routing::get(book_detail).delete(delete_book))
-            .route("/api/v1/books/:id/chapters/:num", axum::routing::get(read_chapter))
-            .route("/api/v1/books/:id/chapters/:num/approve", axum::routing::post(approve_chapter))
-            .route("/api/v1/books/:id/chapters/:num/reject", axum::routing::post(reject_chapter))
+            .route(
+                "/api/v1/books/:id",
+                axum::routing::get(book_detail).delete(delete_book),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num",
+                axum::routing::get(read_chapter),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/approve",
+                axum::routing::post(approve_chapter),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/reject",
+                axum::routing::post(reject_chapter),
+            )
             .route("/api/v1/books/:id/truth", axum::routing::get(truth_list))
-            .route("/api/v1/books/:id/truth/*file", axum::routing::get(truth_file))
+            .route(
+                "/api/v1/books/:id/truth/*file",
+                axum::routing::get(truth_file),
+            )
             .route(
                 "/api/v1/books/:id/chapter-review-mode",
                 axum::routing::get(get_review_mode).put(put_review_mode),
@@ -1443,17 +1659,30 @@ mod books48_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -1481,17 +1710,41 @@ mod books48_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture48(&root);
-        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/2", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/2",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["filename"], "0002_云涌.md");
         assert!(parsed["content"].as_str().unwrap().contains("正文二"));
-        let (status, _) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/9", None).await;
+        let (status, _) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/9",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
 
-        let (status, parsed) = call(app48(rt48(&root)), "POST", "/api/v1/books/b1/chapters/2/approve", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "POST",
+            "/api/v1/books/b1/chapters/2/approve",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["status"], "approved");
-        let index = std::fs::read_to_string(root.join("books").join("b1").join("chapters").join("index.json")).unwrap();
+        let index = std::fs::read_to_string(
+            root.join("books")
+                .join("b1")
+                .join("chapters")
+                .join("index.json"),
+        )
+        .unwrap();
         assert!(index.contains("\"approved\""));
     }
 
@@ -1512,19 +1765,37 @@ mod books48_e2e {
         std::fs::write(chapters.join("0001-风起.md"), "# 第1章 风起\n\n种子版。").unwrap();
 
         // 单数字形态可打开（旧码 padded "0007" 前缀匹配 → 404）。
-        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/7", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/7",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["filename"], "7_手记.md");
         assert!(parsed["content"].as_str().unwrap().contains("非规范名"));
 
         // 前缀碰撞根除：71 章归 71，7 章不误配。
-        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/71", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/71",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["filename"], "00071_长名.md");
 
         // 同号双形态：正典 `_` 胜出（845 号：与索引重建 select_chapter_files 同胜者——
         // 旧口径按 padded 类内字典序取 '-'<'_' 的连字符旧章，索引列正典、详情开旧章）。
-        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapters/1", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/1",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["filename"], "0001_风起.md");
     }
@@ -1537,18 +1808,48 @@ mod books48_e2e {
         let state = StateManager::new(&root);
         state.snapshot_state("b1", 1).await.unwrap();
         // 状态前进到 v2 → reject 第 2 章应回滚到快照。
-        std::fs::write(root.join("books").join("b1").join("story").join("current_state.md"), "状态v2").unwrap();
+        std::fs::write(
+            root.join("books")
+                .join("b1")
+                .join("story")
+                .join("current_state.md"),
+            "状态v2",
+        )
+        .unwrap();
 
-        let (status, parsed) = call(app48(rt48(&root)), "POST", "/api/v1/books/b1/chapters/2/reject", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "POST",
+            "/api/v1/books/b1/chapters/2/reject",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["rolledBackTo"], 1);
         assert_eq!(parsed["discarded"], serde_json::json!([2]));
-        assert!(!root.join("books").join("b1").join("chapters").join("0002_云涌.md").exists());
+        assert!(!root
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join("0002_云涌.md")
+            .exists());
         assert_eq!(
-            std::fs::read_to_string(root.join("books").join("b1").join("story").join("current_state.md")).unwrap(),
+            std::fs::read_to_string(
+                root.join("books")
+                    .join("b1")
+                    .join("story")
+                    .join("current_state.md")
+            )
+            .unwrap(),
             "状态v1"
         );
-        let (status, parsed) = call(app48(rt48(&root)), "POST", "/api/v1/books/b1/chapters/9/reject", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "POST",
+            "/api/v1/books/b1/chapters/9/reject",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["error"], "Chapter 9 not found");
     }
@@ -1558,7 +1859,8 @@ mod books48_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture48(&root);
-        let (status, parsed) = call(app48(rt48(&root)), "GET", "/api/v1/books/b1/truth", None).await;
+        let (status, parsed) =
+            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/truth", None).await;
         assert_eq!(status, StatusCode::OK);
         let names: Vec<&str> = parsed["files"]
             .as_array()
@@ -1589,13 +1891,23 @@ mod books48_e2e {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["content"], "# 林动");
-        let (status, parsed) =
-            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/truth/runtime/chapter-0001.plan.md", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/truth/runtime/chapter-0001.plan.md",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["readonly"], true);
         // 白名单外 → 400。
-        let (status, parsed) =
-            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/truth/secret/evil.md", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/truth/secret/evil.md",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "Invalid truth file");
     }
@@ -1608,8 +1920,13 @@ mod books48_e2e {
         let root = dir.path().to_path_buf();
         fixture48(&root);
         std::fs::write(root.join("inkos.json"), r#"{ "name": "x" }"#).unwrap();
-        let (status, parsed) =
-            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapter-review-mode", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/chapter-review-mode",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["mode"], "auto");
         assert_eq!(parsed["projectMode"], "auto");
@@ -1622,8 +1939,13 @@ mod books48_e2e {
         let root = dir.path().to_path_buf();
         fixture48(&root);
         // project=auto，book 未设 → mode auto。
-        let (status, parsed) =
-            call(app48(rt48(&root)), "GET", "/api/v1/books/b1/chapter-review-mode", None).await;
+        let (status, parsed) = call(
+            app48(rt48(&root)),
+            "GET",
+            "/api/v1/books/b1/chapter-review-mode",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["mode"], "auto");
         assert!(parsed["bookMode"].is_null());
@@ -1711,16 +2033,39 @@ mod books49_e2e {
             r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章 风起\n\n林动睁开双眼。").unwrap();
-        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0002_云涌.md"),
+            "# 第2章 云涌\n\n正文二。",
+        )
+        .unwrap();
         std::fs::write(story.join("current_state.md"), "状态v2").unwrap();
         std::fs::write(story.join("pending_hooks.md"), "| 伏笔 | 状态 |").unwrap();
-        std::fs::write(story.join("snapshots").join("1").join("current_state.md"), "状态v1").unwrap();
-        std::fs::write(story.join("snapshots").join("1").join("pending_hooks.md"), "钩子v1").unwrap();
-        std::fs::write(story.join("runtime").join("chapter-0002.plan.md"), "# plan").unwrap();
-        std::fs::write(story.join("runtime").join("chapter-0002.user-brief.md"), "  保留证人的原话。  \n").unwrap();
         std::fs::write(
-            book.join("chapters").join(".versions").join("0002").join(format!("{VERSION_ID}.md")),
+            story.join("snapshots").join("1").join("current_state.md"),
+            "状态v1",
+        )
+        .unwrap();
+        std::fs::write(
+            story.join("snapshots").join("1").join("pending_hooks.md"),
+            "钩子v1",
+        )
+        .unwrap();
+        std::fs::write(story.join("runtime").join("chapter-0002.plan.md"), "# plan").unwrap();
+        std::fs::write(
+            story.join("runtime").join("chapter-0002.user-brief.md"),
+            "  保留证人的原话。  \n",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters")
+                .join(".versions")
+                .join("0002")
+                .join(format!("{VERSION_ID}.md")),
             "# 第2章 旧稿\n\n旧正文。",
         )
         .unwrap();
@@ -1743,9 +2088,14 @@ mod books49_e2e {
         axum::Router::new()
             .route(
                 "/api/v1/books/:id/chapters/:num",
-                axum::routing::get(read_chapter).put(put_chapter).delete(delete_chapter),
+                axum::routing::get(read_chapter)
+                    .put(put_chapter)
+                    .delete(delete_chapter),
             )
-            .route("/api/v1/books/:id/chapters/:num/workspace", axum::routing::get(chapter_workspace))
+            .route(
+                "/api/v1/books/:id/chapters/:num/workspace",
+                axum::routing::get(chapter_workspace),
+            )
             .route(
                 "/api/v1/books/:id/chapters/:num/workspace/brief",
                 axum::routing::put(put_workspace_brief),
@@ -1761,17 +2111,30 @@ mod books49_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -1781,8 +2144,13 @@ mod books49_e2e {
         let root = dir.path().to_path_buf();
         fixture49(&root);
 
-        let (status, parsed) =
-            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/2/workspace", None).await;
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/2/workspace",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["chapterNumber"], 2);
         assert_eq!(parsed["brief"], "保留证人的原话。");
@@ -1795,11 +2163,21 @@ mod books49_e2e {
         assert_eq!(versions[0]["chapterNumber"], 2);
 
         // 非最新章 canDelete=false；非法章节号 400。
-        let (_, parsed) =
-            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/1/workspace", None).await;
+        let (_, parsed) = call(
+            app49(rt49(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/1/workspace",
+            None,
+        )
+        .await;
         assert_eq!(parsed["canDelete"], false);
-        let (status, parsed) =
-            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/abc/workspace", None).await;
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/abc/workspace",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "Invalid chapter number");
 
@@ -1813,8 +2191,13 @@ mod books49_e2e {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert!(parsed["content"].as_str().unwrap().contains("旧正文"));
-        let (status, _) =
-            call(app49(rt49(&root)), "GET", "/api/v1/books/b1/chapters/2/versions/bad-id", None).await;
+        let (status, _) = call(
+            app49(rt49(&root)),
+            "GET",
+            "/api/v1/books/b1/chapters/2/versions/bad-id",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (status, _) = call(
             app49(rt49(&root)),
@@ -1831,7 +2214,12 @@ mod books49_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture49(&root);
-        let brief_path = root.join("books").join("b1").join("story").join("runtime").join("chapter-0002.user-brief.md");
+        let brief_path = root
+            .join("books")
+            .join("b1")
+            .join("story")
+            .join("runtime")
+            .join("chapter-0002.user-brief.md");
 
         let (status, parsed) = call(
             app49(rt49(&root)),
@@ -1843,7 +2231,10 @@ mod books49_e2e {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["brief"], "让证人先撒谎。");
-        assert_eq!(std::fs::read_to_string(&brief_path).unwrap(), "让证人先撒谎。\n");
+        assert_eq!(
+            std::fs::read_to_string(&brief_path).unwrap(),
+            "让证人先撒谎。\n"
+        );
 
         // 非 string / 无效 JSON / 非法章节号 → 400。
         let (status, parsed) = call(
@@ -1854,7 +2245,10 @@ mod books49_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"], "A valid chapter number and brief string are required");
+        assert_eq!(
+            parsed["error"],
+            "A valid chapter number and brief string are required"
+        );
         let (status, _) = call(
             app49(rt49(&root)),
             "PUT",
@@ -1901,7 +2295,9 @@ mod books49_e2e {
         );
         let touched = parsed["result"]["touchedFiles"].as_array().unwrap();
         assert!(touched.iter().any(|f| f == "chapters/0002_云涌.md"));
-        assert!(touched.iter().any(|f| f == "story/runtime/chapter-0002.plan.md"));
+        assert!(touched
+            .iter()
+            .any(|f| f == "story/runtime/chapter-0002.plan.md"));
         assert!(touched.iter().any(|f| f == "chapters/index.json"));
 
         // 正文覆写 + 尾换行；旧稿归档 _manual_。
@@ -1926,8 +2322,16 @@ mod books49_e2e {
             "# 第2章 云涌\n\n正文二。"
         );
         // runtime：plan 清除、user-brief 保留。
-        assert!(!book.join("story").join("runtime").join("chapter-0002.plan.md").exists());
-        assert!(book.join("story").join("runtime").join("chapter-0002.user-brief.md").exists());
+        assert!(!book
+            .join("story")
+            .join("runtime")
+            .join("chapter-0002.plan.md")
+            .exists());
+        assert!(book
+            .join("story")
+            .join("runtime")
+            .join("chapter-0002.user-brief.md")
+            .exists());
         // 索引：audit-failed + [warning]。
         let index: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap(),
@@ -2006,8 +2410,13 @@ mod books49_e2e {
         let runtime = rt49(&root);
         let mut subscriber = runtime.hub.subscribe();
 
-        let (status, parsed) =
-            call(app49(runtime), "DELETE", "/api/v1/books/b1/chapters/2", None).await;
+        let (status, parsed) = call(
+            app49(runtime),
+            "DELETE",
+            "/api/v1/books/b1/chapters/2",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["bookId"], "b1");
@@ -2015,15 +2424,26 @@ mod books49_e2e {
         assert_eq!(parsed["title"], "第2章");
         assert_eq!(parsed["rolledBackTo"], 1);
         assert_eq!(parsed["discarded"], serde_json::json!([2]));
-        assert_eq!(parsed["trashedFiles"], serde_json::json!(["chapters/.trash/0002_云涌.md"]));
-        assert!(book.join("chapters").join(".trash").join("0002_云涌.md").exists());
+        assert_eq!(
+            parsed["trashedFiles"],
+            serde_json::json!(["chapters/.trash/0002_云涌.md"])
+        );
+        assert!(book
+            .join("chapters")
+            .join(".trash")
+            .join("0002_云涌.md")
+            .exists());
         assert!(!book.join("chapters").join("0002_云涌.md").exists());
         // 快照恢复 + 索引回写 + runtime 工件清除。
         assert_eq!(
             std::fs::read_to_string(book.join("story").join("current_state.md")).unwrap(),
             "状态v1"
         );
-        assert!(!book.join("story").join("runtime").join("chapter-0002.plan.md").exists());
+        assert!(!book
+            .join("story")
+            .join("runtime")
+            .join("chapter-0002.plan.md")
+            .exists());
         let index: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap(),
         )
@@ -2033,8 +2453,13 @@ mod books49_e2e {
         assert_eq!(subscriber.recv().await.unwrap().event, "chapter:deleted");
 
         // 此后删第 1 章：rollbackTarget=0 无快照 → 400 且文件不动。
-        let (status, parsed) =
-            call(app49(rt49(&root)), "DELETE", "/api/v1/books/b1/chapters/1", None).await;
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "DELETE",
+            "/api/v1/books/b1/chapters/1",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             parsed["error"],
@@ -2047,8 +2472,13 @@ mod books49_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture49(&root);
-        let (status, parsed) =
-            call(app49(rt49(&root)), "DELETE", "/api/v1/books/b1/chapters/1", None).await;
+        let (status, parsed) = call(
+            app49(rt49(&root)),
+            "DELETE",
+            "/api/v1/books/b1/chapters/1",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
             parsed["error"],
@@ -2095,10 +2525,30 @@ mod books50_e2e {
             r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章 风起\n\n林动睁开双眼。").unwrap();
-        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
-        std::fs::write(book.join("story").join("runtime").join("chapter-0002.plan.md"), "# plan").unwrap();
-        std::fs::write(book.join("story").join("runtime").join("chapter-0002.user-brief.md"), "保留证人原话。\n").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0002_云涌.md"),
+            "# 第2章 云涌\n\n正文二。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story")
+                .join("runtime")
+                .join("chapter-0002.plan.md"),
+            "# plan",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story")
+                .join("runtime")
+                .join("chapter-0002.user-brief.md"),
+            "保留证人原话。\n",
+        )
+        .unwrap();
         let now = "2026-01-01T00:00:00.000Z";
         let meta = |number: u32, status: &str| {
             serde_json::json!({
@@ -2116,7 +2566,10 @@ mod books50_e2e {
 
     fn app50(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/books/:id/export-save", axum::routing::post(export_save))
+            .route(
+                "/api/v1/books/:id/export-save",
+                axum::routing::post(export_save),
+            )
             .route(
                 "/api/v1/books/:id/chapters/:num/workspace/inspiration",
                 axum::routing::post(post_workspace_inspiration),
@@ -2124,17 +2577,30 @@ mod books50_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -2171,7 +2637,9 @@ mod books50_e2e {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["chapters"], 1);
-        assert!(std::fs::read_to_string(book.join("b1.txt")).unwrap().contains("林动睁开双眼"));
+        assert!(std::fs::read_to_string(book.join("b1.txt"))
+            .unwrap()
+            .contains("林动睁开双眼"));
 
         // 无效 JSON → 默认 txt/全量（TS .catch 语义）。
         let (status, parsed) = call(
@@ -2192,8 +2660,14 @@ mod books50_e2e {
         let root = dir.path().to_path_buf();
         fixture50(&root);
         // 全部章未 approved → approvedOnly 空 → TS "No chapters to export."。
-        let index_path = root.join("books").join("b1").join("chapters").join("index.json");
-        let raw = std::fs::read_to_string(&index_path).unwrap().replace("approved", "drafting");
+        let index_path = root
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join("index.json");
+        let raw = std::fs::read_to_string(&index_path)
+            .unwrap()
+            .replace("approved", "drafting");
         std::fs::write(&index_path, raw).unwrap();
         let (status, parsed) = call(
             app50(rt50(&root, "http://127.0.0.1:9")),
@@ -2212,7 +2686,11 @@ mod books50_e2e {
         let root = dir.path().to_path_buf();
         fixture50(&root);
         let (llm_url, _calls, _llm) = spawn_mock_llm().await;
-        let chapter_path = root.join("books").join("b1").join("chapters").join("0002_云涌.md");
+        let chapter_path = root
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join("0002_云涌.md");
         let before = std::fs::read_to_string(&chapter_path).unwrap();
 
         let (status, parsed) = call(
@@ -2238,7 +2716,10 @@ mod books50_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"], "A valid chapter number and optional brief string are required");
+        assert_eq!(
+            parsed["error"],
+            "A valid chapter number and optional brief string are required"
+        );
         let (status, _) = call(
             app50(rt50(&root, &llm_url)),
             "POST",
@@ -2272,7 +2753,10 @@ mod books51_e2e {
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let temperature = body["temperature"].as_f64();
         let content = if system.contains("修稿编辑") {
             "=== FIXED_ISSUES ===\n重排了冲突顺序\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——多年屈辱，今日起一笔一笔讨回。\n\n=== UPDATED_STATE ===\n| 字段 | 值 |\n|---|---|\n| 当前章节 | 1 |\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n|---|---|\n| H01 | progressing |\n".to_string()
@@ -2299,7 +2783,9 @@ mod books51_e2e {
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -2345,17 +2831,30 @@ mod books51_e2e {
         .unwrap();
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -2369,7 +2868,10 @@ mod books51_e2e {
         let runtime = rt51(&root, &llm);
         let mut subscriber = runtime.hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/rewrite/:chapter", axum::routing::post(rewrite))
+            .route(
+                "/api/v1/books/:id/rewrite/:chapter",
+                axum::routing::post(rewrite),
+            )
             .with_state(runtime);
 
         let (status, parsed) = call(
@@ -2386,11 +2888,19 @@ mod books51_e2e {
         // Always 门：post 审计 3 critical（变差）仍 applied（strict 下会拒绝）。
         assert_eq!(parsed["result"]["applied"], true);
         assert_eq!(parsed["result"]["status"], "audit-failed");
-        assert_eq!(parsed["result"]["revisionDiagnostics"], serde_json::Value::Null);
+        assert_eq!(
+            parsed["result"]["revisionDiagnostics"],
+            serde_json::Value::Null
+        );
 
         // brief 落盘 user-brief；章节改写。
         assert_eq!(
-            std::fs::read_to_string(book.join("story").join("runtime").join("chapter-0001.user-brief.md")).unwrap(),
+            std::fs::read_to_string(
+                book.join("story")
+                    .join("runtime")
+                    .join("chapter-0001.user-brief.md")
+            )
+            .unwrap(),
             "保留事实，重做冲突顺序。\n"
         );
         let saved = std::fs::read_to_string(book.join("chapters").join("0001_风起.md")).unwrap();
@@ -2406,7 +2916,10 @@ mod books51_e2e {
         let mut subscriber2 = runtime2.hub.subscribe();
         let (status, parsed) = call(
             axum::Router::new()
-                .route("/api/v1/books/:id/rewrite/:chapter", axum::routing::post(rewrite))
+                .route(
+                    "/api/v1/books/:id/rewrite/:chapter",
+                    axum::routing::post(rewrite),
+                )
                 .with_state(runtime2),
             "POST",
             "/api/v1/books/b1/rewrite/abc",
@@ -2433,7 +2946,10 @@ mod books51_e2e {
         let llm = spawn_mock51().await;
         let runtime = rt51(&root, &llm);
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+            .route(
+                "/api/v1/books/:id/resync/:chapter",
+                axum::routing::post(resync),
+            )
             .with_state(runtime);
 
         let (status, parsed) = call(app, "POST", "/api/v1/books/b1/resync/1", None).await;
@@ -2444,18 +2960,29 @@ mod books51_e2e {
         assert_eq!(parsed["wordCount"], 16);
         assert_eq!(parsed["auditResult"]["passed"], true);
         assert_eq!(parsed["auditResult"]["issues"], serde_json::json!([]));
-        assert_eq!(parsed["auditResult"]["summary"], "chapter truth/state resynced from edited body");
+        assert_eq!(
+            parsed["auditResult"]["summary"],
+            "chapter truth/state resynced from edited body"
+        );
         assert_eq!(parsed["revised"], false);
         assert_eq!(parsed["status"], "ready-for-review");
         // 真相被结算输出更新（WRITER_RESPONSE 的 RUNTIME_STATE_DELTA 驱动）。
         assert!(book.join("story").join("current_state.md").exists());
         // 快照落盘。
-        assert!(book.join("story").join("snapshots").join("1").join("current_state.md").exists());
+        assert!(book
+            .join("story")
+            .join("snapshots")
+            .join("1")
+            .join("current_state.md")
+            .exists());
 
         // 错误分支：NaN / 非最新 / 空索引（逐字文案）。
         let (status, parsed) = call(
             axum::Router::new()
-                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .route(
+                    "/api/v1/books/:id/resync/:chapter",
+                    axum::routing::post(resync),
+                )
                 .with_state(rt51(&root, &llm)),
             "POST",
             "/api/v1/books/b1/resync/abc",
@@ -2466,7 +2993,10 @@ mod books51_e2e {
         assert_eq!(parsed["error"], "Chapter NaN not found in \"b1\".");
         let (status, parsed) = call(
             axum::Router::new()
-                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .route(
+                    "/api/v1/books/:id/resync/:chapter",
+                    axum::routing::post(resync),
+                )
                 .with_state(rt51(&root, &llm)),
             "POST",
             "/api/v1/books/b1/resync/9",
@@ -2509,8 +3039,10 @@ mod books51_e2e {
         assert_eq!(details["auditPassed"], false);
         assert_eq!(details["auditIssues"][0]["severity"], "warning");
         // 索引回写：状态 + "[severity] description" 问题行。
-        let index: Vec<serde_json::Value> =
-            serde_json::from_str(&std::fs::read_to_string(root.join("books/b1/chapters/index.json")).unwrap()).unwrap();
+        let index: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(root.join("books/b1/chapters/index.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(index[0]["status"], "audit-failed");
         assert_eq!(index[0]["auditIssues"][0], "[warning] 略缓。");
         // 漂移指引落盘（warning 命中 critical/warning 过滤）。
@@ -2523,9 +3055,14 @@ mod books51_e2e {
         let root = dir.path().to_path_buf();
         fixture51(&root);
         let book = root.join("books").join("b1");
-        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章 云涌\n\n正文二。").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0002_云涌.md"),
+            "# 第2章 云涌\n\n正文二。",
+        )
+        .unwrap();
         let index_path = book.join("chapters").join("index.json");
-        let mut index: Vec<serde_json::Value> = serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
+        let mut index: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(&index_path).unwrap()).unwrap();
         index.push(serde_json::json!({
             "number": 2, "title": "云涌", "status": "ready-for-review",
             "wordCount": 4, "auditIssues": [], "lengthWarnings": [],
@@ -2536,7 +3073,10 @@ mod books51_e2e {
 
         let (status, parsed) = call(
             axum::Router::new()
-                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .route(
+                    "/api/v1/books/:id/resync/:chapter",
+                    axum::routing::post(resync),
+                )
                 .with_state(rt51(&root, &llm)),
             "POST",
             "/api/v1/books/b1/resync/1",
@@ -2555,7 +3095,10 @@ mod books51_e2e {
         std::fs::remove_file(book.join("chapters").join("0002_云涌.md")).unwrap();
         let (status, parsed) = call(
             axum::Router::new()
-                .route("/api/v1/books/:id/resync/:chapter", axum::routing::post(resync))
+                .route(
+                    "/api/v1/books/:id/resync/:chapter",
+                    axum::routing::post(resync),
+                )
                 .with_state(rt51(&root, &llm)),
             "POST",
             "/api/v1/books/b1/resync/1",
@@ -2563,7 +3106,10 @@ mod books51_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(parsed["error"], "Book \"b1\" has no persisted chapters to sync.");
+        assert_eq!(
+            parsed["error"],
+            "Book \"b1\" has no persisted chapters to sync."
+        );
     }
 }
 
@@ -2602,9 +3148,21 @@ mod books52_e2e {
         // 三段等长文本触发段落等长 AI-tell（47 号同款手法）。
         let para = "林动睁开双眼，灵气顺着经脉游走，多年屈辱涌上心头。";
         let uniform = format!("{para}\n\n{para}\n\n{para}");
-        std::fs::write(book.join("chapters").join("0001_风起.md"), format!("# 第1章\n\n{uniform}")).unwrap();
-        std::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章\n\n正文二。").unwrap();
-        std::fs::write(book.join("chapters").join("0010_远行.md"), "# 第10章\n\n正文十。").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            format!("# 第1章\n\n{uniform}"),
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0002_云涌.md"),
+            "# 第2章\n\n正文二。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0010_远行.md"),
+            "# 第10章\n\n正文十。",
+        )
+        .unwrap();
         // 非 .md / 非 4 位前缀 → 排除。
         std::fs::write(book.join("chapters").join("index.json"), "[]").unwrap();
         std::fs::write(book.join("chapters").join("notes.md"), "无前缀").unwrap();
@@ -2613,19 +3171,38 @@ mod books52_e2e {
 
     fn app52(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/books/:id/detect-all", axum::routing::post(detect_all))
-            .route("/api/v1/books/:id/detect/stats", axum::routing::get(detect_stats))
-            .route("/api/v1/books/:id/detect/:chapter", axum::routing::post(detect_chapter))
+            .route(
+                "/api/v1/books/:id/detect-all",
+                axum::routing::post(detect_all),
+            )
+            .route(
+                "/api/v1/books/:id/detect/stats",
+                axum::routing::get(detect_stats),
+            )
+            .route(
+                "/api/v1/books/:id/detect/:chapter",
+                axum::routing::post(detect_chapter),
+            )
             .with_state(runtime)
     }
 
     async fn call(app: axum::Router, method: &str, uri: &str) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
-        let request = axum::http::Request::builder().method(method).uri(uri).body(axum::body::Body::empty()).unwrap();
+        let request = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -2635,20 +3212,28 @@ mod books52_e2e {
         let root = dir.path().to_path_buf();
         fixture52(&root);
 
-        let (status, parsed) = call(app52(rt52(&root)), "POST", "/api/v1/books/b1/detect-all").await;
+        let (status, parsed) =
+            call(app52(rt52(&root)), "POST", "/api/v1/books/b1/detect-all").await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["bookId"], "b1");
         let results = parsed["results"].as_array().unwrap();
         assert_eq!(results.len(), 3);
         // 字典序：0001 / 0002 / 0010（chapterNumber parseInt(前 4 位)）。
-        let numbers: Vec<u32> = results.iter().map(|r| r["chapterNumber"].as_u64().unwrap() as u32).collect();
+        let numbers: Vec<u32> = results
+            .iter()
+            .map(|r| r["chapterNumber"].as_u64().unwrap() as u32)
+            .collect();
         assert_eq!(numbers, vec![1, 2, 10]);
         assert_eq!(results[0]["filename"], "0001_风起.md");
         // 等长三段 → 段落等长维度触发（issues 非空，severity warning/info）。
         let issues = results[0]["issues"].as_array().unwrap();
         assert!(!issues.is_empty(), "body: {parsed}");
-        assert!(issues.iter().all(|i| i["severity"] == "warning" || i["severity"] == "info"));
-        assert!(issues[0]["category"].as_str().is_some_and(|c| !c.is_empty()));
+        assert!(issues
+            .iter()
+            .all(|i| i["severity"] == "warning" || i["severity"] == "info"));
+        assert!(issues[0]["category"]
+            .as_str()
+            .is_some_and(|c| !c.is_empty()));
         // 常规短文本 → 无 issue。
         assert_eq!(results[1]["issues"].as_array().unwrap().len(), 0);
     }
@@ -2680,7 +3265,8 @@ mod books52_e2e {
         let story = root.join("books").join("b1").join("story");
 
         // 缺失 → 空统计。
-        let (status, parsed) = call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
+        let (status, parsed) =
+            call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["totalDetections"], 0);
         assert_eq!(parsed["chapterBreakdown"].as_array().unwrap().len(), 0);
@@ -2697,7 +3283,8 @@ mod books52_e2e {
             ]"#,
         )
         .unwrap();
-        let (status, parsed) = call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
+        let (status, parsed) =
+            call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["totalDetections"], 2);
         assert_eq!(parsed["totalRewrites"], 3);
@@ -2715,7 +3302,8 @@ mod books52_e2e {
 
         // 损坏 JSON → 空统计（TS catch 语义）。
         std::fs::write(story.join("detection_history.json"), "{oops").unwrap();
-        let (status, parsed) = call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
+        let (status, parsed) =
+            call(app52(rt52(&root)), "GET", "/api/v1/books/b1/detect/stats").await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["totalDetections"], 0);
     }
@@ -2761,8 +3349,16 @@ mod books53_e2e {
             r#"{"id":"b1","title":"测试书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(book.join("story").join("outline").join("story_frame.md"), "# 故事框架").unwrap();
-        std::fs::write(book.join("story").join("outline").join("volume_map.md"), "# 卷册地图").unwrap();
+        std::fs::write(
+            book.join("story").join("outline").join("story_frame.md"),
+            "# 故事框架",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("outline").join("volume_map.md"),
+            "# 卷册地图",
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("assets").join("genres")).unwrap();
         std::fs::write(
             root.join("assets").join("genres").join("xianxia.md"),
@@ -2777,28 +3373,46 @@ mod books53_e2e {
                 "/api/v1/books/:id/truth/*file",
                 axum::routing::get(truth_file).put(write_truth_file),
             )
-            .route("/api/v1/books/:id/create-status", axum::routing::get(create_status))
+            .route(
+                "/api/v1/books/:id/create-status",
+                axum::routing::get(create_status),
+            )
             .route("/api/v1/genres", axum::routing::get(list_genres))
             .route("/api/v1/genres/create", axum::routing::post(create_genre))
             .route(
                 "/api/v1/genres/:id",
-                axum::routing::get(genre_detail).put(update_genre).delete(delete_genre),
+                axum::routing::get(genre_detail)
+                    .put(update_genre)
+                    .delete(delete_genre),
             )
             .route("/api/v1/genres/:id/copy", axum::routing::post(copy_genre))
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -2836,7 +3450,14 @@ mod books53_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(root.join("books").join("b1").join("story").join("roles").join("主要角色").join("林动.md").exists());
+        assert!(root
+            .join("books")
+            .join("b1")
+            .join("story")
+            .join("roles")
+            .join("主要角色")
+            .join("林动.md")
+            .exists());
 
         // 白名单外 → 400；runtime 诊断 → 400；新布局书 shim → 400。
         let (status, parsed) = call(
@@ -2865,13 +3486,28 @@ mod books53_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"], "Legacy compat shim; edit outline/story_frame.md instead");
+        assert_eq!(
+            parsed["error"],
+            "Legacy compat shim; edit outline/story_frame.md instead"
+        );
 
         // 无效 JSON / 缺 content → onError 形状 500。
-        let (status, parsed) = call(app53(rt53(&root)), "PUT", "/api/v1/books/b1/truth/current_focus.md", Some("{oops")).await;
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/books/b1/truth/current_focus.md",
+            Some("{oops"),
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
-        let (status, _) = call(app53(rt53(&root)), "PUT", "/api/v1/books/b1/truth/current_focus.md", Some("{}")).await;
+        let (status, _) = call(
+            app53(rt53(&root)),
+            "PUT",
+            "/api/v1/books/b1/truth/current_focus.md",
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -2883,7 +3519,13 @@ mod books53_e2e {
         let book = root.join("books").join("b1");
 
         // 五节缺二（book_rules/pending_hooks/roles）→ missing。
-        let (status, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/books/b1/create-status", None).await;
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "GET",
+            "/api/v1/books/b1/create-status",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["status"], "missing");
 
@@ -2891,8 +3533,21 @@ mod books53_e2e {
         std::fs::write(book.join("story").join("book_rules.md"), "规则").unwrap();
         std::fs::write(book.join("story").join("pending_hooks.md"), "| 伏笔 |").unwrap();
         std::fs::create_dir_all(book.join("story").join("roles").join("主要角色")).unwrap();
-        std::fs::write(book.join("story").join("roles").join("主要角色").join("林动.md"), "# 林动").unwrap();
-        let (status, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/books/b1/create-status", None).await;
+        std::fs::write(
+            book.join("story")
+                .join("roles")
+                .join("主要角色")
+                .join("林动.md"),
+            "# 林动",
+        )
+        .unwrap();
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "GET",
+            "/api/v1/books/b1/create-status",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["status"], "ready");
     }
@@ -2913,7 +3568,8 @@ mod books53_e2e {
         assert_eq!(genres[0]["language"], "zh");
 
         // 详情。
-        let (status, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/genres/xianxia", None).await;
+        let (status, parsed) =
+            call(app53(rt53(&root)), "GET", "/api/v1/genres/xianxia", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["profile"]["name"], "仙侠");
         assert!(parsed["body"].as_str().unwrap().contains("正文指导"));
@@ -2935,7 +3591,12 @@ mod books53_e2e {
         );
         // 项目级覆盖同 id：列表 source=project。
         let (_, parsed) = call(app53(rt53(&root)), "GET", "/api/v1/genres", None).await;
-        let wuxia = parsed["genres"].as_array().unwrap().iter().find(|g| g["id"] == "wuxia").unwrap();
+        let wuxia = parsed["genres"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == "wuxia")
+            .unwrap();
         assert_eq!(wuxia["source"], "project");
 
         // 编辑：缺省字段回路径参数。
@@ -2953,7 +3614,13 @@ mod books53_e2e {
         assert!(saved.ends_with("改写指导"));
 
         // 复制内置 → 项目。
-        let (status, parsed) = call(app53(rt53(&root)), "POST", "/api/v1/genres/xianxia/copy", None).await;
+        let (status, parsed) = call(
+            app53(rt53(&root)),
+            "POST",
+            "/api/v1/genres/xianxia/copy",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["path"], "genres/xianxia.md");
         assert!(root.join("genres").join("xianxia.md").exists());
@@ -2961,7 +3628,8 @@ mod books53_e2e {
         // 删除 → 二次 404。
         let (status, _) = call(app53(rt53(&root)), "DELETE", "/api/v1/genres/wuxia", None).await;
         assert_eq!(status, StatusCode::OK);
-        let (status, parsed) = call(app53(rt53(&root)), "DELETE", "/api/v1/genres/wuxia", None).await;
+        let (status, parsed) =
+            call(app53(rt53(&root)), "DELETE", "/api/v1/genres/wuxia", None).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["error"], "Genre \"wuxia\" not found in project");
 
@@ -3043,22 +3711,41 @@ mod config54_e2e {
                 "/api/v1/project/chapter-review-mode",
                 axum::routing::get(get_chapter_review_mode).put(put_chapter_review_mode),
             )
-            .route("/api/v1/project/notify", axum::routing::get(get_notify).put(put_notify))
-            .route("/api/v1/project/language", axum::routing::post(post_language))
+            .route(
+                "/api/v1/project/notify",
+                axum::routing::get(get_notify).put(put_notify),
+            )
+            .route(
+                "/api/v1/project/language",
+                axum::routing::post(post_language),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -3074,13 +3761,31 @@ mod config54_e2e {
 
         // review-mode：无键 auto；manual 落盘 writing.reviewMode；非法值归 auto。
         // （input-governance-mode 面已随 686 号移除——TS 上游 e7c04465 删除。）
-        let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/chapter-review-mode", None).await;
+        let (_, parsed) = call(
+            app54(rt54(&root)),
+            "GET",
+            "/api/v1/project/chapter-review-mode",
+            None,
+        )
+        .await;
         assert_eq!(parsed["mode"], "auto");
-        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/chapter-review-mode", Some(r#"{ "mode": "manual" }"#)).await;
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/chapter-review-mode",
+            Some(r#"{ "mode": "manual" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed, serde_json::json!({ "ok": true, "mode": "manual" }));
         assert_eq!(read_config(&root)["writing"]["reviewMode"], "manual");
-        let (_, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/chapter-review-mode", Some(r#"{ "mode": "garbage" }"#)).await;
+        let (_, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/chapter-review-mode",
+            Some(r#"{ "mode": "garbage" }"#),
+        )
+        .await;
         assert_eq!(parsed["mode"], "auto");
     }
 
@@ -3090,7 +3795,8 @@ mod config54_e2e {
         let root = dir.path().to_path_buf();
         fixture54(&root);
 
-        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/detection", None).await;
+        let (status, parsed) =
+            call(app54(rt54(&root)), "GET", "/api/v1/project/detection", None).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["detection"], serde_json::Value::Null);
 
@@ -3120,10 +3826,21 @@ mod config54_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(parsed["error"].as_str().is_some_and(|e| e.contains("less than or equal to 1")), "{parsed}");
+        assert!(
+            parsed["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("less than or equal to 1")),
+            "{parsed}"
+        );
 
         // null 删键。
-        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/detection", Some(r#"{ "detection": null }"#)).await;
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/detection",
+            Some(r#"{ "detection": null }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["detection"], serde_json::Value::Null);
         assert!(read_config(&root).get("detection").is_none());
@@ -3136,7 +3853,13 @@ mod config54_e2e {
         fixture54(&root);
 
         // model-overrides：缺省 {}；写入对象落盘。
-        let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/model-overrides", None).await;
+        let (_, parsed) = call(
+            app54(rt54(&root)),
+            "GET",
+            "/api/v1/project/model-overrides",
+            None,
+        )
+        .await;
         assert_eq!(parsed["overrides"], serde_json::json!({}));
         let (status, _) = call(
             app54(rt54(&root)),
@@ -3146,10 +3869,19 @@ mod config54_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(read_config(&root)["modelOverrides"]["planner"]["model"], "glm-5");
+        assert_eq!(
+            read_config(&root)["modelOverrides"]["planner"]["model"],
+            "glm-5"
+        );
 
         // default-model：GET null/null；PUT 写入（sync 镜像暂缓——不写 llm.model）。
-        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/default-model", None).await;
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "GET",
+            "/api/v1/project/default-model",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["service"], serde_json::Value::Null);
         assert_eq!(parsed["defaultModel"], serde_json::Value::Null);
@@ -3167,22 +3899,46 @@ mod config54_e2e {
         assert_eq!(llm["defaultModel"], "glm-5-air");
         assert_eq!(llm["service"], "zhipu");
         // GET 回读：defaultModel 命中。
-        let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/default-model", None).await;
+        let (_, parsed) = call(
+            app54(rt54(&root)),
+            "GET",
+            "/api/v1/project/default-model",
+            None,
+        )
+        .await;
         assert_eq!(parsed["defaultModel"], "glm-5-air");
         // 空 defaultModel → 400。
-        let (status, parsed) = call(app54(rt54(&root)), "PUT", "/api/v1/project/default-model", Some(r#"{ "defaultModel": "  " }"#)).await;
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/default-model",
+            Some(r#"{ "defaultModel": "  " }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "defaultModel is required");
 
         // notify：缺省 []；写入数组。
         let (_, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/notify", None).await;
         assert_eq!(parsed["channels"], serde_json::json!([]));
-        let (status, _) = call(app54(rt54(&root)), "PUT", "/api/v1/project/notify", Some(r#"{ "channels": ["bark"] }"#)).await;
+        let (status, _) = call(
+            app54(rt54(&root)),
+            "PUT",
+            "/api/v1/project/notify",
+            Some(r#"{ "channels": ["bark"] }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(read_config(&root)["notify"], serde_json::json!(["bark"]));
 
         // language：透传落盘。
-        let (status, parsed) = call(app54(rt54(&root)), "POST", "/api/v1/project/language", Some(r#"{ "language": "en" }"#)).await;
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "POST",
+            "/api/v1/project/language",
+            Some(r#"{ "language": "en" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed, serde_json::json!({ "ok": true, "language": "en" }));
         assert_eq!(read_config(&root)["language"], "en");
@@ -3195,10 +3951,19 @@ mod config54_e2e {
         fixture54(&root);
 
         // GET 无键 → 整体默认。
-        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/research-search", None).await;
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "GET",
+            "/api/v1/project/research-search",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         // 684 号：TS schema default 字段 allowPrivateEgress 入投影（PUT 往返保真）。
-        assert_eq!(parsed["researchSearch"], serde_json::json!({ "enabled": false, "provider": "tavily", "allowPrivateEgress": false }));
+        assert_eq!(
+            parsed["researchSearch"],
+            serde_json::json!({ "enabled": false, "provider": "tavily", "allowPrivateEgress": false })
+        );
 
         // PUT 合法：填充 + 可选字段保留。
         let (status, parsed) = call(
@@ -3228,7 +3993,13 @@ mod config54_e2e {
 
         // inkos.json 缺失 → GET 500 onError 形状。
         std::fs::remove_file(root.join("inkos.json")).unwrap();
-        let (status, parsed) = call(app54(rt54(&root)), "GET", "/api/v1/project/research-search", None).await;
+        let (status, parsed) = call(
+            app54(rt54(&root)),
+            "GET",
+            "/api/v1/project/research-search",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(parsed["error"]["code"], "INTERNAL_ERROR");
     }
@@ -3239,14 +4010,19 @@ mod style55_e2e {
     use axum::http::StatusCode;
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::books_routes::BooksRuntime;
-    use inkos_engine::server::style_routes::{fanfic_show, import_canon_endpoint, style_analyze, style_import};
+    use inkos_engine::server::style_routes::{
+        fanfic_show, import_canon_endpoint, style_analyze, style_import,
+    };
     use inkos_engine::state::manager::StateManager;
 
     async fn mock55_llm(
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let content = if system.contains("网络小说架构师") {
             "# 正传正典\n\n## 世界规则\n斗气大陆。".to_string()
         } else {
@@ -3264,7 +4040,9 @@ mod style55_e2e {
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -3308,31 +4086,61 @@ mod style55_e2e {
         // 父书真相（Phase 5 新布局）+ 一章正文（>500 字触发风格向导）。
         let parent = root.join("books").join("parent").join("story");
         std::fs::create_dir_all(parent.join("outline")).unwrap();
-        std::fs::write(parent.join("outline").join("story_frame.md"), "# 世界框架\n斗气大陆。").unwrap();
+        std::fs::write(
+            parent.join("outline").join("story_frame.md"),
+            "# 世界框架\n斗气大陆。",
+        )
+        .unwrap();
         std::fs::write(parent.join("current_state.md"), "状态v1").unwrap();
-        std::fs::write(root.join("books").join("parent").join("chapters").join("0001_启.md"), format!("# 第1章\n\n{}", "少年握紧了拳。".repeat(80))).unwrap();
+        std::fs::write(
+            root.join("books")
+                .join("parent")
+                .join("chapters")
+                .join("0001_启.md"),
+            format!("# 第1章\n\n{}", "少年握紧了拳。".repeat(80)),
+        )
+        .unwrap();
     }
 
     fn app55(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
             .route("/api/v1/style/analyze", axum::routing::post(style_analyze))
-            .route("/api/v1/books/:id/style/import", axum::routing::post(style_import))
-            .route("/api/v1/books/:id/import/canon", axum::routing::post(import_canon_endpoint))
+            .route(
+                "/api/v1/books/:id/style/import",
+                axum::routing::post(style_import),
+            )
+            .route(
+                "/api/v1/books/:id/import/canon",
+                axum::routing::post(import_canon_endpoint),
+            )
             .route("/api/v1/books/:id/fanfic", axum::routing::get(fanfic_show))
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -3358,10 +4166,15 @@ mod style55_e2e {
         let bodies = Arc::new(Mutex::new(Vec::new()));
         let app = axum::Router::new()
             .route("/chat/completions", axum::routing::post(mock958_llm))
-            .with_state(Capture958 { bodies: bodies.clone(), reply: Arc::new(reply.to_string()) });
+            .with_state(Capture958 {
+                bodies: bodies.clone(),
+                reply: Arc::new(reply.to_string()),
+            });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), bodies)
     }
 
@@ -3400,7 +4213,10 @@ mod style55_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
-        assert_eq!(parsed, serde_json::json!({ "guide": "## 文风指南\n冷峻克制，短句推进。" }));
+        assert_eq!(
+            parsed,
+            serde_json::json!({ "guide": "## 文风指南\n冷峻克制，短句推进。" })
+        );
         let request = bodies.lock().unwrap().last().cloned().expect("LLM 被调用");
         let messages = request["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2, "{request}");
@@ -3410,11 +4226,18 @@ mod style55_e2e {
             system.starts_with("把参考文本编译为有证据、可执行的文风指南，只返回 Markdown。\n\n## Activated professional skills"),
             "{system}"
         );
-        let analysis = system.find("### inkos-long-story-analysis — ").expect("analysis 技能注入");
-        let imitation = system.find("### inkos-imitation-writing — ").expect("imitation 技能注入");
+        let analysis = system
+            .find("### inkos-long-story-analysis — ")
+            .expect("analysis 技能注入");
+        let imitation = system
+            .find("### inkos-imitation-writing — ")
+            .expect("imitation 技能注入");
         assert!(analysis < imitation, "声明序注入");
         assert_eq!(messages[1]["role"], "user");
-        assert_eq!(messages[1]["content"], "来源：斗破\n\n林动握紧了拳。他抬起头，灵气涌动。");
+        assert_eq!(
+            messages[1]["content"],
+            "来源：斗破\n\n林动握紧了拳。他抬起头，灵气涌动。"
+        );
     }
 
     /// 958 号：语言 = 请求 language（"en" → en，其余 → zh）缺省回项目配置；来源
@@ -3428,7 +4251,13 @@ mod style55_e2e {
         let (llm, bodies) = spawn_mock958("guide").await;
         let last_messages = || bodies.lock().unwrap().last().unwrap()["messages"].clone();
 
-        let (status, _) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "He ran.", "language": "en" }"#)).await;
+        let (status, _) = call(
+            app55(rt55(&root, &llm)),
+            "POST",
+            "/api/v1/style/analyze",
+            Some(r#"{ "text": "He ran.", "language": "en" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let messages = last_messages();
         assert!(messages[0]["content"]
@@ -3438,11 +4267,26 @@ mod style55_e2e {
         assert_eq!(messages[1]["content"], "Source: unknown\n\nHe ran.");
 
         std::fs::write(root.join("inkos.json"), r#"{"language":"en"}"#).unwrap();
-        let (status, _) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "He ran.", "sourceName": "   " }"#)).await;
+        let (status, _) = call(
+            app55(rt55(&root, &llm)),
+            "POST",
+            "/api/v1/style/analyze",
+            Some(r#"{ "text": "He ran.", "sourceName": "   " }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(last_messages()[1]["content"], "Source: reference\n\nHe ran.");
+        assert_eq!(
+            last_messages()[1]["content"],
+            "Source: reference\n\nHe ran."
+        );
 
-        let (status, _) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。", "sourceName": "样", "language": "zh" }"#)).await;
+        let (status, _) = call(
+            app55(rt55(&root, &llm)),
+            "POST",
+            "/api/v1/style/analyze",
+            Some(r#"{ "text": "短句。", "sourceName": "样", "language": "zh" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(last_messages()[1]["content"], "来源：样\n\n短句。");
     }
@@ -3455,20 +4299,44 @@ mod style55_e2e {
         let root = dir.path().to_path_buf();
         fixture55(&root);
         for body in [r#"{ "text": "  " }"#, "{}"] {
-            let (status, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "POST", "/api/v1/style/analyze", Some(body)).await;
+            let (status, parsed) = call(
+                app55(rt55(&root, "http://127.0.0.1:9")),
+                "POST",
+                "/api/v1/style/analyze",
+                Some(body),
+            )
+            .await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
             assert_eq!(parsed["error"], "text is required");
         }
 
         let (llm, bodies) = spawn_mock958("guide").await;
-        let (status, parsed) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。" }"#)).await;
+        let (status, parsed) = call(
+            app55(rt55(&root, &llm)),
+            "POST",
+            "/api/v1/style/analyze",
+            Some(r#"{ "text": "短句。" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(parsed["error"], "Style extraction requires unavailable skill: inkos-long-story-analysis");
-        assert!(bodies.lock().unwrap().is_empty(), "技能先验失败不得触达 LLM");
+        assert_eq!(
+            parsed["error"],
+            "Style extraction requires unavailable skill: inkos-long-story-analysis"
+        );
+        assert!(
+            bodies.lock().unwrap().is_empty(),
+            "技能先验失败不得触达 LLM"
+        );
 
         seed958_skills(&root);
         let (blank_llm, _) = spawn_mock958("   \n  ").await;
-        let (status, parsed) = call(app55(rt55(&root, &blank_llm)), "POST", "/api/v1/style/analyze", Some(r#"{ "text": "短句。" }"#)).await;
+        let (status, parsed) = call(
+            app55(rt55(&root, &blank_llm)),
+            "POST",
+            "/api/v1/style/analyze",
+            Some(r#"{ "text": "短句。" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(parsed["error"], "Style extraction returned an empty guide.");
     }
@@ -3547,7 +4415,10 @@ mod style55_e2e {
 
         // parent_canon.md：LLM 输出 + 确定性 meta 块。
         let canon = std::fs::read_to_string(
-            root.join("books").join("target").join("story").join("parent_canon.md"),
+            root.join("books")
+                .join("target")
+                .join("story")
+                .join("parent_canon.md"),
         )
         .unwrap();
         assert!(canon.contains("# 正传正典"));
@@ -3556,7 +4427,12 @@ mod style55_e2e {
         assert!(canon.contains("\n---\nparentBookId: parent\n"));
         assert!(canon.contains("parentTitle: 书parent"));
         // 父书章节样本 ≥500 → 目标书也生成风格指纹。
-        assert!(root.join("books").join("target").join("story").join("style_guide.md").exists());
+        assert!(root
+            .join("books")
+            .join("target")
+            .join("story")
+            .join("style_guide.md")
+            .exists());
 
         // SSE import:start（type canon）→ import:complete。
         let start = subscriber.recv().await.unwrap();
@@ -3574,10 +4450,22 @@ mod style55_e2e {
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         let error = parsed["error"].as_str().unwrap();
-        assert!(error.starts_with("Parent book \"ghost\" not found. Available: "), "{error}");
-        assert!(error.contains("parent") && error.contains("target"), "{error}");
+        assert!(
+            error.starts_with("Parent book \"ghost\" not found. Available: "),
+            "{error}"
+        );
+        assert!(
+            error.contains("parent") && error.contains("target"),
+            "{error}"
+        );
         // 缺 fromBookId → 400。
-        let (status, parsed) = call(app55(rt55(&root, &llm)), "POST", "/api/v1/books/target/import/canon", Some("{}")).await;
+        let (status, parsed) = call(
+            app55(rt55(&root, &llm)),
+            "POST",
+            "/api/v1/books/target/import/canon",
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "fromBookId is required");
     }
@@ -3588,17 +4476,32 @@ mod style55_e2e {
         let root = dir.path().to_path_buf();
         fixture55(&root);
 
-        let (status, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "GET", "/api/v1/books/target/fanfic", None).await;
+        let (status, parsed) = call(
+            app55(rt55(&root, "http://127.0.0.1:9")),
+            "GET",
+            "/api/v1/books/target/fanfic",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["bookId"], "target");
         assert_eq!(parsed["content"], serde_json::Value::Null);
 
         std::fs::write(
-            root.join("books").join("target").join("story").join("fanfic_canon.md"),
+            root.join("books")
+                .join("target")
+                .join("story")
+                .join("fanfic_canon.md"),
             "# 番外正典",
         )
         .unwrap();
-        let (_, parsed) = call(app55(rt55(&root, "http://127.0.0.1:9")), "GET", "/api/v1/books/target/fanfic", None).await;
+        let (_, parsed) = call(
+            app55(rt55(&root, "http://127.0.0.1:9")),
+            "GET",
+            "/api/v1/books/target/fanfic",
+            None,
+        )
+        .await;
         assert_eq!(parsed["content"], "# 番外正典");
     }
 }
@@ -3642,21 +4545,37 @@ mod config56_e2e {
 
     fn app56(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/project", axum::routing::get(get_project).put(put_project))
+            .route(
+                "/api/v1/project",
+                axum::routing::get(get_project).put(put_project),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -3699,7 +4618,13 @@ mod config56_e2e {
         assert_eq!(parsed["model"], "glm-5");
 
         // 非法 language 不写入（精确 zh/en 命中才生效）。
-        let (status, _) = call(app56(rt56(&root)), "PUT", "/api/v1/project", Some(r#"{ "language": "jp" }"#)).await;
+        let (status, _) = call(
+            app56(rt56(&root)),
+            "PUT",
+            "/api/v1/project",
+            Some(r#"{ "language": "jp" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let (_, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
         assert_eq!(parsed["language"], "en");
@@ -3716,10 +4641,17 @@ mod config56_e2e {
         let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(parsed["error"]["code"], "PROJECT_CONFIG_INVALID");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("inkos.json"));
+        assert!(parsed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("inkos.json"));
 
         // schema 校验失败（name 缺失）同样 500。
-        std::fs::write(root.join("inkos.json"), r#"{ "llm": { "provider": "custom", "baseUrl": "https://x.io", "model": "m" } }"#).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "llm": { "provider": "custom", "baseUrl": "https://x.io", "model": "m" } }"#,
+        )
+        .unwrap();
         let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(parsed["error"]["code"], "PROJECT_CONFIG_INVALID");
@@ -3754,7 +4686,13 @@ mod config56_e2e {
         assert!(parsed["error"].is_string(), "body: {parsed}");
 
         // 仅 language（无 temperature/stream）→ 不解引用 llm → 200。
-        let (status, _) = call(app56(rt56(&root)), "PUT", "/api/v1/project", Some(r#"{ "language": "en" }"#)).await;
+        let (status, _) = call(
+            app56(rt56(&root)),
+            "PUT",
+            "/api/v1/project",
+            Some(r#"{ "language": "en" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
     }
 }
@@ -3859,8 +4797,12 @@ name: 林动
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
-        let content = if system.contains("总架构师") || system.contains("网络小说架构师") {
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let content = if system.contains("总架构师") || system.contains("网络小说架构师")
+        {
             ARCHITECT_OUTPUT.to_string()
         } else if system.contains("资深小说编辑") {
             REVIEW_PASS.to_string()
@@ -3884,7 +4826,9 @@ name: 林动
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -3925,21 +4869,37 @@ name: 林动
                 "/api/v1/books/:id/import/chapters",
                 axum::routing::post(import_chapters_endpoint),
             )
-            .route("/api/v1/books/:id/create-status", axum::routing::get(create_status))
+            .route(
+                "/api/v1/books/:id/create-status",
+                axum::routing::get(create_status),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -3981,21 +4941,43 @@ name: 林动
         let book = root.join("books").join("斗破苍穹");
         // staging 原子落盘面：book.json + Phase 5 地基 + 控制文档 + 快照 0。
         assert!(book.join("book.json").exists());
-        assert!(book.join("story").join("outline").join("story_frame.md").exists());
-        assert!(book.join("story").join("roles").join("主要角色").join("林动.md").exists());
+        assert!(book
+            .join("story")
+            .join("outline")
+            .join("story_frame.md")
+            .exists());
+        assert!(book
+            .join("story")
+            .join("roles")
+            .join("主要角色")
+            .join("林动.md")
+            .exists());
         assert!(book.join("story").join("pending_hooks.md").exists());
         assert!(book.join("story").join("author_intent.md").exists());
-        assert!(book.join("story").join("snapshots").join("0").exists() || book.join("story").join("snapshots").exists());
+        assert!(
+            book.join("story").join("snapshots").join("0").exists()
+                || book.join("story").join("snapshots").exists()
+        );
         // brief.md：外部指令（blurb 段）落盘。
-        let brief = std::fs::read_to_string(book.join("story").join("brief.md")).unwrap_or_default();
+        let brief =
+            std::fs::read_to_string(book.join("story").join("brief.md")).unwrap_or_default();
         assert!(brief.contains("废柴崛起"), "brief: {brief}");
         // 无残留 staging 目录。
         for entry in std::fs::read_dir(root.join("books")).unwrap() {
             let name = entry.unwrap().file_name().to_string_lossy().into_owned();
-            assert!(!name.starts_with(".tmp-book-create-"), "staging 残留: {name}");
+            assert!(
+                !name.starts_with(".tmp-book-create-"),
+                "staging 残留: {name}"
+            );
         }
         // create-status：地基齐备 → ready（内存分支已清）。
-        let (status, parsed) = call(app58(rt58(&root, &llm)), "GET", "/api/v1/books/斗破苍穹/create-status", None).await;
+        let (status, parsed) = call(
+            app58(rt58(&root, &llm)),
+            "GET",
+            "/api/v1/books/斗破苍穹/create-status",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["status"], "ready");
 
@@ -4011,9 +4993,18 @@ name: 林动
         assert_eq!(parsed["error"], "Book \"斗破苍穹\" already exists");
 
         // 空标题 → 400。
-        let (status, parsed) = call(app58(rt58(&root, &llm)), "POST", "/api/v1/books/create", Some(r#"{ "title": "", "genre": "x" }"#)).await;
+        let (status, parsed) = call(
+            app58(rt58(&root, &llm)),
+            "POST",
+            "/api/v1/books/create",
+            Some(r#"{ "title": "", "genre": "x" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"], "Could not derive a valid book id from title");
+        assert_eq!(
+            parsed["error"],
+            "Could not derive a valid book id from title"
+        );
     }
 
     #[tokio::test]
@@ -4070,15 +5061,29 @@ name: 林动
         assert_eq!(index[0]["status"], "imported");
         assert_eq!(index[0]["title"], "风起");
         // 回放重置：旧摘要清除、快照 0 与逐章快照存在。
-        assert!(!book.join("story").join("chapter_summaries.md").exists()
-            || std::fs::read_to_string(book.join("story").join("chapter_summaries.md")).unwrap().contains("风起"));
+        assert!(
+            !book.join("story").join("chapter_summaries.md").exists()
+                || std::fs::read_to_string(book.join("story").join("chapter_summaries.md"))
+                    .unwrap()
+                    .contains("风起")
+        );
         assert!(book.join("story").join("snapshots").join("0").exists());
         assert!(book.join("story").join("snapshots").join("2").exists());
         // 地基重生成（fromImport 输出）。
-        assert!(book.join("story").join("outline").join("story_frame.md").exists());
+        assert!(book
+            .join("story")
+            .join("outline")
+            .join("story_frame.md")
+            .exists());
 
         // text 空 → 400。
-        let (status, parsed) = call(app58(rt58(&root, &llm)), "POST", "/api/v1/books/b1/import/chapters", Some(r#"{ "text": "  " }"#)).await;
+        let (status, parsed) = call(
+            app58(rt58(&root, &llm)),
+            "POST",
+            "/api/v1/books/b1/import/chapters",
+            Some(r#"{ "text": "  " }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "text is required");
     }
@@ -4089,7 +5094,9 @@ mod fanfic59_e2e {
     use axum::http::StatusCode;
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::books_routes::BooksRuntime;
-    use inkos_engine::server::fanfic_routes::{fanfic_init, fanfic_refresh, imitation_init, spinoff_init};
+    use inkos_engine::server::fanfic_routes::{
+        fanfic_init, fanfic_refresh, imitation_init, spinoff_init,
+    };
     use inkos_engine::state::manager::StateManager;
 
     const ARCHITECT_OUTPUT: &str = r#"=== SECTION: story_frame ===
@@ -4170,16 +5177,26 @@ name: 萧炎
         _state: axum::extract::State<()>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let content = if system.contains("同人创作素材分析师") {
             CANON_IMPORT.to_string()
-        } else if system.contains("同人架构师") || system.contains("总架构师") || system.contains("网络小说架构师") {
+        } else if system.contains("同人架构师")
+            || system.contains("总架构师")
+            || system.contains("网络小说架构师")
+        {
             ARCHITECT_OUTPUT.to_string()
         } else if system.contains("资深小说编辑") {
             REVIEW_PASS.to_string()
-        } else if system.contains("网络小说架构师") || system.contains("parent-canon") || system.contains("正传正典参照") {
+        } else if system.contains("网络小说架构师")
+            || system.contains("parent-canon")
+            || system.contains("正传正典参照")
+        {
             PARENT_CANON.to_string()
-        } else if system.contains("文学风格分析专家") || system.contains("literary style analyst") {
+        } else if system.contains("文学风格分析专家") || system.contains("literary style analyst")
+        {
             "## 叙事声音\n热血紧凑。".to_string()
         } else {
             "# 正传正典\n\n## 世界规则\n斗气大陆。".to_string()
@@ -4196,7 +5213,9 @@ name: 萧炎
             .with_state(());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -4238,23 +5257,42 @@ name: 萧炎
     fn app59(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
             .route("/api/v1/fanfic/init", axum::routing::post(fanfic_init))
-            .route("/api/v1/books/:id/fanfic/refresh", axum::routing::post(fanfic_refresh))
+            .route(
+                "/api/v1/books/:id/fanfic/refresh",
+                axum::routing::post(fanfic_refresh),
+            )
             .route("/api/v1/spinoff/init", axum::routing::post(spinoff_init))
-            .route("/api/v1/imitation/init", axum::routing::post(imitation_init))
+            .route(
+                "/api/v1/imitation/init",
+                axum::routing::post(imitation_init),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -4296,9 +5334,21 @@ name: 萧炎
         assert!(canon.contains("斗气大陆，等级森严。"));
         assert!(canon.contains("fanficMode: canon"));
         // 地基（fanfic 架构师输出）+ 角色卡 + 快照 0 + 空索引。
-        assert!(book.join("story").join("outline").join("story_frame.md").exists());
-        assert!(book.join("story").join("roles").join("主要角色").join("萧炎.md").exists());
-        assert!(book.join("story").join("snapshots").join("0").exists() || book.join("story").join("snapshots").exists());
+        assert!(book
+            .join("story")
+            .join("outline")
+            .join("story_frame.md")
+            .exists());
+        assert!(book
+            .join("story")
+            .join("roles")
+            .join("主要角色")
+            .join("萧炎.md")
+            .exists());
+        assert!(
+            book.join("story").join("snapshots").join("0").exists()
+                || book.join("story").join("snapshots").exists()
+        );
         assert!(book.join("chapters").join("index.json").exists());
         // 风格向导（sourceText ≥500）。
         assert!(book.join("story").join("style_guide.md").exists());
@@ -4307,7 +5357,13 @@ name: 萧炎
         assert_eq!(subscriber.recv().await.unwrap().event, "fanfic:complete");
 
         // 缺 sourceText → 400。
-        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/fanfic/init", Some(r#"{ "title": "x" }"#)).await;
+        let (status, parsed) = call(
+            app59(rt59(&root, &llm)),
+            "POST",
+            "/api/v1/fanfic/init",
+            Some(r#"{ "title": "x" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "title and sourceText are required");
 
@@ -4321,7 +5377,13 @@ name: 萧炎
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true);
-        let (status, _) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/books/斗破新程/fanfic/refresh", Some(r#"{ "sourceText": "  " }"#)).await;
+        let (status, _) = call(
+            app59(rt59(&root, &llm)),
+            "POST",
+            "/api/v1/books/斗破新程/fanfic/refresh",
+            Some(r#"{ "sourceText": "  " }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
@@ -4350,10 +5412,15 @@ name: 萧炎
         wait_for(book.join("story").join("parent_canon.md")).await;
         wait_for(book.join("chapters").join("index.json")).await;
         // 正传正典 + 地基（original 模式 + spinoff 上下文）。
-        let parent_canon = std::fs::read_to_string(book.join("story").join("parent_canon.md")).unwrap();
+        let parent_canon =
+            std::fs::read_to_string(book.join("story").join("parent_canon.md")).unwrap();
         // G7c/332 号：平铺 meta 块（`---` + 顶层 key: value）。
         assert!(parent_canon.contains("\n---\nparentBookId: parent\n"));
-        assert!(book.join("story").join("outline").join("story_frame.md").exists());
+        assert!(book
+            .join("story")
+            .join("outline")
+            .join("story_frame.md")
+            .exists());
         assert_eq!(subscriber.recv().await.unwrap().event, "spinoff:start");
         // spinoff:complete → book:created 顺序到达。
         let mut events = Vec::new();
@@ -4364,10 +5431,22 @@ name: 萧炎
         assert!(events.contains(&"book:created".to_string()));
 
         // parent 缺失 → 404；缺 parentBookId → 400。
-        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/spinoff/init", Some(r#"{ "title": "x", "parentBookId": "ghost" }"#)).await;
+        let (status, parsed) = call(
+            app59(rt59(&root, &llm)),
+            "POST",
+            "/api/v1/spinoff/init",
+            Some(r#"{ "title": "x", "parentBookId": "ghost" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["error"], "Parent book \"ghost\" not found");
-        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/spinoff/init", Some(r#"{ "title": "x" }"#)).await;
+        let (status, parsed) = call(
+            app59(rt59(&root, &llm)),
+            "POST",
+            "/api/v1/spinoff/init",
+            Some(r#"{ "title": "x" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "title and parentBookId are required");
 
@@ -4392,9 +5471,18 @@ name: 萧炎
         assert!(brief.contains("废柴逆袭"));
         assert_eq!(subscriber2.recv().await.unwrap().event, "imitation:start");
         // 缺 storyIdea → 400。
-        let (status, parsed) = call(app59(rt59(&root, &llm)), "POST", "/api/v1/imitation/init", Some(r#"{ "title": "y", "referenceText": "z" }"#)).await;
+        let (status, parsed) = call(
+            app59(rt59(&root, &llm)),
+            "POST",
+            "/api/v1/imitation/init",
+            Some(r#"{ "title": "y", "referenceText": "z" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"], "title, referenceText and storyIdea are required");
+        assert_eq!(
+            parsed["error"],
+            "title, referenceText and storyIdea are required"
+        );
     }
 
     /// 962 号：后台创建失败（LLM 不可达）→ `{spinoff,imitation}:error` 后紧跟
@@ -4403,7 +5491,9 @@ name: 萧炎
     #[tokio::test]
     async fn spinoff_and_imitation_failures_also_broadcast_book_error() {
         async fn next_pair(
-            subscriber: &mut tokio::sync::broadcast::Receiver<inkos_engine::server::sse::SsePayload>,
+            subscriber: &mut tokio::sync::broadcast::Receiver<
+                inkos_engine::server::sse::SsePayload,
+            >,
             domain_error: &str,
         ) -> (serde_json::Value, String) {
             let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -4414,7 +5504,10 @@ name: 萧炎
                     .unwrap();
                 if payload.event == domain_error {
                     let data: serde_json::Value = serde_json::from_str(&payload.data).unwrap();
-                    let next = tokio::time::timeout_at(deadline, subscriber.recv()).await.unwrap().unwrap();
+                    let next = tokio::time::timeout_at(deadline, subscriber.recv())
+                        .await
+                        .unwrap()
+                        .unwrap();
                     assert_eq!(next.data, payload.data, "book:error 负载与领域错误同形");
                     return (data, next.event);
                 }
@@ -4488,10 +5581,22 @@ mod skills60_e2e {
 
     fn app60(root: &std::path::Path) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/skills", axum::routing::get(skill_routes::list_skills))
-            .route("/api/v1/skills/import", axum::routing::post(skill_routes::import_skill))
-            .route("/api/v1/skills/:skillId", axum::routing::delete(skill_routes::delete_skill))
-            .route("/api/v1/prompt-packs", axum::routing::get(skill_routes::list_prompt_packs))
+            .route(
+                "/api/v1/skills",
+                axum::routing::get(skill_routes::list_skills),
+            )
+            .route(
+                "/api/v1/skills/import",
+                axum::routing::post(skill_routes::import_skill),
+            )
+            .route(
+                "/api/v1/skills/:skillId",
+                axum::routing::delete(skill_routes::delete_skill),
+            )
+            .route(
+                "/api/v1/prompt-packs",
+                axum::routing::get(skill_routes::list_prompt_packs),
+            )
             .route(
                 "/api/v1/prompt-packs/:promptId",
                 axum::routing::put(skill_routes::put_prompt_pack)
@@ -4500,32 +5605,58 @@ mod skills60_e2e {
             .with_state(rt60(root))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
     /// 标准 base64 编码（测试 fixture 构造 dataUrl 用）。
     fn b64(input: &str) -> String {
-        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let bytes = input.as_bytes();
         let mut out = String::new();
         for chunk in bytes.chunks(3) {
-            let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+            let b = [
+                chunk[0],
+                *chunk.get(1).unwrap_or(&0),
+                *chunk.get(2).unwrap_or(&0),
+            ];
             let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
             out.push(TABLE[(n >> 18) as usize & 63] as char);
             out.push(TABLE[(n >> 12) as usize & 63] as char);
-            out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-            out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+            out.push(if chunk.len() > 1 {
+                TABLE[(n >> 6) as usize & 63] as char
+            } else {
+                '='
+            });
+            out.push(if chunk.len() > 2 {
+                TABLE[n as usize & 63] as char
+            } else {
+                '='
+            });
         }
         out
     }
@@ -4534,7 +5665,8 @@ mod skills60_e2e {
         format!("data:text/markdown;base64,{}", b64(content))
     }
 
-    const MANIFEST: &str = "---\nname: Combat Tactics\ndescription: 战斗策略技能\n---\n\n# 战斗策略\n\n正文指导。";
+    const MANIFEST: &str =
+        "---\nname: Combat Tactics\ndescription: 战斗策略技能\n---\n\n# 战斗策略\n\n正文指导。";
 
     fn import_body(files: &[(&str, &str)]) -> String {
         let entries: Vec<String> = files
@@ -4560,7 +5692,10 @@ mod skills60_e2e {
         assert_eq!(packs[0]["source"], "builtin");
         let prompts = parsed["prompts"].as_array().unwrap();
         assert_eq!(prompts.len(), 12);
-        let writer = prompts.iter().find(|p| p["id"] == "longform.writer").unwrap();
+        let writer = prompts
+            .iter()
+            .find(|p| p["id"] == "longform.writer")
+            .unwrap();
         assert_eq!(writer["packId"], "longform");
         assert_eq!(writer["title"], "Longform Writer");
         assert_eq!(writer["source"], "builtin");
@@ -4588,12 +5723,20 @@ mod skills60_e2e {
         assert_eq!(parsed["prompt"]["source"], "project");
         assert_eq!(parsed["prompt"]["overridden"], true);
         assert_eq!(parsed["prompt"]["path"], "prompt/longform/writer.md");
-        assert!(parsed["prompt"]["content"].as_str().unwrap().contains("覆盖后的写作提示"));
+        assert!(parsed["prompt"]["content"]
+            .as_str()
+            .unwrap()
+            .contains("覆盖后的写作提示"));
         // defaultContent 保留 builtin 原文
-        assert_ne!(parsed["prompt"]["content"], parsed["prompt"]["defaultContent"]);
+        assert_ne!(
+            parsed["prompt"]["content"],
+            parsed["prompt"]["defaultContent"]
+        );
 
         // 覆盖文件落盘（utf-8 原文）
-        let on_disk = std::fs::read_to_string(root.join("prompt").join("longform").join("writer.md")).unwrap();
+        let on_disk =
+            std::fs::read_to_string(root.join("prompt").join("longform").join("writer.md"))
+                .unwrap();
         assert!(on_disk.contains("覆盖后的写作提示"));
 
         // GET 列表反映覆盖态
@@ -4620,7 +5763,11 @@ mod skills60_e2e {
         assert_eq!(parsed["prompt"]["source"], "builtin");
         assert_eq!(parsed["prompt"]["overridden"], false);
         assert!(parsed["prompt"].get("path").is_none());
-        assert!(!root.join("prompt").join("longform").join("writer.md").exists());
+        assert!(!root
+            .join("prompt")
+            .join("longform")
+            .join("writer.md")
+            .exists());
     }
 
     #[tokio::test]
@@ -4638,7 +5785,10 @@ mod skills60_e2e {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["error"]["code"], "PROMPT_PACK_PROMPT_NOT_FOUND");
-        assert_eq!(parsed["error"]["message"], "Prompt pack prompt not found: unknown.prompt");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Prompt pack prompt not found: unknown.prompt"
+        );
 
         // 非 JSON body → 400
         let (status, parsed) = call(
@@ -4650,7 +5800,10 @@ mod skills60_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_PROMPT_PACK_PAYLOAD");
-        assert_eq!(parsed["error"]["message"], "Prompt pack payload must be JSON");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Prompt pack payload must be JSON"
+        );
 
         // content 非串 → 400
         let (status, parsed) = call(
@@ -4696,14 +5849,21 @@ mod skills60_e2e {
             ("my-pack/SKILL.md", MANIFEST),
             ("my-pack/reference.md", "参考资料。"),
         ]);
-        let (status, parsed) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
+        let (status, parsed) =
+            call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["skill"]["id"], "combat-tactics");
         assert_eq!(parsed["skill"]["name"], "Combat Tactics");
         assert_eq!(parsed["skill"]["source"], "project");
         assert_eq!(parsed["skill"]["editable"], true);
-        assert_eq!(parsed["skill"]["path"], ".agents/skills/combat-tactics/SKILL.md");
-        assert!(parsed["skill"]["body"].as_str().unwrap().contains("战斗策略"));
+        assert_eq!(
+            parsed["skill"]["path"],
+            ".agents/skills/combat-tactics/SKILL.md"
+        );
+        assert!(parsed["skill"]["body"]
+            .as_str()
+            .unwrap()
+            .contains("战斗策略"));
 
         let skill_dir = root.join(".agents").join("skills").join("combat-tactics");
         assert!(skill_dir.join("SKILL.md").exists());
@@ -4728,10 +5888,14 @@ mod skills60_e2e {
         assert_eq!(ids, sorted);
 
         // 重复导入 → 409 SKILL_EXISTS
-        let (status, parsed) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
+        let (status, parsed) =
+            call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(parsed["error"]["code"], "SKILL_EXISTS");
-        assert_eq!(parsed["error"]["message"], "Project skill already exists: combat-tactics");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Project skill already exists: combat-tactics"
+        );
 
         // 删除 → ok:true → 目录消失 → 再删 404
         let (status, parsed) = call(
@@ -4753,7 +5917,10 @@ mod skills60_e2e {
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["error"]["code"], "SKILL_NOT_FOUND");
-        assert_eq!(parsed["error"]["message"], "Project skill not found: combat-tactics");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Project skill not found: combat-tactics"
+        );
 
         // 删除后可再次导入
         let (status, _) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
@@ -4767,10 +5934,16 @@ mod skills60_e2e {
 
         // 根级 SKILL.md 形式（skillPath = root/SKILL.md → id 回退 root basename，但 name 可用）
         let body = import_body(&[("SKILL.md", MANIFEST)]);
-        let (status, parsed) = call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
+        let (status, parsed) =
+            call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["skill"]["id"], "combat-tactics");
-        assert!(root.join(".agents").join("skills").join("combat-tactics").join("SKILL.md").exists());
+        assert!(root
+            .join(".agents")
+            .join("skills")
+            .join("combat-tactics")
+            .join("SKILL.md")
+            .exists());
     }
 
     #[tokio::test]
@@ -4780,36 +5953,49 @@ mod skills60_e2e {
         let post = |body: &str| {
             let root = root.clone();
             let body = body.to_string();
-            async move {
-                call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await
-            }
+            async move { call(app60(&root), "POST", "/api/v1/skills/import", Some(&body)).await }
         };
 
         // 非 JSON → 400
         let (status, parsed) = post("not-json").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_SKILL_IMPORT");
-        assert_eq!(parsed["error"]["message"], "Skill import payload must be JSON");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Skill import payload must be JSON"
+        );
 
         // payload 非对象 → 400
         let (status, parsed) = post("[1]").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"]["message"], "Skill import payload must be an object");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Skill import payload must be an object"
+        );
 
         // files 缺失 / 空数组 → 400
         let (status, parsed) = post("{}").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"]["message"], "Skill import requires at least one file");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Skill import requires at least one file"
+        );
         let (status, parsed) = post("{\"files\":[]}").await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"]["message"], "Skill import requires at least one file");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Skill import requires at least one file"
+        );
 
         // 不安全路径（遍历）→ 400 INVALID_SKILL_IMPORT_PATH（消息带原值）
         let body = import_body(&[("../evil.md", "x")]);
         let (status, parsed) = post(&body).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_SKILL_IMPORT_PATH");
-        assert_eq!(parsed["error"]["message"], "Unsafe skill import path: ../evil.md");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Unsafe skill import path: ../evil.md"
+        );
 
         // 绝对路径 → 400
         let body = import_body(&[("/etc/passwd", "x")]);
@@ -4821,7 +6007,10 @@ mod skills60_e2e {
         let body = import_body(&[("SKILL.md", MANIFEST), ("skill.md", MANIFEST)]);
         let (status, parsed) = post(&body).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"]["message"], "Duplicate skill import path: skill.md");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Duplicate skill import path: skill.md"
+        );
 
         // 缺 dataUrl → 400
         let (status, parsed) = post(r#"{"files":[{"path":"SKILL.md"}]}"#).await;
@@ -4829,7 +6018,8 @@ mod skills60_e2e {
         assert_eq!(parsed["error"]["message"], "Missing dataUrl for SKILL.md");
 
         // 坏 dataUrl → 400 INVALID_ATTACHMENT_DATA_URL
-        let (status, parsed) = post(r#"{"files":[{"path":"SKILL.md","dataUrl":"http://x/y"}]}"#).await;
+        let (status, parsed) =
+            post(r#"{"files":[{"path":"SKILL.md","dataUrl":"http://x/y"}]}"#).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_ATTACHMENT_DATA_URL");
 
@@ -4837,20 +6027,29 @@ mod skills60_e2e {
         let body = import_body(&[("notes/other.md", MANIFEST)]);
         let (status, parsed) = post(&body).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"]["message"], "Skill import must contain exactly one SKILL.md");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Skill import must contain exactly one SKILL.md"
+        );
 
         // 两个 SKILL.md → 400
         let body = import_body(&[("a/SKILL.md", MANIFEST), ("b/SKILL.md", MANIFEST)]);
         let (status, parsed) = post(&body).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert_eq!(parsed["error"]["message"], "Skill import must contain exactly one SKILL.md");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Skill import must contain exactly one SKILL.md"
+        );
 
         // 越出 manifest folder → 400 INVALID_SKILL_IMPORT_PATH
         let body = import_body(&[("a/SKILL.md", MANIFEST), ("outside.md", "x")]);
         let (status, parsed) = post(&body).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_SKILL_IMPORT_PATH");
-        assert_eq!(parsed["error"]["message"], "All imported files must be inside the SKILL.md folder");
+        assert_eq!(
+            parsed["error"]["message"],
+            "All imported files must be inside the SKILL.md folder"
+        );
 
         // manifest 解析失败 → 400 INVALID_SKILL_MANIFEST
         let body = import_body(&[("SKILL.md", "no frontmatter")]);
@@ -4900,11 +6099,19 @@ mod skills60_e2e {
         let (status, parsed) = call(app60(&root), "GET", "/api/v1/skills", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let diagnostics = parsed["diagnostics"].as_array().unwrap();
-        assert!(diagnostics
-            .iter()
-            .any(|d| d["path"].as_str().unwrap().contains(&root.join("skills").join("broken").join("SKILL.md").to_string_lossy().to_string())
-                && d["message"].as_str().unwrap().contains("frontmatter")),
-            "diagnostics: {diagnostics:?}");
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d["path"].as_str().unwrap().contains(
+                    &root
+                        .join("skills")
+                        .join("broken")
+                        .join("SKILL.md")
+                        .to_string_lossy()
+                        .to_string()
+                ) && d["message"].as_str().unwrap().contains("frontmatter")),
+            "diagnostics: {diagnostics:?}"
+        );
         // 坏 manifest 不进 skills 列表（home 目录可能带本机技能，故不断言总数）
         let skills = parsed["skills"].as_array().unwrap();
         assert!(!skills.iter().any(|s| s["id"] == "broken"));
@@ -4954,10 +6161,7 @@ name: broadcast-probe
 description: 582 号广播探针。
 ---
 正文";
-        let body = import_body(&[(
-            "broadcast-probe/SKILL.md",
-            manifest,
-        )]);
+        let body = import_body(&[("broadcast-probe/SKILL.md", manifest)]);
         // 关键：订阅必须落在**注入 app 的同一 runtime** 的 hub 上——app60 每次
         // 调用都重建 runtime/hub，测试在此内联路由构建以持有同一 runtime。
         let runtime = rt60(&root);
@@ -5040,16 +6244,26 @@ mod projectfiles61_e2e {
             .with_state(rt61(root))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, Option<Vec<u8>>, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, Option<Vec<u8>>, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec();
         let parsed = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, Some(bytes), parsed)
     }
@@ -5174,7 +6388,8 @@ mod projectfiles61_e2e {
         assert_eq!(parsed["contentType"], "application/json; charset=utf-8");
         assert_eq!(parsed["size"], "{ \"shot\": 1 }".len());
         assert_eq!(
-            std::fs::read_to_string(root.join("storyboards").join("scenes").join("s1.json")).unwrap(),
+            std::fs::read_to_string(root.join("storyboards").join("scenes").join("s1.json"))
+                .unwrap(),
             "{ \"shot\": 1 }"
         );
 
@@ -5215,7 +6430,10 @@ mod projectfiles61_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_PROJECT_ARTIFACT_PATH");
-        assert_eq!(parsed["error"]["message"], "Only generated writing artifacts can be opened");
+        assert_eq!(
+            parsed["error"]["message"],
+            "Only generated writing artifacts can be opened"
+        );
 
         // 非文本扩展 → 415
         let (status, _, parsed) = call(
@@ -5340,7 +6558,10 @@ mod services63_e2e {
 
     fn app63(root: &std::path::Path) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/services", axum::routing::get(service_routes::list_services))
+            .route(
+                "/api/v1/services",
+                axum::routing::get(service_routes::list_services),
+            )
             .route(
                 "/api/v1/services/config",
                 axum::routing::get(service_routes::get_services_config)
@@ -5350,7 +6571,10 @@ mod services63_e2e {
                 "/api/v1/services/config/import-env",
                 axum::routing::post(service_routes::import_env_config),
             )
-            .route("/api/v1/services/models", axum::routing::get(service_routes::list_services_models))
+            .route(
+                "/api/v1/services/models",
+                axum::routing::get(service_routes::list_services_models),
+            )
             .route(
                 "/api/v1/services/models/custom",
                 axum::routing::get(service_routes::list_custom_services_models),
@@ -5385,17 +6609,30 @@ mod services63_e2e {
             .with_state(rt63(root))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -5514,7 +6751,8 @@ mod services63_e2e {
 
         // config 落盘：services + service + configSource=studio + 顶层镜像（63 号补齐）
         let saved: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap())
+                .unwrap();
         let llm = &saved["llm"];
         assert_eq!(llm["service"], "deepseek");
         assert_eq!(llm["configSource"], "studio");
@@ -5539,7 +6777,10 @@ mod services63_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(parsed["error"].as_str().unwrap().contains("INKOS_LLM_API_KEY"));
+        assert!(parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("INKOS_LLM_API_KEY"));
     }
 
     #[tokio::test]
@@ -5559,7 +6800,8 @@ mod services63_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true);
         let saved: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap())
+                .unwrap();
         assert_eq!(saved["llm"]["service"], "deepseek");
         assert_eq!(saved["llm"]["baseUrl"], "https://api.deepseek.com");
         assert_eq!(saved["llm"]["provider"], "openai");
@@ -5597,13 +6839,15 @@ mod services63_e2e {
         )
         .unwrap();
 
-        let (status, parsed) = call(app63(&root), "DELETE", "/api/v1/services/deepseek", None).await;
+        let (status, parsed) =
+            call(app63(&root), "DELETE", "/api/v1/services/deepseek", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["service"], "deepseek");
 
         let saved: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap())
+                .unwrap();
         let llm = &saved["llm"];
         // 选中服务被删 → service + defaultModel 联动清除；moonshot 保留
         assert_eq!(llm["services"].as_array().unwrap().len(), 1);
@@ -5633,7 +6877,13 @@ mod services63_e2e {
         assert_eq!(parsed["ok"], true);
 
         // GET 回读
-        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/deepseek/secret", None).await;
+        let (status, parsed) = call(
+            app63(&root),
+            "GET",
+            "/api/v1/services/deepseek/secret",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["apiKey"], "sk-abc-123");
 
@@ -5658,7 +6908,13 @@ mod services63_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        let (_, parsed) = call(app63(&root), "GET", "/api/v1/services/deepseek/secret", None).await;
+        let (_, parsed) = call(
+            app63(&root),
+            "GET",
+            "/api/v1/services/deepseek/secret",
+            None,
+        )
+        .await;
         assert_eq!(parsed["apiKey"], "");
     }
 
@@ -5703,7 +6959,8 @@ mod services63_e2e {
         .unwrap();
 
         // GET /services/models/custom：probe mock 上游 → 文本模型过滤掉 embedding
-        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/models/custom", None).await;
+        let (status, parsed) =
+            call(app63(&root), "GET", "/api/v1/services/models/custom", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let groups = parsed["groups"].as_array().unwrap();
         assert_eq!(groups.len(), 1);
@@ -5889,7 +7146,11 @@ mod services63_e2e {
     async fn put_default_model_mirrors_top_level() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        std::fs::write(root.join("inkos.json"), r#"{ "name": "p", "llm": { "service": "deepseek" } }"#).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "name": "p", "llm": { "service": "deepseek" } }"#,
+        )
+        .unwrap();
 
         let app = app63(&root).route(
             "/api/v1/project/default-model",
@@ -5907,7 +7168,8 @@ mod services63_e2e {
         assert_eq!(parsed["ok"], true);
 
         let saved: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(root.join("inkos.json")).unwrap())
+                .unwrap();
         let llm = &saved["llm"];
         assert_eq!(llm["defaultModel"], "deepseek-v4-pro");
         // 63 号补齐：顶层镜像
@@ -5975,24 +7237,41 @@ mod sessions64_e2e {
             .with_state(rt64(root))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
     const SESSION_ID: &str = "1782900000000-abc123";
 
     /// transcript fixture：session_created + 一轮 committed user/assistant 消息。
-    fn transcript_fixture(root: &std::path::Path, book_id: Option<&str>, session_kind: Option<&str>) {
+    fn transcript_fixture(
+        root: &std::path::Path,
+        book_id: Option<&str>,
+        session_kind: Option<&str>,
+    ) {
         std::fs::create_dir_all(root.join(".inkos").join("sessions")).unwrap();
         let created = serde_json::json!({
             "type": "session_created", "version": 1, "sessionId": SESSION_ID, "seq": 1,
@@ -6023,7 +7302,9 @@ mod sessions64_e2e {
             "timestamp": 1200, "requestId": "req-1",
         });
         std::fs::write(
-            root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.jsonl")),
+            root.join(".inkos")
+                .join("sessions")
+                .join(format!("{SESSION_ID}.jsonl")),
             [created, started, user, assistant, committed]
                 .iter()
                 .map(|e| serde_json::to_string(e).unwrap())
@@ -6044,8 +7325,14 @@ mod sessions64_e2e {
         let (status, parsed) = call(app64(&root), "GET", "/api/v1/interaction/session", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["activeBookId"], "my-book");
-        assert_eq!(parsed["session"]["activeBookId"], "my-book", "session.activeBookId 以解析值覆盖");
-        assert_eq!(parsed["session"]["automationMode"], "semi", "zod default 填充");
+        assert_eq!(
+            parsed["session"]["activeBookId"], "my-book",
+            "session.activeBookId 以解析值覆盖"
+        );
+        assert_eq!(
+            parsed["session"]["automationMode"], "semi",
+            "zod default 填充"
+        );
         assert_eq!(parsed["session"]["messages"], serde_json::json!([]));
 
         // 多书且无 activeBookId → undefined
@@ -6061,7 +7348,13 @@ mod sessions64_e2e {
         transcript_fixture(&root, Some("my-book"), Some("book"));
 
         // GET 详情：消息重建 + 首条 user 消息标题（≤20 字 + …）
-        let (status, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        let (status, parsed) = call(
+            app64(&root),
+            "GET",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let session = &parsed["session"];
         assert_eq!(session["sessionId"], SESSION_ID);
@@ -6075,7 +7368,10 @@ mod sessions64_e2e {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[1]["role"], "assistant");
-        assert!(messages[1]["content"].as_str().unwrap().contains("废柴少年"));
+        assert!(messages[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("废柴少年"));
 
         // 缺失 → 404 平铺
         let (status, parsed) = call(app64(&root), "GET", "/api/v1/sessions/nope-1", None).await;
@@ -6093,7 +7389,13 @@ mod sessions64_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["session"]["title"], "我的会话");
         // 改名落盘（metadata 事件）
-        let (_, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        let (_, parsed) = call(
+            app64(&root),
+            "GET",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            None,
+        )
+        .await;
         assert_eq!(parsed["session"]["title"], "我的会话");
 
         // PUT 空 title → 400 ApiError
@@ -6108,7 +7410,13 @@ mod sessions64_e2e {
         assert_eq!(parsed["error"]["code"], "INVALID_SESSION_TITLE");
 
         // PUT 改名不存在 → 404
-        let (status, _) = call(app64(&root), "PUT", "/api/v1/sessions/nope-1", Some(r#"{"title":"x"}"#)).await;
+        let (status, _) = call(
+            app64(&root),
+            "PUT",
+            "/api/v1/sessions/nope-1",
+            Some(r#"{"title":"x"}"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
@@ -6121,7 +7429,11 @@ mod sessions64_e2e {
         // 列表（TS `session.bookId !== bookId` 严格过滤：无过滤 = 只列未绑定书的会话）
         let (status, parsed) = call(app64(&root), "GET", "/api/v1/sessions", None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(parsed["sessions"].as_array().unwrap().len(), 0, "已绑定书的会话不在 null 过滤内");
+        assert_eq!(
+            parsed["sessions"].as_array().unwrap().len(),
+            0,
+            "已绑定书的会话不在 null 过滤内"
+        );
         let (_, parsed) = call(app64(&root), "GET", "/api/v1/sessions?bookId=my-book", None).await;
         let sessions = parsed["sessions"].as_array().unwrap();
         assert_eq!(sessions.len(), 1);
@@ -6131,9 +7443,20 @@ mod sessions64_e2e {
         let (_, parsed) = call(app64(&root), "GET", "/api/v1/sessions?bookId=other", None).await;
         assert_eq!(parsed["sessions"].as_array().unwrap().len(), 0);
         // 创建未绑定 chat 会话后，无过滤列表可见
-        let _ = call(app64(&root), "POST", "/api/v1/sessions", Some(r#"{"sessionId":"1782950000000-chat01"}"#)).await;
+        let _ = call(
+            app64(&root),
+            "POST",
+            "/api/v1/sessions",
+            Some(r#"{"sessionId":"1782950000000-chat01"}"#),
+        )
+        .await;
         let (_, parsed) = call(app64(&root), "GET", "/api/v1/sessions", None).await;
-        let ids: Vec<&str> = parsed["sessions"].as_array().unwrap().iter().map(|s| s["sessionId"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = parsed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["sessionId"].as_str().unwrap())
+            .collect();
         assert!(ids.contains(&"1782950000000-chat01"), "{ids:?}");
         assert!(!ids.contains(&SESSION_ID), "绑定书的会话不出现");
 
@@ -6147,7 +7470,10 @@ mod sessions64_e2e {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["session"]["sessionId"], "1782950000000-xyz789");
-        assert_eq!(parsed["session"]["sessionKind"], "chat", "无 bookId 回退 chat");
+        assert_eq!(
+            parsed["session"]["sessionKind"], "chat",
+            "无 bookId 回退 chat"
+        );
         assert!(parsed["session"]["bookId"].is_null());
         assert!(parsed["session"]["title"].is_null());
 
@@ -6251,7 +7577,10 @@ mod sessions64_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture64_create(&root).await;
-        let transcript = root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.jsonl"));
+        let transcript = root
+            .join(".inkos")
+            .join("sessions")
+            .join(format!("{SESSION_ID}.jsonl"));
         assert!(transcript.exists());
         // 任务快照落盘（对账改写终态的前提件）
         std::fs::create_dir_all(root.join(".inkos").join("tasks")).unwrap();
@@ -6261,11 +7590,21 @@ mod sessions64_e2e {
         )
         .unwrap();
 
-        let (status, parsed) = call(app64(&root), "DELETE", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        let (status, parsed) = call(
+            app64(&root),
+            "DELETE",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true);
         assert!(!transcript.exists());
-        assert!(!root.join(".inkos").join("tasks").join(format!("{SESSION_ID}.json")).exists());
+        assert!(!root
+            .join(".inkos")
+            .join("tasks")
+            .join(format!("{SESSION_ID}.json"))
+            .exists());
     }
 
     #[tokio::test]
@@ -6281,12 +7620,26 @@ mod sessions64_e2e {
         .unwrap();
 
         // GET 详情：running 快照 + 本进程无运行确认 → 对账改写为 error 终态并落盘
-        let (status, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        let (status, parsed) = call(
+            app64(&root),
+            "GET",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["task"]["execution"]["status"], "error");
-        assert!(parsed["task"]["execution"]["error"].as_str().unwrap().contains("任务已中断"));
+        assert!(parsed["task"]["execution"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("任务已中断"));
         let saved: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join(".inkos").join("tasks").join(format!("{SESSION_ID}.json"))).unwrap(),
+            &std::fs::read_to_string(
+                root.join(".inkos")
+                    .join("tasks")
+                    .join(format!("{SESSION_ID}.json")),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(saved["execution"]["status"], "error", "对账结果已持久化");
@@ -6304,14 +7657,24 @@ mod sessions64_e2e {
         )
         .unwrap();
 
-        let (status, parsed) = call(app64(&root), "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        let (status, parsed) = call(
+            app64(&root),
+            "GET",
+            &format!("/api/v1/sessions/{SESSION_ID}"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["session"]["title"], "旧会话");
         let messages = parsed["session"]["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0]["content"], "你好");
         // 迁移后 transcript 落盘
-        assert!(root.join(".inkos").join("sessions").join(format!("{SESSION_ID}.jsonl")).exists());
+        assert!(root
+            .join(".inkos")
+            .join("sessions")
+            .join(format!("{SESSION_ID}.jsonl"))
+            .exists());
     }
 }
 
@@ -6348,7 +7711,10 @@ mod agent65_e2e {
 
     fn app65(root: &std::path::Path, llm: &str) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -6360,17 +7726,30 @@ mod agent65_e2e {
             .with_state(rt65(root, llm))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -6414,12 +7793,24 @@ mod agent65_e2e {
         let app = app65(&root, "http://127.0.0.1:9");
 
         // 无 instruction → 平铺 400
-        let (status, parsed) = call(app.clone(), "POST", "/api/v1/agent", Some(r#"{"sessionId":"s"}"#)).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"sessionId":"s"}"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "No instruction provided");
 
         // 无 sessionId → ApiError 400 SESSION_ID_REQUIRED
-        let (status, parsed) = call(app.clone(), "POST", "/api/v1/agent", Some(r#"{"instruction":"你好"}"#)).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/agent",
+            Some(r#"{"instruction":"你好"}"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "SESSION_ID_REQUIRED");
 
@@ -6471,20 +7862,18 @@ mod agent65_e2e {
         assert!(parsed["timings"]["totalMs"].is_u64());
 
         // transcript 持久化：user + assistant 消息可从会话详情 derive
-        let (status, parsed) = call(
-            app,
-            "GET",
-            &format!("/api/v1/sessions/{SESSION_ID}"),
-            None,
-        )
-        .await;
+        let (status, parsed) =
+            call(app, "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let messages = parsed["session"]["messages"].as_array().unwrap();
         assert_eq!(messages.len(), 2, "user + assistant");
         assert_eq!(messages[0]["role"], "user");
         assert_eq!(messages[0]["content"], "帮我看下第二章节奏");
         assert_eq!(messages[1]["role"], "assistant");
-        assert!(messages[1]["content"].as_str().unwrap().contains("修仙故事"));
+        assert!(messages[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("修仙故事"));
         // 无标题会话 → 首条 user 消息成为标题
         let title = parsed["session"]["title"].as_str().unwrap();
         assert!(title.contains("帮我看下"));
@@ -6503,7 +7892,10 @@ mod agent65_e2e {
         let runtime = rt65(&root, &llm);
         let mut subscriber = runtime.hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .with_state(runtime);
         let (status, parsed) = call(
             app,
@@ -6531,9 +7923,21 @@ mod agent65_e2e {
         }
         assert!(saw_draft_delta, "draft:delta 应在 agent:complete 前");
         let title_event = subscriber.recv().await.unwrap();
-        assert_eq!(title_event.event, "session:title", "data: {}", title_event.data);
-        assert!(title_event.data.contains(SESSION_ID), "data: {}", title_event.data);
-        assert!(title_event.data.contains("帮我看下"), "data: {}", title_event.data);
+        assert_eq!(
+            title_event.event, "session:title",
+            "data: {}",
+            title_event.data
+        );
+        assert!(
+            title_event.data.contains(SESSION_ID),
+            "data: {}",
+            title_event.data
+        );
+        assert!(
+            title_event.data.contains("帮我看下"),
+            "data: {}",
+            title_event.data
+        );
     }
 
     /// 129 号：thinking 三事件——reasoning_content 增量（pi-ai reasoningFields
@@ -6558,14 +7962,19 @@ mod agent65_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let llm = format!("http://{addr}");
 
         create_session(&root).await;
         let runtime = rt65(&root, &llm);
         let mut subscriber = runtime.hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .with_state(runtime);
         let (status, parsed) = call(
             app,
@@ -6586,7 +7995,11 @@ mod agent65_e2e {
         assert!(start.data.contains(SESSION_ID), "data: {}", start.data);
         let delta = subscriber.recv().await.unwrap();
         assert_eq!(delta.event, "thinking:delta", "data: {}", delta.data);
-        assert!(delta.data.contains("\"text\":\"先分析章节节奏\""), "data: {}", delta.data);
+        assert!(
+            delta.data.contains("\"text\":\"先分析章节节奏\""),
+            "data: {}",
+            delta.data
+        );
         assert!(delta.data.contains(SESSION_ID), "data: {}", delta.data);
         let end = subscriber.recv().await.unwrap();
         assert_eq!(end.event, "thinking:end", "data: {}", end.data);
@@ -6652,7 +8065,9 @@ mod agent65_e2e {
             app65(&root, "http://127.0.0.1:9"),
             "POST",
             "/api/v1/agent",
-            Some(r#"{"instruction":"hi","sessionId":"1782960000001-bkmiss","activeBookId":"ghost"}"#),
+            Some(
+                r#"{"instruction":"hi","sessionId":"1782960000001-bkmiss","activeBookId":"ghost"}"#,
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -6729,7 +8144,10 @@ mod agent66_e2e {
 
     fn app66(root: &std::path::Path, llm: &str) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -6741,17 +8159,30 @@ mod agent66_e2e {
             .with_state(rt66(root, llm))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -6811,7 +8242,11 @@ mod agent66_e2e {
             "---\nname: 仙侠\nid: xianxia\n---\n正文指导\n",
         )
         .unwrap();
-        std::fs::write(root.join("books").join("b1").join("note.md"), "这是主角设定草稿。").unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("note.md"),
+            "这是主角设定草稿。",
+        )
+        .unwrap();
         let (llm, _guard) = mock_tool_llm().await;
         let _ = call(
             app66(&root, &llm),
@@ -6841,16 +8276,23 @@ mod agent66_e2e {
         assert_eq!(execs.len(), 1);
         assert_eq!(execs[0]["tool"], "read");
         assert_eq!(execs[0]["status"], "completed");
-        assert!(execs[0]["result"].as_str().unwrap().contains("主角设定草稿"));
+        assert!(execs[0]["result"]
+            .as_str()
+            .unwrap()
+            .contains("主角设定草稿"));
 
         // transcript：会话详情可见 assistant 轮文本（工具轮并入 assistant 卡）
-        let (status, parsed) = call(app, "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
+        let (status, parsed) =
+            call(app, "GET", &format!("/api/v1/sessions/{SESSION_ID}"), None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let messages = parsed["session"]["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "user");
         let assistant = &messages[1];
         assert_eq!(assistant["role"], "assistant");
-        assert!(assistant["content"].as_str().unwrap().contains("主角设定草稿"));
+        assert!(assistant["content"]
+            .as_str()
+            .unwrap()
+            .contains("主角设定草稿"));
     }
 
     #[tokio::test]
@@ -6871,7 +8313,9 @@ mod agent66_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app_chat).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app_chat).await.unwrap();
+        });
         let llm = format!("http://{addr}");
 
         let _ = call(
@@ -6892,7 +8336,13 @@ mod agent66_e2e {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["response"], "直接回答。");
-        assert_eq!(parsed["details"]["toolExecutions"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            parsed["details"]["toolExecutions"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
     }
 }
 
@@ -6935,7 +8385,10 @@ mod agent67_e2e {
 
     fn app67(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -6947,17 +8400,30 @@ mod agent67_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -6984,7 +8450,9 @@ mod agent67_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), systems)
     }
 
@@ -7009,7 +8477,9 @@ mod agent67_e2e {
             app.clone(),
             "POST",
             "/api/v1/sessions",
-            Some(&format!(r#"{{"sessionId":"{SID_WRITE}","bookId":"b1","sessionKind":"book"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{SID_WRITE}","bookId":"b1","sessionKind":"book"}}"#
+            )),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -7026,7 +8496,10 @@ mod agent67_e2e {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert!(
-            parsed["response"].as_str().unwrap_or("").starts_with("已为 b1 完成第"),
+            parsed["response"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("已为 b1 完成第"),
             "response: {parsed}"
         );
 
@@ -7043,14 +8516,19 @@ mod agent67_e2e {
         assert_eq!(stages.len(), 7);
         assert!(stages.iter().all(|s| s["status"] == "completed"));
         assert!(
-            exec["logs"].as_array().unwrap().iter().any(|log| log.as_str().unwrap().contains("正在为 b1 写下一章")),
+            exec["logs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|log| log.as_str().unwrap().contains("正在为 b1 写下一章")),
             "logs: {exec}"
         );
         assert_eq!(parsed["session"]["activeBookId"], "b1");
         assert_eq!(parsed["session"]["sessionKind"], "book");
 
         // 任务快照落盘（sourceRequestId 透传）。
-        let snapshot_raw = std::fs::read_to_string(studio_task_snapshot_path(&root, SID_WRITE)).unwrap();
+        let snapshot_raw =
+            std::fs::read_to_string(studio_task_snapshot_path(&root, SID_WRITE)).unwrap();
         let snapshot: serde_json::Value = serde_json::from_str(&snapshot_raw).unwrap();
         assert_eq!(snapshot["requestedIntent"], "write_next");
         assert_eq!(snapshot["sourceRequestId"], "req-67");
@@ -7061,9 +8539,18 @@ mod agent67_e2e {
 
         // transcript：user 先写 + 收尾助手工具消息（toolUse + legacyDisplay）。
         let transcript = std::fs::read_to_string(transcript_path(&root, SID_WRITE)).unwrap();
-        assert!(transcript.contains("\"content\":\"写下一章\""), "transcript: {transcript}");
-        assert!(transcript.contains("\"stopReason\":\"toolUse\""), "transcript: {transcript}");
-        assert!(transcript.contains("\"toolExecutions\""), "transcript: {transcript}");
+        assert!(
+            transcript.contains("\"content\":\"写下一章\""),
+            "transcript: {transcript}"
+        );
+        assert!(
+            transcript.contains("\"stopReason\":\"toolUse\""),
+            "transcript: {transcript}"
+        );
+        assert!(
+            transcript.contains("\"toolExecutions\""),
+            "transcript: {transcript}"
+        );
 
         // SSE 顺序：agent:start → tool:start(background) → tool:end → agent:complete。
         // 238 号：链内新增 log 事件（阶段叙事带 sessionId），按事件名跳过。
@@ -7075,7 +8562,11 @@ mod agent67_e2e {
             }
         };
         assert_eq!(tool_start.event, "tool:start");
-        assert!(tool_start.data.contains("\"background\":true"), "data: {}", tool_start.data);
+        assert!(
+            tool_start.data.contains("\"background\":true"),
+            "data: {}",
+            tool_start.data
+        );
         let tool_end = loop {
             let ev = subscriber.recv().await.unwrap();
             if ev.event != "log" {
@@ -7083,7 +8574,11 @@ mod agent67_e2e {
             }
         };
         assert_eq!(tool_end.event, "tool:end");
-        assert!(tool_end.data.contains("\"isError\":false"), "data: {}", tool_end.data);
+        assert!(
+            tool_end.data.contains("\"isError\":false"),
+            "data: {}",
+            tool_end.data
+        );
         let agent_complete = loop {
             let ev = subscriber.recv().await.unwrap();
             if ev.event != "log" {
@@ -7104,7 +8599,9 @@ mod agent67_e2e {
             app.clone(),
             "POST",
             "/api/v1/sessions",
-            Some(&format!(r#"{{"sessionId":"{SID_GATE}","bookId":"b1","sessionKind":"book"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{SID_GATE}","bookId":"b1","sessionKind":"book"}}"#
+            )),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -7123,11 +8620,17 @@ mod agent67_e2e {
             )),
         )
         .await;
-        reserved_production_sessions().lock().unwrap().remove(SID_GATE);
+        reserved_production_sessions()
+            .lock()
+            .unwrap()
+            .remove(SID_GATE);
         assert_eq!(status, StatusCode::CONFLICT, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "PRODUCTION_TASK_ALREADY_RUNNING");
         assert!(
-            parsed["response"].as_str().unwrap_or("").contains("已有一个生产任务在运行"),
+            parsed["response"]
+                .as_str()
+                .unwrap_or("")
+                .contains("已有一个生产任务在运行"),
             "body: {parsed}"
         );
     }
@@ -7182,13 +8685,8 @@ mod agent67_e2e {
         assert!(book_dir.join("story").join("story_bible.md").is_file());
 
         // 会话迁移：GET /sessions/:id → bookId 绑定新书。
-        let (status, session_payload) = call(
-            app,
-            "GET",
-            &format!("/api/v1/sessions/{SID_BOOK}"),
-            None,
-        )
-        .await;
+        let (status, session_payload) =
+            call(app, "GET", &format!("/api/v1/sessions/{SID_BOOK}"), None).await;
         assert_eq!(status, StatusCode::OK, "body: {session_payload}");
         assert_eq!(session_payload["session"]["bookId"], "青云仙路");
 
@@ -7246,7 +8744,8 @@ mod agent67_e2e {
         // 893 号切链：short_run 走 2.0 结构化环——outline 轮 500 → 502 统一
         // 错误面（AGENT_ACTION_FAILED；SSE-only 旧 mock58 不再兼容结构化请求，
         // 失败面由 2.0 mock 显式注入）。
-        let (llm, _mock_calls) = llm_mock_short_v2(vec![("submit_short_outline", MockTurn::Fail)]).await;
+        let (llm, _mock_calls) =
+            llm_mock_short_v2(vec![("submit_short_outline", MockTurn::Fail)]).await;
         let app = app67(rt67(&root, &llm));
         let (status, _) = call(
             app.clone(),
@@ -7269,7 +8768,10 @@ mod agent67_e2e {
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
         assert!(
-            !parsed["error"]["message"].as_str().unwrap_or_default().is_empty(),
+            !parsed["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty(),
             "body: {parsed}"
         );
 
@@ -7286,7 +8788,10 @@ mod agent67_e2e {
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
         assert!(
-            parsed["error"]["message"].as_str().unwrap().contains("确认建书缺少书名"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("确认建书缺少书名"),
             "body: {parsed}"
         );
     }
@@ -7320,10 +8825,10 @@ mod agent67_e2e {
             format!("{snapshot}\n"),
         )
         .unwrap();
-        active_confirmed_tasks().lock().unwrap().insert(
-            task_id.to_string(),
-            Arc::new(Mutex::new(false)),
-        );
+        active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), Arc::new(Mutex::new(false)));
 
         let app = app67(rt67(&root, &llm));
         let (status, _) = call(
@@ -7349,9 +8854,11 @@ mod agent67_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let systems = systems.lock().unwrap();
         assert!(
-            systems.iter().any(|system| system.contains("## 后台任务状态")
-                && system.contains("正在后台运行的生产任务")
-                && system.contains("写作")),
+            systems
+                .iter()
+                .any(|system| system.contains("## 后台任务状态")
+                    && system.contains("正在后台运行的生产任务")
+                    && system.contains("写作")),
             "captured systems: {systems:?}"
         );
     }
@@ -7395,7 +8902,10 @@ mod agent68_e2e {
 
     fn app68(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -7407,17 +8917,30 @@ mod agent68_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -7443,7 +8966,9 @@ mod agent68_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), messages_log)
     }
 
@@ -7469,7 +8994,13 @@ mod agent68_e2e {
         std::fs::write(transcript_path(root, session_id), payload).unwrap();
     }
 
-    fn msg_event(seq: u64, request_id: &str, role: &str, session_id: &str, message: serde_json::Value) -> TranscriptEvent {
+    fn msg_event(
+        seq: u64,
+        request_id: &str,
+        role: &str,
+        session_id: &str,
+        message: serde_json::Value,
+    ) -> TranscriptEvent {
         TranscriptEvent::Message {
             parent_seq: None,
             version: 1,
@@ -7507,10 +9038,10 @@ mod agent68_e2e {
 
         // 插桩：确认任务运行中（reserved + active 注册表，内存优先路径）。
         let task_flag = Arc::new(Mutex::new(false));
-        reserved_production_sessions()
-            .lock()
-            .unwrap()
-            .insert(SID_ABORT_ALL.to_string(), "direct-write_next-t68".to_string());
+        reserved_production_sessions().lock().unwrap().insert(
+            SID_ABORT_ALL.to_string(),
+            "direct-write_next-t68".to_string(),
+        );
         active_confirmed_tasks()
             .lock()
             .unwrap()
@@ -7523,8 +9054,14 @@ mod agent68_e2e {
             Some("{}"),
         )
         .await;
-        active_confirmed_tasks().lock().unwrap().remove("direct-write_next-t68");
-        reserved_production_sessions().lock().unwrap().remove(SID_ABORT_ALL);
+        active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .remove("direct-write_next-t68");
+        reserved_production_sessions()
+            .lock()
+            .unwrap()
+            .remove(SID_ABORT_ALL);
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["aborted"], true);
@@ -7532,7 +9069,11 @@ mod agent68_e2e {
 
         let event = subscriber.recv().await.unwrap();
         assert_eq!(event.event, "agent:aborted");
-        assert!(event.data.contains("\"aborted\":true"), "data: {}", event.data);
+        assert!(
+            event.data.contains("\"aborted\":true"),
+            "data: {}",
+            event.data
+        );
     }
 
     #[tokio::test]
@@ -7551,10 +9092,10 @@ mod agent68_e2e {
 
         // 确认任务运行中 + scope=chat → 任务不动。
         let task_flag = Arc::new(Mutex::new(false));
-        reserved_production_sessions()
-            .lock()
-            .unwrap()
-            .insert(SID_ABORT_CHAT.to_string(), "direct-write_next-t68b".to_string());
+        reserved_production_sessions().lock().unwrap().insert(
+            SID_ABORT_CHAT.to_string(),
+            "direct-write_next-t68b".to_string(),
+        );
         active_confirmed_tasks()
             .lock()
             .unwrap()
@@ -7572,13 +9113,16 @@ mod agent68_e2e {
         // 聊天轮注册表条目 + scope=chat → aborted=true 且 loop 轮询句柄置位
         //（68 号连通：注册表与 loop 共享同一 Arc）。
         let chat_flag = Arc::new(Mutex::new(false));
-        agent_route::running_agent_sessions().lock().unwrap().insert(
-            SID_ABORT_CHAT.to_string(),
-            Arc::new(Mutex::new(agent_route::AgentSessionHandle {
-                abort_flag: chat_flag.clone(),
-                queue: Arc::new(tokio::sync::Mutex::new(())),
-            })),
-        );
+        agent_route::running_agent_sessions()
+            .lock()
+            .unwrap()
+            .insert(
+                SID_ABORT_CHAT.to_string(),
+                Arc::new(Mutex::new(agent_route::AgentSessionHandle {
+                    abort_flag: chat_flag.clone(),
+                    queue: Arc::new(tokio::sync::Mutex::new(())),
+                })),
+            );
         let (_status, parsed) = call(
             app,
             "POST",
@@ -7586,9 +9130,18 @@ mod agent68_e2e {
             Some(r#"{ "scope": "chat" }"#),
         )
         .await;
-        active_confirmed_tasks().lock().unwrap().remove("direct-write_next-t68b");
-        reserved_production_sessions().lock().unwrap().remove(SID_ABORT_CHAT);
-        agent_route::running_agent_sessions().lock().unwrap().remove(SID_ABORT_CHAT);
+        active_confirmed_tasks()
+            .lock()
+            .unwrap()
+            .remove("direct-write_next-t68b");
+        reserved_production_sessions()
+            .lock()
+            .unwrap()
+            .remove(SID_ABORT_CHAT);
+        agent_route::running_agent_sessions()
+            .lock()
+            .unwrap()
+            .remove(SID_ABORT_CHAT);
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["aborted"], true, "body: {parsed}");
         assert!(*chat_flag.lock().unwrap(), "聊天轮 loop 句柄应已置位");
@@ -7633,19 +9186,37 @@ mod agent68_e2e {
                     session_kind: Some(SessionKind::Chat),
                     input: "看看设定文件".into(),
                 },
-                msg_event(2, "r1", "user", SID_REPLAY, serde_json::json!({
-                    "role": "user", "content": "看看设定文件",
-                })),
-                msg_event(3, "r1", "assistant", SID_REPLAY, serde_json::json!({
-                    "role": "assistant",
-                    "content": [{ "type": "toolCall", "id": "tc1", "name": "read", "arguments": { "path": "note.md" } }],
-                })),
-                msg_event(4, "r1", "toolResult", SID_REPLAY, serde_json::json!({
-                    "role": "toolResult",
-                    "toolCallId": "tc1",
-                    "toolName": "read",
-                    "content": [{ "type": "text", "text": "主角名叫林动。" }],
-                })),
+                msg_event(
+                    2,
+                    "r1",
+                    "user",
+                    SID_REPLAY,
+                    serde_json::json!({
+                        "role": "user", "content": "看看设定文件",
+                    }),
+                ),
+                msg_event(
+                    3,
+                    "r1",
+                    "assistant",
+                    SID_REPLAY,
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": [{ "type": "toolCall", "id": "tc1", "name": "read", "arguments": { "path": "note.md" } }],
+                    }),
+                ),
+                msg_event(
+                    4,
+                    "r1",
+                    "toolResult",
+                    SID_REPLAY,
+                    serde_json::json!({
+                        "role": "toolResult",
+                        "toolCallId": "tc1",
+                        "toolName": "read",
+                        "content": [{ "type": "text", "text": "主角名叫林动。" }],
+                    }),
+                ),
                 TranscriptEvent::RequestCommitted {
                     parent_seq: None,
                     version: 1,
@@ -7664,13 +9235,25 @@ mod agent68_e2e {
                     session_kind: Some(SessionKind::Chat),
                     input: "主角叫什么？".into(),
                 },
-                msg_event(7, "r2", "user", SID_REPLAY, serde_json::json!({
-                    "role": "user", "content": "主角叫什么？",
-                })),
-                msg_event(8, "r2", "assistant", SID_REPLAY, serde_json::json!({
-                    "role": "assistant",
-                    "content": [{ "type": "text", "text": "主角名叫林动。" }],
-                })),
+                msg_event(
+                    7,
+                    "r2",
+                    "user",
+                    SID_REPLAY,
+                    serde_json::json!({
+                        "role": "user", "content": "主角叫什么？",
+                    }),
+                ),
+                msg_event(
+                    8,
+                    "r2",
+                    "assistant",
+                    SID_REPLAY,
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": [{ "type": "text", "text": "主角名叫林动。" }],
+                    }),
+                ),
                 TranscriptEvent::RequestCommitted {
                     parent_seq: None,
                     version: 1,
@@ -7707,21 +9290,36 @@ mod agent68_e2e {
         // user/assistant 对话 → boundary（已完成的历史上下文）→ 本轮指令。
         let log = messages_log.lock().unwrap();
         let messages = log.last().expect("应捕获 LLM messages").as_array().unwrap();
-        let roles: Vec<&str> = messages.iter().map(|m| m["role"].as_str().unwrap_or("")).collect();
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|m| m["role"].as_str().unwrap_or(""))
+            .collect();
         assert_eq!(roles.len(), 6, "messages: {messages:?}");
-        assert_eq!(roles, ["system", "system", "user", "assistant", "system", "user"]);
+        assert_eq!(
+            roles,
+            ["system", "system", "user", "assistant", "system", "user"]
+        );
         assert!(
-            messages[1]["content"].as_str().unwrap().starts_with("[历史状态摘要]"),
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("[历史状态摘要]"),
             "summary: {messages:?}"
         );
         assert!(
-            messages[1]["content"].as_str().unwrap().contains("- read completed — 主角名叫林动。"),
+            messages[1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("- read completed — 主角名叫林动。"),
             "summary: {messages:?}"
         );
         assert_eq!(messages[2]["content"], "主角叫什么？");
         assert_eq!(messages[3]["content"], "主角名叫林动。");
         assert!(
-            messages[4]["content"].as_str().unwrap().starts_with("[已完成的历史上下文]"),
+            messages[4]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("[已完成的历史上下文]"),
             "boundary: {messages:?}"
         );
         assert_eq!(messages[5]["content"], "他还有什么特点？");
@@ -7803,23 +9401,42 @@ mod films69_e2e {
             .with_state(rt69(root))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
-    async fn call_raw(app: axum::Router, uri: &str) -> (StatusCode, Vec<(String, String)>, Vec<u8>) {
+    async fn call_raw(
+        app: axum::Router,
+        uri: &str,
+    ) -> (StatusCode, Vec<(String, String)>, Vec<u8>) {
         use tower::ServiceExt;
-        let request = axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).unwrap();
+        let request = axum::http::Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
         let headers: Vec<(String, String)> = response
@@ -7827,7 +9444,10 @@ mod films69_e2e {
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
             .collect();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap().to_vec();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap()
+            .to_vec();
         (status, headers, bytes)
     }
 
@@ -7907,7 +9527,12 @@ mod films69_e2e {
 
         // authoring-state rev 落盘。
         let state: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("interactive-films").join("bbb").join("authoring-state.json")).unwrap(),
+            &std::fs::read_to_string(
+                root.join("interactive-films")
+                    .join("bbb")
+                    .join("authoring-state.json"),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(state["rev"], 2);
@@ -7943,7 +9568,10 @@ mod films69_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("references missing node"));
+        assert!(parsed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("references missing node"));
     }
 
     #[tokio::test]
@@ -7955,10 +9583,21 @@ mod films69_e2e {
         write_graph(&root, "bad1", broken);
 
         let app = app69(&root);
-        let (status, parsed) = call(app.clone(), "GET", "/api/v1/projects/bad1/story-graph/validation", None).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "GET",
+            "/api/v1/projects/bad1/story-graph/validation",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], false);
-        let codes: Vec<&str> = parsed["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap()).collect();
+        let codes: Vec<&str> = parsed["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["code"].as_str().unwrap())
+            .collect();
         assert!(codes.contains(&"BROKEN_LINK"), "codes: {codes:?}");
         assert!(codes.contains(&"DEAD_END"), "codes: {codes:?}");
         assert!(codes.contains(&"NO_PATH_TO_ENDING"), "codes: {codes:?}");
@@ -7966,7 +9605,13 @@ mod films69_e2e {
         // analysis：report + arcs + distribution 三段（281 号：arcs 为 TS 包装对象
         // `{arcs, truncated}`，此前裸数组导致 UI `arcs.arcs.slice` 崩溃）。
         write_graph(&root, "good1", valid_graph("good1", "完好"));
-        let (status, parsed) = call(app, "GET", "/api/v1/projects/good1/story-graph/analysis", None).await;
+        let (status, parsed) = call(
+            app,
+            "GET",
+            "/api/v1/projects/good1/story-graph/analysis",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["report"]["ok"], true);
         assert_eq!(parsed["arcs"]["arcs"].as_array().unwrap().len(), 1);
@@ -7976,7 +9621,13 @@ mod films69_e2e {
         assert_eq!(parsed["distribution"]["byEnding"]["e1"], 1);
 
         // 缺失 → 404 NOT_FOUND。
-        let (status, parsed) = call(app69(&root), "GET", "/api/v1/projects/none/story-graph/validation", None).await;
+        let (status, parsed) = call(
+            app69(&root),
+            "GET",
+            "/api/v1/projects/none/story-graph/validation",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["error"]["code"], "NOT_FOUND");
     }
@@ -7990,19 +9641,25 @@ mod films69_e2e {
         std::fs::create_dir_all(root.join("covers")).unwrap();
         std::fs::write(root.join("covers").join("pic.png"), b"\x89PNG-fake").unwrap();
         let mut graph = valid_graph("film1", "样本影游");
-        graph["nodes"][1]["imageSlot"] = serde_json::json!({ "prompt": "", "assetRef": "covers/pic.png" });
+        graph["nodes"][1]["imageSlot"] =
+            serde_json::json!({ "prompt": "", "assetRef": "covers/pic.png" });
         write_graph(&root, "film1", graph);
 
         let app = app69(&root);
         // ink
-        let (status, headers, body) = call_raw(app.clone(), "/api/v1/projects/film1/export/ink").await;
+        let (status, headers, body) =
+            call_raw(app.clone(), "/api/v1/projects/film1/export/ink").await;
         assert_eq!(status, StatusCode::OK);
         let text = String::from_utf8(body).unwrap();
         assert!(text.contains("// 样本影游 — exported from InkOS interactive film"));
         assert!(text.contains("VAR courage = 1"));
         assert!(text.contains("-> node_start"));
-        assert!(headers.iter().any(|(k, v)| k == "content-type" && v == "text/plain; charset=utf-8"));
-        assert!(headers.iter().any(|(k, v)| k == "content-disposition" && v.contains("film1.ink")));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "content-type" && v == "text/plain; charset=utf-8"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "content-disposition" && v.contains("film1.ink")));
 
         // html（资产 data URI 内嵌）
         let (status, _, body) = call_raw(app.clone(), "/api/v1/projects/film1/export/html").await;
@@ -8022,8 +9679,12 @@ mod films69_e2e {
         // tar.gz：gunzip + tar 头（ustar magic）
         let (status, headers, body) = call_raw(app.clone(), "/api/v1/projects/film1/export").await;
         assert_eq!(status, StatusCode::OK);
-        assert!(headers.iter().any(|(k, v)| k == "content-type" && v == "application/gzip"));
-        assert!(headers.iter().any(|(k, v)| k == "content-disposition" && v.contains("film1.tar.gz")));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "content-type" && v == "application/gzip"));
+        assert!(headers
+            .iter()
+            .any(|(k, v)| k == "content-disposition" && v.contains("film1.tar.gz")));
         use std::io::Read as _;
         let mut decoder = flate2::read::GzDecoder::new(&body[..]);
         let mut tar = Vec::new();
@@ -8039,7 +9700,6 @@ mod films69_e2e {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(parsed["error"]["code"], "NOT_FOUND");
     }
-
 
     #[tokio::test]
     async fn node_image_endpoint_surface() {
@@ -8143,17 +9803,30 @@ mod translations70_e2e {
             .with_state(rt70(root, llm))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -8197,9 +9870,11 @@ mod translations70_e2e {
     }
 
     fn is_translation_tool_request(body: &serde_json::Value) -> bool {
-        body["tools"]
-            .as_array()
-            .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"] == "submit_translation"))
+        body["tools"].as_array().is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool["function"]["name"] == "submit_translation")
+        })
     }
 
     fn tool_call_response(arguments: &serde_json::Value) -> axum::response::Response {
@@ -8230,17 +9905,29 @@ mod translations70_e2e {
     /// `review.findings` 逐条 record_review_observation、收到工具回执后终提交
     /// submit_translation_review {summary, observationCodes}；其余 PASS。
     /// `review` 缺省=全部通过零发现。
-    fn translation_mock_response(body: &serde_json::Value, review: Option<&serde_json::Value>) -> axum::response::Response {
+    fn translation_mock_response(
+        body: &serde_json::Value,
+        review: Option<&serde_json::Value>,
+    ) -> axum::response::Response {
         if is_translation_tool_request(body) {
             return tool_call_response(&translation_submission(body, false));
         }
         let result_tool = body["tools"][0]["function"]["name"].as_str().unwrap_or("");
         if result_tool == "submit_translation_source_reading" {
-            let fields: serde_json::Map<String, serde_json::Value> = body["tools"][0]["function"]["parameters"]["properties"]
+            let fields: serde_json::Map<String, serde_json::Value> = body["tools"][0]["function"]
+                ["parameters"]["properties"]
                 .as_object()
-                .map(|properties| properties.keys().map(|key| (key.clone(), serde_json::json!(format!("参照{key}")))).collect())
+                .map(|properties| {
+                    properties
+                        .keys()
+                        .map(|key| (key.clone(), serde_json::json!(format!("参照{key}"))))
+                        .collect()
+                })
                 .unwrap_or_default();
-            return named_tool_calls_response(&[("submit_translation_source_reading", serde_json::Value::Object(fields))]);
+            return named_tool_calls_response(&[(
+                "submit_translation_source_reading",
+                serde_json::Value::Object(fields),
+            )]);
         }
         if result_tool == "submit_translation_review" {
             let default_review = serde_json::json!({ "summary": "全部通过。", "findings": [] });
@@ -8250,11 +9937,16 @@ mod translations70_e2e {
                 .as_array()
                 .is_some_and(|messages| messages.iter().any(|m| m["role"] == "tool"));
             if !has_feedback && !findings.is_empty() {
-                let calls: Vec<(&str, serde_json::Value)> =
-                    findings.iter().map(|finding| ("record_review_observation", finding.clone())).collect();
+                let calls: Vec<(&str, serde_json::Value)> = findings
+                    .iter()
+                    .map(|finding| ("record_review_observation", finding.clone()))
+                    .collect();
                 return named_tool_calls_response(&calls);
             }
-            let codes: Vec<serde_json::Value> = findings.iter().map(|finding| finding["code"].clone()).collect();
+            let codes: Vec<serde_json::Value> = findings
+                .iter()
+                .map(|finding| finding["code"].clone())
+                .collect();
             return named_tool_calls_response(&[(
                 "submit_translation_review",
                 serde_json::json!({ "summary": review["summary"], "observationCodes": codes }),
@@ -8289,9 +9981,14 @@ mod translations70_e2e {
             .route(
                 "/chat/completions",
                 axum::routing::post(
-                    |axum::extract::State(systems): axum::extract::State<Arc<Mutex<Vec<String>>>>,
+                    |axum::extract::State(systems): axum::extract::State<
+                        Arc<Mutex<Vec<String>>>,
+                    >,
                      axum::Json(body): axum::Json<serde_json::Value>| async move {
-                        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                        let system = body["messages"][0]["content"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
                         systems.lock().unwrap().push(system);
                         translation_mock_response(&body, None)
                     },
@@ -8300,7 +9997,9 @@ mod translations70_e2e {
             .with_state(systems.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), systems)
     }
 
@@ -8333,7 +10032,10 @@ mod translations70_e2e {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {upload}");
         let stored_path = upload["storedPath"].as_str().unwrap().to_string();
-        assert!(stored_path.starts_with(".inkos/uploads/translation/"), "{stored_path}");
+        assert!(
+            stored_path.starts_with(".inkos/uploads/translation/"),
+            "{stored_path}"
+        );
         assert!(stored_path.ends_with("-novel.txt"), "{stored_path}");
         assert!(root.join(&stored_path).is_file());
         assert_eq!(upload["mimeType"], "text/plain");
@@ -8342,12 +10044,15 @@ mod translations70_e2e {
             app.clone(),
             "POST",
             "/api/v1/translations/create",
-            Some(&serde_json::json!({
-                "filePath": stored_path,
-                "sourceLanguage": "en",
-                "targetLanguage": "zh",
-                "title": "山河之书"
-            }).to_string()),
+            Some(
+                &serde_json::json!({
+                    "filePath": stored_path,
+                    "sourceLanguage": "en",
+                    "targetLanguage": "zh",
+                    "title": "山河之书"
+                })
+                .to_string(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {created}");
@@ -8376,7 +10081,10 @@ mod translations70_e2e {
         assert_eq!(detail["manifest"]["title"], "山河之书");
         assert_eq!(detail["manifest"]["chapters"].as_array().unwrap().len(), 1);
         assert_eq!(detail["manifest"]["chapters"][0]["status"], "pending");
-        assert_eq!(detail["chapters"][0]["segments"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            detail["chapters"][0]["segments"].as_array().unwrap().len(),
+            2
+        );
         assert_eq!(detail["chapters"][0]["segments"][0]["target"], "");
         assert_eq!(detail["report"], "# Translation Review\n\nPending.\n");
         // 967 号：TS 2.0 章节计数字段双处在位（UI 读 manifest.chapters[].translatedSegments）。
@@ -8394,7 +10102,10 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::OK, "body: {run}");
         assert_eq!(run["translatedSegments"], 2);
         assert_eq!(run["reviewedChapters"], 1);
-        assert_eq!(run["reportPath"], format!("works/{project_id}/source/review-report.md"));
+        assert_eq!(
+            run["reportPath"],
+            format!("works/{project_id}/source/review-report.md")
+        );
         assert_eq!(run["skillIds"], serde_json::json!(["inkos-translation"]));
         // 967 号：TS 2.0 回执形（kind/workId/total·completed·pending/observations）。
         assert_eq!(run["kind"], "translation_completed");
@@ -8415,17 +10126,32 @@ mod translations70_e2e {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(detail["manifest"]["chapters"][0]["status"], "reviewed");
         assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 2);
-        assert_eq!(detail["manifest"]["chapters"][0]["reviewSummary"], "全部通过。");
-        assert_eq!(detail["manifest"]["chapters"][0]["observations"], serde_json::json!([]));
+        assert_eq!(
+            detail["manifest"]["chapters"][0]["reviewSummary"],
+            "全部通过。"
+        );
+        assert_eq!(
+            detail["manifest"]["chapters"][0]["observations"],
+            serde_json::json!([])
+        );
         assert_eq!(detail["chapters"][0]["translatedSegments"], 2);
         assert_eq!(detail["chapters"][0]["reviewSummary"], "全部通过。");
-        assert_eq!(detail["chapters"][0]["segments"][0]["target"], "[译]The mountain stood tall.");
+        assert_eq!(
+            detail["chapters"][0]["segments"][0]["target"],
+            "[译]The mountain stood tall."
+        );
         // 969 号：报告=TS 2.0 逐字形（`## 译后标题` + `- summary:`，passed 行退役）。
         let report = detail["report"].as_str().unwrap();
-        assert!(report.contains("## [译]Chapter 1\n\n- summary: 全部通过。\n"), "{report}");
+        assert!(
+            report.contains("## [译]Chapter 1\n\n- summary: 全部通过。\n"),
+            "{report}"
+        );
         assert!(!report.contains("- passed:"), "{report}");
         let glossary_raw = std::fs::read_to_string(
-            root.join("works").join(&project_id).join("source").join("glossary.json"),
+            root.join("works")
+                .join(&project_id)
+                .join("source")
+                .join("glossary.json"),
         )
         .unwrap();
         assert!(glossary_raw.contains("魔力"), "{glossary_raw}");
@@ -8493,18 +10219,47 @@ mod translations70_e2e {
         let project_id = seed_project(&root, &app).await;
 
         // work.json：profileId=translation + artifacts 覆盖全部写入面。
-        let work: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("works").join(&project_id).join("work.json")).unwrap()).unwrap();
+        let work: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&project_id).join("work.json"))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(work["profileId"], "translation");
         assert_eq!(work["language"], "zh");
-        let kinds: Vec<&str> = work["artifacts"].as_array().unwrap().iter().map(|a| a["kind"].as_str().unwrap()).collect();
-        for kind in ["translation-manifest", "glossary", "review", "source-chapter", "translation-chapter"] {
-            assert!(kinds.contains(&kind), "artifact kind {kind} 在场：{kinds:?}");
+        let kinds: Vec<&str> = work["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["kind"].as_str().unwrap())
+            .collect();
+        for kind in [
+            "translation-manifest",
+            "glossary",
+            "review",
+            "source-chapter",
+            "translation-chapter",
+        ] {
+            assert!(
+                kinds.contains(&kind),
+                "artifact kind {kind} 在场：{kinds:?}"
+            );
         }
         for artifact in work["artifacts"].as_array().unwrap() {
-            assert!(artifact["currentRevisionId"].is_string(), "{}", artifact["id"]);
-            let revision = artifact["revisions"].as_array().unwrap().iter().find(|r| r["status"] == "current").unwrap();
-            assert!(revision["checksum"].as_str().unwrap().starts_with("sha256:"));
+            assert!(
+                artifact["currentRevisionId"].is_string(),
+                "{}",
+                artifact["id"]
+            );
+            let revision = artifact["revisions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["status"] == "current")
+                .unwrap();
+            assert!(revision["checksum"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:"));
         }
 
         // 迁移：人工落一个旧布局项目（works 下无 work.json），首次详情读触发搬迁。
@@ -8528,18 +10283,43 @@ mod translations70_e2e {
             r#"{"number":1,"title":"Chapter 1","sourceLanguage":"en","targetLanguage":"zh","segments":[{"index":1,"source":"Old","target":"[译]Old"}]}"#,
         )
         .unwrap();
-        let (status, detail) = call(app.clone(), "GET", &format!("/api/v1/translations/{legacy_id}"), None).await;
+        let (status, detail) = call(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/translations/{legacy_id}"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{detail}");
         assert_eq!(detail["manifest"]["title"], "旧山河");
         assert!(!legacy.exists(), "旧目录已搬迁");
-        assert!(root.join("works").join(legacy_id).join("source").join("manifest.json").is_file());
-        assert!(root.join("works").join(legacy_id).join("source").join("translated").join("chapter-0001.json").is_file());
+        assert!(root
+            .join("works")
+            .join(legacy_id)
+            .join("source")
+            .join("manifest.json")
+            .is_file());
+        assert!(root
+            .join("works")
+            .join(legacy_id)
+            .join("source")
+            .join("translated")
+            .join("chapter-0001.json")
+            .is_file());
 
         // 列表=新布局两项目都可见（跨引擎互读面：TS 2.0 建的项目 Rust 可列可读）。
         let (status, listed) = call(app, "GET", "/api/v1/translations", None).await;
         assert_eq!(status, StatusCode::OK);
-        let ids: Vec<&str> = listed["translations"].as_array().unwrap().iter().map(|t| t["projectId"].as_str().unwrap()).collect();
-        assert!(ids.contains(&project_id.as_str()) && ids.contains(&legacy_id), "{ids:?}");
+        let ids: Vec<&str> = listed["translations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["projectId"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&project_id.as_str()) && ids.contains(&legacy_id),
+            "{ids:?}"
+        );
     }
 
     /// 971 号 P5：段落修订——①改写成功（changed=true + 哈希面 + 审校面清空 +
@@ -8591,17 +10371,33 @@ mod translations70_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app_llm).await.unwrap();
+        });
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         seed_translation_skill(&root);
         let app = app70(&root, &format!("http://{addr}"));
         let project_id = seed_project(&root, &app).await;
         // 先跑一轮（产生审校面：reviewSummary/observations 在 manifest）。
-        let (status, run) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        let (status, run) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {run}");
-        assert!(!run["observations"].as_array().unwrap().is_empty(), "前置审校有发现");
-        assert_eq!(run["reviewSourcePaths"], serde_json::json!([format!("works/{project_id}/source/translated/chapter-0001.json")]));
+        assert!(
+            !run["observations"].as_array().unwrap().is_empty(),
+            "前置审校有发现"
+        );
+        assert_eq!(
+            run["reviewSourcePaths"],
+            serde_json::json!([format!(
+                "works/{project_id}/source/translated/chapter-0001.json"
+            )])
+        );
 
         // 修订段 2。
         let (status, revised) = call(
@@ -8622,38 +10418,108 @@ mod translations70_e2e {
         assert_eq!(revised["previousTargetExcerpt"], "[译]Mana flowed.");
         assert_eq!(revised["targetExcerpt"], "魔力流淌。");
         assert_ne!(revised["previousTargetHash"], revised["targetHash"]);
-        assert!(revised["previousTargetHash"].as_str().unwrap().starts_with("sha256:"));
+        assert!(revised["previousTargetHash"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
         // 修订请求 system 逐字 + 技能块。
-        let revision_request = calls.lock().unwrap().iter().find(|b| b["tools"][0]["function"]["name"] == "submit_translation_revision").unwrap().clone();
-        assert!(revision_request["messages"][0]["content"].as_str().unwrap().starts_with("Revise only the supplied translated paragraph according to the instruction."));
-        assert!(revision_request["messages"][0]["content"].as_str().unwrap().contains("### inkos-translation — "));
+        let revision_request = calls
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|b| b["tools"][0]["function"]["name"] == "submit_translation_revision")
+            .unwrap()
+            .clone();
+        assert!(revision_request["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with(
+                "Revise only the supplied translated paragraph according to the instruction."
+            ));
+        assert!(revision_request["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("### inkos-translation — "));
         // 盘面：译文更新 + manifest 审校面清空。
         let translated: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&project_id).join("source").join("translated").join("chapter-0001.json")).unwrap(),
-        ).unwrap();
+            &std::fs::read_to_string(
+                root.join("works")
+                    .join(&project_id)
+                    .join("source")
+                    .join("translated")
+                    .join("chapter-0001.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
         assert_eq!(translated["segments"][1]["target"], "魔力流淌。");
         let manifest: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&project_id).join("source").join("manifest.json")).unwrap(),
-        ).unwrap();
-        assert!(manifest["chapters"][0].get("reviewSummary").is_none(), "修订后审校面清空：{manifest}");
+            &std::fs::read_to_string(
+                root.join("works")
+                    .join(&project_id)
+                    .join("source")
+                    .join("manifest.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            manifest["chapters"][0].get("reviewSummary").is_none(),
+            "修订后审校面清空：{manifest}"
+        );
         assert!(manifest["chapters"][0].get("observations").is_none());
         // work.json 工件账随写翻转（translated/chapter-0001.json 有 current 修订）。
-        let work: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(root.join("works").join(&project_id).join("work.json")).unwrap()).unwrap();
-        let translated_artifact = work["artifacts"].as_array().unwrap().iter().find(|a| a["id"] == "translated-chapter-0001").expect("translated 工件在场");
-        assert!(!translated_artifact["revisions"].as_array().unwrap().is_empty());
+        let work: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(root.join("works").join(&project_id).join("work.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let translated_artifact = work["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == "translated-chapter-0001")
+            .expect("translated 工件在场");
+        assert!(!translated_artifact["revisions"]
+            .as_array()
+            .unwrap()
+            .is_empty());
 
         // 错误面：缺章 404 / 空白指令 400。
-        let (status, parsed) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/revise"), Some(r#"{ "chapterNumber": 9, "paragraph": 1, "instruction": "x" }"#)).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/revise"),
+            Some(r#"{ "chapterNumber": 9, "paragraph": 1, "instruction": "x" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{parsed}");
         assert_eq!(parsed["error"]["code"], "TRANSLATION_CHAPTER_NOT_FOUND");
-        let (status, parsed) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/revise"), Some(r#"{ "chapterNumber": 1, "paragraph": 1, "instruction": "  " }"#)).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/revise"),
+            Some(r#"{ "chapterNumber": 1, "paragraph": 1, "instruction": "  " }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
         assert_eq!(parsed["error"]["code"], "TRANSLATION_INSTRUCTION_REQUIRED");
 
         // 导出：exportSourcePaths（TS 逐字段）。
-        let (status, exported) = call(app, "POST", &format!("/api/v1/translations/{project_id}/export"), Some(r#"{ "format": "md" }"#)).await;
+        let (status, exported) = call(
+            app,
+            "POST",
+            &format!("/api/v1/translations/{project_id}/export"),
+            Some(r#"{ "format": "md" }"#),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {exported}");
-        assert_eq!(exported["exportSourcePaths"], serde_json::json!([format!("works/{project_id}/source/translated/chapter-0001.json")]));
+        assert_eq!(
+            exported["exportSourcePaths"],
+            serde_json::json!([format!(
+                "works/{project_id}/source/translated/chapter-0001.json"
+            )])
+        );
     }
 
     #[tokio::test]
@@ -8708,7 +10574,13 @@ mod translations70_e2e {
         // detail：非法 id / 缺失项目。
         // percent 编码的单段 id（../etc）命中 :id 路由 → INVALID_ID；多段
         // ../.. 不匹配单段路由 → 404（TS Hono 同行为）。
-        let (status, parsed) = call(app.clone(), "GET", "/api/v1/translations/%2e%2e%2fetc", None).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "GET",
+            "/api/v1/translations/%2e%2e%2fetc",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "INVALID_ID");
         let (status, parsed) = call(app.clone(), "GET", "/api/v1/translations/ghost", None).await;
@@ -8771,7 +10643,10 @@ mod translations70_e2e {
             parsed["error"]["message"],
             "Profile \"translation\" requires unavailable skill(s): inkos-translation"
         );
-        assert!(systems.lock().unwrap().is_empty(), "技能先验失败不得触达 LLM");
+        assert!(
+            systems.lock().unwrap().is_empty(),
+            "技能先验失败不得触达 LLM"
+        );
 
         seed_translation_skill(&root);
         let (status, run) = call(
@@ -8791,12 +10666,31 @@ mod translations70_e2e {
         );
         // 969 号：审校 2.0 双段环——独立源读 + 有源审校（auditor 端点，旧单轮
         // 「Translation Review Agent」JSON 提示退役）。
-        assert!(systems.iter().any(|s| s.contains("Prepare the independent source reading using the activated translation Skill.")), "独立源读在场");
-        assert!(systems.iter().any(|s| s.contains("Review the supplied segment pairs using the activated translation Skill.")), "有源审校在场");
+        assert!(
+            systems.iter().any(|s| s.contains(
+                "Prepare the independent source reading using the activated translation Skill."
+            )),
+            "独立源读在场"
+        );
+        assert!(
+            systems.iter().any(|s| s.contains(
+                "Review the supplied segment pairs using the activated translation Skill."
+            )),
+            "有源审校在场"
+        );
         for system in &systems {
-            assert!(system.contains("\n\n## Activated professional skills"), "{system}");
-            assert!(system.contains("### inkos-translation — inkos-translation"), "{system}");
-            assert!(system.contains("# Long-form translation"), "技能正文注入：{system}");
+            assert!(
+                system.contains("\n\n## Activated professional skills"),
+                "{system}"
+            );
+            assert!(
+                system.contains("### inkos-translation — inkos-translation"),
+                "{system}"
+            );
+            assert!(
+                system.contains("# Long-form translation"),
+                "技能正文注入：{system}"
+            );
         }
     }
 
@@ -8839,14 +10733,22 @@ mod translations70_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app_llm).await.unwrap();
+        });
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         seed_translation_skill(&root);
         let app = app70(&root, &format!("http://{addr}"));
         let project_id = seed_project(&root, &app).await;
 
-        let (status, run) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        let (status, run) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {run}");
         // 969 号：宿主按行区间截取的精确引文（original-2=原文第 2 段，target-2=现译）。
         let pair_refs = serde_json::json!([
@@ -8863,12 +10765,26 @@ mod translations70_e2e {
             observation["scope"] = serde_json::json!("chapter:1");
         }
         assert_eq!(run["observations"], receipt_observations);
-        assert_eq!(run["reviewSourcePaths"], serde_json::json!([format!("works/{project_id}/source/translated/chapter-0001.json")]));
+        assert_eq!(
+            run["reviewSourcePaths"],
+            serde_json::json!([format!(
+                "works/{project_id}/source/translated/chapter-0001.json"
+            )])
+        );
         let detail_uri = format!("/api/v1/translations/{project_id}");
         let (_, detail) = call(app.clone(), "GET", &detail_uri, None).await;
-        assert_eq!(detail["manifest"]["chapters"][0]["status"], "translated", "有 issue 级发现不升 reviewed");
-        assert_eq!(detail["manifest"]["chapters"][0]["reviewSummary"], "两处问题。");
-        assert_eq!(detail["manifest"]["chapters"][0]["observations"], expected_observations);
+        assert_eq!(
+            detail["manifest"]["chapters"][0]["status"], "translated",
+            "有 issue 级发现不升 reviewed"
+        );
+        assert_eq!(
+            detail["manifest"]["chapters"][0]["reviewSummary"],
+            "两处问题。"
+        );
+        assert_eq!(
+            detail["manifest"]["chapters"][0]["observations"],
+            expected_observations
+        );
         assert_eq!(detail["chapters"][0]["observations"], expected_observations);
         // 969 号：报告 TS 逐字——code/summary 行 + source 引文块。
         let report = detail["report"].as_str().unwrap();
@@ -8880,20 +10796,31 @@ mod translations70_e2e {
         // 970 号 P4：旧 manifest（967 前落盘形态）——manifest 在 works 新布局（本轮建），
         // 直接剥三字段 → 详情现场计数仍为 2；旧 `translations/` 布局的搬迁由独立
         // migrate 测试覆盖。
-        let manifest_path = root.join("works").join(&project_id).join("source").join("manifest.json");
-        let mut legacy: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        let manifest_path = root
+            .join("works")
+            .join(&project_id)
+            .join("source")
+            .join("manifest.json");
+        let mut legacy: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
         for chapter in legacy["chapters"].as_array_mut().unwrap() {
             let chapter = chapter.as_object_mut().unwrap();
             chapter.remove("translatedSegments");
             chapter.remove("reviewSummary");
             chapter.remove("observations");
         }
-        std::fs::write(&manifest_path, serde_json::to_string_pretty(&legacy).unwrap()).unwrap();
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
         let (status, detail) = call(app, "GET", &detail_uri, None).await;
         assert_eq!(status, StatusCode::OK, "旧 manifest 仍可读：{detail}");
         assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 2);
         assert_eq!(detail["chapters"][0]["translatedSegments"], 2);
-        assert!(detail["manifest"]["chapters"][0].get("observations").is_none());
+        assert!(detail["manifest"]["chapters"][0]
+            .get("observations")
+            .is_none());
     }
 
     /// 968 号：结构化提交校验回喂重试（TS runWorkerAgentTool validate 语义）——首轮漏译
@@ -8922,14 +10849,22 @@ mod translations70_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app_llm).await.unwrap();
+        });
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         seed_translation_skill(&root);
         let app = app70(&root, &format!("http://{addr}"));
         let project_id = seed_project(&root, &app).await;
 
-        let (status, run) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        let (status, run) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {run}");
         assert_eq!(run["completedSegments"], 2);
         let requests = requests.lock().unwrap().clone();
@@ -8942,19 +10877,38 @@ mod translations70_e2e {
             .and_then(|m| m["content"].as_str())
             .unwrap_or("")
             .to_string();
-        assert!(feedback.contains("Translation omitted segment index(es): "), "{feedback}");
+        assert!(
+            feedback.contains("Translation omitted segment index(es): "),
+            "{feedback}"
+        );
         assert_eq!(requests[0]["tool_choice"], "required");
         assert!(requests[0]["messages"][0]["content"]
             .as_str()
             .unwrap()
             .contains("Finish by calling submit_translation exactly once."));
-        let (_, detail) = call(app, "GET", &format!("/api/v1/translations/{project_id}"), None).await;
-        assert_eq!(detail["manifest"]["chapters"][0]["title"], "[译]Chapter 1", "{detail}");
+        let (_, detail) = call(
+            app,
+            "GET",
+            &format!("/api/v1/translations/{project_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            detail["manifest"]["chapters"][0]["title"], "[译]Chapter 1",
+            "{detail}"
+        );
         let translated = std::fs::read_to_string(
-            root.join(detail["manifest"]["chapters"][0]["translatedPath"].as_str().unwrap()),
+            root.join(
+                detail["manifest"]["chapters"][0]["translatedPath"]
+                    .as_str()
+                    .unwrap(),
+            ),
         )
         .unwrap();
-        assert!(translated.contains("\"title\": \"[译]Chapter 1\""), "{translated}");
+        assert!(
+            translated.contains("\"title\": \"[译]Chapter 1\""),
+            "{translated}"
+        );
     }
 
     /// 969 号：审校 2.0 双段协议面——①独立源读：每段一必填字段 schema、user 含
@@ -9011,31 +10965,70 @@ mod translations70_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app_llm).await.unwrap();
+        });
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         seed_translation_skill(&root);
         let app = app70(&root, &format!("http://{addr}"));
         let project_id = seed_project(&root, &app).await;
 
-        let (status, run) = call(app, "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        let (status, run) = call(
+            app,
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {run}");
         let requests = requests.lock().unwrap().clone();
-        let tool_of = |body: &serde_json::Value| body["tools"][0]["function"]["name"].as_str().unwrap_or("").to_string();
-        let reading_at = requests.iter().position(|b| tool_of(b) == "submit_translation_source_reading").expect("独立源读在场");
-        let review_at = requests.iter().position(|b| tool_of(b) == "submit_translation_review").expect("有源审校在场");
+        let tool_of = |body: &serde_json::Value| {
+            body["tools"][0]["function"]["name"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        };
+        let reading_at = requests
+            .iter()
+            .position(|b| tool_of(b) == "submit_translation_source_reading")
+            .expect("独立源读在场");
+        let review_at = requests
+            .iter()
+            .position(|b| tool_of(b) == "submit_translation_review")
+            .expect("有源审校在场");
         assert!(reading_at < review_at, "源读先于审校");
         let reading = &requests[reading_at];
         let schema = &reading["tools"][0]["function"]["parameters"];
-        assert_eq!(schema["required"], serde_json::json!(["segment_1_target", "segment_2_target"]));
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["segment_1_target", "segment_2_target"])
+        );
         assert_eq!(schema["additionalProperties"], false);
         let reading_user: serde_json::Value = serde_json::from_str(
-            reading["messages"].as_array().unwrap().iter().find(|m| m["role"] == "user").unwrap()["content"].as_str().unwrap(),
+            reading["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["role"] == "user")
+                .unwrap()["content"]
+                .as_str()
+                .unwrap(),
         )
         .unwrap();
-        assert_eq!(reading_user["chapterTitle"], "Chapter 1", "独立源读用原文标题");
+        assert_eq!(
+            reading_user["chapterTitle"], "Chapter 1",
+            "独立源读用原文标题"
+        );
         assert_eq!(reading_user["requestedIndices"], serde_json::json!([1, 2]));
-        assert!(reading_user["originals"].as_array().unwrap().iter().all(|o| o.get("target").is_none()), "源读不暴露现译");
+        assert!(
+            reading_user["originals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|o| o.get("target").is_none()),
+            "源读不暴露现译"
+        );
         let review = &requests[review_at];
         let segments_block = review["messages"]
             .as_array()
@@ -9050,8 +11043,21 @@ mod translations70_e2e {
             segments_block.contains("### Source: original-1\n1\tThe mountain stood tall.\n\n### Source: target-1\n1\t[译]The mountain stood tall.\n\n### Independent reading (comparison aid)\n参照segment_1_target"),
             "{segments_block}"
         );
-        let supporting: Vec<String> = review["tools"].as_array().unwrap().iter().skip(1).map(|t| tool_of(&serde_json::json!({ "tools": [t] }))).collect();
-        assert_eq!(supporting, ["record_review_observation", "calculate_review_values", "calculate_story_interval"]);
+        let supporting: Vec<String> = review["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|t| tool_of(&serde_json::json!({ "tools": [t] })))
+            .collect();
+        assert_eq!(
+            supporting,
+            [
+                "record_review_observation",
+                "calculate_review_values",
+                "calculate_story_interval"
+            ]
+        );
         // 成对引证回喂：第二轮审校请求的工具回执含 PAIR_REQUIRED。
         let pair_feedback = requests
             .iter()
@@ -9061,7 +11067,10 @@ mod translations70_e2e {
             .filter_map(|m| m["content"].as_str().map(str::to_string))
             .find(|text| text.contains("TRANSLATION_REVIEW_PAIR_REQUIRED"))
             .expect("成对引证回喂在场");
-        assert!(pair_feedback.contains("\"observationCodes\":[\"omission\"]"), "{pair_feedback}");
+        assert!(
+            pair_feedback.contains("\"observationCodes\":[\"omission\"]"),
+            "{pair_feedback}"
+        );
         assert_eq!(run["observations"][0]["code"], "omission");
         assert_eq!(
             run["observations"][0]["sourceRefs"],
@@ -9078,31 +11087,53 @@ mod translations70_e2e {
     async fn structured_submission_exhaustion_fails_loudly_without_partial_write() {
         let app_llm = axum::Router::new().route(
             "/chat/completions",
-            axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
-                if is_translation_tool_request(&body) {
-                    return tool_call_response(&translation_submission(&body, true));
-                }
-                translation_mock_response(&body, None)
-            }),
+            axum::routing::post(
+                |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                    if is_translation_tool_request(&body) {
+                        return tool_call_response(&translation_submission(&body, true));
+                    }
+                    translation_mock_response(&body, None)
+                },
+            ),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app_llm).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app_llm).await.unwrap();
+        });
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         seed_translation_skill(&root);
         let app = app70(&root, &format!("http://{addr}"));
         let project_id = seed_project(&root, &app).await;
 
-        let (status, parsed) = call(app.clone(), "POST", &format!("/api/v1/translations/{project_id}/run"), Some("{}")).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            &format!("/api/v1/translations/{project_id}/run"),
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "INKOS_TRANSLATION_ACTION_FAILED");
         assert!(
-            parsed["error"]["message"].as_str().unwrap().starts_with("Translation omitted segment index(es): "),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("Translation omitted segment index(es): "),
             "{parsed}"
         );
-        let (_, detail) = call(app, "GET", &format!("/api/v1/translations/{project_id}"), None).await;
-        assert_eq!(detail["manifest"]["chapters"][0]["translatedSegments"], 0, "坏批不落盘：{detail}");
+        let (_, detail) = call(
+            app,
+            "GET",
+            &format!("/api/v1/translations/{project_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(
+            detail["manifest"]["chapters"][0]["translatedSegments"], 0,
+            "坏批不落盘：{detail}"
+        );
     }
 
     /// 972 号：create 三输入形态——①registered 引用（works 工件，lineage 进 work.json
@@ -9117,8 +11148,18 @@ mod translations70_e2e {
         let app = app70(&root, &llm);
         // 底座：file 形态建一个项目（其 translated/chapter-0001.json 即 registered 工件）。
         let base_id = seed_project(&root, &app).await;
-        let detail = call(app.clone(), "GET", &format!("/api/v1/translations/{base_id}"), None).await.1;
-        let translated_path = detail["manifest"]["chapters"][0]["translatedPath"].as_str().unwrap().to_string();
+        let detail = call(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/translations/{base_id}"),
+            None,
+        )
+        .await
+        .1;
+        let translated_path = detail["manifest"]["chapters"][0]["translatedPath"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(translated_path.starts_with(&format!("works/{base_id}/source/translated/")));
 
         // ② sourceText inline + glossary 初始术语。
@@ -9126,29 +11167,42 @@ mod translations70_e2e {
             app.clone(),
             "POST",
             "/api/v1/translations/create",
-            Some(&serde_json::json!({
-                "sourceText": "Inline chapter body.",
-                "sourceLanguage": "en",
-                "targetLanguage": "zh",
-                "title": "内联之书",
-                "glossary": [{ "source": "Mana", "target": "魔力" }],
-            }).to_string()),
+            Some(
+                &serde_json::json!({
+                    "sourceText": "Inline chapter body.",
+                    "sourceLanguage": "en",
+                    "targetLanguage": "zh",
+                    "title": "内联之书",
+                    "glossary": [{ "source": "Mana", "target": "魔力" }],
+                })
+                .to_string(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {created}");
         let inline_id = created["projectId"].as_str().unwrap().to_string();
-        assert!(created["projectDir"].as_str().unwrap().starts_with("works/"));
+        assert!(created["projectDir"]
+            .as_str()
+            .unwrap()
+            .starts_with("works/"));
         let glossary_raw = std::fs::read_to_string(
-            root.join("works").join(&inline_id).join("source").join("glossary.json"),
+            root.join("works")
+                .join(&inline_id)
+                .join("source")
+                .join("glossary.json"),
         )
         .unwrap();
         assert!(glossary_raw.contains("魔力"), "{glossary_raw}");
         let work: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&inline_id).join("work.json")).unwrap(),
+            &std::fs::read_to_string(root.join("works").join(&inline_id).join("work.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(work["metadata"]["sourceOrigin"], "inline");
-        assert!(work["lineage"].as_array().unwrap().is_empty(), "inline 无 lineage");
+        assert!(
+            work["lineage"].as_array().unwrap().is_empty(),
+            "inline 无 lineage"
+        );
 
         // ① registered 引用（原项目 source 章节工件）+ lineage 进 work.json。
         let artifact_path = translated_path
@@ -9160,21 +11214,28 @@ mod translations70_e2e {
             app.clone(),
             "POST",
             "/api/v1/translations/create",
-            Some(&serde_json::json!({
-                "sources": [{ "workId": base_id, "artifactId": artifact_id }],
-                "sourceLanguage": "en",
-                "targetLanguage": "zh",
-                "title": "衍生之书",
-            }).to_string()),
+            Some(
+                &serde_json::json!({
+                    "sources": [{ "workId": base_id, "artifactId": artifact_id }],
+                    "sourceLanguage": "en",
+                    "targetLanguage": "zh",
+                    "title": "衍生之书",
+                })
+                .to_string(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {created}");
         let derived_id = created["projectId"].as_str().unwrap().to_string();
         let work: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&derived_id).join("work.json")).unwrap(),
+            &std::fs::read_to_string(root.join("works").join(&derived_id).join("work.json"))
+                .unwrap(),
         )
         .unwrap();
-        assert_eq!(work["metadata"]["sourceOrigin"], "inline", "registered 走 resolved 通道");
+        assert_eq!(
+            work["metadata"]["sourceOrigin"], "inline",
+            "registered 走 resolved 通道"
+        );
         let lineage = work["lineage"].as_array().unwrap();
         assert_eq!(lineage.len(), 1);
         assert_eq!(lineage[0]["relation"], "derived-from");
@@ -9187,12 +11248,15 @@ mod translations70_e2e {
             app.clone(),
             "POST",
             "/api/v1/translations/create",
-            Some(&serde_json::json!({
-                "filePath": "novel.txt",
-                "sources": [{ "workId": base_id, "artifactId": artifact_id }],
-                "sourceLanguage": "en",
-                "targetLanguage": "zh",
-            }).to_string()),
+            Some(
+                &serde_json::json!({
+                    "filePath": "novel.txt",
+                    "sources": [{ "workId": base_id, "artifactId": artifact_id }],
+                    "sourceLanguage": "en",
+                    "targetLanguage": "zh",
+                })
+                .to_string(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
@@ -9261,25 +11325,43 @@ mod translations70_e2e {
 
         // ④ file 形态回归（novel.txt 为 fixture 预置的 uploads 文件——从 base 项目
         // manifest.source.path 取真实上传路径）。
-        let base_manifest = call(app.clone(), "GET", &format!("/api/v1/translations/{base_id}"), None).await.1;
-        eprintln!("[972-probe] base source.path = {:?}", base_manifest["manifest"]["source"]["path"]);
-        let source_file = base_manifest["manifest"]["source"]["path"].as_str().unwrap().to_string();
+        let base_manifest = call(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/translations/{base_id}"),
+            None,
+        )
+        .await
+        .1;
+        eprintln!(
+            "[972-probe] base source.path = {:?}",
+            base_manifest["manifest"]["source"]["path"]
+        );
+        let source_file = base_manifest["manifest"]["source"]["path"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let (status, created) = call(
             app.clone(),
             "POST",
             "/api/v1/translations/create",
-            Some(&serde_json::json!({
-                "filePath": source_file,
-                "sourceLanguage": "en",
-                "targetLanguage": "zh",
-                "title": "文件之书",
-            }).to_string()),
+            Some(
+                &serde_json::json!({
+                    "filePath": source_file,
+                    "sourceLanguage": "en",
+                    "targetLanguage": "zh",
+                    "title": "文件之书",
+                })
+                .to_string(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {created}");
         assert_eq!(created["manifest"]["source"]["kind"], "text");
         // 列表：四项目全在（works 扫描）。
-        let listed = call(app.clone(), "GET", "/api/v1/translations", None).await.1;
+        let listed = call(app.clone(), "GET", "/api/v1/translations", None)
+            .await
+            .1;
         let count = listed["translations"].as_array().unwrap().len();
         assert!(count >= 4, "{count}");
     }
@@ -9335,17 +11417,30 @@ mod play71_e2e {
             .with_state(rt71(root))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -9363,7 +11458,8 @@ mod play71_e2e {
                 "id": "w1", "title": "雪夜世界", "premise": "大雪封山的世界",
                 "worldContract": "", "visualContract": "水墨", "mode": "open",
                 "language": "zh", "createdAt": "t", "updatedAt": "t"
-            })).unwrap(),
+            }))
+            .unwrap(),
         )
         .unwrap();
         std::fs::write(
@@ -9373,7 +11469,8 @@ mod play71_e2e {
         .unwrap();
         std::fs::write(
             run_dir.join("state").join("current.json"),
-            serde_json::to_string_pretty(&serde_json::json!({ "turn": 3, "location": "老宅" })).unwrap(),
+            serde_json::to_string_pretty(&serde_json::json!({ "turn": 3, "location": "老宅" }))
+                .unwrap(),
         )
         .unwrap();
         std::fs::write(
@@ -9400,11 +11497,16 @@ mod play71_e2e {
                 "npc": { "status": "failed", "error": "boom" },
                 "scene-turn-3": { "status": "ready", "file": "scene-turn-3.png" },
                 "scene-turn-1": { "status": "ready", "file": "scene-turn-1.png" }
-            })).unwrap(),
+            }))
+            .unwrap(),
         )
         .unwrap();
         std::fs::write(run_dir.join("images").join("hero.png"), b"\x89PNG-hero").unwrap();
-        std::fs::write(run_dir.join("images").join("scene-turn-3.png"), b"\x89PNG-scene").unwrap();
+        std::fs::write(
+            run_dir.join("images").join("scene-turn-3.png"),
+            b"\x89PNG-scene",
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -9426,8 +11528,7 @@ mod play71_e2e {
         let entities = parsed["graph"]["entities"].as_array().unwrap();
         let hero = entities.iter().find(|e| e["id"] == "hero").unwrap();
         assert_eq!(
-            hero["imageUrl"],
-            "/api/v1/play/runs/w1/r1/images/hero.png",
+            hero["imageUrl"], "/api/v1/play/runs/w1/r1/images/hero.png",
             "hero: {hero}"
         );
         let npc = entities.iter().find(|e| e["id"] == "npc").unwrap();
@@ -9488,7 +11589,12 @@ mod play71_e2e {
         assert_eq!(parsed["imageSettings"]["actors"], true);
         assert_eq!(parsed["imageSettings"]["inventory"], false);
         let written = std::fs::read_to_string(
-            root.join("worlds").join("w1").join("runs").join("r1").join("images").join("settings.json"),
+            root.join("worlds")
+                .join("w1")
+                .join("runs")
+                .join("r1")
+                .join("images")
+                .join("settings.json"),
         )
         .unwrap();
         assert!(written.contains("\"actors\": true"), "{written}");
@@ -9529,7 +11635,8 @@ mod play71_e2e {
         // scene 无文本且无投影 → 400。
         let empty_dir = tempfile::tempdir().unwrap();
         let empty_root = empty_dir.path().to_path_buf();
-        std::fs::create_dir_all(empty_root.join("worlds").join("w1").join("runs").join("r1")).unwrap();
+        std::fs::create_dir_all(empty_root.join("worlds").join("w1").join("runs").join("r1"))
+            .unwrap();
         let (status, parsed) = call(
             app71(&empty_root),
             "POST",
@@ -9562,7 +11669,10 @@ mod play71_e2e {
                 .get(axum::http::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
-            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap().to_vec();
+            let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                .await
+                .unwrap()
+                .to_vec();
             (status, content_type, bytes)
         };
         assert_eq!(status, StatusCode::OK);
@@ -9570,7 +11680,13 @@ mod play71_e2e {
         assert_eq!(body, b"\x89PNG-hero");
 
         // 路径穿越 / 缺失。
-        let (status, parsed) = call(app.clone(), "GET", "/api/v1/play/runs/w1/r1/images/%2e%2e%2fhero.png", None).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "GET",
+            "/api/v1/play/runs/w1/r1/images/%2e%2e%2fhero.png",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
         assert_eq!(parsed["error"], "Invalid image file");
         let (status, _) = call(app, "GET", "/api/v1/play/runs/w1/r1/images/ghost.png", None).await;
@@ -9616,13 +11732,28 @@ mod ops72_e2e {
     fn app72_with(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
             .route("/api/v1/daemon", axum::routing::get(ops_routes::get_daemon))
-            .route("/api/v1/daemon/start", axum::routing::post(ops_routes::post_daemon_start))
-            .route("/api/v1/daemon/stop", axum::routing::post(ops_routes::post_daemon_stop))
+            .route(
+                "/api/v1/daemon/start",
+                axum::routing::post(ops_routes::post_daemon_start),
+            )
+            .route(
+                "/api/v1/daemon/stop",
+                axum::routing::post(ops_routes::post_daemon_stop),
+            )
             .route("/api/v1/logs", axum::routing::get(ops_routes::get_logs))
             .route("/api/v1/doctor", axum::routing::get(ops_routes::get_doctor))
-            .route("/api/v1/radar/scan", axum::routing::post(ops_routes::post_radar_scan))
-            .route("/api/v1/radar/history", axum::routing::get(ops_routes::get_radar_history))
-            .route("/api/v1/books/:id/foundation/revise", axum::routing::post(revise_foundation))
+            .route(
+                "/api/v1/radar/scan",
+                axum::routing::post(ops_routes::post_radar_scan),
+            )
+            .route(
+                "/api/v1/radar/history",
+                axum::routing::get(ops_routes::get_radar_history),
+            )
+            .route(
+                "/api/v1/books/:id/foundation/revise",
+                axum::routing::post(revise_foundation),
+            )
             .with_state(runtime)
     }
 
@@ -9630,17 +11761,30 @@ mod ops72_e2e {
         app72_with(rt72(root, llm))
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -9679,7 +11823,9 @@ mod ops72_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -9731,18 +11877,33 @@ mod ops72_e2e {
             "{\"level\":\"info\",\"message\":\"first\"}\nplain line 两\n{\"level\":\"warn\",\"message\":\"last\"}\n",
         )
         .unwrap();
-        let (status, parsed) = call(app72(&root, "http://127.0.0.1:9"), "GET", "/api/v1/logs", None).await;
+        let (status, parsed) = call(
+            app72(&root, "http://127.0.0.1:9"),
+            "GET",
+            "/api/v1/logs",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         let entries = parsed["entries"].as_array().unwrap();
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0]["message"], "first");
         assert_eq!(entries[1]["message"], "plain line 两");
-        assert!(entries[1].get("level").is_none(), "裸行仅 message: {entries:?}");
+        assert!(
+            entries[1].get("level").is_none(),
+            "裸行仅 message: {entries:?}"
+        );
         assert_eq!(entries[2]["level"], "warn");
 
         // 缺失文件 → 空表。
         let empty = tempfile::tempdir().unwrap();
-        let (status, parsed) = call(app72(empty.path(), "http://127.0.0.1:9"), "GET", "/api/v1/logs", None).await;
+        let (status, parsed) = call(
+            app72(empty.path(), "http://127.0.0.1:9"),
+            "GET",
+            "/api/v1/logs",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["entries"].as_array().unwrap().len(), 0);
     }
@@ -9767,7 +11928,9 @@ mod ops72_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["marketSummary"], "都市脑洞热度持续。");
         assert_eq!(parsed["recommendations"].as_array().unwrap().len(), 1);
-        assert!(parsed["timestamp"].as_str().is_some_and(|t| t.ends_with('Z')));
+        assert!(parsed["timestamp"]
+            .as_str()
+            .is_some_and(|t| t.ends_with('Z')));
         assert_eq!(subscriber.recv().await.unwrap().event, "radar:start");
         assert_eq!(subscriber.recv().await.unwrap().event, "radar:complete");
 
@@ -9802,9 +11965,19 @@ mod ops72_e2e {
 
         // LLM 不可达：3s 预算内判 false（不挂起）。
         let started = std::time::Instant::now();
-        let (status, parsed) = call(app72(&root, "http://127.0.0.1:9"), "GET", "/api/v1/doctor", None).await;
+        let (status, parsed) = call(
+            app72(&root, "http://127.0.0.1:9"),
+            "GET",
+            "/api/v1/doctor",
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
-        assert!(started.elapsed() < std::time::Duration::from_secs(6), "doctor 应有界: {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(6),
+            "doctor 应有界: {:?}",
+            started.elapsed()
+        );
         assert_eq!(parsed["inkosJson"], true);
         assert_eq!(parsed["projectEnv"], true);
         assert_eq!(parsed["booksDir"], true);
@@ -9830,7 +12003,13 @@ mod ops72_e2e {
         let app = app72_with(runtime);
 
         // 缺 feedback → 400 平铺。
-        let (status, parsed) = call(app.clone(), "POST", "/api/v1/books/b1/foundation/revise", Some("{}")).await;
+        let (status, parsed) = call(
+            app.clone(),
+            "POST",
+            "/api/v1/books/b1/foundation/revise",
+            Some("{}"),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"], "feedback is required");
 
@@ -9848,11 +12027,18 @@ mod ops72_e2e {
         let backup_dirs: Vec<_> = std::fs::read_dir(&story)
             .unwrap()
             .flatten()
-            .filter(|e| e.file_name().to_string_lossy().starts_with(".backup-phase4-"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(".backup-phase4-")
+            })
             .collect();
         assert_eq!(backup_dirs.len(), 1, "应有 phase4 备份目录");
         let backup = backup_dirs[0].path();
-        assert_eq!(std::fs::read_to_string(backup.join("story_bible.md")).unwrap(), "旧圣经");
+        assert_eq!(
+            std::fs::read_to_string(backup.join("story_bible.md")).unwrap(),
+            "旧圣经"
+        );
         assert_eq!(subscriber.recv().await.unwrap().event, "foundation:revised");
 
         // 书缺失 → 500 + foundation:error。
@@ -9905,12 +12091,13 @@ mod ops72_e2e {
         );
 
         // 章节真实落盘（广播与磁盘一致）。
-        let chapters: Vec<String> = std::fs::read_dir(root.join("books").join("b1").join("chapters"))
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.ends_with(".md"))
-            .collect();
+        let chapters: Vec<String> =
+            std::fs::read_dir(root.join("books").join("b1").join("chapters"))
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".md"))
+                .collect();
         assert_eq!(chapters.len(), 1, "chapters: {chapters:?}");
 
         let (status, _) = call(app, "POST", "/api/v1/daemon/stop", None).await;
@@ -9950,7 +12137,10 @@ mod play73_e2e {
 
     fn app73(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -9962,17 +12152,30 @@ mod play73_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -10029,7 +12232,9 @@ mod play73_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -10056,7 +12261,8 @@ mod play73_e2e {
             app.clone(),
             "POST",
             "/api/v1/agent",
-            Some(r#"{
+            Some(
+                r#"{
                 "instruction": "开一个雪夜古宅的世界",
                 "sessionId": "1782991000000-play01",
                 "actionSource": "button",
@@ -10067,7 +12273,10 @@ mod play73_e2e {
                     "premise": "大雪封山的旧宅，藏着一段旧案。",
                     "suggestedActions": ["查看门厅", "上二楼"]
                 }}
-            }"#.replace(char::is_whitespace, " ").as_str()),
+            }"#
+                .replace(char::is_whitespace, " ")
+                .as_str(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
@@ -10082,19 +12291,32 @@ mod play73_e2e {
         assert_eq!(details["worldId"], "1782991000000-play01");
         assert_eq!(details["runId"], "main");
         assert_eq!(details["mode"], "guided");
-        assert_eq!(details["sceneText"], "你进入「雪夜古宅」。\n大雪封山的旧宅，藏着一段旧案。");
+        assert_eq!(
+            details["sceneText"],
+            "你进入「雪夜古宅」。\n大雪封山的旧宅，藏着一段旧案。"
+        );
         assert_eq!(details["suggestedActions"].as_array().unwrap().len(), 2);
         // 开场播种成功 → 图谱带 actor_player + holding 边。
         let graph = &details["graph"];
-        assert!(graph["entities"]
-            .as_array()
-            .is_some_and(|entities| entities.iter().any(|e| e["id"] == "actor_player")), "graph: {graph}");
+        assert!(
+            graph["entities"]
+                .as_array()
+                .is_some_and(|entities| entities.iter().any(|e| e["id"] == "actor_player")),
+            "graph: {graph}"
+        );
         assert_eq!(parsed["session"]["sessionId"], "1782991000000-play01");
 
         // 磁盘形态：world.json + transcript + current state + scene 投影 + 图（file 后端）。
-        let world_json = root.join("worlds").join("1782991000000-play01").join("world.json");
+        let world_json = root
+            .join("worlds")
+            .join("1782991000000-play01")
+            .join("world.json");
         assert!(world_json.is_file());
-        let run = root.join("worlds").join("1782991000000-play01").join("runs").join("main");
+        let run = root
+            .join("worlds")
+            .join("1782991000000-play01")
+            .join("runs")
+            .join("main");
         assert!(run.join("transcript.jsonl").is_file());
         assert!(run.join("state").join("current.json").is_file());
         assert!(run.join("projections").join("scene.md").is_file());
@@ -10145,7 +12367,10 @@ mod play73_e2e {
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
         assert!(
-            parsed["error"]["message"].as_str().unwrap().contains("缺少标题"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("缺少标题"),
             "body: {parsed}"
         );
     }
@@ -10173,10 +12398,17 @@ mod play73_e2e {
         )
         .await
         .unwrap();
-        inkos_engine::play::ensure_run(&root, "w-step", "main").await.unwrap();
-        inkos_engine::play::append_transcript_turn(&root, "w-step", "main", "user", "开始").await.unwrap();
+        inkos_engine::play::ensure_run(&root, "w-step", "main")
+            .await
+            .unwrap();
+        inkos_engine::play::append_transcript_turn(&root, "w-step", "main", "user", "开始")
+            .await
+            .unwrap();
 
-        let agents = PlayAgents { router: &runtime.router, root: &root };
+        let agents = PlayAgents {
+            router: &runtime.router,
+            root: &root,
+        };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w-step".to_string(),
@@ -10195,8 +12427,10 @@ mod play73_e2e {
         let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
         assert!(events.contains("evt-1"), "{events}");
         assert!(events.contains("看清了厅堂"), "{events}");
-        let current: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(run.join("state").join("current.json")).unwrap()).unwrap();
+        let current: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(run.join("state").join("current.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(current["turn"], 1);
         assert_eq!(current["lastEventId"], "evt-1");
         assert_eq!(current["blocked"], false);
@@ -10206,7 +12440,8 @@ mod play73_e2e {
         assert!(transcript.contains("我环顾四周"));
         assert!(transcript.contains("灯笼的光"));
         let graph: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap())
+                .unwrap();
         assert!(graph["entities"]
             .as_object()
             .is_some_and(|entities| entities.contains_key("location_hall")));
@@ -10241,7 +12476,8 @@ mod play73_e2e {
             app.clone(),
             "POST",
             "/api/v1/agent",
-            Some(r#"{
+            Some(
+                r#"{
                 "instruction": "Open a haunted manor world",
                 "sessionId": "1782991000000-playen",
                 "actionSource": "button",
@@ -10251,8 +12487,9 @@ mod play73_e2e {
                     "premise": "A snowbound manor hides an old case."
                 }}
             }"#
-            .replace(char::is_whitespace, " ")
-            .as_str()),
+                .replace(char::is_whitespace, " ")
+                .as_str(),
+            ),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
@@ -10306,8 +12543,14 @@ mod image74_e2e {
 
     fn app74(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .route(
                 "/api/v1/projects/:id/nodes/:nodeId/image",
                 axum::routing::post(interactive_film_routes::post_node_image),
@@ -10323,17 +12566,30 @@ mod image74_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -10354,7 +12610,9 @@ mod image74_e2e {
         );
         let image_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let image_addr = image_listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(image_listener, image_app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(image_listener, image_app).await.unwrap();
+        });
 
         let llm_app = axum::Router::new().route(
             "/chat/completions",
@@ -10378,7 +12636,9 @@ mod image74_e2e {
         );
         let llm_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let llm_addr = llm_listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(llm_listener, llm_app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(llm_listener, llm_app).await.unwrap();
+        });
 
         (format!("http://{image_addr}"), format!("http://{llm_addr}"))
     }
@@ -10422,7 +12682,10 @@ mod image74_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
-        assert_eq!(parsed["assetRef"], "interactive-films/film1/assets/nodes/start.png");
+        assert_eq!(
+            parsed["assetRef"],
+            "interactive-films/film1/assets/nodes/start.png"
+        );
         assert_eq!(parsed["rev"], 1);
         // 图片落盘 + delta 回写（imageSlot 注入 + authoring rev）。
         assert_eq!(
@@ -10433,7 +12696,10 @@ mod image74_e2e {
             &std::fs::read_to_string(dir_film.join("story-graph.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(updated["nodes"][0]["imageSlot"]["assetRef"], "interactive-films/film1/assets/nodes/start.png");
+        assert_eq!(
+            updated["nodes"][0]["imageSlot"]["assetRef"],
+            "interactive-films/film1/assets/nodes/start.png"
+        );
         assert_eq!(updated["nodes"][0]["imageSlot"]["prompt"], "雪夜宅邸门口");
 
         // 未配置 cover → 400 needsCoverConfig。
@@ -10484,7 +12750,11 @@ mod image74_e2e {
             r#"{"entities":{"actor_hero":{"id":"actor_hero","type":"actor","label":"林动","summary":"少年"}},"edges":{},"stateSlots":{},"events":{}}"#,
         )
         .unwrap();
-        std::fs::write(run.join("projections").join("scene.md"), "雪夜孤灯，风声掠过檐角。").unwrap();
+        std::fs::write(
+            run.join("projections").join("scene.md"),
+            "雪夜孤灯，风声掠过檐角。",
+        )
+        .unwrap();
 
         let app = app74(rt74(&root, "http://127.0.0.1:9"));
         // scene 生图（投影文本兜底）。
@@ -10500,7 +12770,10 @@ mod image74_e2e {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["status"], "ready");
         assert_eq!(parsed["file"], "scene-turn-0.png");
-        assert_eq!(parsed["url"], "/api/v1/play/runs/w1/main/images/scene-turn-0.png");
+        assert_eq!(
+            parsed["url"],
+            "/api/v1/play/runs/w1/main/images/scene-turn-0.png"
+        );
         assert_eq!(
             std::fs::read(run.join("images").join("scene-turn-0.png")).unwrap(),
             b"\x89PNG-fake-image"
@@ -10533,7 +12806,10 @@ mod image74_e2e {
             .find(|e| e["id"] == "actor_hero")
             .cloned()
             .unwrap();
-        assert_eq!(hero["imageUrl"], "/api/v1/play/runs/w1/main/images/actor_hero.png");
+        assert_eq!(
+            hero["imageUrl"],
+            "/api/v1/play/runs/w1/main/images/actor_hero.png"
+        );
     }
 
     #[tokio::test]
@@ -10566,7 +12842,9 @@ mod image74_e2e {
         assert_eq!(exec["details"]["kind"], "graph_updated");
         assert_eq!(exec["details"]["rev"], 1);
         assert_eq!(exec["result"], "Structure drafted: 2 nodes (rev 1).");
-        let graph_raw = std::fs::read_to_string(root.join("interactive-films/film-d/story-graph.json")).unwrap();
+        let graph_raw =
+            std::fs::read_to_string(root.join("interactive-films/film-d/story-graph.json"))
+                .unwrap();
         assert!(graph_raw.contains("\"start\""), "{graph_raw}");
 
         // connect_choice：完整节点 upsert（改选项）→ rev 2。
@@ -10595,10 +12873,15 @@ mod image74_e2e {
         assert_eq!(exec["tool"], "remove_node");
         assert_eq!(exec["details"]["rev"], 3);
         let after: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("interactive-films/film-d/story-graph.json")).unwrap(),
+            &std::fs::read_to_string(root.join("interactive-films/film-d/story-graph.json"))
+                .unwrap(),
         )
         .unwrap();
-        assert!(after["nodes"].as_array().unwrap().iter().all(|n| n["id"] != "end_good"));
+        assert!(after["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n["id"] != "end_good"));
 
         // 缺 nodeId → 502 + 中文文案。
         let (status, parsed) = call(
@@ -10609,7 +12892,13 @@ mod image74_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少 nodeId"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("缺少 nodeId"),
+            "body: {parsed}"
+        );
     }
 }
 
@@ -10645,22 +12934,41 @@ mod translation75_e2e {
 
     fn app75(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -10668,7 +12976,11 @@ mod translation75_e2e {
     async fn translation_create_confirm_flow() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        std::fs::write(root.join("novel.txt"), "Chapter 1\n\nThe mountain stood.\n\nMana flowed.").unwrap();
+        std::fs::write(
+            root.join("novel.txt"),
+            "Chapter 1\n\nThe mountain stood.\n\nMana flowed.",
+        )
+        .unwrap();
         let app = app75(rt75(&root));
         let (status, _) = call(
             app.clone(),
@@ -10690,7 +13002,10 @@ mod translation75_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         // translation_create 不在 suppressManualTextForTool 表 → response 为结果文本。
         assert!(
-            parsed["response"].as_str().unwrap_or_default().contains("Translation project \"山之书\" created."),
+            parsed["response"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Translation project \"山之书\" created."),
             "response: {parsed}"
         );
         let exec = &parsed["details"]["toolExecutions"][0];
@@ -10707,10 +13022,19 @@ mod translation75_e2e {
         assert_eq!(manifest["chapters"].as_array().unwrap().len(), 1);
         assert_eq!(manifest["source"]["kind"], "text");
         // 970 号 P4：布局=works/<id>/source（TS 2.0 works 存储）。
-        assert!(details["manifestPath"].as_str().unwrap().starts_with("works/"));
-        assert!(details["projectDir"].as_str().unwrap().starts_with("works/"));
+        assert!(details["manifestPath"]
+            .as_str()
+            .unwrap()
+            .starts_with("works/"));
+        assert!(details["projectDir"]
+            .as_str()
+            .unwrap()
+            .starts_with("works/"));
         // 结果文本五段。
-        assert!(exec["result"].as_str().unwrap().contains("Translation project \"山之书\" created."));
+        assert!(exec["result"]
+            .as_str()
+            .unwrap()
+            .contains("Translation project \"山之书\" created."));
         assert!(exec["result"].as_str().unwrap().contains("Chapters: 1"));
 
         // 缺 filePath → 502 中文文案。
@@ -10722,7 +13046,13 @@ mod translation75_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少文件路径"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("缺少文件路径"),
+            "body: {parsed}"
+        );
 
         // 文件不存在 → 502（创建失败面）。
         let (status, parsed) = call(
@@ -10740,7 +13070,11 @@ mod translation75_e2e {
     async fn translation_create_three_forms_confirm_flow() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        std::fs::write(root.join("novel.txt"), "Chapter 1\n\nThe mountain stood.\n\nMana flowed.").unwrap();
+        std::fs::write(
+            root.join("novel.txt"),
+            "Chapter 1\n\nThe mountain stood.\n\nMana flowed.",
+        )
+        .unwrap();
         let app = app75(rt75(&root));
         let (status, _) = call(
             app.clone(),
@@ -10762,27 +13096,46 @@ mod translation75_e2e {
         assert_eq!(status, StatusCode::OK, "body: {created}");
         let exec = &created["details"]["toolExecutions"][0];
         assert_eq!(exec["details"]["kind"], "translation_project_created");
-        let inline_id = exec["details"]["manifest"]["id"].as_str().unwrap().to_string();
+        let inline_id = exec["details"]["manifest"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         // 975 号：manifestPath 为项目根相对路径——与 root 拼接（e2e 进程 CWD 与项目根无关）。
-        let inline_dir = root.join(exec["details"]["manifestPath"].as_str().unwrap()).parent().unwrap().to_path_buf();
-        assert!(inline_dir.join("source-input.md").is_file(), "sourceText 形态 source-input.md 在场");
+        let inline_dir = root
+            .join(exec["details"]["manifestPath"].as_str().unwrap())
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        assert!(
+            inline_dir.join("source-input.md").is_file(),
+            "sourceText 形态 source-input.md 在场"
+        );
         let glossary_raw = std::fs::read_to_string(inline_dir.join("glossary.json")).unwrap();
         assert!(glossary_raw.contains("魔力"), "{glossary_raw}");
         let inline_work: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&inline_id).join("work.json")).unwrap(),
-        ).unwrap();
+            &std::fs::read_to_string(root.join("works").join(&inline_id).join("work.json"))
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(inline_work["metadata"]["sourceOrigin"], "inline");
         assert!(inline_work["lineage"].as_array().unwrap().is_empty());
 
         // ① registered sources：引用 ② 的 source 章节工件（lineage 进 work.json）。
-        let artifacts = inline_work["artifacts"].as_array().cloned().unwrap_or_default();
-        let artifact_id = artifacts.iter()
-            .find(|a| a["path"].as_str().map(|p| p.ends_with("chapter-0001.json") && p.contains("source/")).unwrap_or(false))
+        let artifacts = inline_work["artifacts"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let artifact_id = artifacts
+            .iter()
+            .find(|a| {
+                a["path"]
+                    .as_str()
+                    .map(|p| p.ends_with("chapter-0001.json") && p.contains("source/"))
+                    .unwrap_or(false)
+            })
             .and_then(|a| a["id"].as_str())
             .map(String::from)
-            .unwrap_or_else(|| {
-                "source-chapter-0001".to_string()
-            });
+            .unwrap_or_else(|| "source-chapter-0001".to_string());
         let (status, created) = call(
             app.clone(),
             "POST",
@@ -10793,11 +13146,19 @@ mod translation75_e2e {
         assert_eq!(status, StatusCode::OK, "body: {created}");
         // 975 号：manifest 在 toolExecutions[0].details.manifest（agent 路由响应形）。
         let exec = &created["details"]["toolExecutions"][0];
-        let derived_id = exec["details"]["manifest"]["id"].as_str().unwrap().to_string();
+        let derived_id = exec["details"]["manifest"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         let derived_work: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&derived_id).join("work.json")).unwrap(),
-        ).unwrap();
-        let lineage = derived_work["lineage"].as_array().cloned().unwrap_or_default();
+            &std::fs::read_to_string(root.join("works").join(&derived_id).join("work.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let lineage = derived_work["lineage"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         assert_eq!(lineage.len(), 1);
         assert_eq!(lineage[0]["relation"], "derived-from");
         assert_eq!(lineage[0]["sourceWorkId"], inline_id.as_str());
@@ -10814,7 +13175,10 @@ mod translation75_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert!(
-            parsed["error"]["message"].as_str().unwrap_or_default().contains("CREATION_SOURCE_CONFLICT"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("CREATION_SOURCE_CONFLICT"),
             "body: {parsed}"
         );
     }
@@ -10843,7 +13207,13 @@ mod translation75_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "INVALID_ACTION_PAYLOAD");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("Unrecognized key: bogus"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Unrecognized key: bogus"),
+            "body: {parsed}"
+        );
 
         // 子域 unknown 键（createBook strict）→ 400。
         let (status, parsed) = call(
@@ -10854,7 +13224,13 @@ mod translation75_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("createBook: Unrecognized key: extra"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("createBook: Unrecognized key: extra"),
+            "body: {parsed}"
+        );
 
         // 枚举非法（platform）→ 400。
         let (status, _) = call(
@@ -10875,7 +13251,13 @@ mod translation75_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("charsPerChapter"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("charsPerChapter"),
+            "body: {parsed}"
+        );
 
         // 非 strict 子域（draftStructure）unknown 键放行 → 走意图分支（无 projectId → 502）。
         let (status, parsed) = call(
@@ -10886,7 +13268,13 @@ mod translation75_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("project id"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("project id"),
+            "body: {parsed}"
+        );
     }
 }
 
@@ -10922,22 +13310,41 @@ mod script76_e2e {
 
     fn app76(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -10970,7 +13377,9 @@ mod script76_e2e {
         );
         let llm_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let llm_addr = llm_listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(llm_listener, llm_app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(llm_listener, llm_app).await.unwrap();
+        });
 
         use base64::Engine as _;
         let png_b64 = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG-cover");
@@ -10986,7 +13395,9 @@ mod script76_e2e {
         );
         let image_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let image_addr = image_listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(image_listener, image_app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(image_listener, image_app).await.unwrap();
+        });
 
         (format!("http://{llm_addr}"), format!("http://{image_addr}"))
     }
@@ -11036,7 +13447,10 @@ mod script76_e2e {
         )
         .unwrap();
         assert_eq!(status_json["kind"], "script");
-        assert_eq!(status_json["status"], "complete", "ProductionRunSnapshot 形态（141 号）");
+        assert_eq!(
+            status_json["status"], "complete",
+            "ProductionRunSnapshot 形态（141 号）"
+        );
         assert_eq!(status_json["stage"], "commit");
         assert_eq!(status_json["artifacts"].as_array().unwrap().len(), 2);
 
@@ -11049,7 +13463,13 @@ mod script76_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少标题"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("缺少标题"),
+            "body: {parsed}"
+        );
     }
 
     #[tokio::test]
@@ -11081,10 +13501,14 @@ mod script76_e2e {
         let details = &exec["details"];
         assert_eq!(details["kind"], "storyboard_project_created");
         assert_eq!(details["baseDir"], "storyboards/山雨");
-        assert_eq!(details["assetsManifestPath"], "storyboards/山雨/assets.json");
+        assert_eq!(
+            details["assetsManifestPath"],
+            "storyboards/山雨/assets.json"
+        );
 
         // image-prompts 提取（Prompt: 行编号化）。
-        let prompts = std::fs::read_to_string(root.join("storyboards/山雨/image-prompts.md")).unwrap();
+        let prompts =
+            std::fs::read_to_string(root.join("storyboards/山雨/image-prompts.md")).unwrap();
         assert!(prompts.contains("1. 雨夜街口，水墨远景"), "{prompts}");
         assert!(prompts.contains("2. 灯下人影，半身近景"), "{prompts}");
         // assets manifest：两 shot + prompt_ready + 三目录。
@@ -11156,11 +13580,20 @@ mod script76_e2e {
         assert_eq!(details["coverPromptPath"], "covers/山雨/cover-prompt.md");
         assert_eq!(details["coverImagePath"], "covers/山雨/cover.png");
         // 响应文本三行。
-        assert!(parsed["response"].as_str().unwrap().contains("Cover generated for \"山雨\"."), "body: {parsed}");
+        assert!(
+            parsed["response"]
+                .as_str()
+                .unwrap()
+                .contains("Cover generated for \"山雨\"."),
+            "body: {parsed}"
+        );
 
         // 落盘：prompt（generic zh）+ png。
         let prompt = std::fs::read_to_string(root.join("covers/山雨/cover-prompt.md")).unwrap();
-        assert!(prompt.starts_with("按用户给出的标题、简介、卖点和视觉要求生成封面图。"), "{prompt}");
+        assert!(
+            prompt.starts_with("按用户给出的标题、简介、卖点和视觉要求生成封面图。"),
+            "{prompt}"
+        );
         assert!(prompt.contains("卖点：节奏快；反转强"), "{prompt}");
         assert_eq!(
             std::fs::read(root.join("covers/山雨/cover.png")).unwrap(),
@@ -11176,7 +13609,13 @@ mod script76_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("缺少标题"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("缺少标题"),
+            "body: {parsed}"
+        );
 
         let bare = tempfile::tempdir().unwrap();
         let bare_root = bare.path().to_path_buf();
@@ -11197,7 +13636,10 @@ mod script76_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert!(
-            parsed["error"]["message"].as_str().unwrap().contains("cover endpoint is required"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("cover endpoint is required"),
             "body: {parsed}"
         );
     }
@@ -11235,22 +13677,41 @@ mod film77_e2e {
 
     fn app77(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -11283,7 +13744,9 @@ mod film77_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, llm_app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, llm_app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -11322,45 +13785,80 @@ mod film77_e2e {
         assert_eq!(exec["label"], "互动影游");
         assert_eq!(exec["status"], "completed");
         // suppressManualTextForTool 名单内 → 助手气泡留空。
-        assert_eq!(parsed["response"].as_str().unwrap_or("NULL"), "", "body: {parsed}");
+        assert_eq!(
+            parsed["response"].as_str().unwrap_or("NULL"),
+            "",
+            "body: {parsed}"
+        );
         let details = &exec["details"];
         assert_eq!(details["kind"], "interactive_film_created");
         assert_eq!(details["projectId"], "迷雾宅邸");
         assert_eq!(details["baseDir"], "interactive-films/迷雾宅邸");
-        assert_eq!(details["storyGraphPath"], "interactive-films/迷雾宅邸/story-graph.json");
-        assert_eq!(details["specPath"], "interactive-films/迷雾宅邸/interactive-spec.md");
-        assert_eq!(details["storyTreePath"], "interactive-films/迷雾宅邸/story-tree.md");
+        assert_eq!(
+            details["storyGraphPath"],
+            "interactive-films/迷雾宅邸/story-graph.json"
+        );
+        assert_eq!(
+            details["specPath"],
+            "interactive-films/迷雾宅邸/interactive-spec.md"
+        );
+        assert_eq!(
+            details["storyTreePath"],
+            "interactive-films/迷雾宅邸/story-tree.md"
+        );
         assert_eq!(details["flagsPath"], "interactive-films/迷雾宅邸/flags.md");
-        assert_eq!(details["scriptPath"], "interactive-films/迷雾宅邸/script.md");
-        assert_eq!(details["assetsManifestPath"], "interactive-films/迷雾宅邸/assets.json");
+        assert_eq!(
+            details["scriptPath"],
+            "interactive-films/迷雾宅邸/script.md"
+        );
+        assert_eq!(
+            details["assetsManifestPath"],
+            "interactive-films/迷雾宅邸/assets.json"
+        );
         let text = exec["result"].as_str().unwrap_or_default();
-        assert!(text.starts_with("Interactive film \"迷雾宅邸\" completed."), "text: {text}");
-        assert!(text.contains("Story graph: interactive-films/迷雾宅邸/story-graph.json"), "text: {text}");
+        assert!(
+            text.starts_with("Interactive film \"迷雾宅邸\" completed."),
+            "text: {text}"
+        );
+        assert!(
+            text.contains("Story graph: interactive-films/迷雾宅邸/story-graph.json"),
+            "text: {text}"
+        );
 
         // 五节落盘：spec（含目标受众/参考模式）+ 树/旗标/剧本（集尾标签归一）。
-        let spec = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/interactive-spec.md")).unwrap();
+        let spec =
+            std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/interactive-spec.md"))
+                .unwrap();
         assert!(spec.starts_with("# 迷雾宅邸 互动影游创作规格"), "{spec}");
         assert!(spec.contains("- 目标受众：青年玩家"), "{spec}");
         assert!(spec.contains("- 参考模式：底片风"), "{spec}");
-        let tree = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/story-tree.md")).unwrap();
+        let tree =
+            std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/story-tree.md")).unwrap();
         assert!(tree.contains("主线三幕"), "{tree}");
         assert!(!tree.contains("剧情树"), "小节提取后不含自身标题：{tree}");
-        let flags = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/flags.md")).unwrap();
+        let flags =
+            std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/flags.md")).unwrap();
         assert!(flags.contains("trust"), "{flags}");
-        let script = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/script.md")).unwrap();
+        let script =
+            std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/script.md")).unwrap();
         assert!(script.contains("字幕：第一集完"), "{script}");
         // image-prompts 编号化 + assets manifest（LLM graph 走通）。
-        let prompts = std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/image-prompts.md")).unwrap();
+        let prompts =
+            std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/image-prompts.md"))
+                .unwrap();
         assert!(prompts.contains("1. 雨夜街口，水墨远景"), "{prompts}");
         let manifest: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/assets.json")).unwrap(),
         )
         .unwrap();
         assert_eq!(manifest["assets"].as_array().unwrap().len(), 2);
-        assert!(root.join("interactive-films/迷雾宅邸/assets/selected").is_dir());
+        assert!(root
+            .join("interactive-films/迷雾宅邸/assets/selected")
+            .is_dir());
         // story-graph.json：LLM 输出 + projectId 注入。
         let graph: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/story-graph.json")).unwrap(),
+            &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/story-graph.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(graph["projectId"], "迷雾宅邸");
@@ -11370,7 +13868,10 @@ mod film77_e2e {
             &std::fs::read_to_string(root.join("interactive-films/迷雾宅邸/status.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(status_json["kind"], "interactive-film", "ProductionRunSnapshot 形态（141 号）");
+        assert_eq!(
+            status_json["kind"], "interactive-film",
+            "ProductionRunSnapshot 形态（141 号）"
+        );
 
         // 缺 title → 502 中文。
         let (status, parsed) = call(
@@ -11381,7 +13882,13 @@ mod film77_e2e {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY);
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("确认创建互动影游缺少标题"), "body: {parsed}");
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("确认创建互动影游缺少标题"),
+            "body: {parsed}"
+        );
     }
 
     #[tokio::test]
@@ -11412,7 +13919,8 @@ mod film77_e2e {
         assert_eq!(exec["status"], "completed", "body: {parsed}");
         // fallback 图：start + act-1..3 + 双结局，story_progress counter。
         let graph: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("interactive-films/雾中灯/story-graph.json")).unwrap(),
+            &std::fs::read_to_string(root.join("interactive-films/雾中灯/story-graph.json"))
+                .unwrap(),
         )
         .unwrap();
         let nodes = graph["nodes"].as_array().unwrap();
@@ -11422,7 +13930,13 @@ mod film77_e2e {
         assert_eq!(nodes[3]["choices"].as_array().unwrap().len(), 2);
         assert_eq!(graph["variables"][0]["name"], "story_progress");
         // storyCore = merge 后 requirements（instruction + 补充要求）。
-        assert!(graph["worldAnchor"]["storyCore"].as_str().unwrap().contains("轻悬疑"), "graph: {graph}");
+        assert!(
+            graph["worldAnchor"]["storyCore"]
+                .as_str()
+                .unwrap()
+                .contains("轻悬疑"),
+            "graph: {graph}"
+        );
         // 进度日志含 fallback 说明。
         let logs = exec["logs"].as_array().cloned().unwrap_or_default();
         let joined = logs
@@ -11430,7 +13944,11 @@ mod film77_e2e {
             .filter_map(|l| l.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(joined.contains("Story graph JSON generation failed; writing a minimal playable graph."), "logs: {joined}");
+        assert!(
+            joined
+                .contains("Story graph JSON generation failed; writing a minimal playable graph."),
+            "logs: {joined}"
+        );
     }
 }
 
@@ -11500,7 +14018,9 @@ async fn llm_mock_short_v2(
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, llm_app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, llm_app).await.unwrap();
+    });
     (format!("http://{addr}"), calls)
 }
 
@@ -11593,7 +14113,6 @@ fn full_flow_script() -> Vec<(&'static str, MockTurn)> {
     ]
 }
 
-
 mod short78_e2e {
     //! 78 号：short_run 确认全链（可恢复三段生产 + 补章循环 + 修订降级 + 最终语言断言）。
     use super::*;
@@ -11626,8 +14145,14 @@ mod short78_e2e {
 
     fn app78(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .route(
                 "/api/v1/works/:workId/capabilities/short-fiction/:actionId",
                 axum::routing::post(
@@ -11637,17 +14162,30 @@ mod short78_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -11683,11 +14221,26 @@ mod short78_e2e {
             response_text.starts_with("Short fiction manuscript \"night-rain\" saved with"),
             "response: {response_text}"
         );
-        assert!(response_text.contains("Delivery checks: checks_passed"), "response: {response_text}");
-        assert!(response_text.contains("Measured manuscript:"), "response: {response_text}");
-        assert!(response_text.contains("review: completed"), "response: {response_text}");
-        assert!(response_text.contains("package: completed"), "response: {response_text}");
-        assert!(response_text.contains("Final: works/night-rain/source/final/full.md"), "response: {response_text}");
+        assert!(
+            response_text.contains("Delivery checks: checks_passed"),
+            "response: {response_text}"
+        );
+        assert!(
+            response_text.contains("Measured manuscript:"),
+            "response: {response_text}"
+        );
+        assert!(
+            response_text.contains("review: completed"),
+            "response: {response_text}"
+        );
+        assert!(
+            response_text.contains("package: completed"),
+            "response: {response_text}"
+        );
+        assert!(
+            response_text.contains("Final: works/night-rain/source/final/full.md"),
+            "response: {response_text}"
+        );
         assert!(
             response_text.contains("Sales package: works/night-rain/source/final/sales-package.md"),
             "response: {response_text}"
@@ -11696,18 +14249,39 @@ mod short78_e2e {
             response_text.contains("Cover prompt: works/night-rain/source/final/cover-prompt.md"),
             "response: {response_text}"
         );
-        assert!(response_text.contains("Cover image: not generated."), "response: {response_text}");
-        assert!(response_text.contains("Cover image reason: disabled"), "response: {response_text}");
+        assert!(
+            response_text.contains("Cover image: not generated."),
+            "response: {response_text}"
+        );
+        assert!(
+            response_text.contains("Cover image reason: disabled"),
+            "response: {response_text}"
+        );
         let details = &exec["details"];
         assert_eq!(details["kind"], "short_fiction_created");
         assert_eq!(details["workId"], "night-rain");
         assert_eq!(details["storyId"], "night-rain");
         assert_eq!(details["coverError"], "disabled");
-        assert!(details.get("coverImagePath").is_none(), "details: {details}");
-        assert_eq!(details["outlinePath"], "works/night-rain/source/outline/v001.md");
-        assert_eq!(details["finalMarkdownPath"], "works/night-rain/source/final/full.md");
-        assert_eq!(details["salesPackagePath"], "works/night-rain/source/final/sales-package.md");
-        assert_eq!(details["coverPromptPath"], "works/night-rain/source/final/cover-prompt.md");
+        assert!(
+            details.get("coverImagePath").is_none(),
+            "details: {details}"
+        );
+        assert_eq!(
+            details["outlinePath"],
+            "works/night-rain/source/outline/v001.md"
+        );
+        assert_eq!(
+            details["finalMarkdownPath"],
+            "works/night-rain/source/final/full.md"
+        );
+        assert_eq!(
+            details["salesPackagePath"],
+            "works/night-rain/source/final/sales-package.md"
+        );
+        assert_eq!(
+            details["coverPromptPath"],
+            "works/night-rain/source/final/cover-prompt.md"
+        );
 
         // work 域产物面（886 §六验收句：work 创建+四阶段+产物集）。
         assert!(root.join("works/night-rain/work.json").is_file());
@@ -11814,8 +14388,16 @@ mod short78_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         let message = parsed["error"]["message"].as_str().unwrap_or_default();
-        assert!(message.contains("charsPerChapter=700 超出中文短篇的合法范围（每章 900-1200 个汉字）"), "message: {message}");
-        assert!(message.contains("is outside the valid range for Chinese shorts (900-1200 characters per chapter)"), "message: {message}");
+        assert!(
+            message.contains("charsPerChapter=700 超出中文短篇的合法范围（每章 900-1200 个汉字）"),
+            "message: {message}"
+        );
+        assert!(
+            message.contains(
+                "is outside the valid range for Chinese shorts (900-1200 characters per chapter)"
+            ),
+            "message: {message}"
+        );
     }
 
     #[tokio::test]
@@ -11847,7 +14429,10 @@ mod short78_e2e {
         assert_eq!(details["storyId"], "existing");
         // 重放面 coverError 来自 persisted stages（cover=false → 无封面阶段 → 无错误面）。
         assert!(details.get("coverError").is_none(), "details: {details}");
-        assert_eq!(details["finalMarkdownPath"], "works/existing/source/final/full.md");
+        assert_eq!(
+            details["finalMarkdownPath"],
+            "works/existing/source/final/full.md"
+        );
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             first_calls,
@@ -11945,23 +14530,41 @@ mod short78_e2e {
         let (status, parsed) =
             call_action(app.clone(), "plan_short_fiction", serde_json::json!({ "direction": "雨夜追凶，双线收束", "chapters": 2, "charsPerChapter": 900 }).to_string()).await;
         assert_eq!(status, StatusCode::OK, "plan: {parsed}");
-        assert_eq!(parsed["details"]["kind"], "short_stage_completed", "plan: {parsed}");
+        assert_eq!(
+            parsed["details"]["kind"], "short_stage_completed",
+            "plan: {parsed}"
+        );
         assert!(
-            parsed["content"].as_str().unwrap().starts_with("outline completed: "),
+            parsed["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("outline completed: "),
             "content: {parsed}"
         );
-        assert!(root.join("works/night-rain3/source/outline/v001.md").is_file());
+        assert!(root
+            .join("works/night-rain3/source/outline/v001.md")
+            .is_file());
 
-        let (status, parsed) =
-            call_action(app.clone(), "draft_short_fiction", serde_json::json!({ "chapters": 2, "charsPerChapter": 900, "coverRequired": true }).to_string()).await;
+        let (status, parsed) = call_action(
+            app.clone(),
+            "draft_short_fiction",
+            serde_json::json!({ "chapters": 2, "charsPerChapter": 900, "coverRequired": true })
+                .to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "draft: {parsed}");
         assert_eq!(parsed["details"]["kind"], "short_stage_completed");
-        assert!(root.join("works/night-rain3/source/drafts/v001/draft.json").is_file());
-        assert!(root.join("works/night-rain3/source/final/short-story.json").is_file());
+        assert!(root
+            .join("works/night-rain3/source/drafts/v001/draft.json")
+            .is_file());
+        assert!(root
+            .join("works/night-rain3/source/final/short-story.json")
+            .is_file());
         // coverRequired 优先级（896 审查修复：TS L427 coverRequired ?? 逐字——
         // stage 调用显式要求覆盖 previous 继承面）。
         let state_after_draft: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works/night-rain3/source/production-state.json")).unwrap(),
+            &std::fs::read_to_string(root.join("works/night-rain3/source/production-state.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -11969,17 +14572,29 @@ mod short78_e2e {
             "state: {state_after_draft}"
         );
 
-        let (status, parsed) =
-            call_action(app.clone(), "review_short_fiction", serde_json::json!({}).to_string()).await;
+        let (status, parsed) = call_action(
+            app.clone(),
+            "review_short_fiction",
+            serde_json::json!({}).to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "review: {parsed}");
         assert_eq!(parsed["details"]["kind"], "short_stage_completed");
-        assert!(root.join("works/night-rain3/source/reviews/draft-v001.md").is_file());
+        assert!(root
+            .join("works/night-rain3/source/reviews/draft-v001.md")
+            .is_file());
 
-        let (status, parsed) =
-            call_action(app.clone(), "package_short_fiction", serde_json::json!({}).to_string()).await;
+        let (status, parsed) = call_action(
+            app.clone(),
+            "package_short_fiction",
+            serde_json::json!({}).to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "package: {parsed}");
         assert_eq!(parsed["details"]["kind"], "short_stage_completed");
-        assert!(root.join("works/night-rain3/source/final/sales-package.json").is_file());
+        assert!(root
+            .join("works/night-rain3/source/final/sales-package.json")
+            .is_file());
 
         // episode 事件序列（每动作一个 completed episode）。
         let store = inkos_engine::harness::episode_store::CreativeEpisodeStore::new(
@@ -11996,7 +14611,10 @@ mod short78_e2e {
         assert_eq!(episodes.len(), 4, "四动作各一 episode: {}", episodes.len());
         let first = &episodes[episodes.len() - 4];
         let events = store.list_events(&first.id).unwrap();
-        let types: Vec<String> = events.iter().map(|event| event.event_type.clone()).collect();
+        let types: Vec<String> = events
+            .iter()
+            .map(|event| event.event_type.clone())
+            .collect();
         assert!(
             types.starts_with(&[
                 "episode-started".to_string(),
@@ -12009,13 +14627,28 @@ mod short78_e2e {
         store.close();
 
         // revise 动作（单章快路径 + review 阶段复用）。
-        let (status, parsed) =
-            call_action(app, "revise_short_fiction", serde_json::json!({ "instruction": "重写第一章", "chapterNumbers": [1] }).to_string()).await;
+        let (status, parsed) = call_action(
+            app,
+            "revise_short_fiction",
+            serde_json::json!({ "instruction": "重写第一章", "chapterNumbers": [1] }).to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "revise: {parsed}");
-        assert_eq!(parsed["details"]["kind"], "short_fiction_revised", "revise: {parsed}");
-        assert!(parsed["content"].as_str().unwrap().starts_with("Revised short fiction \"night-rain3\""));
-        let final_draft = std::fs::read_to_string(root.join("works/night-rain3/source/final/short-story.json")).unwrap();
-        assert!(final_draft.contains("雨夜里少年提灯出门"), "final 应落 scoped 替换文本: {final_draft}");
+        assert_eq!(
+            parsed["details"]["kind"], "short_fiction_revised",
+            "revise: {parsed}"
+        );
+        assert!(parsed["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("Revised short fiction \"night-rain3\""));
+        let final_draft =
+            std::fs::read_to_string(root.join("works/night-rain3/source/final/short-story.json"))
+                .unwrap();
+        assert!(
+            final_draft.contains("雨夜里少年提灯出门"),
+            "final 应落 scoped 替换文本: {final_draft}"
+        );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 12);
     }
 
@@ -12044,7 +14677,11 @@ mod short78_e2e {
             )
             .unwrap();
         };
-        seed_work(&root, "params-face", serde_json::json!("雾夜寻踪，单线收束"));
+        seed_work(
+            &root,
+            "params-face",
+            serde_json::json!("雾夜寻踪，单线收束"),
+        );
         seed_work(&root, "guard-work", serde_json::Value::Null);
         let action = |app: axum::Router, work: &'static str, action: &'static str, body: String| {
             let app = app.clone();
@@ -12061,7 +14698,13 @@ mod short78_e2e {
 
         // ① 声明键类型面：direction 非字符串 → decode 失败（capability-registry
         //    错误文案镜像），先于工件门、零 LLM 调用。
-        let (status, parsed) = action(app.clone(), "params-face", "plan_short_fiction", r#"{"direction":42}"#.to_string()).await;
+        let (status, parsed) = action(
+            app.clone(),
+            "params-face",
+            "plan_short_fiction",
+            r#"{"direction":42}"#.to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         let message = parsed["error"]["message"].as_str().unwrap_or_default();
         assert!(
@@ -12081,11 +14724,20 @@ mod short78_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         let message = parsed["error"]["message"].as_str().unwrap_or_default();
-        assert!(message.contains("/chapters: Expected integer >= 1"), "{message}");
+        assert!(
+            message.contains("/chapters: Expected integer >= 1"),
+            "{message}"
+        );
         assert!(!message.contains("minChapterLength"), "{message}");
 
         // ③ outline 空方向守卫：direction 缺席 + 无 intent 回退 → TS 逐字文案。
-        let (status, parsed) = action(app.clone(), "guard-work", "plan_short_fiction", "{}".to_string()).await;
+        let (status, parsed) = action(
+            app.clone(),
+            "guard-work",
+            "plan_short_fiction",
+            "{}".to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(
             parsed["error"]["message"].as_str().unwrap_or_default(),
@@ -12096,12 +14748,22 @@ mod short78_e2e {
         // ④ metadata.intent 回退链：plan 无 direction → intent 兜底成稿；
         // coverRequired:false 显式要求（TS L427 coverRequired ?? 优先级——
         // Some(false) 有别于缺省缺省面）。
-        let (status, parsed) = action(app.clone(), "params-face", "plan_short_fiction", r#"{"coverRequired":false}"#.to_string()).await;
+        let (status, parsed) = action(
+            app.clone(),
+            "params-face",
+            "plan_short_fiction",
+            r#"{"coverRequired":false}"#.to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["details"]["kind"], "short_stage_completed");
-        assert_eq!(parsed["details"]["coverRequired"], false, "stage 结果面 coverRequired 透传: {parsed}");
+        assert_eq!(
+            parsed["details"]["coverRequired"], false,
+            "stage 结果面 coverRequired 透传: {parsed}"
+        );
         let state: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works/params-face/source/production-state.json")).unwrap(),
+            &std::fs::read_to_string(root.join("works/params-face/source/production-state.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(state["intent"], "雾夜寻踪，单线收束", "state: {state}");
@@ -12109,34 +14771,74 @@ mod short78_e2e {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // ⑤ review/package 声明键类型面（校验先于工件门）。
-        let (status, parsed) = action(app.clone(), "params-face", "review_short_fiction", r#"{"reviewScope":42}"#.to_string()).await;
+        let (status, parsed) = action(
+            app.clone(),
+            "params-face",
+            "review_short_fiction",
+            r#"{"reviewScope":42}"#.to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert!(
-            parsed["error"]["message"].as_str().unwrap_or_default().contains("/reviewScope: Expected string"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/reviewScope: Expected string"),
             "body: {parsed}"
         );
-        let (status, parsed) = action(app.clone(), "params-face", "package_short_fiction", r#"{"direction":[]}"#.to_string()).await;
+        let (status, parsed) = action(
+            app.clone(),
+            "params-face",
+            "package_short_fiction",
+            r#"{"direction":[]}"#.to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert!(
-            parsed["error"]["message"].as_str().unwrap_or_default().contains("/direction: Expected string"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/direction: Expected string"),
             "body: {parsed}"
         );
 
         // ⑥ revise 面：chapterNumbers 越界拒；chapterCount（TS 键名，非 stage 面
         //    chapters）类型面拒——修正前 Rust 误读 chapters 键。
-        let (status, parsed) = action(app.clone(), "params-face", "revise_short_fiction", r#"{"instruction":"重写","chapterNumbers":[0]}"#.to_string()).await;
+        let (status, parsed) = action(
+            app.clone(),
+            "params-face",
+            "revise_short_fiction",
+            r#"{"instruction":"重写","chapterNumbers":[0]}"#.to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert!(
-            parsed["error"]["message"].as_str().unwrap_or_default().contains("/chapterNumbers: Expected array of integer >= 1"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/chapterNumbers: Expected array of integer >= 1"),
             "body: {parsed}"
         );
-        let (status, parsed) = action(app.clone(), "params-face", "revise_short_fiction", r#"{"instruction":"重写","chapterCount":0}"#.to_string()).await;
+        let (status, parsed) = action(
+            app.clone(),
+            "params-face",
+            "revise_short_fiction",
+            r#"{"instruction":"重写","chapterCount":0}"#.to_string(),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert!(
-            parsed["error"]["message"].as_str().unwrap_or_default().contains("/chapterCount: Expected integer >= 1"),
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/chapterCount: Expected integer >= 1"),
             "body: {parsed}"
         );
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "参数违约全程零额外 LLM 调用");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "参数违约全程零额外 LLM 调用"
+        );
     }
 }
 
@@ -12250,8 +14952,14 @@ mod play79_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-        (format!("http://{addr}"), render_calls, saw_replay_constraint)
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (
+            format!("http://{addr}"),
+            render_calls,
+            saw_replay_constraint,
+        )
     }
 
     #[tokio::test]
@@ -12277,7 +14985,10 @@ mod play79_e2e {
         .await
         .unwrap();
 
-        let agents = PlayAgents { router: &runtime.router, root: &root };
+        let agents = PlayAgents {
+            router: &runtime.router,
+            root: &root,
+        };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w79e2e".to_string(),
@@ -12285,30 +14996,44 @@ mod play79_e2e {
         };
 
         // seed → step（带 reconciler）。
-        runner.seed_opening(&agents, "雨夜开场。", &[]).await.unwrap();
+        runner
+            .seed_opening(&agents, "雨夜开场。", &[])
+            .await
+            .unwrap();
         let step1 = runner
             .step(&agents, &agents, &agents, Some(&agents), "我环顾四周", None)
             .await
             .unwrap();
         assert_eq!(step1.scene_text, "场景甲：灯笼的光晃了一下。");
         // reconcile 补充：summary 合成 + clue_button 入图 + holding 边。
-        let summary = step1.mutation.get("summary").and_then(Value::as_str).unwrap();
+        let summary = step1
+            .mutation
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap();
         assert!(summary.contains("玩家看清了厅堂"), "{summary}");
         assert!(summary.contains("正文补充：纽扣落地"), "{summary}");
         let run = root.join("worlds/w79e2e/runs/main");
         let graph: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap())
+                .unwrap();
         let entity_ids: Vec<&str> = graph["entities"]
             .as_object()
             .unwrap()
             .keys()
             .map(String::as_str)
             .collect();
-        assert!(entity_ids.contains(&"clue_button"), "reconcile 实体入图：{entity_ids:?}");
-        assert!(graph["edges"].as_object().unwrap().values().any(|edge| {
-            edge.get("toId").and_then(Value::as_str) == Some("clue_button")
-                && edge.pointer("/value/role").and_then(Value::as_str) == Some("holding")
-        }), "graph: {graph}");
+        assert!(
+            entity_ids.contains(&"clue_button"),
+            "reconcile 实体入图：{entity_ids:?}"
+        );
+        assert!(
+            graph["edges"].as_object().unwrap().values().any(|edge| {
+                edge.get("toId").and_then(Value::as_str) == Some("clue_button")
+                    && edge.pointer("/value/role").and_then(Value::as_str) == Some("holding")
+            }),
+            "graph: {graph}"
+        );
         // checkpoint 前置 + state 投影含补充实体。
         assert!(run.join("checkpoints/before-turn-1.json").is_file());
         let state_md = std::fs::read_to_string(run.join("projections/state.md")).unwrap();
@@ -12321,12 +15046,21 @@ mod play79_e2e {
             .unwrap();
         assert_eq!(replay.scene_text, "场景乙：重写后的厅堂静得反常。");
         assert_eq!(replay.replayed_input, "我环顾四周");
-        assert!(saw_replay_constraint.load(Ordering::SeqCst), "重写约束应注入 renderer");
+        assert!(
+            saw_replay_constraint.load(Ordering::SeqCst),
+            "重写约束应注入 renderer"
+        );
         let previous_variant = replay.previous_variant_id.clone().unwrap();
         assert_ne!(previous_variant, replay.variant_id.clone().unwrap());
         let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
-        assert_eq!(events.lines().filter(|l| !l.trim().is_empty()).count(), 1, "{events}");
-        let variant_files: Vec<_> = std::fs::read_dir(run.join("variants/turn-1")).unwrap().collect();
+        assert_eq!(
+            events.lines().filter(|l| !l.trim().is_empty()).count(),
+            1,
+            "{events}"
+        );
+        let variant_files: Vec<_> = std::fs::read_dir(run.join("variants/turn-1"))
+            .unwrap()
+            .collect();
         assert_eq!(variant_files.len(), 2, "变体对：{variant_files:?}");
 
         // 恢复第一版：场景甲回放。
@@ -12347,7 +15081,10 @@ mod play79_e2e {
             .unwrap_err();
         assert_eq!(error, "No Play turn to regenerate.");
         let missing = runner.restore_variant(5, "v-none").await.unwrap_err();
-        assert!(missing.contains("Play variant not found: turn 5 / v-none"), "{missing}");
+        assert!(
+            missing.contains("Play variant not found: turn 5 / v-none"),
+            "{missing}"
+        );
         let _ = StatusCode::OK;
     }
 }
@@ -12387,7 +15124,10 @@ mod play80_e2e {
 
     fn app80(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -12395,24 +15135,42 @@ mod play80_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
     /// mock：play 五代理（同 79 号）+ studio-agent 聊天面（play 系统提示词 →
     /// 按指令关键词发 play_step / play_revise 工具调用，收到 tool 结果后收束
     /// 成终文）。捕获 tools 名单与 system 文本供注册面断言。
-    async fn mock_play80_llm() -> (String, Arc<Mutex<Vec<String>>>, Arc<Mutex<String>>, Arc<AtomicUsize>) {
+    async fn mock_play80_llm() -> (
+        String,
+        Arc<Mutex<Vec<String>>>,
+        Arc<Mutex<String>>,
+        Arc<AtomicUsize>,
+    ) {
         let tool_names: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let systems: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
         let render_calls = Arc::new(AtomicUsize::new(0));
@@ -12528,7 +15286,9 @@ mod play80_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), tool_names, systems, render_calls)
     }
 
@@ -12585,30 +15345,52 @@ mod play80_e2e {
         assert_eq!(execs.len(), 1);
         assert_eq!(execs[0]["tool"], "play_step");
         assert_eq!(execs[0]["status"], "completed");
-        assert!(execs[0]["result"].as_str().unwrap().contains("场景甲"), "body: {parsed}");
+        assert!(
+            execs[0]["result"].as_str().unwrap().contains("场景甲"),
+            "body: {parsed}"
+        );
 
         // 注册面：tools 含 play_step/play_revise（105 号：play 会话无文件三件）。
         let names = tool_names.lock().unwrap().clone();
         assert!(names.contains(&"play_step".to_string()), "{names:?}");
         assert!(names.contains(&"play_revise".to_string()), "{names:?}");
-        assert!(!names.contains(&"read".to_string()), "play 会话不应注册 read：{names:?}");
+        assert!(
+            !names.contains(&"read".to_string()),
+            "play 会话不应注册 read：{names:?}"
+        );
         let system = systems.lock().unwrap().clone();
-        assert!(system.contains("【铁律】") && system.contains("play_step"), "{system}");
+        assert!(
+            system.contains("【铁律】") && system.contains("play_step"),
+            "{system}"
+        );
 
         // 落盘：事件 + state + 场景投影 + 图（会话绑定的世界）。
-        let run = root.join("worlds").join(session_id).join("runs").join("main");
+        let run = root
+            .join("worlds")
+            .join(session_id)
+            .join("runs")
+            .join("main");
         let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
-        assert!(events.contains("evt-1") && events.contains("看清了厅堂"), "{events}");
-        let current: Value =
-            serde_json::from_str(&std::fs::read_to_string(run.join("state").join("current.json")).unwrap()).unwrap();
+        assert!(
+            events.contains("evt-1") && events.contains("看清了厅堂"),
+            "{events}"
+        );
+        let current: Value = serde_json::from_str(
+            &std::fs::read_to_string(run.join("state").join("current.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(current["turn"], 1);
         let scene = std::fs::read_to_string(run.join("projections").join("scene.md")).unwrap();
         assert!(scene.contains("场景甲"), "{scene}");
         let graph: Value =
-            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
-        assert!(graph["entities"]
-            .as_object()
-            .is_some_and(|entities| entities.contains_key("location_hall")), "graph: {graph}");
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap())
+                .unwrap();
+        assert!(
+            graph["entities"]
+                .as_object()
+                .is_some_and(|entities| entities.contains_key("location_hall")),
+            "graph: {graph}"
+        );
     }
 
     #[tokio::test]
@@ -12633,13 +15415,19 @@ mod play80_e2e {
         seed_world(&root, session_id).await;
 
         // 直调 runner 先走一回合（场景甲），聊天面负责重做。
-        let agents = PlayAgents { router: &shared_router, root: &root };
+        let agents = PlayAgents {
+            router: &shared_router,
+            root: &root,
+        };
         let runner = PlayRunner {
             project_root: &root,
             world_id: session_id.to_string(),
             run_id: "main".to_string(),
         };
-        runner.seed_opening(&agents, "雨夜开场。", &[]).await.unwrap();
+        runner
+            .seed_opening(&agents, "雨夜开场。", &[])
+            .await
+            .unwrap();
         let step1 = runner
             .step(&agents, &agents, &agents, Some(&agents), "我环顾四周", None)
             .await
@@ -12661,13 +15449,26 @@ mod play80_e2e {
         assert_eq!(execs.len(), 1);
         assert_eq!(execs[0]["tool"], "play_revise");
         assert_eq!(execs[0]["status"], "completed");
-        assert!(execs[0]["result"].as_str().unwrap().contains("场景乙"), "body: {parsed}");
+        assert!(
+            execs[0]["result"].as_str().unwrap().contains("场景乙"),
+            "body: {parsed}"
+        );
 
         // 重做落盘：变体对 + 事件不涨。
-        let run = root.join("worlds").join(session_id).join("runs").join("main");
+        let run = root
+            .join("worlds")
+            .join(session_id)
+            .join("runs")
+            .join("main");
         let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
-        assert_eq!(events.lines().filter(|l| !l.trim().is_empty()).count(), 1, "{events}");
-        let variant_files: Vec<_> = std::fs::read_dir(run.join("variants").join("turn-1")).unwrap().collect();
+        assert_eq!(
+            events.lines().filter(|l| !l.trim().is_empty()).count(),
+            1,
+            "{events}"
+        );
+        let variant_files: Vec<_> = std::fs::read_dir(run.join("variants").join("turn-1"))
+            .unwrap()
+            .collect();
         assert_eq!(variant_files.len(), 2, "变体对：{variant_files:?}");
 
         // 恢复不存在变体：错误透传为 error 执行卡（TS restore 分支无 catch）。
@@ -12685,7 +15486,10 @@ mod play80_e2e {
         assert_eq!(execs[0]["tool"], "play_revise");
         assert_eq!(execs[0]["status"], "error");
         assert!(
-            execs[0]["error"].as_str().unwrap().contains("Play variant not found: turn 1 / v-none"),
+            execs[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Play variant not found: turn 1 / v-none"),
             "body: {parsed}"
         );
     }
@@ -12725,7 +15529,10 @@ mod play81_e2e {
 
     fn app81(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -12733,17 +15540,30 @@ mod play81_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -12790,7 +15610,9 @@ mod play81_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), tool_names)
     }
 
@@ -12826,7 +15648,9 @@ mod play81_e2e {
         )
         .await
         .unwrap();
-        inkos_engine::play::ensure_run(&root, session_id, "main").await.unwrap();
+        inkos_engine::play::ensure_run(&root, session_id, "main")
+            .await
+            .unwrap();
         inkos_engine::play::save_current_state(
             &root,
             session_id,
@@ -12861,7 +15685,9 @@ mod play81_e2e {
         assert_eq!(execs[0]["result"], "风险重量已替换。");
 
         // world.json：替换生效 + updatedAt 重写。
-        let world = inkos_engine::play::load_world(&root, session_id).await.unwrap();
+        let world = inkos_engine::play::load_world(&root, session_id)
+            .await
+            .unwrap();
         let contract = world["worldContract"].as_str().unwrap();
         assert!(contract.contains("涉及追责 / 需要主任签字"), "{contract}");
         assert!(!contract.contains("可能追责 / 不能公开"), "{contract}");
@@ -12873,22 +15699,36 @@ mod play81_e2e {
         assert_eq!(state["turn"], 2);
         assert_eq!(state["lastEventId"], "evt-2");
         assert!(
-            state["worldContract"].as_str().unwrap().contains("涉及追责"),
+            state["worldContract"]
+                .as_str()
+                .unwrap()
+                .contains("涉及追责"),
             "{state}"
         );
-        assert!(state["graphEditedAt"].as_str().is_some_and(|v| !v.is_empty()));
+        assert!(state["graphEditedAt"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()));
 
         // persona → actor_player 实体（manual-edit 事件位）。
-        let run_dir = root.join("worlds").join(session_id).join("runs").join("main");
-        let graph: Value =
-            serde_json::from_str(&std::fs::read_to_string(run_dir.join("play-graph.json")).unwrap()).unwrap();
+        let run_dir = root
+            .join("worlds")
+            .join(session_id)
+            .join("runs")
+            .join("main");
+        let graph: Value = serde_json::from_str(
+            &std::fs::read_to_string(run_dir.join("play-graph.json")).unwrap(),
+        )
+        .unwrap();
         let player = graph["entities"]
             .as_object()
             .unwrap()
             .get("actor_player")
             .cloned()
             .unwrap_or(Value::Null);
-        assert_eq!(player["summary"], "我是查清停电夜的租客。", "graph: {graph}");
+        assert_eq!(
+            player["summary"], "我是查清停电夜的租客。",
+            "graph: {graph}"
+        );
         assert_eq!(player["updatedEventId"], "manual-edit");
         // 不推进回合：无事件新增。
         assert!(!run_dir.join("events.jsonl").exists());
@@ -13014,7 +15854,9 @@ mod play82_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), captured)
     }
 
@@ -13044,53 +15886,118 @@ mod play82_e2e {
         let runtime = rt82(&root, &llm);
         seed_en_world(&root, "w82en").await;
 
-        let agents = PlayAgents { router: &runtime.router, root: &root };
+        let agents = PlayAgents {
+            router: &runtime.router,
+            root: &root,
+        };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w82en".to_string(),
             run_id: "main".to_string(),
         };
-        runner.seed_opening(&agents, "The hall is dim.", &[]).await.unwrap();
-        let step = runner
-            .step(&agents, &agents, &agents, Some(&agents), "I look around", None)
+        runner
+            .seed_opening(&agents, "The hall is dim.", &[])
             .await
             .unwrap();
-        assert_eq!(step.scene_text, "The lantern gutters; the hall holds its breath.");
+        let step = runner
+            .step(
+                &agents,
+                &agents,
+                &agents,
+                Some(&agents),
+                "I look around",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            step.scene_text,
+            "The lantern gutters; the hall holds its breath."
+        );
 
         // 四代理 en 系统提示词 + en user 标签逐项断言。
         let logs = captured.lock().unwrap().clone();
-        let get = |prefix: &str| logs.iter().find(|l| l.starts_with(prefix)).cloned().unwrap_or_default();
+        let get = |prefix: &str| {
+            logs.iter()
+                .find(|l| l.starts_with(prefix))
+                .cloned()
+                .unwrap_or_default()
+        };
         let interpreter_sys = get("INTERPRETER_SYS:");
-        assert!(interpreter_sys.contains("You are an interactive-fiction action interpreter."), "{interpreter_sys}");
+        assert!(
+            interpreter_sys.contains("You are an interactive-fiction action interpreter."),
+            "{interpreter_sys}"
+        );
         let interpreter_user = get("INTERPRETER_USER:");
-        assert!(interpreter_user.contains("Current scene:"), "{interpreter_user}");
-        assert!(interpreter_user.contains("Player input:"), "{interpreter_user}");
+        assert!(
+            interpreter_user.contains("Current scene:"),
+            "{interpreter_user}"
+        );
+        assert!(
+            interpreter_user.contains("Player input:"),
+            "{interpreter_user}"
+        );
         let mutator_sys = get("MUTATOR_SYS:");
-        assert!(mutator_sys.contains("You are an interactive-fiction world-state drafter."), "{mutator_sys}");
+        assert!(
+            mutator_sys.contains("You are an interactive-fiction world-state drafter."),
+            "{mutator_sys}"
+        );
         let mutator_user = get("MUTATOR_USER:");
         assert!(mutator_user.contains("Player's words:"), "{mutator_user}");
-        assert!(mutator_user.contains("Action interpretation:"), "{mutator_user}");
+        assert!(
+            mutator_user.contains("Action interpretation:"),
+            "{mutator_user}"
+        );
         // 开场播种（首次 mutator 调用）走 en 播种指令；step 调用走 en 标签。
-        assert!(logs.iter().any(|l| l.starts_with("MUTATOR_USER:") && l.contains("Seed only the state")), "{logs:?}");
+        assert!(
+            logs.iter()
+                .any(|l| l.starts_with("MUTATOR_USER:") && l.contains("Seed only the state")),
+            "{logs:?}"
+        );
         let renderer_sys = get("RENDERER_SYS:");
-        assert!(renderer_sys.contains("You are an interactive-fiction scene-response author."), "{renderer_sys}");
+        assert!(
+            renderer_sys.contains("You are an interactive-fiction scene-response author."),
+            "{renderer_sys}"
+        );
         let renderer_user = get("RENDERER_USER:");
-        assert!(renderer_user.contains("World setting (always obey):"), "{renderer_user}");
+        assert!(
+            renderer_user.contains("World setting (always obey):"),
+            "{renderer_user}"
+        );
         assert!(renderer_user.contains("Player's words:"), "{renderer_user}");
-        assert!(renderer_user.contains("Applied changes this turn:"), "{renderer_user}");
-        assert!(renderer_user.contains("Current state summary:"), "{renderer_user}");
+        assert!(
+            renderer_user.contains("Applied changes this turn:"),
+            "{renderer_user}"
+        );
+        assert!(
+            renderer_user.contains("Current state summary:"),
+            "{renderer_user}"
+        );
         let reconciler_sys = get("RECONCILER_SYS:");
-        assert!(reconciler_sys.contains("You reconcile an interactive-fiction scene"), "{reconciler_sys}");
+        assert!(
+            reconciler_sys.contains("You reconcile an interactive-fiction scene"),
+            "{reconciler_sys}"
+        );
 
         // 落盘：事件 + 场景 + 图（reconcile 补充入图）。
         let run = root.join("worlds/w82en/runs/main");
         let events = std::fs::read_to_string(run.join("events.jsonl")).unwrap();
-        assert!(events.contains("evt-1") && events.contains("surveys the hall"), "{events}");
+        assert!(
+            events.contains("evt-1") && events.contains("surveys the hall"),
+            "{events}"
+        );
         let scene = std::fs::read_to_string(run.join("projections/scene.md")).unwrap();
         assert!(scene.contains("lantern gutters"), "{scene}");
         let graph: Value =
-            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap()).unwrap();
-        assert!(graph["entities"].as_object().unwrap().contains_key("clue_button"), "graph: {graph}");
+            serde_json::from_str(&std::fs::read_to_string(run.join("play-graph.json")).unwrap())
+                .unwrap();
+        assert!(
+            graph["entities"]
+                .as_object()
+                .unwrap()
+                .contains_key("clue_button"),
+            "graph: {graph}"
+        );
         let _ = StatusCode::OK;
     }
 
@@ -13103,23 +16010,34 @@ mod play82_e2e {
         let runtime = rt82(&root, &llm);
         seed_en_world(&root, "w82fb").await;
 
-        let agents = PlayAgents { router: &runtime.router, root: &root };
+        let agents = PlayAgents {
+            router: &runtime.router,
+            root: &root,
+        };
         let runner = PlayRunner {
             project_root: &root,
             world_id: "w82fb".to_string(),
             run_id: "main".to_string(),
         };
-        runner.seed_opening(&agents, "The hall is dim.", &[]).await.unwrap();
+        runner
+            .seed_opening(&agents, "The hall is dim.", &[])
+            .await
+            .unwrap();
         let step = runner
-            .step(&agents, &agents, &agents, Some(&agents), "I look around", None)
+            .step(
+                &agents,
+                &agents,
+                &agents,
+                Some(&agents),
+                "I look around",
+                None,
+            )
             .await
             .unwrap();
         // renderer 三轮空输出 → en 兜底文案（不抛错，回合仍提交）。
         assert_eq!(step.scene_text, "(The moment holds, unresolved.)");
-        let events = std::fs::read_to_string(
-            root.join("worlds/w82fb/runs/main/events.jsonl"),
-        )
-        .unwrap();
+        let events =
+            std::fs::read_to_string(root.join("worlds/w82fb/runs/main/events.jsonl")).unwrap();
         assert!(events.contains("evt-1"), "{events}");
     }
 }
@@ -13157,7 +16075,10 @@ mod material83_e2e {
 
     fn app83(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -13165,17 +16086,30 @@ mod material83_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -13219,7 +16153,9 @@ mod material83_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), tool_names)
     }
 
@@ -13260,8 +16196,14 @@ mod material83_e2e {
         // 注册面：material 双工具对所有会话可见（105 号：chat 会话无文件三件）。
         let names = tool_names.lock().unwrap().clone();
         assert!(names.contains(&"ingest_material".to_string()), "{names:?}");
-        assert!(names.contains(&"retrieve_material".to_string()), "{names:?}");
-        assert!(!names.contains(&"read".to_string()), "chat 会话不应注册 read：{names:?}");
+        assert!(
+            names.contains(&"retrieve_material".to_string()),
+            "{names:?}"
+        );
+        assert!(
+            !names.contains(&"read".to_string()),
+            "chat 会话不应注册 read：{names:?}"
+        );
 
         // 两张执行卡：ingest → completed + 归档文本；retrieve → completed + 片段。
         let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
@@ -13269,12 +16211,18 @@ mod material83_e2e {
         assert_eq!(execs[0]["tool"], "ingest_material");
         assert_eq!(execs[0]["status"], "completed");
         let ingest_text = execs[0]["result"].as_str().unwrap();
-        assert!(ingest_text.starts_with("Material ingested: .inkos/materials/"), "{ingest_text}");
+        assert!(
+            ingest_text.starts_with("Material ingested: .inkos/materials/"),
+            "{ingest_text}"
+        );
         assert!(ingest_text.contains("Kind: text"), "{ingest_text}");
         assert_eq!(execs[1]["tool"], "retrieve_material");
         assert_eq!(execs[1]["status"], "completed");
         let retrieve_text = execs[1]["result"].as_str().unwrap();
-        assert!(retrieve_text.contains("Retrieved 1 material snippet."), "{retrieve_text}");
+        assert!(
+            retrieve_text.contains("Retrieved 1 material snippet."),
+            "{retrieve_text}"
+        );
         assert!(retrieve_text.contains("## 1. 冷库账页"), "{retrieve_text}");
         assert!(retrieve_text.contains("0607"), "{retrieve_text}");
 
@@ -13287,7 +16235,10 @@ mod material83_e2e {
             let name = entry.unwrap().file_name().to_string_lossy().to_string();
             if name.ends_with(".json") {
                 json_count += 1;
-                manifest = serde_json::from_str(&std::fs::read_to_string(materials_dir.join(&name)).unwrap()).unwrap();
+                manifest = serde_json::from_str(
+                    &std::fs::read_to_string(materials_dir.join(&name)).unwrap(),
+                )
+                .unwrap();
             } else if name.ends_with(".md") {
                 markdown_count += 1;
             }
@@ -13295,7 +16246,10 @@ mod material83_e2e {
         assert_eq!((json_count, markdown_count), (1, 1));
         assert_eq!(manifest["title"], "冷库账页");
         assert_eq!(manifest["kind"], "text");
-        assert!(manifest["markdownPath"].as_str().unwrap().starts_with(".inkos/materials/"));
+        assert!(manifest["markdownPath"]
+            .as_str()
+            .unwrap()
+            .starts_with(".inkos/materials/"));
     }
 
     #[tokio::test]
@@ -13312,7 +16266,9 @@ mod material83_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let source_addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, source_app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, source_app).await.unwrap();
+        });
 
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
@@ -13356,7 +16312,9 @@ mod material83_e2e {
         );
         let llm_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let llm_addr = llm_listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(llm_listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(llm_listener, app).await.unwrap();
+        });
         let llm = format!("http://{llm_addr}");
 
         let session_id = "1783003000002-m83b";
@@ -13395,14 +16353,15 @@ mod material83_e2e {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".json"))
             .collect();
         assert_eq!(entries.len(), 1);
-        let manifest: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(entries[0].path()).unwrap(),
-        )
-        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(entries[0].path()).unwrap()).unwrap();
         assert_eq!(manifest["title"], "冷库事故调查");
         assert_eq!(manifest["kind"], "webpage");
         assert_eq!(manifest["purpose"], "research");
-        assert_eq!(manifest["source"], format!("http://{source_addr}/docs/page.html"));
+        assert_eq!(
+            manifest["source"],
+            format!("http://{source_addr}/docs/page.html")
+        );
     }
 }
 
@@ -13439,7 +16398,10 @@ mod propose84_e2e {
 
     fn app84(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -13447,17 +16409,30 @@ mod propose84_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -13520,7 +16495,9 @@ mod propose84_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), tool_names)
     }
 
@@ -13636,13 +16613,19 @@ mod propose84_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["response"], "（该会话不提供确认卡。）");
         let names = tool_names.lock().unwrap().clone();
-        assert!(!names.contains(&"propose_action".to_string()), "play 有世界不注册：{names:?}");
+        assert!(
+            !names.contains(&"propose_action".to_string()),
+            "play 有世界不注册：{names:?}"
+        );
         assert!(names.contains(&"play_edit".to_string()), "{names:?}");
         let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
         assert_eq!(execs[0]["tool"], "propose_action");
         assert_eq!(execs[0]["status"], "error");
         assert!(
-            execs[0]["error"].as_str().unwrap().contains("Unknown tool: propose_action"),
+            execs[0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown tool: propose_action"),
             "body: {parsed}"
         );
     }
@@ -13681,7 +16664,10 @@ mod research85_e2e {
 
     fn app85(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -13689,17 +16675,30 @@ mod research85_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -13778,7 +16777,9 @@ mod research85_e2e {
                     }
                 }),
             );
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let base = source_base;
 
         let dir = tempfile::tempdir().unwrap();
@@ -13841,9 +16842,18 @@ mod research85_e2e {
         let markdown = std::fs::read_to_string(entries[0].as_ref().unwrap().path()).unwrap();
         assert!(markdown.starts_with("# Research: 1990 年代县冷库会计流程\n\n- Purpose: era\n- Depth: quick\n- Confidence: medium"), "{markdown}");
         assert!(markdown.contains("### [S1] 冷库账页史料"), "{markdown}");
-        assert!(markdown.contains("冷库夜班每两小时抄表一次。账页分三联存根。这是第三句。"), "{markdown}");
-        assert!(!markdown.contains("第四句超限"), "摘录只取前三句：{markdown}");
-        assert!(markdown.contains("## Query log\n- 1990 年代县冷库会计流程 年代 背景 制度 物价 生活"), "{markdown}");
+        assert!(
+            markdown.contains("冷库夜班每两小时抄表一次。账页分三联存根。这是第三句。"),
+            "{markdown}"
+        );
+        assert!(
+            !markdown.contains("第四句超限"),
+            "摘录只取前三句：{markdown}"
+        );
+        assert!(
+            markdown.contains("## Query log\n- 1990 年代县冷库会计流程 年代 背景 制度 物价 生活"),
+            "{markdown}"
+        );
     }
 }
 
@@ -13941,7 +16951,10 @@ name: 林动
 
     fn app85b(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -13949,17 +16962,30 @@ name: 林动
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -14008,7 +17034,9 @@ name: 林动
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -14075,9 +17103,15 @@ name: 林动
         assert_eq!(execs[0]["tool"], "import_chapters");
         assert_eq!(execs[0]["status"], "completed");
         let text = execs[0]["result"].as_str().unwrap();
-        assert!(text.starts_with("Imported 2 chapter(s) into book \"b85\".\nTotal imported length: "), "{text}");
+        assert!(
+            text.starts_with("Imported 2 chapter(s) into book \"b85\".\nTotal imported length: "),
+            "{text}"
+        );
         assert!(text.contains("Next chapter to write: 3."), "{text}");
-        assert!(text.contains("Foundation and truth files were reverse-engineered"), "{text}");
+        assert!(
+            text.contains("Foundation and truth files were reverse-engineered"),
+            "{text}"
+        );
         // 落盘（复用 59 号链断言面）。
         assert!(book.join("chapters").join("0001_风起.md").exists());
         let index: serde_json::Value = serde_json::from_str(
@@ -14138,12 +17172,12 @@ mod details86_e2e {
     //! details.toolExecutions[i].details（propose 确认卡 / play 回合卡）。
     use super::*;
     use axum::http::StatusCode;
-    use serde_json::json;
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::agent_route;
     use inkos_engine::server::books_routes::BooksRuntime;
     use inkos_engine::server::session_routes;
     use inkos_engine::state::manager::StateManager;
+    use serde_json::json;
 
     fn rt86(root: &std::path::Path, llm: &str) -> BooksRuntime {
         BooksRuntime {
@@ -14167,7 +17201,10 @@ mod details86_e2e {
 
     fn app86(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -14175,17 +17212,30 @@ mod details86_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -14259,7 +17309,9 @@ mod details86_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -14347,7 +17399,9 @@ mod details86_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let llm = format!("http://{addr}");
 
         let session_id = "1783006000002-bcs";
@@ -14441,12 +17495,19 @@ mod details86_e2e {
         assert_eq!(details["worldId"], session_id);
         assert_eq!(details["runId"], "main");
         assert_eq!(details["title"], "厅堂夜探");
-        assert_eq!(details["sceneText"], "灯笼的光晃了一下，厅堂深处有人影一闪。");
+        assert_eq!(
+            details["sceneText"],
+            "灯笼的光晃了一下，厅堂深处有人影一闪。"
+        );
         assert_eq!(details["suggestedActions"], json!(["追上去", "吹灭灯笼"]));
         assert_eq!(details["currentState"]["turn"], 1);
-        assert!(details["graph"]["entities"]
-            .as_array()
-            .is_some_and(|entities| entities.iter().any(|e| e["id"] == "location_hall")), "graph: {}", details["graph"]);
+        assert!(
+            details["graph"]["entities"]
+                .as_array()
+                .is_some_and(|entities| entities.iter().any(|e| e["id"] == "location_hall")),
+            "graph: {}",
+            details["graph"]
+        );
     }
 }
 
@@ -14484,7 +17545,10 @@ mod sub87_e2e {
 
     fn app87(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -14492,17 +17556,30 @@ mod sub87_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -14593,7 +17670,9 @@ mod sub87_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), tool_names)
     }
 
@@ -14628,13 +17707,22 @@ mod sub87_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["response"], "（已交给子代理完成。）");
         let names = tool_names.lock().unwrap().clone();
-        assert!(names.contains(&"sub_agent".to_string()), "书会话注册：{names:?}");
+        assert!(
+            names.contains(&"sub_agent".to_string()),
+            "书会话注册：{names:?}"
+        );
         let execs = parsed["details"]["toolExecutions"].as_array().unwrap();
         assert_eq!(execs.len(), 1);
         let card = &execs[0];
         assert_eq!(card["tool"], "sub_agent");
         assert_eq!(card["status"], "completed", "body: {parsed}");
-        assert!(card["result"].as_str().unwrap().starts_with("Chapter written for \"b1\". Word count: "), "body: {parsed}");
+        assert!(
+            card["result"]
+                .as_str()
+                .unwrap()
+                .starts_with("Chapter written for \"b1\". Word count: "),
+            "body: {parsed}"
+        );
         assert_eq!(card["details"]["kind"], "chapter_written");
         assert_eq!(card["details"]["bookId"], "b1");
         assert_eq!(card["details"]["chapterNumber"], 1);
@@ -14675,9 +17763,15 @@ mod sub87_e2e {
         assert_eq!(card["tool"], "sub_agent");
         assert_eq!(card["status"], "completed", "body: {parsed}");
         let export_text = card["result"].as_str().unwrap();
-        assert!(export_text.starts_with("Exported \"b1\": "), "{export_text}");
+        assert!(
+            export_text.starts_with("Exported \"b1\": "),
+            "{export_text}"
+        );
         let output_path = export_text.split(" → ").nth(1).unwrap().to_string();
-        assert!(std::path::Path::new(&output_path).is_file(), "导出落盘：{output_path}");
+        assert!(
+            std::path::Path::new(&output_path).is_file(),
+            "导出落盘：{output_path}"
+        );
         let _ = Value::Null;
     }
 
@@ -14707,7 +17801,10 @@ mod sub87_e2e {
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let names = tool_names.lock().unwrap().clone();
-        assert!(!names.contains(&"sub_agent".to_string()), "无书 chat 不注册：{names:?}");
+        assert!(
+            !names.contains(&"sub_agent".to_string()),
+            "无书 chat 不注册：{names:?}"
+        );
         assert!(names.contains(&"propose_action".to_string()), "{names:?}");
     }
 }
@@ -14746,22 +17843,41 @@ mod sub88_e2e {
 
     fn app88(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -14828,12 +17944,17 @@ mod sub88_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
     fn chapter_file(root: &std::path::Path) -> std::path::PathBuf {
-        root.join("books").join("b1").join("chapters").join("0001_风起.md")
+        root.join("books")
+            .join("b1")
+            .join("chapters")
+            .join("0001_风起.md")
     }
 
     #[tokio::test]
@@ -14841,7 +17962,11 @@ mod sub88_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture_project(&root);
-        std::fs::write(chapter_file(&root), "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。").unwrap();
+        std::fs::write(
+            chapter_file(&root),
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
+        )
+        .unwrap();
         let llm = spawn_mock88(false).await;
         let session_id = "1783007000003-s88a";
         let app = app88(rt88(&root, &llm));
@@ -14869,7 +17994,10 @@ mod sub88_e2e {
         let card = &execs[0];
         assert_eq!(card["tool"], "sub_agent");
         assert_eq!(card["status"], "completed", "body: {parsed}");
-        assert_eq!(card["result"].as_str().unwrap(), "Revision (polish) complete for \"b1\" chapter 1.");
+        assert_eq!(
+            card["result"].as_str().unwrap(),
+            "Revision (polish) complete for \"b1\" chapter 1."
+        );
         let details = &card["details"];
         assert_eq!(details["kind"], "chapter_revision");
         assert_eq!(details["bookId"], "b1");
@@ -14922,23 +18050,44 @@ mod sub88_e2e {
             "{text}"
         );
         assert!(text.contains("Revision gate:"), "{text}");
-        assert!(text.contains("- Standard: A revision is applied only when"), "{text}");
-        assert!(text.contains("- Before: blocking=1, critical=0, aiTell=0"), "{text}");
-        assert!(text.contains("- After: blocking=2, critical=0, aiTell=0"), "{text}");
+        assert!(
+            text.contains("- Standard: A revision is applied only when"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- Before: blocking=1, critical=0, aiTell=0"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- After: blocking=2, critical=0, aiTell=0"),
+            "{text}"
+        );
         assert!(text.contains("- Remaining issues:"), "{text}");
-        assert!(text.contains("  - [warning] 节奏: 中段推进略缓。 (压缩。)"), "{text}");
+        assert!(
+            text.contains("  - [warning] 节奏: 中段推进略缓。 (压缩。)"),
+            "{text}"
+        );
         let details = &card["details"];
         assert_eq!(details["kind"], "chapter_revision");
         assert_eq!(details["applied"], false);
         assert_eq!(details["status"], "unchanged");
         assert_eq!(details["mode"], "spot-fix");
-        assert!(details["skippedReason"].as_str().unwrap().starts_with("Manual revision kept original chapter"));
+        assert!(details["skippedReason"]
+            .as_str()
+            .unwrap()
+            .starts_with("Manual revision kept original chapter"));
         let diagnostics = &details["revisionDiagnostics"];
         assert_eq!(diagnostics["before"]["blockingCount"], 1);
         assert_eq!(diagnostics["after"]["blockingCount"], 2);
-        assert!(!diagnostics["remainingIssues"].as_array().unwrap().is_empty());
+        assert!(!diagnostics["remainingIssues"]
+            .as_array()
+            .unwrap()
+            .is_empty());
         // 门控拒绝：原章保留。
-        assert_eq!(std::fs::read_to_string(chapter_file(&root)).unwrap(), original);
+        assert_eq!(
+            std::fs::read_to_string(chapter_file(&root)).unwrap(),
+            original
+        );
     }
 }
 
@@ -14976,22 +18125,41 @@ mod sub89_e2e {
 
     fn app89(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -15047,7 +18215,9 @@ mod sub89_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), tool_names)
     }
 
@@ -15101,7 +18271,10 @@ mod sub89_e2e {
         let card = &parsed["details"]["toolExecutions"][0];
         assert_eq!(card["tool"], "patch_chapter_text");
         assert_eq!(card["status"], "completed", "body: {parsed}");
-        assert_eq!(card["result"].as_str().unwrap(), "Patched chapter 1 and marked it for review.");
+        assert_eq!(
+            card["result"].as_str().unwrap(),
+            "Patched chapter 1 and marked it for review."
+        );
         let saved = std::fs::read_to_string(root.join("books/b1/chapters/0001_风起.md")).unwrap();
         assert_eq!(saved, "# 第1章 风起\n\n林动睁开双眼，灵气在丹田盘旋。");
 
@@ -15130,7 +18303,11 @@ mod sub89_e2e {
         assert_eq!(details["title"], "夜行");
         let book = root.join("books").join("b1");
         assert!(!book.join("chapters").join("0002_夜行.md").exists());
-        assert!(book.join("chapters").join(".trash").join("0002_夜行.md").is_file());
+        assert!(book
+            .join("chapters")
+            .join(".trash")
+            .join("0002_夜行.md")
+            .is_file());
         assert!(book.join("chapters").join("0001_风起.md").is_file());
         // 回滚后的活状态来自第 1 章快照。
         let state = std::fs::read_to_string(book.join("story").join("current_state.md")).unwrap();
@@ -15149,9 +18326,15 @@ mod sub89_e2e {
             "research_web",
             "import_chapters",
         ] {
-            assert!(names.contains(&expected.to_string()), "缺 {expected}：{names:?}");
+            assert!(
+                names.contains(&expected.to_string()),
+                "缺 {expected}：{names:?}"
+            );
         }
-        assert!(!names.contains(&"propose_action".to_string()), "book 会话不应注册 propose_action：{names:?}");
+        assert!(
+            !names.contains(&"propose_action".to_string()),
+            "book 会话不应注册 propose_action：{names:?}"
+        );
     }
 
     #[tokio::test]
@@ -15166,7 +18349,9 @@ mod sub89_e2e {
             app.clone(),
             "POST",
             "/api/v1/sessions",
-            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1","sessionKind":"edit"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{session_id}","bookId":"b1","sessionKind":"edit"}}"#
+            )),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -15188,7 +18373,10 @@ mod sub89_e2e {
             "replace_chapter_text",
             "delete_latest_chapter",
         ] {
-            assert!(names.contains(&expected.to_string()), "edit 缺 {expected}：{names:?}");
+            assert!(
+                names.contains(&expected.to_string()),
+                "edit 缺 {expected}：{names:?}"
+            );
         }
         for banned in [
             "sub_agent",
@@ -15197,7 +18385,10 @@ mod sub89_e2e {
             "import_chapters",
             "propose_action",
         ] {
-            assert!(!names.contains(&banned.to_string()), "edit 不应注册 {banned}：{names:?}");
+            assert!(
+                !names.contains(&banned.to_string()),
+                "edit 不应注册 {banned}：{names:?}"
+            );
         }
     }
 }
@@ -15235,22 +18426,41 @@ mod sub90_e2e {
 
     fn app90(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -15329,7 +18539,9 @@ mod sub90_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), tool_names)
     }
 
@@ -15370,13 +18582,26 @@ mod sub90_e2e {
         assert_eq!(card["tool"], "create_narrative_forecast");
         assert_eq!(card["status"], "completed", "body: {parsed}");
         let result_text = card["result"].as_str().unwrap();
-        assert!(result_text.starts_with("Narrative forecast fc-"), "{result_text}");
-        assert!(result_text.contains("created with 2 isolated branches."), "{result_text}");
-        assert!(result_text.contains("branch-1 \"结盟\" — intent fit 88/100, 1 risk(s), premise: 接受合作提议"), "{result_text}");
+        assert!(
+            result_text.starts_with("Narrative forecast fc-"),
+            "{result_text}"
+        );
+        assert!(
+            result_text.contains("created with 2 isolated branches."),
+            "{result_text}"
+        );
+        assert!(
+            result_text.contains(
+                "branch-1 \"结盟\" — intent fit 88/100, 1 risk(s), premise: 接受合作提议"
+            ),
+            "{result_text}"
+        );
         let details = &card["details"];
         assert_eq!(details["kind"], "narrative_forecast_created");
         let forecast_id = details["forecastId"].as_str().unwrap().to_string();
-        let forecast_dir = root.join("books/b1/story/runtime/narrative-forecasts").join(&forecast_id);
+        let forecast_dir = root
+            .join("books/b1/story/runtime/narrative-forecasts")
+            .join(&forecast_id);
         assert!(forecast_dir.join("forecast.json").is_file());
         assert!(forecast_dir.join("comparison.md").is_file());
         let comparison = std::fs::read_to_string(forecast_dir.join("comparison.md")).unwrap();
@@ -15396,7 +18621,12 @@ mod sub90_e2e {
         let card = &parsed["details"]["toolExecutions"][0];
         assert_eq!(card["tool"], "get_narrative_forecast");
         let result_text = card["result"].as_str().unwrap();
-        assert!(result_text.contains(&format!("Forecast {forecast_id} (book b1) — status: active.")), "{result_text}");
+        assert!(
+            result_text.contains(&format!(
+                "Forecast {forecast_id} (book b1) — status: active."
+            )),
+            "{result_text}"
+        );
         assert_eq!(card["details"]["stale"], false);
 
         // ③ select：只写 selected-branch-plan.md。
@@ -15413,7 +18643,12 @@ mod sub90_e2e {
         let card = &parsed["details"]["toolExecutions"][0];
         assert_eq!(card["tool"], "select_narrative_branch");
         let result_text = card["result"].as_str().unwrap();
-        assert!(result_text.starts_with(&format!("Selected branch-1 \"结盟\" from forecast {forecast_id}.")), "{result_text}");
+        assert!(
+            result_text.starts_with(&format!(
+                "Selected branch-1 \"结盟\" from forecast {forecast_id}."
+            )),
+            "{result_text}"
+        );
         let plan = std::fs::read_to_string(forecast_dir.join("selected-branch-plan.md")).unwrap();
         assert!(plan.starts_with("# 已选分支计划：结盟"));
         assert!(plan.contains("- 分支：branch-1"));
@@ -15433,7 +18668,10 @@ mod sub90_e2e {
         let card = &parsed["details"]["toolExecutions"][0];
         let result_text = card["result"].as_str().unwrap();
         assert!(result_text.contains("— status: stale."), "{result_text}");
-        assert!(result_text.contains("WARNING: canonical chapters or state changed"), "{result_text}");
+        assert!(
+            result_text.contains("WARNING: canonical chapters or state changed"),
+            "{result_text}"
+        );
         assert_eq!(card["details"]["stale"], true);
 
         // book 会话注册：forecast 三件齐备。
@@ -15443,7 +18681,10 @@ mod sub90_e2e {
             "get_narrative_forecast",
             "select_narrative_branch",
         ] {
-            assert!(names.contains(&expected.to_string()), "缺 {expected}：{names:?}");
+            assert!(
+                names.contains(&expected.to_string()),
+                "缺 {expected}：{names:?}"
+            );
         }
     }
 
@@ -15459,7 +18700,9 @@ mod sub90_e2e {
             app.clone(),
             "POST",
             "/api/v1/sessions",
-            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b1","sessionKind":"edit"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{session_id}","bookId":"b1","sessionKind":"edit"}}"#
+            )),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -15479,7 +18722,10 @@ mod sub90_e2e {
             "get_narrative_forecast",
             "select_narrative_branch",
         ] {
-            assert!(!names.contains(&banned.to_string()), "edit 不应注册 {banned}：{names:?}");
+            assert!(
+                !names.contains(&banned.to_string()),
+                "edit 不应注册 {banned}：{names:?}"
+            );
         }
     }
 }
@@ -15553,22 +18799,41 @@ mod sub91_e2e {
 
     fn app91(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -15609,7 +18874,9 @@ mod sub91_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -15632,8 +18899,16 @@ mod sub91_e2e {
         )
         .unwrap();
         // 既有第 1 章 + 既有地基（内容标记——续放不得覆盖）。
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动睁开双眼。").unwrap();
-        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基（续放不得覆盖）\n\n旧内容。").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第一章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("story_bible.md"),
+            "# 既有地基（续放不得覆盖）\n\n旧内容。",
+        )
+        .unwrap();
         // 源文件两章（续放从第 2 章起回放）。
         std::fs::write(
             root.join("novel91.txt"),
@@ -15669,7 +18944,10 @@ mod sub91_e2e {
         assert_eq!(card["tool"], "import_chapters");
         assert_eq!(card["status"], "completed", "body: {parsed}");
         let result_text = card["result"].as_str().unwrap();
-        assert!(result_text.contains("Imported 1 chapter(s) into book \"b91\"."), "{result_text}");
+        assert!(
+            result_text.contains("Imported 1 chapter(s) into book \"b91\"."),
+            "{result_text}"
+        );
         assert!(
             result_text.contains("Resumed replay from chapter 2; earlier chapters and the existing foundation were kept."),
             "{result_text}"
@@ -15693,7 +18971,8 @@ mod sub91_e2e {
         assert_eq!(entries.len(), 1, "第 2 章应落盘：{entries:?}");
         // 索引：两章（1 保留 + 2 新增）。
         let index: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(book.join("chapters").join("index.json")).unwrap_or("[]".to_string()),
+            &std::fs::read_to_string(book.join("chapters").join("index.json"))
+                .unwrap_or("[]".to_string()),
         )
         .unwrap_or(serde_json::json!([]));
         assert_eq!(index.as_array().map(Vec::len), Some(2), "index: {index}");
@@ -15872,22 +19151,41 @@ name: 林震
 
     fn app92(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -15950,7 +19248,9 @@ name: 林震
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), review_calls)
     }
 
@@ -15971,7 +19271,11 @@ name: 林震
             r#"{"id":"b92","title":"系列书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(root.join("novel92.txt"), "# 第一章 风起\n\n林动睁开双眼，灵气涌动。").unwrap();
+        std::fs::write(
+            root.join("novel92.txt"),
+            "# 第一章 风起\n\n林动睁开双眼，灵气涌动。",
+        )
+        .unwrap();
 
         let (llm, review_calls) = mock_series_llm().await;
         let session_id = "1783007000010-s92a";
@@ -15999,14 +19303,18 @@ name: 林震
         assert_eq!(card["tool"], "import_chapters");
         assert_eq!(card["status"], "completed", "body: {parsed}");
         let result_text = card["result"].as_str().unwrap();
-        assert!(result_text.contains("Imported 1 chapter(s) into book \"b92\"."), "{result_text}");
+        assert!(
+            result_text.contains("Imported 1 chapter(s) into book \"b92\"."),
+            "{result_text}"
+        );
         assert_eq!(card["details"]["importMode"], "series");
 
         // 评审环：首审拒绝 → 带反馈重生成 → 复审通过（恰两次评审）。
         assert_eq!(*review_calls.lock().unwrap(), 2, "评审次数");
         // 落盘地基来自 B 稿（反馈重生成轮）：系列强化的卷名 + 主角林震。
-        let volume_map = std::fs::read_to_string(book.join("story").join("outline").join("volume_map.md"))
-            .unwrap_or_default();
+        let volume_map =
+            std::fs::read_to_string(book.join("story").join("outline").join("volume_map.md"))
+                .unwrap_or_default();
         assert!(volume_map.contains("系列新程"), "volume_map: {volume_map}");
         let roles_major = book.join("story").join("roles").join("主要角色");
         let role_names: Vec<String> = std::fs::read_dir(&roles_major)
@@ -16014,7 +19322,10 @@ name: 林震
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .collect();
-        assert!(role_names.iter().any(|n| n.contains("林震")), "roles: {role_names:?}");
+        assert!(
+            role_names.iter().any(|n| n.contains("林震")),
+            "roles: {role_names:?}"
+        );
         // 章节回放照常。
         assert!(book.join("chapters").join("0001_风起.md").is_file());
     }
@@ -16053,22 +19364,41 @@ mod sub93_e2e {
 
     fn app93(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -16086,7 +19416,9 @@ mod sub93_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -16119,7 +19451,10 @@ mod sub93_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
         let message = parsed["error"].as_str().unwrap();
-        assert!(message.starts_with("模型 gemini-image-2.0 不适合文本聊天/写作。"), "{message}");
+        assert!(
+            message.starts_with("模型 gemini-image-2.0 不适合文本聊天/写作。"),
+            "{message}"
+        );
         assert_eq!(parsed["response"].as_str().unwrap(), message);
         // 文本模型放行（后续附件用例复用）。
         let (status, _) = call(
@@ -16181,7 +19516,10 @@ mod sub93_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "INVALID_ATTACHMENT");
-        assert!(parsed["error"]["message"].as_str().unwrap().contains("a.md is missing dataUrl"));
+        assert!(parsed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("a.md is missing dataUrl"));
     }
 }
 
@@ -16218,22 +19556,41 @@ mod sub95_e2e {
 
     fn app95(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -16261,7 +19618,9 @@ mod sub95_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), captured)
     }
 
@@ -16306,7 +19665,10 @@ mod sub95_e2e {
         assert_eq!(content[0]["type"], "text");
         let text = content[0]["text"].as_str().unwrap();
         assert!(text.starts_with("看看这两个附件"), "{text}");
-        assert!(text.contains("## 用户上传文件（宿主已接收，用户授权本轮使用）"), "{text}");
+        assert!(
+            text.contains("## 用户上传文件（宿主已接收，用户授权本轮使用）"),
+            "{text}"
+        );
         assert!(text.contains("### notes.md"), "{text}");
         assert!(text.contains("内容：\n```\n参考资料内容\n```"), "{text}");
         assert!(text.contains("### shot.png"), "{text}");
@@ -16317,7 +19679,11 @@ mod sub95_e2e {
             content[1]["image_url"]["url"],
             "data:image/png;base64,iVBORw0KGgo="
         );
-        assert_eq!(content.as_array().unwrap().len(), 2, "text + 1 图：{content}");
+        assert_eq!(
+            content.as_array().unwrap().len(),
+            2,
+            "text + 1 图：{content}"
+        );
         // 上传落盘（93 号行为保留）。
         let upload_dir = root.join(".inkos").join("uploads").join(session_id);
         let count = std::fs::read_dir(&upload_dir).unwrap().count();
@@ -16364,17 +19730,30 @@ mod sub96_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -16413,7 +19792,9 @@ mod sub96_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -16432,13 +19813,20 @@ mod sub96_e2e {
             "stream": false,
         })
         .to_string();
-        let (status, parsed) = call(app, "POST", "/api/v1/services/deepseek/test", Some(&body)).await;
+        let (status, parsed) =
+            call(app, "POST", "/api/v1/services/deepseek/test", Some(&body)).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true, "body: {parsed}");
         // 120 号 TS 逐字：/test 不消费 payload.model——候选 = checkModel；
         // discovered 空 → 预设静态回退清单（modelsSource=fallback）。
-        assert_eq!(parsed["selectedModel"], "deepseek-v4-flash", "body: {parsed}");
-        assert_eq!(parsed["detected"]["modelsSource"], "fallback", "body: {parsed}");
+        assert_eq!(
+            parsed["selectedModel"], "deepseek-v4-flash",
+            "body: {parsed}"
+        );
+        assert_eq!(
+            parsed["detected"]["modelsSource"], "fallback",
+            "body: {parsed}"
+        );
         assert_eq!(parsed["modelCount"], 4, "body: {parsed}");
         assert_eq!(parsed["probe"]["ok"], true);
     }
@@ -16465,8 +19853,14 @@ mod sub96_e2e {
         assert!(error.starts_with("Google Gemini 测试连接失败。"), "{error}");
         assert!(error.contains("服务商：Google Gemini"), "{error}");
         assert!(error.contains("测试模型：gemini-2.5-flash"), "{error}");
-        assert!(error.contains("1. API Key 是否来自 Google AI Studio 的 Gemini API key"), "{error}");
-        assert!(error.contains("4. 如果 key 曾经泄露，请在 AI Studio 重新生成后再保存。"), "{error}");
+        assert!(
+            error.contains("1. API Key 是否来自 Google AI Studio 的 Gemini API key"),
+            "{error}"
+        );
+        assert!(
+            error.contains("4. 如果 key 曾经泄露，请在 AI Studio 重新生成后再保存。"),
+            "{error}"
+        );
         assert_eq!(parsed["probe"]["ok"], false);
     }
 }
@@ -16504,22 +19898,41 @@ mod sub97_e2e {
 
     fn app97(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -16546,7 +19959,9 @@ mod sub97_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), models)
     }
 
@@ -16629,7 +20044,10 @@ mod sub97_e2e {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
         assert_eq!(parsed["error"], "请先为 deepseek 配置 API Key");
-        assert_eq!(parsed["response"], "请先在模型配置中为 deepseek 填写 API Key，然后再试。");
+        assert_eq!(
+            parsed["response"],
+            "请先在模型配置中为 deepseek 填写 API Key，然后再试。"
+        );
     }
 }
 
@@ -16671,11 +20089,20 @@ mod sub99_e2e {
 
     async fn call(app: axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
-        let request = axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).unwrap();
+        let request = axum::http::Request::builder()
+            .uri(uri)
+            .body(axum::body::Body::empty())
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -16715,7 +20142,9 @@ mod sub99_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), streams)
     }
 
@@ -16726,13 +20155,21 @@ mod sub99_e2e {
         fixture_project(&root);
         // 106 号起计划为 TS buildProbePlans 逐字：stream 偏好仅在 apiFormat
         // 有偏好时生效（apiFormat=chat + stream=true → [chat×true, chat×false]）。
-        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true,"apiFormat":"chat"}}"#).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{"llm":{"stream":true,"apiFormat":"chat"}}"#,
+        )
+        .unwrap();
         let (llm, streams) = mock_doctor_upstream(false).await;
         let (status, parsed) = call(app99(rt99(&root, &llm)), "/api/v1/doctor").await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["llmConnected"], true, "body: {parsed}");
         let calls = streams.lock().unwrap().clone();
-        assert_eq!(calls, vec![true, false], "首传输 stream 空 → 回退非 stream：{calls:?}");
+        assert_eq!(
+            calls,
+            vec![true, false],
+            "首传输 stream 空 → 回退非 stream：{calls:?}"
+        );
     }
 
     #[tokio::test]
@@ -16740,13 +20177,21 @@ mod sub99_e2e {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture_project(&root);
-        std::fs::write(root.join("inkos.json"), r#"{"llm":{"stream":true,"apiFormat":"chat"}}"#).unwrap();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{"llm":{"stream":true,"apiFormat":"chat"}}"#,
+        )
+        .unwrap();
         let (llm, streams) = mock_doctor_upstream(true).await;
         let (status, parsed) = call(app99(rt99(&root, &llm)), "/api/v1/doctor").await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["llmConnected"], false, "body: {parsed}");
         let calls = streams.lock().unwrap().clone();
-        assert_eq!(calls, vec![true, false], "两计划都试过后判未连接：{calls:?}");
+        assert_eq!(
+            calls,
+            vec![true, false],
+            "两计划都试过后判未连接：{calls:?}"
+        );
     }
 }
 
@@ -16783,22 +20228,41 @@ mod sub100_e2e {
 
     fn app100(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -16837,7 +20301,9 @@ mod sub100_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -16877,16 +20343,27 @@ mod sub100_e2e {
         assert_eq!(card["tool"], "ingest_material");
         assert_eq!(card["status"], "completed", "body: {parsed}");
         let result_text = card["result"].as_str().unwrap();
-        assert!(result_text.starts_with("Material ingested: "), "{result_text}");
+        assert!(
+            result_text.starts_with("Material ingested: "),
+            "{result_text}"
+        );
         // manifest：kind pdf + 页数 + 抽取文本。
-        let manifest_path = format!(".inkos/materials/{}.json", card["details"]["asset"]["id"].as_str().unwrap_or_default());
-        let manifest: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join(manifest_path)).unwrap(),
-        )
-        .unwrap();
+        let manifest_path = format!(
+            ".inkos/materials/{}.json",
+            card["details"]["asset"]["id"].as_str().unwrap_or_default()
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(manifest_path)).unwrap())
+                .unwrap();
         assert_eq!(manifest["kind"], "pdf");
         assert_eq!(manifest["totalPages"], 1);
-        assert!(manifest["excerpt"].as_str().unwrap().contains("Chapter one reference material."), "excerpt: {manifest}");
+        assert!(
+            manifest["excerpt"]
+                .as_str()
+                .unwrap()
+                .contains("Chapter one reference material."),
+            "excerpt: {manifest}"
+        );
     }
 }
 
@@ -16916,37 +20393,37 @@ mod sub101_e2e {
         let seen_for_server = writer_seen.clone();
         let app = axum::Router::new().route(
             "/chat/completions",
-            axum::routing::post(
-                move |axum::Json(body): axum::Json<serde_json::Value>| {
-                    let writer_seen = seen_for_server.clone();
-                    async move {
-                        let system = body["messages"][0]["content"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_string();
-                        let content = if system.contains("创作总编") {
-                            PLANNER_RESPONSE.to_string()
-                        } else if system.contains("作家") || system.contains("写手") {
-                            *writer_seen.lock().unwrap() = true;
-                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                            WRITER_RESPONSE.to_string()
-                        } else if system.contains("审稿") {
-                            // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
-                            AUDIT_JSON_PASS.to_string()
-                        } else {
-                            "PASS".to_string()
-                        };
-                        axum::response::IntoResponse::into_response((
-                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                            sse_body(&content),
-                        ))
-                    }
-                },
-            ),
+            axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
+                let writer_seen = seen_for_server.clone();
+                async move {
+                    let system = body["messages"][0]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let content = if system.contains("创作总编") {
+                        PLANNER_RESPONSE.to_string()
+                    } else if system.contains("作家") || system.contains("写手") {
+                        *writer_seen.lock().unwrap() = true;
+                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        WRITER_RESPONSE.to_string()
+                    } else if system.contains("审稿") {
+                        // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
+                        AUDIT_JSON_PASS.to_string()
+                    } else {
+                        "PASS".to_string()
+                    };
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        sse_body(&content),
+                    ))
+                }
+            }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), writer_seen, handle)
     }
 
@@ -16981,11 +20458,14 @@ mod sub101_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -17003,7 +20483,10 @@ mod sub101_e2e {
         let runtime = rt(&root, &llm);
         let mut subscriber = runtime.hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -17064,7 +20547,10 @@ mod sub101_e2e {
         // TS formatAgentActionFailure 非忙错误面：502 AGENT_ACTION_FAILED。
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
-        assert_eq!(parsed["error"]["message"], "操作已中止：用户请求停止该任务。");
+        assert_eq!(
+            parsed["error"]["message"],
+            "操作已中止：用户请求停止该任务。"
+        );
         assert_eq!(parsed["response"], "操作已中止：用户请求停止该任务。");
 
         // 安全点语义：草稿虽已生成，但检查点②先于任何落盘——章节目录、
@@ -17076,7 +20562,12 @@ mod sub101_e2e {
             .count();
         assert_eq!(chapters, 0, "中止后不应有任何章节落盘");
         assert!(
-            !root.join("books").join("b1").join("story").join("chapter_summaries.md").exists(),
+            !root
+                .join("books")
+                .join("b1")
+                .join("story")
+                .join("chapter_summaries.md")
+                .exists(),
             "真相面不应有章节摘要投影"
         );
 
@@ -17088,7 +20579,8 @@ mod sub101_e2e {
         assert_eq!(snapshot["requestedIntent"], "write_next");
         assert_eq!(snapshot["execution"]["status"], "error");
         assert_eq!(
-            snapshot["execution"]["error"], "操作已中止：用户请求停止该任务。"
+            snapshot["execution"]["error"],
+            "操作已中止：用户请求停止该任务。"
         );
 
         // 广播序：agent:start → tool:start(background) →（abort 端点的
@@ -17196,11 +20688,14 @@ mod sub102_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -17213,8 +20708,8 @@ mod sub102_e2e {
     /// （第 3 章）**到达时**标记 seen 后睡 600ms——标记时刻第 2 章必然已
     /// 完整落盘（回放循环已推进到第 3 章头），把"第 3 章分析在途时 abort"
     /// 钉死在检查点③之前，无时序抖动。
-    async fn mock_two_phase_analyzer()
-        -> (String, Arc<StdMutex<bool>>, tokio::task::JoinHandle<()>) {
+    async fn mock_two_phase_analyzer() -> (String, Arc<StdMutex<bool>>, tokio::task::JoinHandle<()>)
+    {
         let second_seen = Arc::new(StdMutex::new(false));
         let seen_for_server = second_seen.clone();
         let analyzer_calls = Arc::new(StdMutex::new(0u32));
@@ -17268,7 +20763,9 @@ mod sub102_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let handle = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), second_seen, handle)
     }
 
@@ -17290,8 +20787,16 @@ mod sub102_e2e {
             r#"{"id":"b102","title":"截断书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动睁开双眼。").unwrap();
-        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基（截断不得覆盖）\n\n旧内容。").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第一章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("story_bible.md"),
+            "# 既有地基（截断不得覆盖）\n\n旧内容。",
+        )
+        .unwrap();
         // 源文件三章：续放回放第 2、3 章。
         std::fs::write(
             root.join("novel102.txt"),
@@ -17302,8 +20807,14 @@ mod sub102_e2e {
         let (llm, second_seen, _guard) = mock_two_phase_analyzer().await;
         let session_id = "1783099000002-imp1";
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .route(
                 "/api/v1/sessions/:sessionId/abort",
                 axum::routing::post(session_routes::abort_session),
@@ -17313,7 +20824,9 @@ mod sub102_e2e {
             app.clone(),
             "POST",
             "/api/v1/sessions",
-            Some(&format!(r#"{{"sessionId":"{session_id}","bookId":"b102"}}"#)),
+            Some(&format!(
+                r#"{{"sessionId":"{session_id}","bookId":"b102"}}"#
+            )),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
@@ -17335,7 +20848,10 @@ mod sub102_e2e {
         // 等到第 3 章分析在途（第 2 章此刻应已完整落盘）。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !*second_seen.lock().unwrap() {
-            assert!(std::time::Instant::now() < deadline, "第 3 章分析应在 10s 内出现");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "第 3 章分析应在 10s 内出现"
+            );
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         // 第 2 章已落盘是章粒度安全点的前提（此刻断言而非事后，锁死语义）。
@@ -17364,16 +20880,17 @@ mod sub102_e2e {
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "AGENT_ERROR", "body: {parsed}");
         assert_eq!(parsed["response"], "aborted");
-        assert!(parsed["details"]["toolExecutions"].as_array().map(Vec::is_empty).unwrap_or(true));
+        assert!(parsed["details"]["toolExecutions"]
+            .as_array()
+            .map(Vec::is_empty)
+            .unwrap_or(true));
 
         // 章粒度安全点：第 1/2 章保留、第 3 章零落盘、索引两章、地基未动。
         assert!(book.join("chapters").join("0001_风起.md").is_file());
-        assert!(
-            std::fs::read_dir(book.join("chapters"))
-                .unwrap()
-                .filter_map(|e| e.ok())
-                .any(|e| e.file_name().to_string_lossy().starts_with("0002"))
-        );
+        assert!(std::fs::read_dir(book.join("chapters"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().starts_with("0002")));
         assert!(
             !std::fs::read_dir(book.join("chapters"))
                 .unwrap()
@@ -17436,11 +20953,14 @@ mod sub105_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -17484,7 +21004,9 @@ mod sub105_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), names)
     }
 
@@ -17507,14 +21029,28 @@ mod sub105_e2e {
         )
         .unwrap();
         // story 命中小写 lantern（大小写不敏感）+ chapters 命中 + 项目根文件不参与。
-        std::fs::write(book.join("story").join("current_state.md"), "灯是 lantern 亮着。").unwrap();
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "他提起 Lantern 走进夜色。").unwrap();
+        std::fs::write(
+            book.join("story").join("current_state.md"),
+            "灯是 lantern 亮着。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "他提起 Lantern 走进夜色。",
+        )
+        .unwrap();
         std::fs::write(root.join("outside.md"), "lantern 不该被搜到").unwrap();
 
         let (llm, names) = mock_capture_tools().await;
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
-            .route("/api/v1/sessions", axum::routing::post(session_routes::create_session))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
+            .route(
+                "/api/v1/sessions",
+                axum::routing::post(session_routes::create_session),
+            )
             .with_state(rt(&root, &llm));
 
         // 书会话：grep（books/ 作用域 + story/chapters 前缀 + 行号 + 原行）。
@@ -17651,11 +21187,14 @@ mod sub106_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -17710,7 +21249,9 @@ mod sub106_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), bodies)
     }
 
@@ -17733,14 +21274,22 @@ mod sub106_e2e {
             app,
             "POST",
             "/api/v1/services/deepseek/test",
-            Some(&format!(r#"{{"apiKey":"k","baseUrl":"{llm}","model":"resp-model"}}"#)),
+            Some(&format!(
+                r#"{{"apiKey":"k","baseUrl":"{llm}","model":"resp-model"}}"#
+            )),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["ok"], true, "body: {parsed}");
-        assert_eq!(parsed["detected"]["apiFormat"], "responses", "body: {parsed}");
+        assert_eq!(
+            parsed["detected"]["apiFormat"], "responses",
+            "body: {parsed}"
+        );
         assert_eq!(parsed["detected"]["stream"], false, "body: {parsed}");
-        assert_eq!(parsed["detected"]["modelsSource"], "fallback", "body: {parsed}");
+        assert_eq!(
+            parsed["detected"]["modelsSource"], "fallback",
+            "body: {parsed}"
+        );
         assert_eq!(parsed["selectedModel"], "deepseek-v4-flash");
 
         // /responses 探测请求形态（TS chatCompletion 经 responses 传输）。
@@ -17751,7 +21300,8 @@ mod sub106_e2e {
         assert_eq!(probe["max_output_tokens"], 16);
         assert_eq!(probe["stream"], false);
         assert_eq!(
-            probe["input"][0]["content"][0]["text"], "Reply with OK only."
+            probe["input"][0]["content"][0]["text"],
+            "Reply with OK only."
         );
     }
 
@@ -17776,7 +21326,10 @@ mod sub106_e2e {
         .unwrap();
 
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -17811,7 +21364,9 @@ mod sub106_e2e {
         assert_eq!(request["stream"], true);
         assert_eq!(request["store"], false);
         assert!(
-            request["instructions"].as_str().is_some_and(|s| !s.is_empty()),
+            request["instructions"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()),
             "system 提示应进 instructions：{request}"
         );
         let input = request["input"].as_array().unwrap();
@@ -17874,11 +21429,14 @@ mod sub108_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -17918,7 +21476,9 @@ mod sub108_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), bodies)
     }
 
@@ -17942,7 +21502,10 @@ mod sub108_e2e {
         .unwrap();
 
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -18021,11 +21584,14 @@ mod sub109_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -18056,7 +21622,9 @@ mod sub109_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -18082,11 +21650,17 @@ mod sub109_e2e {
         // 启动 router 指向死端点——radar 若走启动态必然失败。
         let runtime = rt(&root, "http://127.0.0.1:9");
         let app = axum::Router::new()
-            .route("/api/v1/radar/scan", axum::routing::post(ops_routes::post_radar_scan))
+            .route(
+                "/api/v1/radar/scan",
+                axum::routing::post(ops_routes::post_radar_scan),
+            )
             .with_state(runtime);
         let (status, parsed) = call(app.clone(), "POST", "/api/v1/radar/scan", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
-        assert_eq!(parsed["marketSummary"], "热配置端点生效。", "body: {parsed}");
+        assert_eq!(
+            parsed["marketSummary"], "热配置端点生效。",
+            "body: {parsed}"
+        );
 
         // 配置改写指回死端点 → mtime 失效 → 热解析回落失败。
         std::fs::write(
@@ -18145,11 +21719,14 @@ mod sub111_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -18159,33 +21736,36 @@ mod sub111_e2e {
     }
 
     /// webhook 捕获 mock（任意 POST → 200，记 headers+body）。
-    async fn mock_webhook_sink() -> (String, Arc<StdMutex<Vec<(serde_json::Value, String, String)>>>) {
+    async fn mock_webhook_sink() -> (
+        String,
+        Arc<StdMutex<Vec<(serde_json::Value, String, String)>>>,
+    ) {
         let hits = Arc::new(StdMutex::new(Vec::new()));
         let hits_for_server = hits.clone();
         let app = axum::Router::new().route(
             "/hook",
-            axum::routing::post(
-                move |headers: axum::http::HeaderMap, body: String| {
-                    let hits = hits_for_server.clone();
-                    async move {
-                        let signature = headers
-                            .get("X-InkOS-Signature")
-                            .map(|value| value.to_str().unwrap_or_default().to_string())
-                            .unwrap_or_default();
-                        let raw = body.clone();
-                        hits.lock().unwrap().push((
-                            serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
-                            signature,
-                            raw,
-                        ));
-                        StatusCode::OK
-                    }
-                },
-            ),
+            axum::routing::post(move |headers: axum::http::HeaderMap, body: String| {
+                let hits = hits_for_server.clone();
+                async move {
+                    let signature = headers
+                        .get("X-InkOS-Signature")
+                        .map(|value| value.to_str().unwrap_or_default().to_string())
+                        .unwrap_or_default();
+                    let raw = body.clone();
+                    hits.lock().unwrap().push((
+                        serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
+                        signature,
+                        raw,
+                    ));
+                    StatusCode::OK
+                }
+            }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}/hook"), hits)
     }
 
@@ -18206,7 +21786,10 @@ mod sub111_e2e {
 
         let session = "1783099000007-n111";
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -18264,7 +21847,8 @@ mod sub111_e2e {
         // HMAC 签名头（sha256=hex 且与原始报文重算一致）。
         for (_body, signature, raw) in &hits {
             assert!(signature.starts_with("sha256="), "signature: {signature}");
-            let expected = inkos_engine::notify::dispatcher::hmac_sha256_hex(b"s3cr3t", raw.as_bytes());
+            let expected =
+                inkos_engine::notify::dispatcher::hmac_sha256_hex(b"s3cr3t", raw.as_bytes());
             assert_eq!(signature, &format!("sha256={expected}"));
         }
     }
@@ -18277,25 +21861,30 @@ mod sub111_e2e {
         let app = axum::Router::new()
             .route(
                 "/chat/completions",
-                axum::routing::post(|axum::Json(body): axum::Json<serde_json::Value>| async move {
-                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                    let content = if system.contains("创作总编") {
-                        PLANNER_RESPONSE.to_string()
-                    } else if system.contains("修稿编辑") {
-                        "改写后的章节内容：口语更强，长短句交错， AI 痕迹更少。".to_string()
-                    } else if system.contains("作家") || system.contains("写手") {
-                        WRITER_RESPONSE.to_string()
-                    } else if system.contains("审稿") {
-                        // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
-                        AUDIT_JSON_PASS.to_string()
-                    } else {
-                        "PASS".to_string()
-                    };
-                    axum::response::IntoResponse::into_response((
-                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                        sse_body(&content),
-                    ))
-                }),
+                axum::routing::post(
+                    |axum::Json(body): axum::Json<serde_json::Value>| async move {
+                        let system = body["messages"][0]["content"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
+                        let content = if system.contains("创作总编") {
+                            PLANNER_RESPONSE.to_string()
+                        } else if system.contains("修稿编辑") {
+                            "改写后的章节内容：口语更强，长短句交错， AI 痕迹更少。".to_string()
+                        } else if system.contains("作家") || system.contains("写手") {
+                            WRITER_RESPONSE.to_string()
+                        } else if system.contains("审稿") {
+                            // 987 号：审核环 FullCycleAuditor JSON 契约（文本协议面退役）。
+                            AUDIT_JSON_PASS.to_string()
+                        } else {
+                            "PASS".to_string()
+                        };
+                        axum::response::IntoResponse::into_response((
+                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                            sse_body(&content),
+                        ))
+                    },
+                ),
             )
             .route(
                 "/detect",
@@ -18315,7 +21904,9 @@ mod sub111_e2e {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), detect_calls)
     }
 
@@ -18335,8 +21926,14 @@ mod sub111_e2e {
         .unwrap();
 
         let app = axum::Router::new()
-            .route("/api/v1/daemon/start", axum::routing::post(ops_routes::post_daemon_start))
-            .route("/api/v1/daemon/stop", axum::routing::post(ops_routes::post_daemon_stop))
+            .route(
+                "/api/v1/daemon/start",
+                axum::routing::post(ops_routes::post_daemon_start),
+            )
+            .route(
+                "/api/v1/daemon/stop",
+                axum::routing::post(ops_routes::post_daemon_stop),
+            )
             .with_state(rt(&root, &llm));
         // daemon 为进程单例——并行测试（如 sub104 daemon 用例）可能正持有，
         // 400 时等待重试（另一测试 stop 后放行）。
@@ -18377,10 +21974,8 @@ mod sub111_e2e {
             assert!(std::time::Instant::now() < deadline, "history 未落盘");
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        let history: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(&history_path).unwrap(),
-        )
-        .unwrap();
+        let history: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&history_path).unwrap()).unwrap();
         let entries = history.as_array().unwrap();
         assert_eq!(entries.len(), 1, "history: {history}");
         assert_eq!(entries[0]["action"], "rewrite");
@@ -18436,11 +22031,14 @@ mod sub112_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -18462,7 +22060,10 @@ mod sub112_e2e {
         let (llm, _calls, _guard) = spawn_mock_llm().await;
         let session = "1783099000008-m112";
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -18534,7 +22135,9 @@ mod sub112_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -18556,8 +22159,16 @@ mod sub112_e2e {
             r#"{"id":"b112","title":"回放书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动睁开双眼。").unwrap();
-        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基\n\n旧内容。").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第一章 风起\n\n林动睁开双眼。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("story_bible.md"),
+            "# 既有地基\n\n旧内容。",
+        )
+        .unwrap();
         std::fs::write(
             root.join("novel112.txt"),
             "# 第一章 风起\n\n林动睁开双眼。\n\n# 第二章 云涌\n\n坊市喧闹。",
@@ -18567,7 +22178,10 @@ mod sub112_e2e {
         let llm = mock_replay_governed().await;
         let session = "1783099000009-g112";
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -18649,11 +22263,14 @@ mod sub114_e2e {
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request =
-            builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .unwrap();
         let parsed = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
@@ -18690,7 +22307,9 @@ mod sub114_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -18712,8 +22331,16 @@ mod sub114_e2e {
             r#"{"id":"b114","title":"结构态书","platform":"other","genre":"xianxia","status":"active","targetChapters":100,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
         )
         .unwrap();
-        std::fs::write(book.join("chapters").join("0001_风起.md"), "# 第一章 风起\n\n林动。").unwrap();
-        std::fs::write(book.join("story").join("story_bible.md"), "# 既有地基\n\n旧。").unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第一章 风起\n\n林动。",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("story").join("story_bible.md"),
+            "# 既有地基\n\n旧。",
+        )
+        .unwrap();
         std::fs::write(
             root.join("novel114.txt"),
             "# 第一章 风起\n\n林动。\n\n# 第二章 续章\n\n夜色渐深。",
@@ -18723,7 +22350,10 @@ mod sub114_e2e {
         let llm = mock_replay().await;
         let session = "1783099000010-s114";
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -18752,13 +22382,15 @@ mod sub114_e2e {
 
         // 四件套（TS 导入路径磁盘格式）。
         let state = book.join("story").join("state");
-        let manifest: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(state.join("manifest.json")).unwrap(),
-        )
-        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(state.join("manifest.json")).unwrap())
+                .unwrap();
         assert_eq!(manifest["schemaVersion"], 2);
         assert_eq!(manifest["language"], "zh");
-        assert_eq!(manifest["lastAppliedChapter"], 2, "回放后进度 2：{manifest}");
+        assert_eq!(
+            manifest["lastAppliedChapter"], 2,
+            "回放后进度 2：{manifest}"
+        );
         let current: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(state.join("current_state.json")).unwrap(),
         )
@@ -18774,10 +22406,9 @@ mod sub114_e2e {
                 .is_some_and(|rows| rows.iter().any(|row| row["chapter"] == 2)),
             "{summaries}"
         );
-        let hooks: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(state.join("hooks.json")).unwrap(),
-        )
-        .unwrap();
+        let hooks: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(state.join("hooks.json")).unwrap())
+                .unwrap();
         assert!(hooks["hooks"].is_array(), "{hooks}");
     }
 
@@ -18803,7 +22434,9 @@ mod sub114_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -18816,7 +22449,10 @@ mod sub114_e2e {
         let runtime = rt(&root, &llm);
         let mut subscriber = runtime.hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -18911,7 +22547,9 @@ mod sub126_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -18938,12 +22576,17 @@ mod sub126_e2e {
             sink.lock().unwrap().push(progress.clone());
         }));
         let outcome = router
-            .chat("writer", vec![inkos_engine::llm::provider::LLMMessage {
-                role: inkos_engine::llm::provider::LLMRole::User,
-                content: "你好".into(),
-                tool_calls: None,
-                tool_call_id: None,
-            }], 0.7, None)
+            .chat(
+                "writer",
+                vec![inkos_engine::llm::provider::LLMMessage {
+                    role: inkos_engine::llm::provider::LLMRole::User,
+                    content: "你好".into(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                }],
+                0.7,
+                None,
+            )
             .await
             .unwrap();
         assert!(outcome.content.contains("修仙故事"));
@@ -18987,11 +22630,31 @@ mod sub126_e2e {
         let event = subscriber.recv().await.unwrap();
         assert_eq!(event.event, "llm:progress");
         // 键序无关（serde_json Map 排序）——逐字段断言 + 不带 sessionId。
-        assert!(event.data.contains(r#""elapsedMs":1234"#), "data: {}", event.data);
-        assert!(event.data.contains(r#""totalChars":42"#), "data: {}", event.data);
-        assert!(event.data.contains(r#""chineseChars":20"#), "data: {}", event.data);
-        assert!(event.data.contains(r#""status":"streaming""#), "data: {}", event.data);
-        assert!(!event.data.contains("sessionId"), "books 面不带 sessionId：{}", event.data);
+        assert!(
+            event.data.contains(r#""elapsedMs":1234"#),
+            "data: {}",
+            event.data
+        );
+        assert!(
+            event.data.contains(r#""totalChars":42"#),
+            "data: {}",
+            event.data
+        );
+        assert!(
+            event.data.contains(r#""chineseChars":20"#),
+            "data: {}",
+            event.data
+        );
+        assert!(
+            event.data.contains(r#""status":"streaming""#),
+            "data: {}",
+            event.data
+        );
+        assert!(
+            !event.data.contains("sessionId"),
+            "books 面不带 sessionId：{}",
+            event.data
+        );
     }
 
     #[tokio::test]
@@ -19025,7 +22688,11 @@ mod sub126_e2e {
             "camelCase 负载：{}",
             event.data
         );
-        assert!(!event.data.contains("sources"), "可选键省略：{}", event.data);
+        assert!(
+            !event.data.contains("sources"),
+            "可选键省略：{}",
+            event.data
+        );
     }
 
     /// 127 号：with_event_broadcasts 的 log 广播——{level, tag:"studio", message}
@@ -19036,24 +22703,34 @@ mod sub126_e2e {
         let root = dir.path().to_path_buf();
         let runtime = rt126(&root, "http://127.0.0.1:9");
         let mut subscriber = runtime.hub.subscribe();
-        let config = books_routes::with_event_broadcasts(
-            WriteNextConfig::default(),
-            &runtime.hub,
-            &root,
-        );
+        let config =
+            books_routes::with_event_broadcasts(WriteNextConfig::default(), &runtime.hub, &root);
         let on_log = config.on_log.expect("事件化配置应挂 log 回调");
         on_log("info", "阶段：撰写章节草稿");
         let event = subscriber.recv().await.unwrap();
         // 237 号：阶段日志同步落盘 inkos.log（TS fileSink 三通道对应面）。
-        assert!(
-            root.join("inkos.log").exists(),
-            "阶段日志应落盘 inkos.log"
-        );
+        assert!(root.join("inkos.log").exists(), "阶段日志应落盘 inkos.log");
         assert_eq!(event.event, "log");
-        assert!(event.data.contains("\"level\":\"info\""), "data: {}", event.data);
-        assert!(event.data.contains("\"tag\":\"studio\""), "data: {}", event.data);
-        assert!(event.data.contains("\"message\":\"阶段：撰写章节草稿\""), "data: {}", event.data);
-        assert!(!event.data.contains("sessionId"), "books 面不带标记：{}", event.data);
+        assert!(
+            event.data.contains("\"level\":\"info\""),
+            "data: {}",
+            event.data
+        );
+        assert!(
+            event.data.contains("\"tag\":\"studio\""),
+            "data: {}",
+            event.data
+        );
+        assert!(
+            event.data.contains("\"message\":\"阶段：撰写章节草稿\""),
+            "data: {}",
+            event.data
+        );
+        assert!(
+            !event.data.contains("sessionId"),
+            "books 面不带标记：{}",
+            event.data
+        );
     }
 }
 
@@ -19061,11 +22738,11 @@ mod sub126_e2e {
 
 mod sub132_e2e {
     use super::*;
-    use inkos_engine::server::books_routes::{revise, BooksRuntime};
-    use axum::http::Request;
     use axum::body::Body;
-    use tower::util::ServiceExt;
+    use axum::http::Request;
+    use inkos_engine::server::books_routes::{revise, BooksRuntime};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::util::ServiceExt;
 
     /// validator 分派状态：调用序号 + 是否恒败模式。
     #[derive(Clone)]
@@ -19078,7 +22755,10 @@ mod sub132_e2e {
         axum::extract::State(script): axum::extract::State<ValidatorScript>,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> axum::response::Response {
-        let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+        let system = body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
         let temperature = body["temperature"].as_f64();
         let content = if system.contains("continuity validator") {
             // 状态校验：首验 FAIL；重试复验按脚本（恒败或转 PASS）。
@@ -19094,7 +22774,8 @@ mod sub132_e2e {
             "=== FIXED_ISSUES ===\n压缩了中段\n\n=== REVISED_CONTENT ===\n林动睁开双眼，灵气顺经脉游走。他攥紧拳头——屈辱自今日起讨回。".to_string()
         } else if system.contains("审") || system.contains("连续") {
             if temperature == Some(0.0) {
-                r#"{"passed": true, "overallScore": 90, "summary": "修订后连贯。", "issues": []}"#.to_string()
+                r#"{"passed": true, "overallScore": 90, "summary": "修订后连贯。", "issues": []}"#
+                    .to_string()
             } else {
                 r#"{"passed": false, "overallScore": 70, "summary": "有一处节奏问题。", "issues": [{"severity": "warning", "category": "节奏", "description": "中段推进略缓。", "suggestion": "压缩。"}]}"#.to_string()
             }
@@ -19118,7 +22799,9 @@ mod sub132_e2e {
             .with_state(script.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), script)
     }
 
@@ -19155,7 +22838,9 @@ mod sub132_e2e {
             .await
             .unwrap();
         assert_eq!(response.status(), 200);
-        let body = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
         serde_json::from_slice(&body).unwrap()
     }
 
@@ -19172,7 +22857,10 @@ mod sub132_e2e {
         .unwrap();
         let (llm, script) = spawn_mock132(false).await;
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .route(
+                "/api/v1/books/:id/revise/:chapter",
+                axum::routing::post(revise),
+            )
             .with_state(rt132(&root, &llm));
 
         let parsed = post_revise(app).await;
@@ -19193,7 +22881,10 @@ mod sub132_e2e {
         std::fs::write(&chapter_path, original).unwrap();
         let (llm, script) = spawn_mock132(true).await;
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
+            .route(
+                "/api/v1/books/:id/revise/:chapter",
+                axum::routing::post(revise),
+            )
             .with_state(rt132(&root, &llm));
 
         let parsed = post_revise(app).await;
@@ -19210,7 +22901,10 @@ mod sub132_e2e {
             diagnostics["standard"],
             "Revision text and derived story state must both validate before any file is replaced."
         );
-        assert_eq!(diagnostics["before"], diagnostics["after"], "degraded 用 pre 计数");
+        assert_eq!(
+            diagnostics["before"], diagnostics["after"],
+            "degraded 用 pre 计数"
+        );
         let after = std::fs::read_to_string(&chapter_path).unwrap();
         assert_eq!(after, original, "degraded 时章节文件必须保持原文");
     }
@@ -19265,7 +22959,10 @@ mod sub136_e2e {
         // 终态快照（成功链：ready-for-review → complete）。
         assert_eq!(run["version"], 1);
         assert_eq!(run["kind"], "long-fiction");
-        assert_eq!(run["id"], format!("b1:chapter-{:04}", result.chapter_number));
+        assert_eq!(
+            run["id"],
+            format!("b1:chapter-{:04}", result.chapter_number)
+        );
         assert_eq!(run["status"], "complete");
         assert_eq!(run["stage"], format!("chapter-{}", result.chapter_number));
         // 531 号：skillIds 记录实际激活——本测试直调无 scope → 键省略
@@ -19294,7 +22991,10 @@ mod sub136_e2e {
         assert!(obs["expected"]["max"].is_u64());
         assert!(obs["actual"]["value"].is_u64());
         assert_eq!(obs["evidence"], artifacts[0]);
-        assert!(matches!(obs["severity"].as_str(), Some("info") | Some("blocking")));
+        assert!(matches!(
+            obs["severity"].as_str(),
+            Some("info") | Some("blocking")
+        ));
         assert_eq!(obs["repairable"], obs["severity"] != "info");
         // updatedAt 为 JS ISO 毫秒格式；可选键省略。
         assert!(
@@ -19304,7 +23004,10 @@ mod sub136_e2e {
             run["updatedAt"]
         );
         assert!(run.get("error").is_none());
-        assert!(run.get("model").is_none(), "Rust 装配无单值 model——备案省略");
+        assert!(
+            run.get("model").is_none(),
+            "Rust 装配无单值 model——备案省略"
+        );
     }
 }
 
@@ -19313,14 +23016,10 @@ mod sub136_e2e {
 mod sub139_e2e {
     use super::*;
     use inkos_engine::pipeline::write_next::{write_next_chapter, WriteNextConfig, WriteNextCtx};
-    use inkos_engine::skills::production_bindings::{
-        worker_skills_for_agent, OPERATION_SKILLS,
-    };
+    use inkos_engine::skills::production_bindings::{worker_skills_for_agent, OPERATION_SKILLS};
     use std::sync::Mutex;
 
-    async fn capture_system_mock(
-        systems: Arc<Mutex<Vec<String>>>,
-    ) -> String {
+    async fn capture_system_mock(systems: Arc<Mutex<Vec<String>>>) -> String {
         let sink = systems.clone();
         async fn scripted_body(content: &str) -> axum::body::Body {
             let content = content.to_string();
@@ -19341,7 +23040,10 @@ mod sub139_e2e {
             axum::routing::post(move |axum::Json(body): axum::Json<serde_json::Value>| {
                 let sink = sink.clone();
                 async move {
-                    let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
+                    let system = body["messages"][0]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
                     sink.lock().unwrap().push(system.clone());
                     let content = if system.contains("创作总编") {
                         PLANNER_RESPONSE.to_string()
@@ -19362,7 +23064,9 @@ mod sub139_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -19411,7 +23115,16 @@ mod sub139_e2e {
         let result = OPERATION_SKILLS
             .scope(
                 Some(Arc::new(worker)),
-                write_next_chapter(&state, &agents, &ctx, &WriteNextConfig::default(), "b1", None, None, None),
+                write_next_chapter(
+                    &state,
+                    &agents,
+                    &ctx,
+                    &WriteNextConfig::default(),
+                    "b1",
+                    None,
+                    None,
+                    None,
+                ),
             )
             .await
             .expect("write-next 应成功");
@@ -19440,7 +23153,9 @@ mod sub139_e2e {
 mod sub141_e2e {
     use super::*;
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
-    use inkos_engine::pipeline::script_storyboard_runner::{run_script_creation, ScriptCreationRunOptions};
+    use inkos_engine::pipeline::script_storyboard_runner::{
+        run_script_creation, ScriptCreationRunOptions,
+    };
 
     fn router_for(llm: &str) -> AgentRouter {
         AgentRouter::new(
@@ -19488,15 +23203,27 @@ mod sub141_e2e {
         let base = root.join("dramas").join("night-patrol");
         assert!(base.join("script-spec.md").exists(), "spec 落盘");
         assert!(base.join("script.md").exists(), "script 落盘");
-        assert_eq!(result.script_path.replace('\\', "/"), "dramas/night-patrol/script.md");
+        assert_eq!(
+            result.script_path.replace('\\', "/"),
+            "dramas/night-patrol/script.md"
+        );
         let status: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(base.join("status.json")).unwrap()).unwrap();
-        assert_eq!(status["version"], 1, "快照形态（旧 completedAt 形态已废弃）");
+            serde_json::from_str(&std::fs::read_to_string(base.join("status.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            status["version"], 1,
+            "快照形态（旧 completedAt 形态已废弃）"
+        );
         assert_eq!(status["kind"], "script");
         assert_eq!(status["id"], "night-patrol");
         assert_eq!(status["status"], "complete");
         assert_eq!(status["stage"], "commit");
-        let artifacts: Vec<&str> = status["artifacts"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+        let artifacts: Vec<&str> = status["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
         assert_eq!(artifacts.len(), 2, "{artifacts:?}");
         assert!(artifacts[0].ends_with("script-spec.md"));
         assert!(artifacts[1].ends_with("script.md"));
@@ -19554,8 +23281,15 @@ mod sub141_e2e {
             axum::routing::post(move |axum::Json(payload): axum::Json<serde_json::Value>| {
                 let body = body.clone();
                 async move {
-                    let system = payload["messages"][0]["content"].as_str().unwrap_or("").to_string();
-                    let content = if system.contains("剧本创作工具") { body.clone() } else { "PASS".to_string() };
+                    let system = payload["messages"][0]["content"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    let content = if system.contains("剧本创作工具") {
+                        body.clone()
+                    } else {
+                        "PASS".to_string()
+                    };
                     axum::response::IntoResponse::into_response((
                         [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                         sse(&content),
@@ -19565,7 +23299,9 @@ mod sub141_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 }
@@ -19613,26 +23349,44 @@ mod sub273_upload_caps_e2e {
                 "/api/v1/books/:id/style/import",
                 axum::routing::post(style_routes::style_import),
             )
-            .route("/api/v1/style/analyze", axum::routing::post(style_routes::style_analyze))
+            .route(
+                "/api/v1/style/analyze",
+                axum::routing::post(style_routes::style_analyze),
+            )
             .route(
                 "/api/v1/books/:id/import/chapters",
                 axum::routing::post(book_create_routes::import_chapters_endpoint),
             )
-            .route("/api/v1/fanfic/init", axum::routing::post(fanfic_routes::fanfic_init))
+            .route(
+                "/api/v1/fanfic/init",
+                axum::routing::post(fanfic_routes::fanfic_init),
+            )
             .with_state(rt273(root, llm))
     }
 
-    async fn call273(app: axum::Router, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call273(
+        app: axum::Router,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::util::ServiceExt;
         let mut builder = axum::http::Request::builder().method("POST").uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 24).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 24)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -19659,13 +23413,15 @@ mod sub273_upload_caps_e2e {
         assert_eq!(tokio::fs::read(root.join(stored)).await.unwrap(), b"hello");
 
         // 缺 dataUrl → 400 INVALID_CANON_UPLOAD（TS ApiError → onError 形态）
-        let (status, parsed) = call273(app.clone(), "/api/v1/import/canon/upload", Some("{}")).await;
+        let (status, parsed) =
+            call273(app.clone(), "/api/v1/import/canon/upload", Some("{}")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_CANON_UPLOAD");
         assert_eq!(parsed["error"]["message"], "Upload is missing dataUrl");
 
         // 非 JSON body → 按 {} 处理（TS c.req.json().catch(() => ({}))）
-        let (status, parsed) = call273(app.clone(), "/api/v1/import/canon/upload", Some("not-json")).await;
+        let (status, parsed) =
+            call273(app.clone(), "/api/v1/import/canon/upload", Some("not-json")).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(parsed["error"]["code"], "INVALID_CANON_UPLOAD");
 
@@ -19713,10 +23469,19 @@ mod sub273_upload_caps_e2e {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["material"]["title"], "novel");
         let markdown_path = parsed["material"]["markdownPath"].as_str().unwrap();
-        assert!(markdown_path.starts_with(".inkos/materials/"), "{markdown_path}");
+        assert!(
+            markdown_path.starts_with(".inkos/materials/"),
+            "{markdown_path}"
+        );
         assert!(root.join(markdown_path).is_file(), "material markdown 落盘");
         // 提取自 mock 的 SECTION 文档落进 fanfic_canon.md
-        let canon = std::fs::read_to_string(root.join("books").join("demo").join("story").join("fanfic_canon.md")).unwrap();
+        let canon = std::fs::read_to_string(
+            root.join("books")
+                .join("demo")
+                .join("story")
+                .join("fanfic_canon.md"),
+        )
+        .unwrap();
         assert!(canon.contains("世界规则：剑气纵横"), "{canon}");
 
         // 书缺失 → loadBookConfig 失败 → 500 平铺 error（TS catch 形态）
@@ -19742,16 +23507,29 @@ mod sub273_upload_caps_e2e {
 
         // style/analyze：前导空白垫到 >2MB，text 空 → 400「text is required」
         //（958 号起该端点走 LLM 编译——垫片形态证明 body 完整读取，不依赖 LLM）
-        let padded = format!("{}{}", " ".repeat(2_500_000), r#"{"text":"  ","sourceName":"x"}"#);
+        let padded = format!(
+            "{}{}",
+            " ".repeat(2_500_000),
+            r#"{"text":"  ","sourceName":"x"}"#
+        );
         assert!(padded.len() > 2 * 1024 * 1024);
         let (status, parsed) = call273(app.clone(), "/api/v1/style/analyze", Some(&padded)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "style/analyze 应接受 >2MB（{parsed}）");
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "style/analyze 应接受 >2MB（{parsed}）"
+        );
         assert_eq!(parsed["error"], "text is required");
 
         // import/chapters：前导空白垫到 >2MB，payload 校验失败 → 400「text is required」
         //（证明 body 完整读取并解析——旧代码在读取阶段即 axum 413）
         let padded = format!("{}{}", " ".repeat(2_500_000), r#"{"text":""}"#);
-        let (status, parsed) = call273(app.clone(), "/api/v1/books/demo/import/chapters", Some(&padded)).await;
+        let (status, parsed) = call273(
+            app.clone(),
+            "/api/v1/books/demo/import/chapters",
+            Some(&padded),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{parsed}");
         assert_eq!(parsed["error"], "text is required");
 
@@ -19802,7 +23580,9 @@ mod sub273_upload_caps_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 }
@@ -19810,13 +23590,13 @@ mod sub273_upload_caps_e2e {
 // ── 303 号：四件创建域 confirm-production 执行器回归 ─────────────────
 mod sub303_creation_domains_e2e {
     use super::*;
-    use serde_json::json;
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::agent_production::{
         run_confirmed_production, ProductionRequest, RequestedIntent, StudioLang,
     };
     use inkos_engine::server::books_routes::BooksRuntime;
     use inkos_engine::state::manager::StateManager;
+    use serde_json::json;
 
     fn rt303(root: &std::path::Path, llm: &str) -> BooksRuntime {
         BooksRuntime {
@@ -19898,7 +23678,9 @@ mod sub303_creation_domains_e2e {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 
@@ -19931,7 +23713,11 @@ mod sub303_creation_domains_e2e {
             Ok(outcome) => outcome,
             Err(err) => panic!("fanfic 意图应执行成功：{}", err.message),
         };
-        assert!(outcome.response_text.contains("同人创作完成"), "{}", outcome.response_text);
+        assert!(
+            outcome.response_text.contains("同人创作完成"),
+            "{}",
+            outcome.response_text
+        );
         // 找到新书的 book 目录并验证正典/地基落盘。
         let mut found_canon = false;
         for entry in std::fs::read_dir(root.join("books")).unwrap().flatten() {
@@ -19966,14 +23752,22 @@ mod sub303_creation_domains_e2e {
                 "sourceName": "参考作品",
             }
         });
-        let request = make_request("s302-imitation", None, RequestedIntent::StyleImitation, &payload);
+        let request = make_request(
+            "s302-imitation",
+            None,
+            RequestedIntent::StyleImitation,
+            &payload,
+        );
         let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
         let _outcome = match outcome {
             Ok(outcome) => outcome,
             Err(err) => panic!("仿写意图应执行成功：{}", err.message),
         };
         let book_dir = root.join("books").join("镜中剑");
-        assert!(book_dir.join("story").join("style_guide.md").is_file(), "风格指南落盘");
+        assert!(
+            book_dir.join("story").join("style_guide.md").is_file(),
+            "风格指南落盘"
+        );
     }
 
     #[tokio::test]
@@ -19985,7 +23779,12 @@ mod sub303_creation_domains_e2e {
         let payload = json!({
             "spinoffCreate": { "title": "无父番外" }
         });
-        let request = make_request("s302-spinoff", None, RequestedIntent::SpinoffCreate, &payload);
+        let request = make_request(
+            "s302-spinoff",
+            None,
+            RequestedIntent::SpinoffCreate,
+            &payload,
+        );
         let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
         let err = match outcome {
             Err(err) => err,
@@ -20023,14 +23822,24 @@ mod sub303_creation_domains_e2e {
         let payload = json!({
             "spinoffCreate": { "title": "药老前传", "parentBookId": "b1", "direction": "药老的早年" }
         });
-        let request = make_request("s328-spinoff", None, RequestedIntent::SpinoffCreate, &payload);
+        let request = make_request(
+            "s328-spinoff",
+            None,
+            RequestedIntent::SpinoffCreate,
+            &payload,
+        );
         let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
         match outcome {
-            Ok(outcome) => assert!(outcome.response_text.contains("番外创建完成"), "{}", outcome.response_text),
+            Ok(outcome) => assert!(
+                outcome.response_text.contains("番外创建完成"),
+                "{}",
+                outcome.response_text
+            ),
             Err(err) => panic!("番外意图应执行成功：{}", err.message),
         }
         let config: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("books").join("药老前传").join("book.json")).unwrap(),
+            &std::fs::read_to_string(root.join("books").join("药老前传").join("book.json"))
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(config["parentBookId"], "b1", "{config}");
@@ -20040,7 +23849,11 @@ mod sub303_creation_domains_e2e {
         assert_eq!(config["genre"], "xuanhuan", "{config}");
         // 正传正典参照落盘（import_canon 产物）。
         assert!(
-            root.join("books").join("药老前传").join("story").join("parent_canon.md").is_file(),
+            root.join("books")
+                .join("药老前传")
+                .join("story")
+                .join("parent_canon.md")
+                .is_file(),
             "parent_canon.md 未落盘"
         );
     }
@@ -20070,7 +23883,11 @@ mod sub303_creation_domains_e2e {
         )
         .unwrap();
         std::fs::create_dir_all(root.join(".inkos").join("uploads")).unwrap();
-        std::fs::write(root.join(".inkos").join("uploads").join("cont.txt"), "# 第二章\n续文。\n").unwrap();
+        std::fs::write(
+            root.join(".inkos").join("uploads").join("cont.txt"),
+            "# 第二章\n续文。\n",
+        )
+        .unwrap();
         let llm = spawn_mock303().await;
         let payload = json!({
             "continuationImport": {
@@ -20117,7 +23934,12 @@ mod sub303_creation_domains_e2e {
                 "language": "zh",
             }
         });
-        let request = make_request("s302-continuation", None, RequestedIntent::ContinuationImport, &payload);
+        let request = make_request(
+            "s302-continuation",
+            None,
+            RequestedIntent::ContinuationImport,
+            &payload,
+        );
         let outcome = run_confirmed_production(&rt303(&root, &llm), request).await;
         let _outcome = match outcome {
             Ok(outcome) => outcome,
@@ -20135,7 +23957,10 @@ mod sub303_creation_domains_e2e {
         let index = std::fs::read_to_string(book_dir.join("chapters").join("index.json")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&index).unwrap();
         assert_eq!(parsed.as_array().unwrap().len(), 2, "{index}");
-        assert!(book_dir.join("chapters").join("0001_北境.md").is_file(), "第一章落盘");
+        assert!(
+            book_dir.join("chapters").join("0001_北境.md").is_file(),
+            "第一章落盘"
+        );
     }
 }
 
@@ -20207,7 +24032,10 @@ mod pending_abort_e2e {
 
     fn app_pa(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/agent", axum::routing::post(agent_route::post_agent))
+            .route(
+                "/api/v1/agent",
+                axum::routing::post(agent_route::post_agent),
+            )
             .route(
                 "/api/v1/sessions",
                 axum::routing::post(session_routes::create_session),
@@ -20219,17 +24047,30 @@ mod pending_abort_e2e {
             .with_state(runtime)
     }
 
-    async fn call(app: axum::Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, serde_json::Value) {
+    async fn call(
+        app: axum::Router,
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
         use tower::ServiceExt;
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        let request = builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap();
+        let request = builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        let parsed = if bytes.is_empty() { serde_json::Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null) };
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
+        };
         (status, parsed)
     }
 
@@ -20271,7 +24112,9 @@ mod pending_abort_e2e {
                 app_a,
                 "POST",
                 "/api/v1/agent",
-                Some(&format!(r#"{{"instruction":"hold 第一问在飞","sessionId":"{SID}"}}"#)),
+                Some(&format!(
+                    r#"{{"instruction":"hold 第一问在飞","sessionId":"{SID}"}}"#
+                )),
             )
             .await
         });
@@ -20294,7 +24137,9 @@ mod pending_abort_e2e {
                 app_b,
                 "POST",
                 "/api/v1/agent",
-                Some(&format!(r#"{{"instruction":"第二问排队待取消","sessionId":"{SID}"}}"#)),
+                Some(&format!(
+                    r#"{{"instruction":"第二问排队待取消","sessionId":"{SID}"}}"#
+                )),
             )
             .await
         });
@@ -20321,19 +24166,39 @@ mod pending_abort_e2e {
         tokio::time::sleep(std::time::Duration::from_millis(120)).await;
         llm_state.release.notify_waiters();
         let (status_a, body_a) = turn_a.await.unwrap();
-        assert_eq!(status_a, StatusCode::INTERNAL_SERVER_ERROR, "A 在飞中止: {body_a}");
+        assert_eq!(
+            status_a,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "A 在飞中止: {body_a}"
+        );
         assert_eq!(body_a["error"]["message"], "aborted");
         let (status_b, body_b) = turn_b.await.unwrap();
-        assert_eq!(status_b, StatusCode::INTERNAL_SERVER_ERROR, "B 受理即中止: {body_b}");
+        assert_eq!(
+            status_b,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "B 受理即中止: {body_b}"
+        );
         assert_eq!(body_b["error"]["message"], "aborted");
 
         // transcript：两轮 started+user+failed，零 committed（A 在飞中止不写
         // committed；B 受理即中止写 started+user+failed 三事件）。
         let events = read_transcript_events(&root, SID).await;
-        let started = events.iter().filter(|e| matches!(e, TranscriptEvent::RequestStarted { .. })).count();
-        let committed = events.iter().filter(|e| matches!(e, TranscriptEvent::RequestCommitted { .. })).count();
-        let failed = events.iter().filter(|e| matches!(e, TranscriptEvent::RequestFailed { .. })).count();
-        let user_msgs = events.iter().filter(|e| matches!(e, TranscriptEvent::Message { role, .. } if role == "user")).count();
+        let started = events
+            .iter()
+            .filter(|e| matches!(e, TranscriptEvent::RequestStarted { .. }))
+            .count();
+        let committed = events
+            .iter()
+            .filter(|e| matches!(e, TranscriptEvent::RequestCommitted { .. }))
+            .count();
+        let failed = events
+            .iter()
+            .filter(|e| matches!(e, TranscriptEvent::RequestFailed { .. }))
+            .count();
+        let user_msgs = events
+            .iter()
+            .filter(|e| matches!(e, TranscriptEvent::Message { role, .. } if role == "user"))
+            .count();
         assert_eq!(started, 2, "events: {events:?}");
         assert_eq!(user_msgs, 2, "events: {events:?}");
         assert_eq!(failed, 2, "events: {events:?}");
@@ -20344,13 +24209,18 @@ mod pending_abort_e2e {
             app,
             "POST",
             "/api/v1/agent",
-            Some(&format!(r#"{{"instruction":"第三问新消息","sessionId":"{SID}"}}"#)),
+            Some(&format!(
+                r#"{{"instruction":"第三问新消息","sessionId":"{SID}"}}"#
+            )),
         )
         .await;
         assert_eq!(status_c, StatusCode::OK, "C 新轮: {body_c}");
         let events = read_transcript_events(&root, SID).await;
         assert_eq!(
-            events.iter().filter(|e| matches!(e, TranscriptEvent::RequestCommitted { .. })).count(),
+            events
+                .iter()
+                .filter(|e| matches!(e, TranscriptEvent::RequestCommitted { .. }))
+                .count(),
             1
         );
     }

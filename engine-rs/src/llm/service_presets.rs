@@ -36,20 +36,211 @@ pub enum ProviderFamily {
 
 /// 14 服务预设（逐字移植 TS SERVICE_PRESETS）。
 pub const SERVICE_PRESETS: &[ServicePreset] = &[
-    ServicePreset { key: "openai", provider_family: ProviderFamily::Openai, api: "openai-responses", base_url: "https://api.openai.com/v1", label: "OpenAI", temperature_range: Some((0.0, 2.0)), default_temperature: Some(1.0), writing_temperature: Some(1.0), temperature_hint: None, known_models: &[], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "anthropic", provider_family: ProviderFamily::Anthropic, api: "anthropic-messages", base_url: "https://api.anthropic.com", label: "Anthropic", temperature_range: Some((0.0, 1.0)), default_temperature: Some(1.0), writing_temperature: Some(1.0), temperature_hint: Some("不要同时改 temperature 和 top_p"), known_models: &[], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "deepseek", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "https://api.deepseek.com", label: "DeepSeek", temperature_range: Some((0.0, 2.0)), default_temperature: Some(1.0), writing_temperature: Some(1.5), temperature_hint: Some("创意写作推荐 1.5"), known_models: &[], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "moonshot", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "https://api.moonshot.cn/v1", label: "Moonshot (Kimi)", temperature_range: Some((0.0, 1.0)), default_temperature: Some(0.3), writing_temperature: Some(1.0), temperature_hint: Some("kimi-k2.5 推荐 temperature=1.0"), known_models: &[], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "minimax", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "https://api.minimaxi.com/v1", label: "MiniMax", temperature_range: Some((0.0, 2.0)), default_temperature: Some(0.9), writing_temperature: Some(0.9), temperature_hint: None, known_models: &["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2.5-highspeed", "MiniMax-M2.1", "MiniMax-M2.1-highspeed", "MiniMax-M2"], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "bailian", provider_family: ProviderFamily::Anthropic, api: "anthropic-messages", base_url: "https://dashscope.aliyuncs.com/apps/anthropic", label: "百炼 (通义千问)", temperature_range: Some((0.0, 2.0)), default_temperature: Some(0.7), writing_temperature: Some(1.0), temperature_hint: None, known_models: &[], pi_provider: Some("anthropic"), models_base_url: None },
-    ServicePreset { key: "zhipu", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "https://open.bigmodel.cn/api/paas/v4", label: "智谱 GLM", temperature_range: Some((0.0, 1.0)), default_temperature: Some(0.95), writing_temperature: Some(0.95), temperature_hint: None, known_models: &[], pi_provider: Some("zai"), models_base_url: None },
-    ServicePreset { key: "siliconflow", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "https://api.siliconflow.cn/v1", label: "硅基流动", temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, known_models: &[], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "ppio", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "https://api.ppinfra.com/v3/openai", label: "PPIO", temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, known_models: &[], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "openrouter", provider_family: ProviderFamily::Openai, api: "openai-responses", base_url: "https://openrouter.ai/api/v1", label: "OpenRouter", temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, known_models: &[], pi_provider: Some("openrouter"), models_base_url: None },
-    ServicePreset { key: "kkaiapi", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "https://api.kkaiapi.com/v1", label: "kkaiapi", temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, known_models: &[], pi_provider: None, models_base_url: Some("https://api.kkaiapi.com/v1") },
-    ServicePreset { key: "ollama", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "http://localhost:11434/v1", label: "Ollama (本地)", temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, known_models: &[], pi_provider: None, models_base_url: None },
-    ServicePreset { key: "lmstudio", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "http://localhost:1234/v1", label: "LM Studio (本地)", temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, known_models: &[], pi_provider: None, models_base_url: Some("http://localhost:1234/v1") },
-    ServicePreset { key: "custom", provider_family: ProviderFamily::Openai, api: "openai-completions", base_url: "", label: "自定义端点", temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, known_models: &[], pi_provider: None, models_base_url: None },
+    ServicePreset {
+        key: "openai",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-responses",
+        base_url: "https://api.openai.com/v1",
+        label: "OpenAI",
+        temperature_range: Some((0.0, 2.0)),
+        default_temperature: Some(1.0),
+        writing_temperature: Some(1.0),
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "anthropic",
+        provider_family: ProviderFamily::Anthropic,
+        api: "anthropic-messages",
+        base_url: "https://api.anthropic.com",
+        label: "Anthropic",
+        temperature_range: Some((0.0, 1.0)),
+        default_temperature: Some(1.0),
+        writing_temperature: Some(1.0),
+        temperature_hint: Some("不要同时改 temperature 和 top_p"),
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "deepseek",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "https://api.deepseek.com",
+        label: "DeepSeek",
+        temperature_range: Some((0.0, 2.0)),
+        default_temperature: Some(1.0),
+        writing_temperature: Some(1.5),
+        temperature_hint: Some("创意写作推荐 1.5"),
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "moonshot",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "https://api.moonshot.cn/v1",
+        label: "Moonshot (Kimi)",
+        temperature_range: Some((0.0, 1.0)),
+        default_temperature: Some(0.3),
+        writing_temperature: Some(1.0),
+        temperature_hint: Some("kimi-k2.5 推荐 temperature=1.0"),
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "minimax",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "https://api.minimaxi.com/v1",
+        label: "MiniMax",
+        temperature_range: Some((0.0, 2.0)),
+        default_temperature: Some(0.9),
+        writing_temperature: Some(0.9),
+        temperature_hint: None,
+        known_models: &[
+            "MiniMax-M3",
+            "MiniMax-M2.7",
+            "MiniMax-M2.7-highspeed",
+            "MiniMax-M2.5",
+            "MiniMax-M2.5-highspeed",
+            "MiniMax-M2.1",
+            "MiniMax-M2.1-highspeed",
+            "MiniMax-M2",
+        ],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "bailian",
+        provider_family: ProviderFamily::Anthropic,
+        api: "anthropic-messages",
+        base_url: "https://dashscope.aliyuncs.com/apps/anthropic",
+        label: "百炼 (通义千问)",
+        temperature_range: Some((0.0, 2.0)),
+        default_temperature: Some(0.7),
+        writing_temperature: Some(1.0),
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: Some("anthropic"),
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "zhipu",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "https://open.bigmodel.cn/api/paas/v4",
+        label: "智谱 GLM",
+        temperature_range: Some((0.0, 1.0)),
+        default_temperature: Some(0.95),
+        writing_temperature: Some(0.95),
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: Some("zai"),
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "siliconflow",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "https://api.siliconflow.cn/v1",
+        label: "硅基流动",
+        temperature_range: None,
+        default_temperature: None,
+        writing_temperature: None,
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "ppio",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "https://api.ppinfra.com/v3/openai",
+        label: "PPIO",
+        temperature_range: None,
+        default_temperature: None,
+        writing_temperature: None,
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "openrouter",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-responses",
+        base_url: "https://openrouter.ai/api/v1",
+        label: "OpenRouter",
+        temperature_range: None,
+        default_temperature: None,
+        writing_temperature: None,
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: Some("openrouter"),
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "kkaiapi",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "https://api.kkaiapi.com/v1",
+        label: "kkaiapi",
+        temperature_range: None,
+        default_temperature: None,
+        writing_temperature: None,
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: Some("https://api.kkaiapi.com/v1"),
+    },
+    ServicePreset {
+        key: "ollama",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "http://localhost:11434/v1",
+        label: "Ollama (本地)",
+        temperature_range: None,
+        default_temperature: None,
+        writing_temperature: None,
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
+    ServicePreset {
+        key: "lmstudio",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "http://localhost:1234/v1",
+        label: "LM Studio (本地)",
+        temperature_range: None,
+        default_temperature: None,
+        writing_temperature: None,
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: Some("http://localhost:1234/v1"),
+    },
+    ServicePreset {
+        key: "custom",
+        provider_family: ProviderFamily::Openai,
+        api: "openai-completions",
+        base_url: "",
+        label: "自定义端点",
+        temperature_range: None,
+        default_temperature: None,
+        writing_temperature: None,
+        temperature_hint: None,
+        known_models: &[],
+        pi_provider: None,
+        models_base_url: None,
+    },
 ];
 
 /// legacy 预设查询（不合并 endpoint bank，后者待 providers 域移植）。
@@ -79,7 +270,10 @@ pub fn get_writing_temperature(service: &str) -> f64 {
 /// modelsBaseUrl ?? baseUrl（用于 /models probe）。
 pub fn resolve_service_models_base_url(service: &str) -> Option<&'static str> {
     let preset = service_preset(service)?;
-    preset.models_base_url.or(Some(preset.base_url)).filter(|s| !s.is_empty())
+    preset
+        .models_base_url
+        .or(Some(preset.base_url))
+        .filter(|s| !s.is_empty())
 }
 
 /// 按 baseUrl hostname 反查 service id（custom/空 baseUrl 跳过）。
@@ -133,12 +327,15 @@ pub fn resolve_service_preset(service: &str) -> Option<ResolvedServicePreset> {
     if provider.is_none() && legacy.is_none() {
         return None;
     }
-    let provider_family = legacy
-        .map(|p| p.provider_family)
-        .unwrap_or_else(|| match provider.map(|p| p.api) {
-            Some(crate::llm::providers::ApiProtocol::AnthropicMessages) => ProviderFamily::Anthropic,
-            _ => ProviderFamily::Openai,
-        });
+    let provider_family =
+        legacy
+            .map(|p| p.provider_family)
+            .unwrap_or_else(|| match provider.map(|p| p.api) {
+                Some(crate::llm::providers::ApiProtocol::AnthropicMessages) => {
+                    ProviderFamily::Anthropic
+                }
+                _ => ProviderFamily::Openai,
+            });
     let api = provider
         .map(|p| api_protocol_str(p.api))
         .or_else(|| legacy.map(|p| p.api))
@@ -156,7 +353,11 @@ pub fn resolve_service_preset(service: &str) -> Option<ResolvedServicePreset> {
     let known_models = legacy.map(|p| p.known_models.to_vec()).unwrap_or_default();
     let models_base_url = provider
         .and_then(|p| p.models_base_url.clone())
-        .or_else(|| legacy.and_then(|p| p.models_base_url).map(|s| s.to_string()));
+        .or_else(|| {
+            legacy
+                .and_then(|p| p.models_base_url)
+                .map(|s| s.to_string())
+        });
     Some(ResolvedServicePreset {
         provider_family,
         api,
@@ -214,16 +415,34 @@ mod tests {
 
     #[test]
     fn guess_by_hostname() {
-        assert_eq!(guess_service_from_base_url("https://api.deepseek.com/v1"), "deepseek");
-        assert_eq!(guess_service_from_base_url("https://api.moonshot.cn/v1/chat"), "moonshot");
-        assert_eq!(guess_service_from_base_url("http://localhost:11434/v1"), "ollama");
-        assert_eq!(guess_service_from_base_url("https://unknown.example.com"), "custom");
+        assert_eq!(
+            guess_service_from_base_url("https://api.deepseek.com/v1"),
+            "deepseek"
+        );
+        assert_eq!(
+            guess_service_from_base_url("https://api.moonshot.cn/v1/chat"),
+            "moonshot"
+        );
+        assert_eq!(
+            guess_service_from_base_url("http://localhost:11434/v1"),
+            "ollama"
+        );
+        assert_eq!(
+            guess_service_from_base_url("https://unknown.example.com"),
+            "custom"
+        );
     }
 
     #[test]
     fn models_base_url_resolution() {
-        assert_eq!(resolve_service_models_base_url("kkaiapi"), Some("https://api.kkaiapi.com/v1"));
-        assert_eq!(resolve_service_models_base_url("deepseek"), Some("https://api.deepseek.com"));
+        assert_eq!(
+            resolve_service_models_base_url("kkaiapi"),
+            Some("https://api.kkaiapi.com/v1")
+        );
+        assert_eq!(
+            resolve_service_models_base_url("deepseek"),
+            Some("https://api.deepseek.com")
+        );
         assert_eq!(resolve_service_models_base_url("custom"), None); // 空 baseUrl
     }
 
@@ -261,8 +480,14 @@ mod resolve_tests {
     #[test]
     fn bank_api_wins_for_family() {
         // bailian legacy=anthropic；bank api 也是 anthropic-messages
-        assert_eq!(resolve_service_provider_family("bailian"), Some(ProviderFamily::Anthropic));
-        assert_eq!(resolve_service_provider_family("zhipu"), Some(ProviderFamily::Openai));
+        assert_eq!(
+            resolve_service_provider_family("bailian"),
+            Some(ProviderFamily::Anthropic)
+        );
+        assert_eq!(
+            resolve_service_provider_family("zhipu"),
+            Some(ProviderFamily::Openai)
+        );
         assert!(resolve_service_provider_family("nope").is_none());
     }
 }

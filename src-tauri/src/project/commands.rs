@@ -62,10 +62,7 @@ pub async fn remove_project(id: String, state: State<'_, AppState>) -> Result<()
 
 /// 更新项目元数据
 #[tauri::command]
-pub async fn update_project(
-    meta: ProjectMeta,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn update_project(meta: ProjectMeta, state: State<'_, AppState>) -> Result<(), String> {
     let manager = &state.project_manager;
     manager.update_project(&meta).map_err(|e| e.to_string())?;
 

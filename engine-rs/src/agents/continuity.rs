@@ -14,7 +14,9 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::fanfic_dimensions::{get_fanfic_dimension_config, FanficDimensionConfig, FANFIC_DIMENSIONS};
+use super::fanfic_dimensions::{
+    get_fanfic_dimension_config, FanficDimensionConfig, FANFIC_DIMENSIONS,
+};
 use super::rules_reader::{
     read_book_language, read_book_rules, read_genre_profile, ReadGenreProfileError,
 };
@@ -114,7 +116,11 @@ pub fn contains_chinese(text: &str) -> bool {
 
 /// 解析题材标签：中文语言或 profileName 不含中文时直接用 profileName；
 /// 否则 "other" → "general"，余者把 `_-` 转空格。对齐 TS `resolveGenreLabel`。
-pub fn resolve_genre_label(genre_id: &str, profile_name: &str, language: WritingLanguage) -> String {
+pub fn resolve_genre_label(
+    genre_id: &str,
+    profile_name: &str,
+    language: WritingLanguage,
+) -> String {
     if language == WritingLanguage::Zh || !contains_chinese(profile_name) {
         return profile_name.to_string();
     }
@@ -128,17 +134,28 @@ pub fn resolve_genre_label(genre_id: &str, profile_name: &str, language: Writing
 pub fn dimension_name(id: u32, language: WritingLanguage) -> Option<&'static str> {
     let labels = dimension_labels();
     let entry = labels.get(&id)?;
-    Some(if language == WritingLanguage::En { entry.en } else { entry.zh })
+    Some(if language == WritingLanguage::En {
+        entry.en
+    } else {
+        entry.zh
+    })
 }
 
 /// 本地化 join（中文「、」，英文「, 」）。对齐 TS `joinLocalized`。
 pub fn join_localized(items: &[String], language: WritingLanguage) -> String {
-    let sep = if language == WritingLanguage::En { ", " } else { "、" };
+    let sep = if language == WritingLanguage::En {
+        ", "
+    } else {
+        "、"
+    };
     items.join(sep)
 }
 
 /// 同人维度严重度提示。对齐 TS `formatFanficSeverityNote`。
-pub fn format_fanfic_severity_note(severity: AuditSeverity, language: WritingLanguage) -> &'static str {
+pub fn format_fanfic_severity_note(
+    severity: AuditSeverity,
+    language: WritingLanguage,
+) -> &'static str {
     if language == WritingLanguage::En {
         return match severity {
             AuditSeverity::Critical => "Strict check.",
@@ -178,7 +195,11 @@ fn dimension_labels() -> &'static HashMap<u32, DimensionLabel> {
             (11, "利益链断裂", "Incentive Chain Check"),
             (12, "年代考据", "Era Accuracy Check"),
             (13, "配角降智", "Side Character Competence Check"),
-            (14, "配角工具人化", "Side Character Instrumentalization Check"),
+            (
+                14,
+                "配角工具人化",
+                "Side Character Instrumentalization Check",
+            ),
             (15, "爽点虚化", "Payoff Dilution Check"),
             (16, "台词失真", "Dialogue Authenticity Check"),
             (17, "流水账", "Chronicle Drift Check"),
@@ -386,7 +407,8 @@ pub fn build_dimension_note(
         }
         28 => {
             if language == WritingLanguage::En {
-                "Check whether spinoff events contradict the mainline canon constraints.".to_string()
+                "Check whether spinoff events contradict the mainline canon constraints."
+                    .to_string()
             } else {
                 "检查番外事件是否与正典约束表矛盾".to_string()
             }
@@ -437,7 +459,10 @@ pub fn build_dimension_note(
             let Some(cfg) = fanfic_config else {
                 return String::new();
             };
-            let severity = cfg.severity_overrides.get(&id).copied()
+            let severity = cfg
+                .severity_overrides
+                .get(&id)
+                .copied()
                 .unwrap_or(AuditSeverity::Warning);
             let base_note: Option<&str> = if language == WritingLanguage::En {
                 match id {
@@ -455,10 +480,7 @@ pub fn build_dimension_note(
             };
 
             match base_note {
-                Some(base) => format!(
-                    "{base} {}",
-                    format_fanfic_severity_note(severity, language)
-                ),
+                Some(base) => format!("{base} {}", format_fanfic_severity_note(severity, language)),
                 None => String::new(),
             }
         }
@@ -518,7 +540,9 @@ pub fn build_dimension_list(
                     AuditDimension::Number(n) => add(*n, &mut active_ids),
                     AuditDimension::Text(s) => {
                         // 先精确匹配，再子串模糊匹配。
-                        if let Some((_, id)) = name_to_id.iter().find(|(name, _)| *name == s.as_str()) {
+                        if let Some((_, id)) =
+                            name_to_id.iter().find(|(name, _)| *name == s.as_str())
+                        {
                             add(*id as f64, &mut active_ids);
                         } else if let Some((_, id)) = name_to_id
                             .iter()
@@ -627,7 +651,10 @@ pub fn extract_balanced_json(text: &str) -> Option<&str> {
 }
 
 /// JS `??` 合并语义：缺失或 null 取右值。
-fn coalesce<'a>(a: Option<&'a serde_json::Value>, b: Option<&'a serde_json::Value>) -> Option<&'a serde_json::Value> {
+fn coalesce<'a>(
+    a: Option<&'a serde_json::Value>,
+    b: Option<&'a serde_json::Value>,
+) -> Option<&'a serde_json::Value> {
     match a {
         Some(serde_json::Value::Null) | None => b,
         other => other,
@@ -737,9 +764,8 @@ pub fn parse_audit_result(content: &str, language: WritingLanguage) -> AuditResu
     // 策略 3：```json 代码块。
     {
         static CODE_BLOCK: OnceLock<Regex> = OnceLock::new();
-        let code_block = CODE_BLOCK.get_or_init(|| {
-            Regex::new(r"```(?:json)?\s*\n?([\s\S]*?)\n?```").unwrap()
-        });
+        let code_block =
+            CODE_BLOCK.get_or_init(|| Regex::new(r"```(?:json)?\s*\n?([\s\S]*?)\n?```").unwrap());
         if let Some(m) = code_block.captures(content) {
             let block = m.get(1).expect("组 1 必在").as_str().trim();
             if let Some(result) = try_parse_audit_json(block, language) {
@@ -754,12 +780,14 @@ pub fn parse_audit_result(content: &str, language: WritingLanguage) -> AuditResu
         static ISSUES: OnceLock<Regex> = OnceLock::new();
         static SUMMARY: OnceLock<Regex> = OnceLock::new();
         static ISSUE_OBJ: OnceLock<Regex> = OnceLock::new();
-        let passed_re = PASSED.get_or_init(|| Regex::new(r#""passed"\s*:\s*(true|false)"#).unwrap());
-        let issues_re = ISSUES.get_or_init(|| Regex::new(r#""issues"\s*:\s*\[([\s\S]*?)\]"#).unwrap());
-        let summary_re = SUMMARY.get_or_init(|| Regex::new(r#""summary"\s*:\s*"([^"]*)""#).unwrap());
-        let issue_obj = ISSUE_OBJ.get_or_init(|| {
-            Regex::new(r#"\{[^{}]*"severity"\s*:\s*"[^"]*"[^{}]*\}"#).unwrap()
-        });
+        let passed_re =
+            PASSED.get_or_init(|| Regex::new(r#""passed"\s*:\s*(true|false)"#).unwrap());
+        let issues_re =
+            ISSUES.get_or_init(|| Regex::new(r#""issues"\s*:\s*\[([\s\S]*?)\]"#).unwrap());
+        let summary_re =
+            SUMMARY.get_or_init(|| Regex::new(r#""summary"\s*:\s*"([^"]*)""#).unwrap());
+        let issue_obj = ISSUE_OBJ
+            .get_or_init(|| Regex::new(r#"\{[^{}]*"severity"\s*:\s*"[^"]*"[^{}]*\}"#).unwrap());
 
         if let Some(m) = passed_re.captures(content) {
             let passed = m.get(1).expect("组 1 必在").as_str() == "true";
@@ -829,13 +857,11 @@ pub fn build_reduced_control_block(
     let selected_context = context_package
         .selected_context
         .iter()
-        .map(|entry| {
-            match &entry.excerpt {
-                Some(excerpt) if !excerpt.is_empty() => {
-                    format!("- {}: {} | {excerpt}", entry.source, entry.reason)
-                }
-                _ => format!("- {}: {}", entry.source, entry.reason),
+        .map(|entry| match &entry.excerpt {
+            Some(excerpt) if !excerpt.is_empty() => {
+                format!("- {}: {} | {excerpt}", entry.source, entry.reason)
             }
+            _ => format!("- {}: {}", entry.source, entry.reason),
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -1023,7 +1049,9 @@ pub async fn audit_chapter(
     let ledger = overrides
         .and_then(|o| o.ledger.clone())
         .unwrap_or(disk_ledger);
-    let hooks = overrides.and_then(|o| o.hooks.clone()).unwrap_or(disk_hooks);
+    let hooks = overrides
+        .and_then(|o| o.hooks.clone())
+        .unwrap_or(disk_hooks);
 
     let has_parent_canon = parent_canon != MISSING_FILE;
     let has_fanfic_canon = fanfic_canon != MISSING_FILE;
@@ -1284,12 +1312,9 @@ pub async fn audit_chapter(
         options.context_package.as_ref(),
         options.rule_stack.as_ref(),
     ) {
-        (Some(intent), Some(pkg), Some(stack)) => build_reduced_control_block(
-            intent,
-            pkg,
-            stack,
-            resolved_language,
-        ),
+        (Some(intent), Some(pkg), Some(stack)) => {
+            build_reduced_control_block(intent, pkg, stack, resolved_language)
+        }
         _ => String::new(),
     };
     let style_guide_block = if reduced_control_block.is_empty() {
@@ -1326,12 +1351,14 @@ pub async fn audit_chapter(
         LLMMessage {
             role: LLMRole::System,
             content: system_prompt,
-            tool_calls: None, tool_call_id: None,
+            tool_calls: None,
+            tool_call_id: None,
         },
         LLMMessage {
             role: LLMRole::User,
             content: user_prompt,
-            tool_calls: None, tool_call_id: None,
+            tool_calls: None,
+            tool_call_id: None,
         },
     ];
     let temperature = options.temperature.unwrap_or(0.3);
@@ -1375,7 +1402,8 @@ async fn load_previous_chapter(book_dir: &Path, current_chapter: u32) -> String 
     }
     let chapters_dir = book_dir.join("chapters");
     let Some(name) =
-        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, current_chapter - 1).await
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, current_chapter - 1)
+            .await
     else {
         return String::new();
     };
@@ -1473,8 +1501,14 @@ mod tests {
     fn dimension_name_covers_all_40_in_both_languages() {
         // G7a/341 号：维度表扩至 39；R1/357 号：扩至 40（追读承接检查）。
         for id in 1..=40u32 {
-            assert!(dimension_name(id, WritingLanguage::Zh).is_some(), "维度 {id} 缺中文");
-            assert!(dimension_name(id, WritingLanguage::En).is_some(), "维度 {id} 缺英文");
+            assert!(
+                dimension_name(id, WritingLanguage::Zh).is_some(),
+                "维度 {id} 缺中文"
+            );
+            assert!(
+                dimension_name(id, WritingLanguage::En).is_some(),
+                "维度 {id} 缺英文"
+            );
         }
         assert_eq!(dimension_name(0, WritingLanguage::Zh), None);
         assert_eq!(dimension_name(41, WritingLanguage::En), None);
@@ -1484,7 +1518,10 @@ mod tests {
     fn dimension_name_specific_labels() {
         assert_eq!(dimension_name(1, WritingLanguage::Zh), Some("OOC检查"));
         assert_eq!(dimension_name(1, WritingLanguage::En), Some("OOC Check"));
-        assert_eq!(dimension_name(37, WritingLanguage::Zh), Some("正典事件一致性"));
+        assert_eq!(
+            dimension_name(37, WritingLanguage::Zh),
+            Some("正典事件一致性")
+        );
     }
 
     #[test]
@@ -1718,7 +1755,15 @@ mod tests {
             ],
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false, false);
+        let dims = build_dimension_list(
+            &gp,
+            Some(&rules),
+            WritingLanguage::Zh,
+            false,
+            None,
+            false,
+            false,
+        );
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         assert_eq!(ids, vec![1, 4, 5, 6, 10, 27, 32, 33]);
 
@@ -1753,7 +1798,15 @@ mod tests {
             }),
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false, false);
+        let dims = build_dimension_list(
+            &gp,
+            Some(&rules),
+            WritingLanguage::Zh,
+            false,
+            None,
+            false,
+            false,
+        );
         assert!(dims.iter().any(|d| d.id == 12));
     }
 
@@ -1765,7 +1818,15 @@ mod tests {
         assert!(dims.iter().any(|d| d.id == 31));
 
         // 同人模式下不激活番外维度，改激活同人维度 34-37。
-        let dims = build_dimension_list(&gp, None, WritingLanguage::Zh, true, Some(FanficMode::Au), false, false);
+        let dims = build_dimension_list(
+            &gp,
+            None,
+            WritingLanguage::Zh,
+            true,
+            Some(FanficMode::Au),
+            false,
+            false,
+        );
         assert!(!dims.iter().any(|d| (28..=31).contains(&d.id)));
         assert!(dims.iter().any(|d| (34..=37).contains(&d.id)));
     }
@@ -1776,12 +1837,20 @@ mod tests {
         let rules = BookRules {
             additional_audit_dimensions: vec![
                 AuditDimension::Text("Timeline Check".to_string()), // en 精确 → 2
-                AuditDimension::Text("pacing".to_string()),         // en 模糊（包含于 Pacing Check? 否）→
-                AuditDimension::Number(1.5),                        // 非整数 → 无名跳过
+                AuditDimension::Text("pacing".to_string()), // en 模糊（包含于 Pacing Check? 否）→
+                AuditDimension::Number(1.5),                // 非整数 → 无名跳过
             ],
             ..BookRules::default()
         };
-        let dims = build_dimension_list(&gp, Some(&rules), WritingLanguage::Zh, false, None, false, false);
+        let dims = build_dimension_list(
+            &gp,
+            Some(&rules),
+            WritingLanguage::Zh,
+            false,
+            None,
+            false,
+            false,
+        );
         let ids: Vec<u32> = dims.iter().map(|d| d.id).collect();
         assert!(ids.contains(&2));
         // "pacing" 小写包含于… TS includes 区分大小写：name "Pacing Check" 不含 "pacing"，
@@ -1812,8 +1881,8 @@ mod tests {
         );
         assert_eq!(extract_balanced_json("no braces"), None);
         assert_eq!(extract_balanced_json(r#"{"a": {"b": 1"#), None); // 不平衡
-        // 嵌套字符串内的花括号——TS 同样按字符计数不感知字符串语义：
-        // "a}b" 中的 } 使 depth 归零，提取在 "a} 处截断。
+                                                                     // 嵌套字符串内的花括号——TS 同样按字符计数不感知字符串语义：
+                                                                     // "a}b" 中的 } 使 depth 归零，提取在 "a} 处截断。
         assert_eq!(
             extract_balanced_json(r#"- {"x": "a}b"}"#),
             Some(r#"{"x": "a}"#)
@@ -1900,13 +1969,22 @@ mod tests {
     #[test]
     fn parse_audit_result_score_field_aliases_and_clamp() {
         // overallScore 驼峰别名。
-        let r = parse_audit_result(r#"{"passed": true, "overallScore": 72.4}"#, WritingLanguage::Zh);
+        let r = parse_audit_result(
+            r#"{"passed": true, "overallScore": 72.4}"#,
+            WritingLanguage::Zh,
+        );
         assert_eq!(r.overall_score, Some(72));
         // null score → overallScore 不可用 → None。
-        let r = parse_audit_result(r#"{"passed": true, "overall_score": null, "overallScore": "x"}"#, WritingLanguage::Zh);
+        let r = parse_audit_result(
+            r#"{"passed": true, "overall_score": null, "overallScore": "x"}"#,
+            WritingLanguage::Zh,
+        );
         assert_eq!(r.overall_score, None);
         // 负分 clamp 到 0。
-        let r = parse_audit_result(r#"{"passed": true, "overall_score": -5}"#, WritingLanguage::Zh);
+        let r = parse_audit_result(
+            r#"{"passed": true, "overall_score": -5}"#,
+            WritingLanguage::Zh,
+        );
         assert_eq!(r.overall_score, Some(0));
     }
 
@@ -1980,7 +2058,8 @@ mod tests {
             &test_rule_stack(),
             WritingLanguage::Zh,
         );
-        assert!(block.starts_with("\n## 本章控制输入（由 Planner/Composer 编译）\n本章目标：主角突破\n"));
+        assert!(block
+            .starts_with("\n## 本章控制输入（由 Planner/Composer 编译）\n本章目标：主角突破\n"));
         assert!(block.contains("- story/pending_hooks.md#H1: 主线伏笔 | H1 玉佩悬念"));
         assert!(block.contains("- story/chapter_summaries.md: 前情"));
         assert!(block.contains("- 硬护栏：主角不死"));
@@ -2053,7 +2132,10 @@ mod tests {
             messages: Vec<LLMMessage>,
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((messages, temperature));
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((messages, temperature));
             Ok(ChatOutcome {
                 content: self.response.clone(),
                 usage: self.usage,
@@ -2087,7 +2169,9 @@ mod tests {
         tokio::fs::create_dir_all(project.join("genres"))
             .await
             .expect("建 project genres");
-        tokio::fs::create_dir_all(&builtin).await.expect("建 builtin");
+        tokio::fs::create_dir_all(&builtin)
+            .await
+            .expect("建 builtin");
         tokio::fs::write(builtin.join("xianxia.md"), genre_md)
             .await
             .expect("写内置 genre");
@@ -2158,7 +2242,10 @@ mod tests {
         );
 
         // prompt 断言：单次调用、默认温度。
-        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let calls = mock
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1, 0.3);
         let (system, user) = {
@@ -2179,7 +2266,9 @@ mod tests {
         assert!(system.contains("## Prompt Pack Guidance (longform.auditor"));
 
         // user：状态卡 + 伏笔池（disk 过滤版）+ 文风指南回退 + 上一章全文 + 待审内容。
-        assert!(user.starts_with("请审查第3章。\n\n## 当前状态卡\n# 当前状态\n林动：凝魂境三层\n\n"));
+        assert!(
+            user.starts_with("请审查第3章。\n\n## 当前状态卡\n# 当前状态\n林动：凝魂境三层\n\n")
+        );
         assert!(user.contains("## 伏笔池"));
         assert!(user.contains("| H1 | open |"));
         assert!(!user.contains("## 资源账本")); // numericalSystem 关闭
@@ -2227,7 +2316,9 @@ mod tests {
         // genre=None → "other"，内置 other.md 缺失 → Genre NotFound 错误。
         assert!(matches!(
             result,
-            Err(AuditChapterError::Genre(ReadGenreProfileError::NotFound { .. }))
+            Err(AuditChapterError::Genre(
+                ReadGenreProfileError::NotFound { .. }
+            ))
         ));
     }
 
@@ -2242,7 +2333,9 @@ mod tests {
         tokio::fs::create_dir_all(project.join("genres"))
             .await
             .expect("建 project genres");
-        tokio::fs::create_dir_all(&builtin).await.expect("建 builtin");
+        tokio::fs::create_dir_all(&builtin)
+            .await
+            .expect("建 builtin");
         tokio::fs::create_dir_all(&book).await.expect("建 book");
         let _ = genre_en;
         tokio::fs::write(builtin.join("other.md"), other_md)
@@ -2275,7 +2368,10 @@ mod tests {
         // eraResearch → chat_with_search 路由。
         assert!(mock.search_used.load(Ordering::SeqCst));
 
-        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let calls = mock
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let system = &calls[0].0[0].content;
         let user = &calls[0].0[1].content;
         // en genre label：profileName "General" 无中文 → 用 profileName。
@@ -2296,7 +2392,10 @@ mod tests {
             &[
                 ("book.json", r#"{"language":"zh"}"#),
                 ("story/current_state.md", "# 当前状态\n真实内容"),
-                ("story/pending_hooks.md", "| hook_id | 状态 |\n| --- | --- |\n| H1 | open |\n"),
+                (
+                    "story/pending_hooks.md",
+                    "| hook_id | 状态 |\n| --- | --- |\n| H1 | open |\n",
+                ),
             ],
         )
         .await;
@@ -2325,7 +2424,10 @@ mod tests {
             .await
             .expect("应成功");
 
-        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let calls = mock
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let user = &calls[0].0[1].content;
         // governed hooks 块替代 disk 伏笔池。
         assert!(user.contains("H1 玉佩悬念未解"));
@@ -2378,7 +2480,10 @@ mod tests {
             .await
             .expect("应成功");
 
-        let calls = mock.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let calls = mock
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls[0].1, 0.7); // 自定义温度
         let user = &calls[0].0[1].content;
         // 真相文件覆盖生效。
@@ -2386,7 +2491,9 @@ mod tests {
         assert!(!user.contains("盘上状态"));
         assert!(user.contains("伏笔覆盖"));
         // memo 块。
-        assert!(user.contains("## 章节备忘（用于 memo 偏离检测）\ngoal：突破凝魂境\n\n## 当前任务\n拿下城主之位\n"));
+        assert!(user.contains(
+            "## 章节备忘（用于 memo 偏离检测）\ngoal：突破凝魂境\n\n## 当前任务\n拿下城主之位\n"
+        ));
         // 三件套齐全 → 精简控制块替代文风指南块。
         assert!(user.contains("## 本章控制输入（由 Planner/Composer 编译）\n推进主线"));
         assert!(!user.contains("## 文风指南"));

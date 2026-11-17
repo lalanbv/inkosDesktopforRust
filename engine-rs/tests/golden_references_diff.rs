@@ -6,7 +6,8 @@
 
 use serde_json::Value;
 
-const VECTORS: &str = include_str!("../../packages/core/src/__tests__/golden/references-vectors.json");
+const VECTORS: &str =
+    include_str!("../../packages/core/src/__tests__/golden/references-vectors.json");
 
 fn normalize(value: Value) -> Value {
     value

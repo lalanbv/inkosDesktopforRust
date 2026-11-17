@@ -317,8 +317,8 @@ pub fn try_parse_book_rules_frontmatter(
     // 对齐 TS：yaml.load("") → undefined / yaml.load("null") → null → zod parse throw
     // （golden frontmatter-empty 向量验证）。serde_yaml_ng 会把空输入吞成全默认结构，
     // 须显式拦下交给调用方回退。
-    let value: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(fm).map_err(|e| BookRulesFrontmatterError::Invalid(e.to_string()))?;
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(fm)
+        .map_err(|e| BookRulesFrontmatterError::Invalid(e.to_string()))?;
     if value.is_null() {
         return Err(BookRulesFrontmatterError::Invalid(
             "frontmatter 为空（yaml.load → undefined/null）".to_string(),

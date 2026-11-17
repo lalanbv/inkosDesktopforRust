@@ -36,7 +36,10 @@ pub struct ForecastPromptInput<'a> {
     pub base_chapter: u32,
 }
 
-pub fn build_forecast_user_prompt(input: &ForecastPromptInput<'_>, language: ForecastLanguage) -> String {
+pub fn build_forecast_user_prompt(
+    input: &ForecastPromptInput<'_>,
+    language: ForecastLanguage,
+) -> String {
     let first_chapter = input.base_chapter + 1;
     if language == "en" {
         [
@@ -87,7 +90,8 @@ pub fn build_forecast_repair_prompt(validation_error: &str, language: ForecastLa
     } else {
         [
             format!("你上一次的输出未通过校验：{validation_error}"),
-            "请修正上述问题后重新输出完整 JSON 对象，只输出 JSON，不要解释，不要代码围栏。".to_string(),
+            "请修正上述问题后重新输出完整 JSON 对象，只输出 JSON，不要解释，不要代码围栏。"
+                .to_string(),
         ]
         .join("\n")
     }

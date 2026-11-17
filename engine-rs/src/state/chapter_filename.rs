@@ -84,9 +84,15 @@ mod tests {
     fn parse_number_bounds_match_ts_u32_and_ascii_digits() {
         // 854 号：章号上界与 TS `MAX_CHAPTER_NUMBER`（u32::MAX）恒等——TS `parseInt` 对
         // 超 u32 前导号给出浮点整数并列为章，Rust parse 失败判非章即旧漂移点。
-        assert_eq!(parse_chapter_file_number("4294967295_界内.md"), Some(u32::MAX));
+        assert_eq!(
+            parse_chapter_file_number("4294967295_界内.md"),
+            Some(u32::MAX)
+        );
         assert_eq!(parse_chapter_file_number("4294967296_超界.md"), None);
-        assert_eq!(parse_chapter_file_number(&format!("{}_天文.md", "9".repeat(20))), None);
+        assert_eq!(
+            parse_chapter_file_number(&format!("{}_天文.md", "9".repeat(20))),
+            None
+        );
         // 854 号：数字类显式 ASCII——regex `\d` 默认 Unicode 数字类（全角/阿拉伯-印度
         // 数字），JS `\d` 恒 ASCII；对齐后非 ASCII 数字前缀不构成章号。混合形态按
         // ASCII 前导段取值，与 TS `\d+` 捕获语义恒等。
@@ -150,7 +156,10 @@ mod tests {
             Some("00071_长名.md".to_string())
         );
         // 无候选 / 0 号。
-        assert_eq!(find_chapter_file_by_number(&list(&["0002_风起.md"]), 1), None);
+        assert_eq!(
+            find_chapter_file_by_number(&list(&["0002_风起.md"]), 1),
+            None
+        );
         assert_eq!(find_chapter_file_by_number(&list(&["0000_零.md"]), 0), None);
     }
 
@@ -158,17 +167,33 @@ mod tests {
     fn find_agrees_with_select_chapter_files_for_every_chapter() {
         // 845 号：读侧定位与索引去重对任一章的胜者恒等，且与输入顺序无关。
         let files = list(&[
-            "0002-b.md", "0001_新.md", "0001-旧.md", "0003.md", "0000_zero.md", "index.json",
-            "0002-a.md", "7_a.md", "0007_b.md", "007_c.md", "00071_七十一.md",
+            "0002-b.md",
+            "0001_新.md",
+            "0001-旧.md",
+            "0003.md",
+            "0000_zero.md",
+            "index.json",
+            "0002-a.md",
+            "7_a.md",
+            "0007_b.md",
+            "007_c.md",
+            "00071_七十一.md",
         ]);
         let mut reversed = files.clone();
         reversed.reverse();
         let selected = select_chapter_files(files.clone());
         assert_eq!(selected, select_chapter_files(reversed.clone()));
         for name in &selected {
-            let number = parse_chapter_file_number(name).expect("selected files carry a chapter number");
-            assert_eq!(find_chapter_file_by_number(&files, number).as_deref(), Some(name.as_str()));
-            assert_eq!(find_chapter_file_by_number(&reversed, number).as_deref(), Some(name.as_str()));
+            let number =
+                parse_chapter_file_number(name).expect("selected files carry a chapter number");
+            assert_eq!(
+                find_chapter_file_by_number(&files, number).as_deref(),
+                Some(name.as_str())
+            );
+            assert_eq!(
+                find_chapter_file_by_number(&reversed, number).as_deref(),
+                Some(name.as_str())
+            );
         }
     }
 }

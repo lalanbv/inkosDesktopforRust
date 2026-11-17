@@ -21,7 +21,9 @@ use crate::agents::continuity::{AuditResult, AuditTokenUsage, ChatOutcome};
 use crate::agents::planner::PlannerChat;
 use crate::agents::reviser::ReviserChat;
 use crate::agents::state_validator::StateValidatorChat;
-use crate::agents::writer::{SettleChapterStateInput, WriteChapterError, WriteChapterOutput, WriterChat, WriterCtx};
+use crate::agents::writer::{
+    SettleChapterStateInput, WriteChapterError, WriteChapterOutput, WriterChat, WriterCtx,
+};
 use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::llm::streaming_client::{ChatCompletionParams, StreamError, StreamingChatClient};
 use crate::pipeline::chapter_review_cycle::{ChapterReviewCycleControlInput, CycleAuditor};
@@ -104,7 +106,10 @@ impl AgentRouter {
 
     /// 覆盖传输协议（默认 chat；inkos.json llm.apiFormat / 服务项 apiFormat /
     /// env INKOS_LLM_API_FORMAT 命中 responses 时置位）。
-    pub fn with_api_format(mut self, api_format: crate::llm::providers::TransportApiFormat) -> Self {
+    pub fn with_api_format(
+        mut self,
+        api_format: crate::llm::providers::TransportApiFormat,
+    ) -> Self {
         self.api_format = api_format;
         self
     }
@@ -191,11 +196,7 @@ impl AgentRouter {
 
     async fn client_for(&self, endpoint: &ResolvedEndpoint) -> Arc<StreamingChatClient> {
         // 缓存键：baseUrl|apiKey 尾 4 位（避免全键入内存日志面的同时区分端点）。
-        let key = format!(
-            "{}|{}",
-            endpoint.base_url,
-            endpoint.api_key.len()
-        );
+        let key = format!("{}|{}", endpoint.base_url, endpoint.api_key.len());
         let mut clients = self.clients.lock().await;
         if let Some(client) = clients.get(&key) {
             return client.clone();
@@ -230,8 +231,14 @@ impl AgentRouter {
         messages: Vec<LLMMessage>,
         max_tokens: u32,
     ) -> Result<ChatOutcome, String> {
-        self.chat_once("compaction", &self.default.model.clone(), messages, 0.2, Some(max_tokens))
-            .await
+        self.chat_once(
+            "compaction",
+            &self.default.model.clone(),
+            messages,
+            0.2,
+            Some(max_tokens),
+        )
+        .await
     }
 
     pub async fn chat(
@@ -372,7 +379,10 @@ impl AgentRouter {
         const TRANSIENT_RETRIES: usize = 2;
         let mut attempt: usize = 0;
         loop {
-            match self.chat_once(agent, model, messages.clone(), temperature, max_tokens).await {
+            match self
+                .chat_once(agent, model, messages.clone(), temperature, max_tokens)
+                .await
+            {
                 Ok(outcome) => return Ok(outcome),
                 Err(text) => {
                     if !crate::llm::provider::is_retryable_llm_error(&text) {
@@ -383,7 +393,8 @@ impl AgentRouter {
                     }
                     attempt += 1;
                     tracing::warn!(agent, attempt, model, "LLM 瞬时错误，退避后重试：{text}");
-                    tokio::time::sleep(std::time::Duration::from_millis(800 * attempt as u64)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(800 * attempt as u64))
+                        .await;
                 }
             }
         }
@@ -472,7 +483,9 @@ macro_rules! impl_simple_chat {
                 messages: Vec<LLMMessage>,
                 temperature: f64,
             ) -> Result<ChatOutcome, String> {
-                self.router.chat(self.agent, messages, temperature, None).await
+                self.router
+                    .chat(self.agent, messages, temperature, None)
+                    .await
             }
         }
     };
@@ -496,7 +509,9 @@ impl crate::agents::consolidator::ConsolidatorChat for RoutedAgent {
         messages: Vec<LLMMessage>,
         temperature: f64,
     ) -> Result<ChatOutcome, String> {
-        self.router.chat(self.agent, messages, temperature, None).await
+        self.router
+            .chat(self.agent, messages, temperature, None)
+            .await
     }
 }
 #[async_trait]
@@ -506,7 +521,9 @@ impl crate::agents::continuity::AuditorChat for RoutedAgent {
         messages: Vec<LLMMessage>,
         temperature: f64,
     ) -> Result<ChatOutcome, String> {
-        self.router.chat(self.agent, messages, temperature, None).await
+        self.router
+            .chat(self.agent, messages, temperature, None)
+            .await
     }
 }
 
@@ -518,7 +535,12 @@ impl crate::agents::composer::ComposerChat for RoutedAgent {
         options: ComposerChatOptions,
     ) -> Result<ChatOutcome, String> {
         self.router
-            .chat(self.agent, messages, options.temperature, options.max_tokens)
+            .chat(
+                self.agent,
+                messages,
+                options.temperature,
+                options.max_tokens,
+            )
             .await
     }
 }
@@ -717,7 +739,6 @@ impl CycleAuditor for FullCycleAuditor {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,7 +783,11 @@ mod tests {
 
     /// 205 号：可编程失败次数的 mock LLM——前 `fail_times` 次返回指定
     /// 状态码，之后返回正常 SSE/JSON（计数控供断言重试次数）。
-    async fn spawn_flaky_llm(fail_times: usize, status: u16, err_body: &str) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    async fn spawn_flaky_llm(
+        fail_times: usize,
+        status: u16,
+        err_body: &str,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let hits_clone = hits.clone();
@@ -798,7 +823,9 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), hits)
     }
 
@@ -817,7 +844,12 @@ mod tests {
     }
 
     fn user_message() -> Vec<LLMMessage> {
-        vec![LLMMessage { role: crate::llm::provider::LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }]
+        vec![LLMMessage {
+            role: crate::llm::provider::LLMRole::User,
+            content: "x".into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }]
     }
 
     /// 429 一次后退避重试成功（对齐 TS withTransientLLMRetry：2 次预算）。
@@ -826,7 +858,10 @@ mod tests {
         use std::sync::atomic::Ordering;
         let (base, hits) = spawn_flaky_llm(1, 429, r#"{"error":"rate limit"}"#).await;
         let router = router_at(&base);
-        let outcome = router.chat("writer", user_message(), 0.1, None).await.unwrap();
+        let outcome = router
+            .chat("writer", user_message(), 0.1, None)
+            .await
+            .unwrap();
         assert_eq!(outcome.content, "OK");
         assert_eq!(hits.load(Ordering::SeqCst), 2, "首次 429 + 重试 1 次");
     }
@@ -837,7 +872,10 @@ mod tests {
         use std::sync::atomic::Ordering;
         let (base, hits) = spawn_flaky_llm(9, 503, r#"{"error":"service unavailable"}"#).await;
         let router = router_at(&base);
-        let err = router.chat("writer", user_message(), 0.1, None).await.unwrap_err();
+        let err = router
+            .chat("writer", user_message(), 0.1, None)
+            .await
+            .unwrap_err();
         assert!(err.contains("503"), "{err}");
         assert_eq!(hits.load(Ordering::SeqCst), 3, "1 次原始 + 2 次重试");
     }
@@ -849,8 +887,14 @@ mod tests {
         let (base, hits) =
             spawn_flaky_llm(9, 500, r#"{"error":{"code":"model_not_available"}}"#).await;
         let router = router_at(&base);
-        let err = router.chat("writer", user_message(), 0.1, None).await.unwrap_err();
-        assert!(err.contains("500") || err.contains("model_not_available"), "{err}");
+        let err = router
+            .chat("writer", user_message(), 0.1, None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("500") || err.contains("model_not_available"),
+            "{err}"
+        );
         assert_eq!(hits.load(Ordering::SeqCst), 1, "非瞬时直接失败");
     }
 
@@ -916,7 +960,9 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (format!("http://{addr}"), counters)
     }
 
@@ -967,10 +1013,18 @@ mod tests {
     fn resolve_chain_orders_pins_and_falls_back() {
         let router = routing_router_at(
             "http://localhost:1",
-            writing_routing(Some("primary-m"), vec!["primary-m", "backup-m", "second-m"], Some(2)),
+            writing_routing(
+                Some("primary-m"),
+                vec!["primary-m", "backup-m", "second-m"],
+                Some(2),
+            ),
         );
         let (models, retry) = router.resolve_chain("writer");
-        assert_eq!(models, vec!["primary-m", "backup-m", "second-m"], "与主模型重复者剔除，按序封顶");
+        assert_eq!(
+            models,
+            vec!["primary-m", "backup-m", "second-m"],
+            "与主模型重复者剔除，按序封顶"
+        );
         assert_eq!(retry, 2);
 
         let pinned = AgentRouter::new(
@@ -1011,16 +1065,25 @@ mod tests {
             r#"{"error":"rate limit"}"#,
         )
         .await;
-        let router =
-            routing_router_at(&base, writing_routing(Some("primary-m"), vec!["backup-m"], None));
-        let outcome = router.chat("writer", user_message(), 0.1, None).await.unwrap();
+        let router = routing_router_at(
+            &base,
+            writing_routing(Some("primary-m"), vec!["backup-m"], None),
+        );
+        let outcome = router
+            .chat("writer", user_message(), 0.1, None)
+            .await
+            .unwrap();
         assert_eq!(outcome.content, "OK");
         assert_eq!(
             counters["primary-m"].load(Ordering::SeqCst),
             3,
             "primary 1 次原始 + 2 次瞬态重试"
         );
-        assert_eq!(counters["backup-m"].load(Ordering::SeqCst), 1, "backup 接管 1 次");
+        assert_eq!(
+            counters["backup-m"].load(Ordering::SeqCst),
+            1,
+            "backup 接管 1 次"
+        );
     }
 
     /// R25：非瞬态（model_not_available）立即失败，不重试不切换。
@@ -1033,11 +1096,23 @@ mod tests {
             r#"{"error":{"code":"model_not_available"}}"#,
         )
         .await;
-        let router =
-            routing_router_at(&base, writing_routing(Some("primary-m"), vec!["backup-m"], None));
-        let err = router.chat("writer", user_message(), 0.1, None).await.unwrap_err();
-        assert!(err.contains("500") || err.contains("model_not_available"), "{err}");
-        assert_eq!(counters["primary-m"].load(Ordering::SeqCst), 1, "非瞬态 1 次即失败");
+        let router = routing_router_at(
+            &base,
+            writing_routing(Some("primary-m"), vec!["backup-m"], None),
+        );
+        let err = router
+            .chat("writer", user_message(), 0.1, None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.contains("500") || err.contains("model_not_available"),
+            "{err}"
+        );
+        assert_eq!(
+            counters["primary-m"].load(Ordering::SeqCst),
+            1,
+            "非瞬态 1 次即失败"
+        );
         assert_eq!(counters["backup-m"].load(Ordering::SeqCst), 0, "不切换备用");
     }
 
@@ -1056,7 +1131,10 @@ mod tests {
             &base,
             writing_routing(Some("primary-m"), vec!["backup-m"], Some(2)),
         );
-        let outcome = router.chat("writer", user_message(), 0.1, None).await.unwrap();
+        let outcome = router
+            .chat("writer", user_message(), 0.1, None)
+            .await
+            .unwrap();
         assert_eq!(outcome.content, "OK");
         assert_eq!(
             counters["primary-m"].load(Ordering::SeqCst),
@@ -1069,10 +1147,18 @@ mod tests {
     #[tokio::test]
     async fn chat_failure_is_string_error() {
         let router = router_with(HashMap::new());
-        let agent = RoutedAgent { router: std::sync::Arc::new(router), agent: "writer" };
+        let agent = RoutedAgent {
+            router: std::sync::Arc::new(router),
+            agent: "writer",
+        };
         let error = crate::agents::writer::WriterChat::chat(
             &agent,
-            vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }],
+            vec![LLMMessage {
+                role: LLMRole::User,
+                content: "x".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            }],
             0.7,
         )
         .await
@@ -1085,7 +1171,10 @@ mod tests {
     async fn auditor_protocol_parses() {
         // 本地 mock LLM：首行 PASS + 问题行 + 分数行。
         let router = router_with(HashMap::new());
-        let agent = RoutedAgent { router: std::sync::Arc::new(router), agent: "auditor" };
+        let agent = RoutedAgent {
+            router: std::sync::Arc::new(router),
+            agent: "auditor",
+        };
         // 直接测协议解析逻辑——通过注入式结果不可行（无 mock 面），
         // 用最小内联复算验证（真实 HTTP 面由 E2E 契约测试覆盖）。
         let content = "PASS\n[节奏] 节奏拖沓\n92";

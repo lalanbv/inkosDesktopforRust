@@ -164,13 +164,20 @@ pub enum TranscriptEvent {
         pi_turn_index: Option<u64>,
         #[serde(rename = "toolCallId", skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
-        #[serde(rename = "sourceToolAssistantUuid", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "sourceToolAssistantUuid",
+            skip_serializing_if = "Option::is_none"
+        )]
         source_tool_assistant_uuid: Option<String>,
         /// 876 号：上游 2.0（b399a8d3，8/30）把 `legacyDisplay` 改名 `display`
         /// 且 TS 严格 schema 只认新名——此前 Rust 写旧名，Node 回退端读到即整份
         /// 会话拒读。写新名、读兼容旧名（alias：旧 Rust 文件 + 2.0 前 TS 文件）。
         /// 装箱：展示补充稀有出现，避免把每个事件撑到最大变体尺寸（large_enum_variant）。
-        #[serde(rename = "display", alias = "legacyDisplay", skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "display",
+            alias = "legacyDisplay",
+            skip_serializing_if = "Option::is_none"
+        )]
         display: Option<Box<MessageDisplay>>,
         /// 876 号：上游 2.0 消息可见性——`"model"`=仅模型可见，UI 恢复剔除
         /// （TS visibleMessageEvents 同语义）；Rust 自身不写。
@@ -259,7 +266,11 @@ pub struct MessageDisplay {
     pub user_input: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
-    #[serde(rename = "toolExecutions", default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        rename = "toolExecutions",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub tool_executions: Vec<Value>,
 }
 
@@ -398,8 +409,7 @@ pub fn legacy_book_session_path(project_root: &Path, session_id: &str) -> PathBu
 
 /// 读事件流：坏行跳过（zod safeParse 语义），seq 升序。
 pub async fn read_transcript_events(project_root: &Path, session_id: &str) -> Vec<TranscriptEvent> {
-    let Ok(raw) = tokio::fs::read_to_string(transcript_path(project_root, session_id)).await
-    else {
+    let Ok(raw) = tokio::fs::read_to_string(transcript_path(project_root, session_id)).await else {
         return Vec::new();
     };
     parse_transcript(&raw).0
@@ -422,7 +432,11 @@ fn parse_transcript(raw: &str) -> (Vec<TranscriptEvent>, Option<u64>) {
             raw_max_seq = Some(raw_max_seq.map_or(seq, |max| max.max(seq)));
         }
         // zod 拒绝 version≠1 的行；serde 宽松接受（偏差备案：边缘差异）
-        if value.get("version").and_then(Value::as_u64).is_some_and(|version| version != 1) {
+        if value
+            .get("version")
+            .and_then(Value::as_u64)
+            .is_some_and(|version| version != 1)
+        {
             continue;
         }
         if let Ok(parsed) = serde_json::from_value::<TranscriptEvent>(value) {
@@ -439,7 +453,8 @@ fn session_lock(project_root: &Path, session_id: &str) -> Arc<tokio::sync::Mutex
     let locks = LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
     let key = format!("{}:{}", project_root.display(), session_id);
     locks
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .entry(key)
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
         .clone()
@@ -484,7 +499,10 @@ where
         };
     }
 
-    if tokio::fs::create_dir_all(sessions_dir(project_root)).await.is_err() {
+    if tokio::fs::create_dir_all(sessions_dir(project_root))
+        .await
+        .is_err()
+    {
         return Vec::new();
     }
     let mut payload = String::new();
@@ -541,31 +559,59 @@ mod tests {
 
     #[test]
     fn legacy_display_alias_reads_and_writes_canonical_display() {
-        let event: TranscriptEvent = serde_json::from_str(GOLDEN_LEGACY_DISPLAY_LINE).expect("旧名行可读");
-        let TranscriptEvent::Message { display, .. } = &event else { panic!("应为 message") };
+        let event: TranscriptEvent =
+            serde_json::from_str(GOLDEN_LEGACY_DISPLAY_LINE).expect("旧名行可读");
+        let TranscriptEvent::Message { display, .. } = &event else {
+            panic!("应为 message")
+        };
         assert_eq!(display.as_ref().map(|d| d.tool_executions.len()), Some(1));
         let written = serde_json::to_value(&event).unwrap();
-        assert!(written.get("display").is_some(), "写出须为 TS 2.0 认的新名 display");
-        assert!(written.get("legacyDisplay").is_none(), "不得再写旧名（TS 严格 schema 拒读）");
+        assert!(
+            written.get("display").is_some(),
+            "写出须为 TS 2.0 认的新名 display"
+        );
+        assert!(
+            written.get("legacyDisplay").is_none(),
+            "不得再写旧名（TS 严格 schema 拒读）"
+        );
     }
 
     #[test]
     fn ts20_message_round_trips_losslessly_including_visibility() {
-        let event: TranscriptEvent = serde_json::from_str(GOLDEN_TS20_MESSAGE_LINE).expect("2.0 行可读");
-        let TranscriptEvent::Message { display, visibility, .. } = &event else { panic!("应为 message") };
+        let event: TranscriptEvent =
+            serde_json::from_str(GOLDEN_TS20_MESSAGE_LINE).expect("2.0 行可读");
+        let TranscriptEvent::Message {
+            display,
+            visibility,
+            ..
+        } = &event
+        else {
+            panic!("应为 message")
+        };
         assert_eq!(visibility.as_deref(), Some("model"));
         let display = display.as_ref().expect("display 不得丢");
         assert!(display.completion.is_some() && display.user_input.is_some());
         assert_eq!(display.thinking.as_deref(), Some("先列人物"));
         assert_eq!(display.tool_executions.len(), 1);
-        assert_eq!(serde_json::to_value(&event).unwrap(), as_value(GOLDEN_TS20_MESSAGE_LINE), "读写须无损");
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            as_value(GOLDEN_TS20_MESSAGE_LINE),
+            "读写须无损"
+        );
     }
 
     #[test]
     fn request_delivery_line_parses_and_round_trips() {
-        let event: TranscriptEvent = serde_json::from_str(GOLDEN_REQUEST_DELIVERY_LINE).expect("request_delivery 可读");
-        assert!(matches!(event, TranscriptEvent::RequestDelivery { seq: 5, .. }));
-        assert_eq!(serde_json::to_value(&event).unwrap(), as_value(GOLDEN_REQUEST_DELIVERY_LINE));
+        let event: TranscriptEvent =
+            serde_json::from_str(GOLDEN_REQUEST_DELIVERY_LINE).expect("request_delivery 可读");
+        assert!(matches!(
+            event,
+            TranscriptEvent::RequestDelivery { seq: 5, .. }
+        ));
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            as_value(GOLDEN_REQUEST_DELIVERY_LINE)
+        );
     }
 
     #[test]
@@ -592,7 +638,9 @@ mod tests {
             &GOLDEN_REQUEST_DELIVERY_LINE.replace(r#""seq":5"#, r#""seq":4"#).replace(r#""parentSeq":4"#, r#""parentSeq":3"#),
         ]
         .join("\n");
-        tokio::fs::write(transcript_path(root, "s876"), format!("{ts_written}\n")).await.unwrap();
+        tokio::fs::write(transcript_path(root, "s876"), format!("{ts_written}\n"))
+            .await
+            .unwrap();
 
         let written = append_transcript_events(root, "s876", |_, next_seq| {
             vec![TranscriptEvent::RequestCommitted {
@@ -606,15 +654,31 @@ mod tests {
         })
         .await;
         assert_eq!(written.len(), 1);
-        assert_eq!(written[0].seq(), 5, "seq 须越过 TS 末行 request_delivery(4)，不得复用");
-        assert_eq!(written[0].parent_seq(), Some(Some(4)), "父须为 request_delivery(4)，不得从其前驱分叉");
+        assert_eq!(
+            written[0].seq(),
+            5,
+            "seq 须越过 TS 末行 request_delivery(4)，不得复用"
+        );
+        assert_eq!(
+            written[0].parent_seq(),
+            Some(Some(4)),
+            "父须为 request_delivery(4)，不得从其前驱分叉"
+        );
     }
 
     #[test]
     fn model_visibility_messages_are_hidden_from_ui_projection() {
         let model_only: TranscriptEvent = serde_json::from_str(GOLDEN_TS20_MESSAGE_LINE).unwrap();
-        let visible: TranscriptEvent = serde_json::from_str(&GOLDEN_TS20_MESSAGE_LINE.replace(r#""visibility":"model","#, "")).unwrap();
-        assert!(message_events_to_interaction_messages(&[&model_only]).is_empty(), "visibility=model 不入 UI");
-        assert!(!message_events_to_interaction_messages(&[&visible]).is_empty(), "无 visibility 正常投影");
+        let visible: TranscriptEvent =
+            serde_json::from_str(&GOLDEN_TS20_MESSAGE_LINE.replace(r#""visibility":"model","#, ""))
+                .unwrap();
+        assert!(
+            message_events_to_interaction_messages(&[&model_only]).is_empty(),
+            "visibility=model 不入 UI"
+        );
+        assert!(
+            !message_events_to_interaction_messages(&[&visible]).is_empty(),
+            "无 visibility 正常投影"
+        );
     }
 }

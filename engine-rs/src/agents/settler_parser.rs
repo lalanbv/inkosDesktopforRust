@@ -90,14 +90,24 @@ fn is_tag_header_at(s: &str, pos: usize) -> bool {
     }
     let after = &rest[4..];
     // 读到下一个 ` ===` 或行末。
-    let name_end = after.find(" ===").or_else(|| after.find('\n')).unwrap_or(after.len());
+    let name_end = after
+        .find(" ===")
+        .or_else(|| after.find('\n'))
+        .unwrap_or(after.len());
     let name = &after[..name_end];
-    !name.is_empty() && name.chars().all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit())
 }
 
 /// 空串 → 兜底文案。
 fn fallback(s: String, default: &str) -> String {
-    if s.is_empty() { default.to_string() } else { s }
+    if s.is_empty() {
+        default.to_string()
+    } else {
+        s
+    }
 }
 
 #[cfg(test)]
@@ -106,7 +116,10 @@ mod tests {
     use crate::models::genre_profile::GenreProfile;
 
     fn profile(numerical: bool) -> GenreProfile {
-        GenreProfile { numerical_system: numerical, ..GenreProfile::default() }
+        GenreProfile {
+            numerical_system: numerical,
+            ..GenreProfile::default()
+        }
     }
 
     #[test]
@@ -151,7 +164,10 @@ h01 推进
     fn ledger_empty_when_numerical_system_false() {
         let content = "=== UPDATED_LEDGER ===\n金币 +10\n\n=== UPDATED_STATE ===\nx";
         let out = parse_settlement_output(content, &profile(false));
-        assert_eq!(out.updated_ledger, "", "numerical_system=false 时 ledger 强制空");
+        assert_eq!(
+            out.updated_ledger, "",
+            "numerical_system=false 时 ledger 强制空"
+        );
         assert_eq!(out.updated_state, "x");
     }
 

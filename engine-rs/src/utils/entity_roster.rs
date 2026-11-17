@@ -35,11 +35,22 @@ pub fn parse_entity_roster(markdown: &str) -> Vec<RosterEntity> {
     macro_rules! flush {
         () => {
             if has_current {
-                let name = fields.get("name").map(|s| s.trim().to_string()).unwrap_or_default();
+                let name = fields
+                    .get("name")
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
                 if !name.is_empty() {
-                    let aliases = split_list(fields.get("aliases").map(String::as_str).unwrap_or(""));
-                    let kind_raw = fields.get("kind").map(|s| s.trim().to_string()).unwrap_or_else(|| "other".into());
-                    let kind = if KINDS.contains(&kind_raw.as_str()) { kind_raw } else { "other".to_string() };
+                    let aliases =
+                        split_list(fields.get("aliases").map(String::as_str).unwrap_or(""));
+                    let kind_raw = fields
+                        .get("kind")
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|| "other".into());
+                    let kind = if KINDS.contains(&kind_raw.as_str()) {
+                        kind_raw
+                    } else {
+                        "other".to_string()
+                    };
                     let registered_at = fields
                         .get("registeredAt")
                         .map(String::as_str)
@@ -47,7 +58,13 @@ pub fn parse_entity_roster(markdown: &str) -> Vec<RosterEntity> {
                         .trim()
                         .parse::<i64>()
                         .unwrap_or(0);
-                    entries.push(RosterEntity { id: current_id.clone().unwrap_or_default(), name, aliases, kind, registered_at });
+                    entries.push(RosterEntity {
+                        id: current_id.clone().unwrap_or_default(),
+                        name,
+                        aliases,
+                        kind,
+                        registered_at,
+                    });
                 }
             }
         };
@@ -70,7 +87,10 @@ pub fn parse_entity_roster(markdown: &str) -> Vec<RosterEntity> {
         }
         if let Some(rest) = line.strip_prefix("- ") {
             if let Some(colon) = rest.find(':') {
-                fields.insert(rest[..colon].trim().to_string(), rest[colon + 1..].trim_start().to_string());
+                fields.insert(
+                    rest[..colon].trim().to_string(),
+                    rest[colon + 1..].trim_start().to_string(),
+                );
             }
         }
     }
@@ -107,10 +127,10 @@ pub fn render_entity_roster(entries: &[RosterEntity]) -> String {
 }
 
 /// 从章摘要 characters 列提取人名候选（去重保序、剔除停用词）。
-pub fn extract_character_candidates(
-    summaries: &[(i64, String)],
-) -> Vec<String> {
-    const STOPWORDS: [&str; 9] = ["无", "没有", "暂无", "none", "n/a", "unknown", "未知", "other", "others"];
+pub fn extract_character_candidates(summaries: &[(i64, String)]) -> Vec<String> {
+    const STOPWORDS: [&str; 9] = [
+        "无", "没有", "暂无", "none", "n/a", "unknown", "未知", "other", "others",
+    ];
     let mut ordered: Vec<(i64, String)> = summaries.to_vec();
     ordered.sort_by_key(|(chapter, _)| *chapter);
     let mut seen: Vec<String> = Vec::new();
@@ -147,7 +167,11 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
         let mut current_row = vec![i];
         for j in 1..=b.len() {
             let substitution = previous[j - 1] + usize::from(a[i - 1] != b[j - 1]);
-            current_row.push((previous[j] + 1).min(current_row[j - 1] + 1).min(substitution));
+            current_row.push(
+                (previous[j] + 1)
+                    .min(current_row[j - 1] + 1)
+                    .min(substitution),
+            );
         }
         previous = current_row;
     }
@@ -190,7 +214,10 @@ pub fn resolve_roster_candidates(
         let key = candidate.to_lowercase();
         let matched = roster.iter().any(|entity| {
             entity.name.to_lowercase() == key
-                || entity.aliases.iter().any(|alias| alias.to_lowercase() == key)
+                || entity
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.to_lowercase() == key)
         });
         if matched {
             continue;
@@ -263,25 +290,39 @@ pub fn render_roster_confirmation_card(
         return None;
     }
     let is_en = language == "en";
-    let mut lines = vec![
-        if is_en {
-            "Unregistered proper nouns found in this chapter (new entity / alias / typo):".to_string()
-        } else {
-            "本章发现未登记专名（新实体 / 别名 / 笔误）：".to_string()
-        },
-    ];
+    let mut lines = vec![if is_en {
+        "Unregistered proper nouns found in this chapter (new entity / alias / typo):".to_string()
+    } else {
+        "本章发现未登记专名（新实体 / 别名 / 笔误）：".to_string()
+    }];
     for card in cards {
         let line = if card.action == "typo" {
             if is_en {
-                format!("- \"{}\" → possible typo of \"{}\"?", card.candidate, card.target_name.clone().unwrap_or_default())
+                format!(
+                    "- \"{}\" → possible typo of \"{}\"?",
+                    card.candidate,
+                    card.target_name.clone().unwrap_or_default()
+                )
             } else {
-                format!("- \"{}\" → 疑似 \"{}\" 的笔误？", card.candidate, card.target_name.clone().unwrap_or_default())
+                format!(
+                    "- \"{}\" → 疑似 \"{}\" 的笔误？",
+                    card.candidate,
+                    card.target_name.clone().unwrap_or_default()
+                )
             }
         } else if card.action == "alias" {
             if is_en {
-                format!("- \"{}\" → possible alias of \"{}\"?", card.candidate, card.target_name.clone().unwrap_or_default())
+                format!(
+                    "- \"{}\" → possible alias of \"{}\"?",
+                    card.candidate,
+                    card.target_name.clone().unwrap_or_default()
+                )
             } else {
-                format!("- \"{}\" → 可能是 \"{}\" 的别名？", card.candidate, card.target_name.clone().unwrap_or_default())
+                format!(
+                    "- \"{}\" → 可能是 \"{}\" 的别名？",
+                    card.candidate,
+                    card.target_name.clone().unwrap_or_default()
+                )
             }
         } else if is_en {
             format!("- \"{}\" → new entity?", card.candidate)
@@ -325,12 +366,19 @@ pub fn apply_roster_confirmation(
     let key = confirmation.candidate.to_lowercase();
     let already_known = roster.iter().any(|entity| {
         entity.name.to_lowercase() == key
-            || entity.aliases.iter().any(|alias| alias.to_lowercase() == key)
+            || entity
+                .aliases
+                .iter()
+                .any(|alias| alias.to_lowercase() == key)
     });
     if already_known {
         return (
             roster.to_vec(),
-            RosterConfirmationApplied { kind: "duplicate-ignored", id: None, target_name: None },
+            RosterConfirmationApplied {
+                kind: "duplicate-ignored",
+                id: None,
+                target_name: None,
+            },
         );
     }
 
@@ -355,7 +403,11 @@ pub fn apply_roster_confirmation(
         next.push(entry);
         return (
             next,
-            RosterConfirmationApplied { kind: "new-entity", id: Some(id), target_name: None },
+            RosterConfirmationApplied {
+                kind: "new-entity",
+                id: Some(id),
+                target_name: None,
+            },
         );
     }
 
@@ -381,7 +433,11 @@ pub fn apply_roster_confirmation(
 
     (
         roster.to_vec(),
-        RosterConfirmationApplied { kind: "typo-ignored", id: None, target_name: None },
+        RosterConfirmationApplied {
+            kind: "typo-ignored",
+            id: None,
+            target_name: None,
+        },
     )
 }
 

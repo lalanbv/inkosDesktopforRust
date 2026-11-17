@@ -15,12 +15,17 @@ use std::collections::HashMap;
 /// 动作种类。对齐 TS `z.enum(["look","say","move","do","wait"])`。Default = Do（对齐 .catch("do")）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PlayActionKind {
-    #[serde(rename = "look")] Look,
-    #[serde(rename = "say")] Say,
-    #[serde(rename = "move")] Move,
+    #[serde(rename = "look")]
+    Look,
+    #[serde(rename = "say")]
+    Say,
+    #[serde(rename = "move")]
+    Move,
     #[default]
-    #[serde(rename = "do")] Do,
-    #[serde(rename = "wait")] Wait,
+    #[serde(rename = "do")]
+    Do,
+    #[serde(rename = "wait")]
+    Wait,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -45,17 +50,28 @@ pub type PlayActionKindDefault = PlayActionKind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PlayEntityType {
     #[default]
-    #[serde(rename = "actor")] Actor,
-    #[serde(rename = "location")] Location,
-    #[serde(rename = "item")] Item,
-    #[serde(rename = "evidence")] Evidence,
-    #[serde(rename = "clue")] Clue,
-    #[serde(rename = "claim")] Claim,
-    #[serde(rename = "proof_chain")] ProofChain,
-    #[serde(rename = "organization")] Organization,
-    #[serde(rename = "rule")] Rule,
-    #[serde(rename = "scene")] Scene,
-    #[serde(rename = "event")] Event,
+    #[serde(rename = "actor")]
+    Actor,
+    #[serde(rename = "location")]
+    Location,
+    #[serde(rename = "item")]
+    Item,
+    #[serde(rename = "evidence")]
+    Evidence,
+    #[serde(rename = "clue")]
+    Clue,
+    #[serde(rename = "claim")]
+    Claim,
+    #[serde(rename = "proof_chain")]
+    ProofChain,
+    #[serde(rename = "organization")]
+    Organization,
+    #[serde(rename = "rule")]
+    Rule,
+    #[serde(rename = "scene")]
+    Scene,
+    #[serde(rename = "event")]
+    Event,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -104,13 +120,20 @@ pub struct PlayEdge {
 /// 状态槽种类。7 值枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayStateSlotKind {
-    #[serde(rename = "resource")] Resource,
-    #[serde(rename = "relation")] Relation,
-    #[serde(rename = "pressure")] Pressure,
-    #[serde(rename = "clue")] Clue,
-    #[serde(rename = "evidence")] Evidence,
-    #[serde(rename = "flag")] Flag,
-    #[serde(rename = "timer")] Timer,
+    #[serde(rename = "resource")]
+    Resource,
+    #[serde(rename = "relation")]
+    Relation,
+    #[serde(rename = "pressure")]
+    Pressure,
+    #[serde(rename = "clue")]
+    Clue,
+    #[serde(rename = "evidence")]
+    Evidence,
+    #[serde(rename = "flag")]
+    Flag,
+    #[serde(rename = "timer")]
+    Timer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -138,14 +161,22 @@ pub struct PlayTimeAdvance {
 /// 证据状态。8 值枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlayEvidenceStatus {
-    #[serde(rename = "unknown")] Unknown,
-    #[serde(rename = "hinted")] Hinted,
-    #[serde(rename = "seen")] Seen,
-    #[serde(rename = "collected")] Collected,
-    #[serde(rename = "verified")] Verified,
-    #[serde(rename = "weaponized")] Weaponized,
-    #[serde(rename = "exposed")] Exposed,
-    #[serde(rename = "exhausted")] Exhausted,
+    #[serde(rename = "unknown")]
+    Unknown,
+    #[serde(rename = "hinted")]
+    Hinted,
+    #[serde(rename = "seen")]
+    Seen,
+    #[serde(rename = "collected")]
+    Collected,
+    #[serde(rename = "verified")]
+    Verified,
+    #[serde(rename = "weaponized")]
+    Weaponized,
+    #[serde(rename = "exposed")]
+    Exposed,
+    #[serde(rename = "exhausted")]
+    Exhausted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

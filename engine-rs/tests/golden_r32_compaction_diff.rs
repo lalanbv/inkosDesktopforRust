@@ -18,11 +18,21 @@ const VECTORS: &str =
     include_str!("../../packages/core/src/__tests__/golden/r32-compaction-vectors.json");
 
 fn user_msg(content: &str) -> LLMMessage {
-    LLMMessage { role: LLMRole::User, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: LLMRole::User,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 fn assistant_msg(content: &str) -> LLMMessage {
-    LLMMessage { role: LLMRole::Assistant, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: LLMRole::Assistant,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 fn vector_messages(raw: &[Value]) -> Vec<LLMMessage> {
@@ -69,23 +79,42 @@ fn roles_of(messages: &[LLMMessage]) -> Vec<Option<&'static str>> {
 fn settings_and_summary_budget_match_golden() {
     let parsed: Value = serde_json::from_str(VECTORS).expect("golden json");
     let settings = &parsed["settings"];
-    assert_eq!(settings["enabled"].as_bool(), Some(DEFAULT_COMPACTION_SETTINGS.enabled));
-    assert_eq!(settings["reserveTokens"].as_u64(), Some(DEFAULT_COMPACTION_SETTINGS.reserve_tokens));
+    assert_eq!(
+        settings["enabled"].as_bool(),
+        Some(DEFAULT_COMPACTION_SETTINGS.enabled)
+    );
+    assert_eq!(
+        settings["reserveTokens"].as_u64(),
+        Some(DEFAULT_COMPACTION_SETTINGS.reserve_tokens)
+    );
     assert_eq!(
         settings["keepRecentTokens"].as_u64(),
         Some(DEFAULT_COMPACTION_SETTINGS.keep_recent_tokens)
     );
-    assert_eq!(parsed["summaryMaxTokens"].as_u64(), Some(SUMMARY_MAX_TOKENS));
+    assert_eq!(
+        parsed["summaryMaxTokens"].as_u64(),
+        Some(SUMMARY_MAX_TOKENS)
+    );
 }
 
 #[test]
 fn prompts_match_golden_codepoints() {
     let parsed: Value = serde_json::from_str(VECTORS).expect("golden json");
-    assert_eq!(SUMMARIZATION_SYSTEM_PROMPT, parsed["prompts"]["system"].as_str().expect("system"));
-    assert_eq!(SUMMARIZATION_PROMPT, parsed["prompts"]["summarization"].as_str().expect("summarization"));
+    assert_eq!(
+        SUMMARIZATION_SYSTEM_PROMPT,
+        parsed["prompts"]["system"].as_str().expect("system")
+    );
+    assert_eq!(
+        SUMMARIZATION_PROMPT,
+        parsed["prompts"]["summarization"]
+            .as_str()
+            .expect("summarization")
+    );
     assert_eq!(
         UPDATE_SUMMARIZATION_PROMPT,
-        parsed["prompts"]["updateSummarization"].as_str().expect("updateSummarization")
+        parsed["prompts"]["updateSummarization"]
+            .as_str()
+            .expect("updateSummarization")
     );
 }
 
@@ -102,13 +131,19 @@ fn trigger_vectors_match_golden() {
             ref custom => CompactionSettings {
                 enabled: custom["enabled"].as_bool().expect("enabled"),
                 reserve_tokens: custom["reserveTokens"].as_u64().expect("reserveTokens"),
-                keep_recent_tokens: custom["keepRecentTokens"].as_u64().expect("keepRecentTokens"),
+                keep_recent_tokens: custom["keepRecentTokens"]
+                    .as_u64()
+                    .expect("keepRecentTokens"),
             },
         };
         let expected = &vector["expected"];
 
         let usage = estimate_context_tokens(&messages, &raws);
-        assert_eq!(usage.tokens, expected["tokens"].as_u64().unwrap_or(0), "{name}: tokens");
+        assert_eq!(
+            usage.tokens,
+            expected["tokens"].as_u64().unwrap_or(0),
+            "{name}: tokens"
+        );
         assert_eq!(
             usage.usage_tokens,
             expected["usageTokens"].as_u64().unwrap_or(0),
@@ -116,18 +151,27 @@ fn trigger_vectors_match_golden() {
         );
         // invalid-window 短路是 should_compact 的防御分支（窗口 0）。
         let compact = should_compact(usage.tokens, context_window, &settings);
-        assert_eq!(compact, expected["compact"].as_bool().expect("compact"), "{name}: compact");
+        assert_eq!(
+            compact,
+            expected["compact"].as_bool().expect("compact"),
+            "{name}: compact"
+        );
     }
 }
 
 #[test]
 fn cut_point_vectors_match_golden() {
     let parsed: Value = serde_json::from_str(VECTORS).expect("golden json");
-    for vector in parsed["cutPointVectors"].as_array().expect("cutPointVectors") {
+    for vector in parsed["cutPointVectors"]
+        .as_array()
+        .expect("cutPointVectors")
+    {
         let name = vector["name"].as_str().expect("name");
         let messages = vector_messages(vector["messages"].as_array().expect("messages"));
         let roles = roles_of(&messages);
-        let keep_recent = vector["keepRecentTokens"].as_u64().expect("keepRecentTokens");
+        let keep_recent = vector["keepRecentTokens"]
+            .as_u64()
+            .expect("keepRecentTokens");
         let expected = &vector["expected"];
         let cut = find_cut_point(&roles, &messages, 0, messages.len(), keep_recent);
         assert_eq!(
@@ -141,14 +185,21 @@ fn cut_point_vectors_match_golden() {
             expected["turnStartIndex"].as_i64().expect("turnStartIndex"),
             "{name}: turnStartIndex"
         );
-        assert_eq!(cut.is_split_turn, expected["isSplitTurn"].as_bool().expect("isSplitTurn"), "{name}");
+        assert_eq!(
+            cut.is_split_turn,
+            expected["isSplitTurn"].as_bool().expect("isSplitTurn"),
+            "{name}"
+        );
     }
 }
 
 #[test]
 fn serialize_vectors_match_golden() {
     let parsed: Value = serde_json::from_str(VECTORS).expect("golden json");
-    for vector in parsed["serializeVectors"].as_array().expect("serializeVectors") {
+    for vector in parsed["serializeVectors"]
+        .as_array()
+        .expect("serializeVectors")
+    {
         let messages = vector_messages(vector["messages"].as_array().expect("messages"));
         assert_eq!(
             serialize_conversation(&messages),
@@ -162,7 +213,10 @@ fn serialize_vectors_match_golden() {
 #[test]
 fn prompt_assembly_vectors_match_golden() {
     let parsed: Value = serde_json::from_str(VECTORS).expect("golden json");
-    for vector in parsed["promptAssemblyVectors"].as_array().expect("promptAssemblyVectors") {
+    for vector in parsed["promptAssemblyVectors"]
+        .as_array()
+        .expect("promptAssemblyVectors")
+    {
         let previous = vector["previousSummary"].as_str();
         assert_eq!(
             build_summary_prompt(vector["serialized"].as_str().expect("serialized"), previous),

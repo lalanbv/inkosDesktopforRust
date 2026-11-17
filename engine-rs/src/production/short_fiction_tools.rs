@@ -304,7 +304,10 @@ pub struct ShortAuthorScope {
     pub story_title: Option<bool>,
     #[serde(rename = "chapterNumbers")]
     pub chapter_numbers: Vec<u32>,
-    #[serde(rename = "chapterTitleNumbers", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "chapterTitleNumbers",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub chapter_title_numbers: Option<Vec<u32>>,
     pub opening: bool,
     pub outline: bool,
@@ -332,7 +335,11 @@ pub fn short_author_scope_schema() -> Value {
 pub fn short_author_scope_request(
     draft: &super::short_fiction::ShortFictionBatchDraft,
     author_request: &str,
-) -> (Vec<crate::llm::provider::LLMMessage>, super::structured_agent::WorkerToolSpec, ShortAuthorScopeValidate) {
+) -> (
+    Vec<crate::llm::provider::LLMMessage>,
+    super::structured_agent::WorkerToolSpec,
+    ShortAuthorScopeValidate,
+) {
     use crate::llm::provider::{LLMMessage, LLMRole};
     let manuscript = serde_json::to_value(draft).unwrap_or(Value::Null);
     let messages = vec![
@@ -365,7 +372,11 @@ pub fn short_author_scope_request(
         messages,
         tool,
         ShortAuthorScopeValidate {
-            chapter_numbers: draft.chapters.iter().map(|chapter| chapter.number).collect(),
+            chapter_numbers: draft
+                .chapters
+                .iter()
+                .map(|chapter| chapter.number)
+                .collect(),
         },
     )
 }
@@ -380,7 +391,10 @@ impl ShortAuthorScopeValidate {
     pub fn validate(&self, scope: &ShortAuthorScope) -> Result<(), StructuredToolError> {
         let mut selected = scope.chapter_numbers.clone();
         selected.extend(scope.chapter_title_numbers.clone().unwrap_or_default());
-        if selected.iter().any(|number| !self.chapter_numbers.contains(number)) {
+        if selected
+            .iter()
+            .any(|number| !self.chapter_numbers.contains(number))
+        {
             return Err(StructuredToolError::coded(
                 "SHORT_REVISION_OUT_OF_SCOPE",
                 "Select existing chapter numbers.".to_string(),
@@ -397,7 +411,10 @@ mod tests {
     use super::*;
 
     fn tokio() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -409,10 +426,22 @@ mod tests {
                 "end": { "clock": "project-week", "week": 2, "weekday": 3 },
             })))
             .unwrap();
-        assert_eq!(receipt.get("kind").and_then(Value::as_str), Some("story_interval"));
-        assert_eq!(receipt.get("elapsedMinutes").and_then(Value::as_i64), Some(2 * 1440));
-        assert_eq!(receipt.get("precision").and_then(Value::as_str), Some("days"));
-        assert_eq!(receipt.get("exactWholeWeeks").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            receipt.get("kind").and_then(Value::as_str),
+            Some("story_interval")
+        );
+        assert_eq!(
+            receipt.get("elapsedMinutes").and_then(Value::as_i64),
+            Some(2 * 1440)
+        );
+        assert_eq!(
+            receipt.get("precision").and_then(Value::as_str),
+            Some("days")
+        );
+        assert_eq!(
+            receipt.get("exactWholeWeeks").and_then(Value::as_bool),
+            Some(false)
+        );
         let magnitude = receipt.get("magnitude").unwrap();
         assert_eq!(magnitude.get("days").and_then(Value::as_i64), Some(2));
     }
@@ -433,19 +462,29 @@ mod tests {
                 "end": { "clock": "a", "week": 2, "weekday": 3 },
             })))
             .unwrap_err();
-        assert_eq!(error.code.as_deref(), Some("STORY_INTERVAL_PRECISION_MISMATCH"));
+        assert_eq!(
+            error.code.as_deref(),
+            Some("STORY_INTERVAL_PRECISION_MISMATCH")
+        );
     }
 
     #[test]
     fn review_calculation_receipt_and_error() {
         let tool = review_calculation_tool();
         let receipt = tokio()
-            .block_on((tool.execute)(json!({ "operation": "add", "values": [3, 4, 5] })))
+            .block_on((tool.execute)(
+                json!({ "operation": "add", "values": [3, 4, 5] }),
+            ))
             .unwrap();
-        assert_eq!(receipt.get("kind").and_then(Value::as_str), Some("review_calculation"));
+        assert_eq!(
+            receipt.get("kind").and_then(Value::as_str),
+            Some("review_calculation")
+        );
         assert_eq!(receipt.get("result").and_then(Value::as_f64), Some(12.0));
         let error = tokio()
-            .block_on((tool.execute)(json!({ "operation": "divide", "values": [1, 0] })))
+            .block_on((tool.execute)(
+                json!({ "operation": "divide", "values": [1, 0] }),
+            ))
             .unwrap_err();
         assert_eq!(error.code.as_deref(), Some("REVIEW_CALCULATION_UNDEFINED"));
         let error = tokio()
@@ -463,7 +502,11 @@ mod tests {
         assert!(properties.get("chapter_2_instruction").is_some());
         assert!(properties.get("chapter_3_instruction").is_none());
         let without_title = short_revision_plan_submission_schema(1, 1, false);
-        assert!(without_title.get("properties").unwrap().get("storyTitle").is_none());
+        assert!(without_title
+            .get("properties")
+            .unwrap()
+            .get("storyTitle")
+            .is_none());
     }
 
     #[test]
@@ -490,7 +533,9 @@ mod tests {
         let (messages, tool, validate) = short_author_scope_request(&draft, "改第一章");
         assert_eq!(messages.len(), 3);
         assert_eq!(tool.name, "submit_short_author_scope");
-        assert!(messages.iter().all(|message| !message.content.contains('\u{FFFD}')));
+        assert!(messages
+            .iter()
+            .all(|message| !message.content.contains('\u{FFFD}')));
         validate
             .validate(&ShortAuthorScope {
                 whole_manuscript: false,

@@ -43,7 +43,10 @@ pub struct LoopbackGuardConfig {
 
 impl Default for LoopbackGuardConfig {
     fn default() -> Self {
-        Self { enabled: true, extra_origins: Vec::new() }
+        Self {
+            enabled: true,
+            extra_origins: Vec::new(),
+        }
     }
 }
 
@@ -55,7 +58,10 @@ impl LoopbackGuardConfig {
             .ok()
             .map(|v| !parse_disabled(&v))
             .unwrap_or(true);
-        Self { enabled, extra_origins: env_extra_origins() }
+        Self {
+            enabled,
+            extra_origins: env_extra_origins(),
+        }
     }
 }
 
@@ -73,7 +79,10 @@ pub fn env_extra_origins() -> Vec<String> {
 
 /// `0`/`false`/`off`（大小写不敏感）视为关闭指令，其余任何值（含空串）视为开启。
 fn parse_disabled(value: &str) -> bool {
-    matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off")
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off"
+    )
 }
 
 /// Host:port 剥端口（IPv6 `[::1]:8787` 形态保留方括号整体）。
@@ -163,7 +172,10 @@ mod tests {
     /// 测试形态：守卫（外）+ CORS（内）+ echo 路由——复刻 bin 装配顺序。
     fn app(config: LoopbackGuardConfig) -> Router {
         let inner = Router::new()
-            .route("/api/v1/health", get(|| async { axum::Json(serde_json::json!({ "ok": true })) }))
+            .route(
+                "/api/v1/health",
+                get(|| async { axum::Json(serde_json::json!({ "ok": true })) }),
+            )
             .layer(crate::server::sidecar_cors_layer());
         with_loopback_guard(inner, config)
     }
@@ -185,7 +197,12 @@ mod tests {
         let headers = resp
             .headers()
             .iter()
-            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or_default().to_string()))
+            .map(|(k, v)| {
+                (
+                    k.as_str().to_string(),
+                    v.to_str().unwrap_or_default().to_string(),
+                )
+            })
             .collect();
         (status, headers)
     }
@@ -211,7 +228,14 @@ mod tests {
 
     #[test]
     fn loopback_host_matrix() {
-        for host in ["localhost", "LOCALHOST", "127.0.0.1", "[::1]", "[::]", "::1"] {
+        for host in [
+            "localhost",
+            "LOCALHOST",
+            "127.0.0.1",
+            "[::1]",
+            "[::]",
+            "::1",
+        ] {
             assert!(is_loopback_host(host), "{host} 应为回环");
         }
         for host in ["example.com", "127.0.0.2", "0.0.0.0", "[2001:db8::1]", ""] {
@@ -254,14 +278,20 @@ mod tests {
         .await;
         assert_eq!(status, 403);
         assert!(
-            !headers.iter().any(|(k, _)| k.starts_with("access-control-")),
+            !headers
+                .iter()
+                .any(|(k, _)| k.starts_with("access-control-")),
             "拦截响应不应携带 CORS 头: {headers:?}"
         );
     }
 
     #[tokio::test]
     async fn loopback_origin_any_port_passes() {
-        for origin in ["http://localhost:4567", "http://127.0.0.1:7788", "tauri://localhost"] {
+        for origin in [
+            "http://localhost:4567",
+            "http://127.0.0.1:7788",
+            "tauri://localhost",
+        ] {
             let (status, _) = hit(&app(LoopbackGuardConfig::default()), |b| {
                 b.header("origin", origin)
             })
@@ -272,7 +302,10 @@ mod tests {
 
     #[tokio::test]
     async fn null_origin_rejected() {
-        let (status, _) = hit(&app(LoopbackGuardConfig::default()), |b| b.header("origin", "null")).await;
+        let (status, _) = hit(&app(LoopbackGuardConfig::default()), |b| {
+            b.header("origin", "null")
+        })
+        .await;
         assert_eq!(status, 403);
     }
 
@@ -282,7 +315,10 @@ mod tests {
             extra_origins: vec!["https://embed.example".to_string()],
             ..Default::default()
         };
-        let (status, _) = hit(&app(config), |b| b.header("origin", "https://embed.example")).await;
+        let (status, _) = hit(&app(config), |b| {
+            b.header("origin", "https://embed.example")
+        })
+        .await;
         assert_eq!(status, 200);
     }
 
@@ -306,16 +342,23 @@ mod tests {
     #[tokio::test]
     async fn loopback_hosts_pass() {
         for host in ["localhost:8787", "127.0.0.1:8787", "[::1]:8787"] {
-            let (status, _) = hit(&app(LoopbackGuardConfig::default()), |b| b.header("host", host)).await;
+            let (status, _) = hit(&app(LoopbackGuardConfig::default()), |b| {
+                b.header("host", host)
+            })
+            .await;
             assert_eq!(status, 200, "Host {host} 应放行");
         }
     }
 
     #[tokio::test]
     async fn disabled_guard_passes_everything() {
-        let config = LoopbackGuardConfig { enabled: false, ..Default::default() };
+        let config = LoopbackGuardConfig {
+            enabled: false,
+            ..Default::default()
+        };
         let (status, _) = hit(&app(config), |b| {
-            b.header("origin", "http://evil.com").header("host", "evil.com:1")
+            b.header("origin", "http://evil.com")
+                .header("host", "evil.com:1")
         })
         .await;
         assert_eq!(status, 200, "守卫关闭时应全放行");
@@ -344,8 +387,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(evil.status().as_u16(), 403, "远端 Origin 不得读取 secrets");
-        let body = axum::body::to_bytes(evict_into_body(evil), usize::MAX).await.unwrap();
-        assert!(!body.windows(15).any(|w| w == b"test-key-secret"), "403 体不得泄漏密钥");
+        let body = axum::body::to_bytes(evict_into_body(evil), usize::MAX)
+            .await
+            .unwrap();
+        assert!(
+            !body.windows(15).any(|w| w == b"test-key-secret"),
+            "403 体不得泄漏密钥"
+        );
     }
 
     fn evict_into_body(resp: axum::response::Response) -> Body {

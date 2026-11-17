@@ -66,19 +66,25 @@ impl Default for MockStore {
 
 impl SecretStore for MockStore {
     fn read_all(&self) -> Result<HashMap<String, String>> {
-        Ok(self.map.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
+        Ok(self
+            .map
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone())
     }
 
     fn upsert(&self, key: &str, value: &str) -> Result<()> {
         self.map
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     fn delete(&self, key: &str) -> Result<()> {
         self.map
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(key);
         Ok(())
     }
@@ -139,8 +145,9 @@ impl KeyringStore {
     /// - `__index__` 存在但 JSON 损坏 → `Err`（数据完整性问题，不应静默吞错）。
     fn read_index(&self) -> Result<Vec<String>> {
         match self.entry_for(INDEX_KEY)?.get_password() {
-            Ok(json) => serde_json::from_str::<Vec<String>>(&json)
-                .map_err(|e| anyhow::anyhow!("keyring __index__ JSON 解析失败: {e}（原始: {json:?}）")),
+            Ok(json) => serde_json::from_str::<Vec<String>>(&json).map_err(|e| {
+                anyhow::anyhow!("keyring __index__ JSON 解析失败: {e}（原始: {json:?}）")
+            }),
             Err(KeyringError::NoEntry) => Ok(Vec::new()),
             Err(e) => Err(anyhow::anyhow!(
                 "keyring __index__ get_password(service={}) 失败: {e}",
@@ -153,12 +160,12 @@ impl KeyringStore {
     fn write_index(&self, keys: &[String]) -> Result<()> {
         let json = serde_json::to_string(keys)
             .map_err(|e| anyhow::anyhow!("keyring __index__ JSON 序列化失败: {e}"))?;
-        self.entry_for(INDEX_KEY)?
-            .set_password(&json)
-            .map_err(|e| anyhow::anyhow!(
+        self.entry_for(INDEX_KEY)?.set_password(&json).map_err(|e| {
+            anyhow::anyhow!(
                 "keyring __index__ set_password(service={}) 失败: {e}",
                 self.service
-            ))
+            )
+        })
     }
 
     /// 把 `key` 加入 `__index__`（已存在则幂等 no-op，保持顺序不变）。
@@ -185,7 +192,10 @@ impl KeyringStore {
 
 impl SecretStore for KeyringStore {
     fn read_all(&self) -> Result<HashMap<String, String>> {
-        let _guard = self.index_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self
+            .index_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let keys = self.read_index()?;
         let mut out = HashMap::with_capacity(keys.len());
         for key in keys {
@@ -213,14 +223,17 @@ impl SecretStore for KeyringStore {
     }
 
     fn upsert(&self, key: &str, value: &str) -> Result<()> {
-        let _guard = self.index_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self
+            .index_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // 1. 写 entry（即便后续 index 更新失败，secret 已落 keychain——下次 upsert 同 key 幂等覆盖）
-        self.entry_for(key)?
-            .set_password(value)
-            .map_err(|e| anyhow::anyhow!(
+        self.entry_for(key)?.set_password(value).map_err(|e| {
+            anyhow::anyhow!(
                 "keyring set_password(service={}, key={key}) 失败: {e}",
                 self.service
-            ))?;
+            )
+        })?;
 
         // 2. 更新 __index__（key 已存在则幂等 no-op）
         // index 更新失败时返回 Err——keychain 中 secret 已存在但 index 缺失会导致下次
@@ -230,7 +243,10 @@ impl SecretStore for KeyringStore {
     }
 
     fn delete(&self, key: &str) -> Result<()> {
-        let _guard = self.index_lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _guard = self
+            .index_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // 1. 删 entry（不存在视为成功，与 MockStore::delete 语义一致）
         // 注：keyring v3 的方法名是 `delete_credential`（v2 是 `delete_password`，v3 改名）。
         match self.entry_for(key)?.delete_credential() {
@@ -424,7 +440,10 @@ mod tests {
         let all = store.read_all().unwrap();
         assert_eq!(all.len(), N, "并发 upsert 不应丢失 key（index_lock）");
         for i in 0..N {
-            assert!(all.contains_key(&format!("k{i}")), "k{i} 丢失（index 竞态）");
+            assert!(
+                all.contains_key(&format!("k{i}")),
+                "k{i} 丢失（index 竞态）"
+            );
         }
         cleanup(&store);
     }

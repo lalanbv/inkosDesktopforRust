@@ -109,7 +109,10 @@ pub fn get_fanfic_dimension_config(
     for dim in &FANFIC_DIMENSIONS {
         let severity = severity_for(mode, dim.id);
         severity_overrides.insert(dim.id, severity);
-        notes.insert(dim.id, format!("{} {}", dim.base_note, severity_label(severity)));
+        notes.insert(
+            dim.id,
+            format!("{} {}", dim.base_note, severity_label(severity)),
+        );
     }
 
     // OOC 模式放宽内建 OOC 检查（维度 1 → info）。

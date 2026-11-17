@@ -183,14 +183,49 @@ pub fn render_storyboard_spec(input: &StoryboardCreationInput) -> String {
             format!("# {} 分镜创作规格", input.title).as_str(),
             "",
             "## 目标",
-            &format!("- 分镜粒度：{}", input.granularity.as_deref().map(str::trim).filter(|g| !g.is_empty()).unwrap_or("按场景和关键镜头拆分")),
-            &format!("- 画幅：{}", input.aspect_ratio.as_deref().map(str::trim).filter(|a| !a.is_empty()).unwrap_or("未指定，默认按用户素材目标判断")),
-            &format!("- 视觉风格：{}", input.visual_style.as_deref().map(str::trim).filter(|v| !v.is_empty()).unwrap_or("未指定，按用户素材和目标平台判断")),
-            &input.max_shots.map(|shots| format!("- 镜头上限：{shots}")).unwrap_or_else(|| "- 镜头上限：未指定".to_string()),
-            &input.source_kind.clone().map(|kind| format!("- 原素材：{kind}")).unwrap_or_else(|| "- 原素材：用户输入/对话需求".to_string()),
+            &format!(
+                "- 分镜粒度：{}",
+                input
+                    .granularity
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|g| !g.is_empty())
+                    .unwrap_or("按场景和关键镜头拆分")
+            ),
+            &format!(
+                "- 画幅：{}",
+                input
+                    .aspect_ratio
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty())
+                    .unwrap_or("未指定，默认按用户素材目标判断")
+            ),
+            &format!(
+                "- 视觉风格：{}",
+                input
+                    .visual_style
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or("未指定，按用户素材和目标平台判断")
+            ),
+            &input
+                .max_shots
+                .map(|shots| format!("- 镜头上限：{shots}"))
+                .unwrap_or_else(|| "- 镜头上限：未指定".to_string()),
+            &input
+                .source_kind
+                .clone()
+                .map(|kind| format!("- 原素材：{kind}"))
+                .unwrap_or_else(|| "- 原素材：用户输入/对话需求".to_string()),
             "",
             "## 用户要求",
-            input.requirements.as_deref().map(str::trim).filter(|r| !r.is_empty())
+            input
+                .requirements
+                .as_deref()
+                .map(str::trim)
+                .filter(|r| !r.is_empty())
                 .unwrap_or("未单独指定；以用户确认时的 instruction 为准。"),
             "",
             "## 分镜边界",
@@ -358,14 +393,27 @@ fn estimate_storyboard_max_tokens(input: &StoryboardCreationInput) -> u32 {
 }
 
 /// `ScriptCreationAgent.writeScript`（temp 0.55）。
-pub async fn write_script(router: &AgentRouter, input: &ScriptCreationInput) -> Result<String, String> {
+pub async fn write_script(
+    router: &AgentRouter,
+    input: &ScriptCreationInput,
+) -> Result<String, String> {
     let language = input.language.as_deref();
     let outcome = router
         .chat(
             "script-creation-writer",
             vec![
-                LLMMessage { role: LLMRole::System, content: script_creation_system_prompt(language), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: script_creation_user_prompt(input), tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: script_creation_system_prompt(language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: script_creation_user_prompt(input),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.55,
             Some(estimate_script_max_tokens(input)),
@@ -376,14 +424,27 @@ pub async fn write_script(router: &AgentRouter, input: &ScriptCreationInput) -> 
 }
 
 /// `StoryboardCreationAgent.writeStoryboard`（temp 0.45）。
-pub async fn write_storyboard(router: &AgentRouter, input: &StoryboardCreationInput) -> Result<String, String> {
+pub async fn write_storyboard(
+    router: &AgentRouter,
+    input: &StoryboardCreationInput,
+) -> Result<String, String> {
     let language = input.language.as_deref();
     let outcome = router
         .chat(
             "storyboard-creation-writer",
             vec![
-                LLMMessage { role: LLMRole::System, content: storyboard_creation_system_prompt(language), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: storyboard_creation_user_prompt(input), tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: storyboard_creation_system_prompt(language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: storyboard_creation_user_prompt(input),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.45,
             Some(estimate_storyboard_max_tokens(input)),
@@ -402,8 +463,15 @@ fn normalize_heading_text(text: &str) -> String {
         .strip_prefix("**")
         .and_then(|body| body.strip_suffix("**"))
         .unwrap_or(trimmed);
-    let stripped: String = unbolded.chars().filter(|c| !matches!(c, '`' | '*' | '_')).collect();
-    stripped.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    let stripped: String = unbolded
+        .chars()
+        .filter(|c| !matches!(c, '`' | '*' | '_'))
+        .collect();
+    stripped
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
 }
 
 fn heading_matches(text: &str, heading: &str) -> bool {
@@ -414,8 +482,7 @@ fn heading_matches(text: &str, heading: &str) -> bool {
         return false;
     }
     let rest = text[heading.len()..].trim();
-    rest.is_empty()
-        || rest.starts_with(['（', '(', '【', '[', ':', '：', '-', '—', ' '])
+    rest.is_empty() || rest.starts_with(['（', '(', '【', '[', ':', '：', '-', '—', ' '])
 }
 
 /// `extractMarkdownSection`：首个匹配标题的正文块（同级或更高级标题终止）。
@@ -430,7 +497,11 @@ pub fn count_markdown_sections(raw: &str, headings: &[&str]) -> usize {
             let text = normalize_heading_text(caps.get(2).map(|m| m.as_str()).unwrap_or_default());
             Some((text, normalized.clone()))
         })
-        .filter(|(text, normalized)| normalized.iter().any(|heading| heading_matches(text, heading)))
+        .filter(|(text, normalized)| {
+            normalized
+                .iter()
+                .any(|heading| heading_matches(text, heading))
+        })
         .count()
 }
 
@@ -438,8 +509,16 @@ pub fn count_markdown_sections(raw: &str, headings: &[&str]) -> usize {
 /// 正文节，否则拒交（零提交）。
 pub fn assert_script_deliverable(script: &str, language: Option<&str>) -> Result<(), String> {
     let en = language == Some("en");
-    let character_headings: Vec<&str> = if en { vec!["Characters"] } else { vec!["人物", "Characters"] };
-    let script_headings: Vec<&str> = if en { vec!["Script"] } else { vec!["剧本正文", "Script"] };
+    let character_headings: Vec<&str> = if en {
+        vec!["Characters"]
+    } else {
+        vec!["人物", "Characters"]
+    };
+    let script_headings: Vec<&str> = if en {
+        vec!["Script"]
+    } else {
+        vec!["剧本正文", "Script"]
+    };
     let body = extract_markdown_section(script, &script_headings);
     let character_count = count_markdown_sections(script, &character_headings);
     let script_count = count_markdown_sections(script, &script_headings);
@@ -459,13 +538,21 @@ pub fn extract_markdown_section(raw: &str, headings: &[&str]) -> Option<String> 
     let heading_re = regex::Regex::new(r"^(#{1,6})\s*(.+?)\s*$").ok()?;
     let level_re = regex::Regex::new(r"^(#{1,6})\s+").ok()?;
     let normalized: Vec<String> = headings.iter().map(|h| normalize_heading_text(h)).collect();
-    let lines: Vec<&str> = raw.split('\n').map(|line| line.trim_end_matches('\r')).collect();
+    let lines: Vec<&str> = raw
+        .split('\n')
+        .map(|line| line.trim_end_matches('\r'))
+        .collect();
     let mut start = usize::MAX;
     let mut level = 0usize;
     for (index, line) in lines.iter().enumerate() {
-        let Some(caps) = heading_re.captures(line) else { continue };
+        let Some(caps) = heading_re.captures(line) else {
+            continue;
+        };
         let text = normalize_heading_text(caps.get(2).map(|m| m.as_str()).unwrap_or_default());
-        if normalized.iter().any(|heading| heading_matches(&text, heading)) {
+        if normalized
+            .iter()
+            .any(|heading| heading_matches(&text, heading))
+        {
             start = index + 1;
             level = caps.get(1).map(|m| m.as_str()).unwrap_or_default().len();
             break;
@@ -508,8 +595,14 @@ fn is_markdown_table_separator(cells: &[String]) -> bool {
 }
 
 fn is_prompt_column_header(cell: &str) -> bool {
-    let re = regex::Regex::new(r"(?i)^(?:prompt|image\s*prompt|shot\s*prompt|提示词|图像提示词|分镜图提示词)$").unwrap();
-    let cleaned: String = cell.chars().filter(|c| !matches!(c, '`' | '*' | '_')).collect();
+    let re = regex::Regex::new(
+        r"(?i)^(?:prompt|image\s*prompt|shot\s*prompt|提示词|图像提示词|分镜图提示词)$",
+    )
+    .unwrap();
+    let cleaned: String = cell
+        .chars()
+        .filter(|c| !matches!(c, '`' | '*' | '_'))
+        .collect();
     re.is_match(cleaned.trim())
 }
 
@@ -532,7 +625,8 @@ pub fn parse_storyboard_prompt_lines(markdown: &str) -> Vec<String> {
         r"(?i)(?:^|[|>\-\d.)、\s])(?:\*\*)?\s*(?:Prompt(?:\s+for\s+[^:*：]+)?|提示词(?:\s*[^:*：]+)?|图像提示词|分镜图提示词)\s*(?:\*\*)?\s*[：:]\s*(.+?)\s*$",
     )
     .unwrap();
-    let numbered_re = regex::Regex::new(r"^(?:[-*]\s*)?(?:\d+|[０-９]+)[.)、：:\s-]+(.+)$").unwrap();
+    let numbered_re =
+        regex::Regex::new(r"^(?:[-*]\s*)?(?:\d+|[０-９]+)[.)、：:\s-]+(.+)$").unwrap();
     let mut prompts = Vec::new();
     let mut prompt_column_index: isize = -1;
     for raw_line in markdown.split('\n') {
@@ -545,12 +639,18 @@ pub fn parse_storyboard_prompt_lines(markdown: &str) -> Vec<String> {
             if is_markdown_table_separator(&cells) {
                 continue;
             }
-            if let Some(header_index) = cells.iter().position(|cell| is_prompt_column_header(cell)) {
+            if let Some(header_index) = cells.iter().position(|cell| is_prompt_column_header(cell))
+            {
                 prompt_column_index = header_index as isize;
                 continue;
             }
             if prompt_column_index >= 0 {
-                let prompt = clean_prompt_text(cells.get(prompt_column_index as usize).map(String::as_str).unwrap_or(""));
+                let prompt = clean_prompt_text(
+                    cells
+                        .get(prompt_column_index as usize)
+                        .map(String::as_str)
+                        .unwrap_or(""),
+                );
                 if !prompt.is_empty() {
                     prompts.push(prompt);
                 }
@@ -583,7 +683,15 @@ pub fn parse_storyboard_prompt_lines(markdown: &str) -> Vec<String> {
 
 /// `extractStoryboardImagePrompts`：图像提示词小节提取 + 编号化；空回退整体。
 pub fn extract_storyboard_image_prompts(raw: &str) -> String {
-    let section = extract_markdown_section(raw, &["图像提示词", "分镜图提示词", "Image Prompts", "Shot Image Prompts"]);
+    let section = extract_markdown_section(
+        raw,
+        &[
+            "图像提示词",
+            "分镜图提示词",
+            "Image Prompts",
+            "Shot Image Prompts",
+        ],
+    );
     let source = section
         .as_deref()
         .map(str::trim)
@@ -604,11 +712,11 @@ pub fn extract_storyboard_image_prompts(raw: &str) -> String {
 
 /// `normalizeScriptEpisodeEndLabels`：按当前"第N集"标题校正"字幕：第N集完"。
 pub fn normalize_script_episode_end_labels(script: &str) -> String {
-    let heading_re = regex::Regex::new(r"^(#{1,6})\s*第\s*([一二三四五六七八九十百千万\d]+)\s*集(?:\s|$)").unwrap();
-    let label_re = regex::Regex::new(
-        r"(字幕\s*[：:]\s*)第\s*[一二三四五六七八九十百千万\d]+\s*集完",
-    )
-    .unwrap();
+    let heading_re =
+        regex::Regex::new(r"^(#{1,6})\s*第\s*([一二三四五六七八九十百千万\d]+)\s*集(?:\s|$)")
+            .unwrap();
+    let label_re =
+        regex::Regex::new(r"(字幕\s*[：:]\s*)第\s*[一二三四五六七八九十百千万\d]+\s*集完").unwrap();
     let mut current_episode: Option<String> = None;
     let mut out_lines = Vec::new();
     for line in script.split('\n') {
@@ -621,7 +729,9 @@ pub fn normalize_script_episode_end_labels(script: &str) -> String {
             continue;
         }
         let episode = current_episode.clone().unwrap_or_default();
-        let replaced = label_re.replace_all(line, format!("$1第{episode}集完").as_str()).to_string();
+        let replaced = label_re
+            .replace_all(line, format!("$1第{episode}集完").as_str())
+            .to_string();
         out_lines.push(replaced);
     }
     out_lines.join("\n")
@@ -641,7 +751,8 @@ mod tests {
 
     #[test]
     fn markdown_section_extraction() {
-        let raw = "# 标题\n\n## 图像提示词\n\nPrompt: 雪夜街道\nPrompt: 灯下人影\n\n## 其它\n\n后面内容";
+        let raw =
+            "# 标题\n\n## 图像提示词\n\nPrompt: 雪夜街道\nPrompt: 灯下人影\n\n## 其它\n\n后面内容";
         let section = extract_markdown_section(raw, &["图像提示词", "Image Prompts"]).unwrap();
         assert!(section.contains("雪夜街道"), "{section}");
         assert!(!section.contains("其它"), "{section}");
@@ -657,7 +768,8 @@ mod tests {
     #[test]
     fn prompt_lines_three_forms() {
         // Prompt: 行。
-        let lines = parse_storyboard_prompt_lines("Prompt: 雪夜街道\n提示词：灯下人影\n图像提示词: 远景");
+        let lines =
+            parse_storyboard_prompt_lines("Prompt: 雪夜街道\n提示词：灯下人影\n图像提示词: 远景");
         assert_eq!(lines, vec!["雪夜街道", "灯下人影", "远景"]);
         // 表格 prompt 列（表头定位 + 数据行取列）。
         let table = "| 镜号 | 提示词 |\n| --- | --- |\n| 01 | 雪夜街口 |";
@@ -713,7 +825,13 @@ mod tests {
         assert!(spec.contains("## 互动影游边界"), "{spec}");
         // 五节用户提示词含全部小节标题。
         let user = interactive_creation_user_prompt(&input);
-        for heading in ["## 剧情树", "## 变量与旗标表", "## 多结局路径", "## 互动剧本", "## 分镜与图像提示词"] {
+        for heading in [
+            "## 剧情树",
+            "## 变量与旗标表",
+            "## 多结局路径",
+            "## 互动剧本",
+            "## 分镜与图像提示词",
+        ] {
             assert!(user.contains(heading), "user prompt 缺 {heading}");
         }
     }
@@ -730,7 +848,10 @@ mod tests {
         assert!(spec.starts_with("# 山雨 剧本创作规格"), "{spec}");
         assert!(spec.contains("- 交付类型：竖屏短剧"), "{spec}");
         assert!(spec.contains("- 集数/段落数：8"), "{spec}");
-        assert!(spec.contains("未单独指定；以用户确认时的 instruction 为准。"), "{spec}");
+        assert!(
+            spec.contains("未单独指定；以用户确认时的 instruction 为准。"),
+            "{spec}"
+        );
 
         let board_input = StoryboardCreationInput {
             title: "山雨".into(),
@@ -936,8 +1057,18 @@ pub async fn write_interactive_film(
         .chat(
             "interactive-film-creation-writer",
             vec![
-                LLMMessage { role: LLMRole::System, content: interactive_creation_system_prompt(language), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: interactive_creation_user_prompt(input), tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: interactive_creation_system_prompt(language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: interactive_creation_user_prompt(input),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.5,
             Some(estimate_interactive_film_max_tokens(input)),
@@ -964,8 +1095,18 @@ pub async fn generate_story_graph_from_premise(
         .chat(
             "interactive-film-graph-writer",
             vec![
-                LLMMessage { role: LLMRole::System, content: interactive_film_system_prompt(language), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: interactive_film_system_prompt(language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.5,
             Some(8000),
@@ -990,7 +1131,9 @@ pub fn build_story_graph_from_llm_text(
     let start = fenced.find('{');
     let end = fenced.rfind('}');
     let Some((start, end)) = start.zip(end).filter(|(s, e)| e > s) else {
-        return Err("LLM did not return a parseable JSON object / LLM 未返回可解析的 JSON 对象".to_string());
+        return Err(
+            "LLM did not return a parseable JSON object / LLM 未返回可解析的 JSON 对象".to_string(),
+        );
     };
     let mut parsed: serde_json::Value =
         serde_json::from_str(&fenced[start..=end]).map_err(|e| e.to_string())?;

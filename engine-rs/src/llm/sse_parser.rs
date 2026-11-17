@@ -48,7 +48,9 @@ pub struct SseStreamParser {
 
 impl SseStreamParser {
     pub fn new() -> Self {
-        SseStreamParser { pending: String::new() }
+        SseStreamParser {
+            pending: String::new(),
+        }
     }
 
     /// 送入一段原始字节（文本），返回该段解析出的事件（可能为空，表示仍在缓冲）。
@@ -57,9 +59,16 @@ impl SseStreamParser {
         let mut events = Vec::new();
         loop {
             // SSE 事件以空行（\n\n 或 \r\n\r\n）分隔
-            let split_at = self.pending.find("\n\n").or_else(|| self.pending.find("\r\n\r\n"));
+            let split_at = self
+                .pending
+                .find("\n\n")
+                .or_else(|| self.pending.find("\r\n\r\n"));
             let Some(end) = split_at else { break };
-            let sep_len = if self.pending[end..].starts_with("\r\n\r\n") { 4 } else { 2 };
+            let sep_len = if self.pending[end..].starts_with("\r\n\r\n") {
+                4
+            } else {
+                2
+            };
             let end_abs = end + sep_len;
             // 627 号：先在借用切片上解析（事件持有 owned String，借用即止），
             // 再 drain 缓冲——免去此前每帧一次的 block String collect 分配。
@@ -94,7 +103,10 @@ impl Default for SseStreamParser {
 fn parse_sse_block(block: &str) -> Vec<SseEvent> {
     let mut data_payload: Option<&str> = None;
     for line in block.lines() {
-        if let Some(rest) = line.strip_prefix("data:").or_else(|| line.strip_prefix("data ")) {
+        if let Some(rest) = line
+            .strip_prefix("data:")
+            .or_else(|| line.strip_prefix("data "))
+        {
             let trimmed = rest.trim();
             if trimmed.is_empty() {
                 continue;
@@ -103,7 +115,9 @@ fn parse_sse_block(block: &str) -> Vec<SseEvent> {
         }
         // event:/id:/comment 行忽略
     }
-    let Some(payload) = data_payload else { return Vec::new() };
+    let Some(payload) = data_payload else {
+        return Vec::new();
+    };
     if payload == "[DONE]" {
         return vec![SseEvent::Done];
     }
@@ -197,14 +211,10 @@ fn parse_openai_chunk(chunk: OpenAiChunk) -> Vec<SseEvent> {
         if let Some(content) = content.filter(|text| !text.is_empty()) {
             events.push(SseEvent::Delta(content));
         }
-        let reasoning = [
-            reasoning_content,
-            reasoning,
-            reasoning_text,
-        ]
-        .into_iter()
-        .flatten()
-        .find(|text| !text.is_empty());
+        let reasoning = [reasoning_content, reasoning, reasoning_text]
+            .into_iter()
+            .flatten()
+            .find(|text| !text.is_empty());
         if let Some(reasoning) = reasoning {
             events.push(SseEvent::ReasoningDelta(reasoning));
         }
@@ -246,7 +256,16 @@ mod tests {
     fn parses_content_deltas() {
         let stream = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"世界\"}}]}\n\n";
         let events = parse_sse_stream(stream);
-        let text: String = events.iter().filter_map(|e| if let SseEvent::Delta(s) = e { Some(s.clone()) } else { None }).collect();
+        let text: String = events
+            .iter()
+            .filter_map(|e| {
+                if let SseEvent::Delta(s) = e {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(text, "你好世界");
     }
 
@@ -268,9 +287,8 @@ mod tests {
             vec![SseEvent::ReasoningDelta("让我想想".to_string())]
         );
         // 无 reasoning_content 时 reasoning 兜底；两者同帧不重复（pi-ai 防重复语义）。
-        let events = parse_sse_stream(
-            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"B\"}}]}\n\n",
-        );
+        let events =
+            parse_sse_stream("data: {\"choices\":[{\"delta\":{\"reasoning\":\"B\"}}]}\n\n");
         assert_eq!(events, vec![SseEvent::ReasoningDelta("B".to_string())]);
         // content 与 reasoning 同帧：双双产出（pi-ai 双分支语义——content 块与
         // thinking 块独立累积；130 号 Vec 化后不再互相遮蔽）。
@@ -308,29 +326,43 @@ mod tests {
     fn tool_call_delta() {
         let stream = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"write\",\"arguments\":\"{\\\"x\\\":\"}}]}}]}\n\n";
         let events = parse_sse_stream(stream);
-        assert!(matches!(events.first(), Some(SseEvent::ToolCallDelta { index: 0, id, name, arguments }) if id.as_deref() == Some("call_1") && name.as_deref() == Some("write") && arguments.is_some()));
+        assert!(
+            matches!(events.first(), Some(SseEvent::ToolCallDelta { index: 0, id, name, arguments }) if id.as_deref() == Some("call_1") && name.as_deref() == Some("write") && arguments.is_some())
+        );
     }
 
     #[test]
     fn usage_frame() {
         let stream = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n";
         let events = parse_sse_stream(stream);
-        assert!(matches!(events.first(), Some(SseEvent::Usage { prompt_tokens: Some(10), completion_tokens: Some(5), total_tokens: Some(15) })));
+        assert!(matches!(
+            events.first(),
+            Some(SseEvent::Usage {
+                prompt_tokens: Some(10),
+                completion_tokens: Some(5),
+                total_tokens: Some(15)
+            })
+        ));
     }
 
     #[test]
     fn incremental_chunks_buffer() {
         let mut p = SseStreamParser::new();
         // 跨 chunk 的不完整行
-        assert!(p.push("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}").is_empty());
+        assert!(p
+            .push("data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}")
+            .is_empty());
         assert!(p.push("]}\n\n").len() == 1);
     }
 
     #[test]
     fn skips_non_data_lines() {
-        let stream = ": comment\nevent: ping\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n";
+        let stream =
+            ": comment\nevent: ping\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n";
         let events = parse_sse_stream(stream);
-        assert!(events.iter().any(|e| matches!(e, SseEvent::Delta(s) if s == "ok")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, SseEvent::Delta(s) if s == "ok")));
     }
 
     #[test]
@@ -338,13 +370,24 @@ mod tests {
         let mut p = SseStreamParser::new();
         p.push("data: {\"choices\":[{\"delta\":{\"content\":\"end\"}}]}"); // 无尾随 \n\n
         let events = p.finish();
-        assert!(events.iter().any(|e| matches!(e, SseEvent::Delta(s) if s == "end")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, SseEvent::Delta(s) if s == "end")));
     }
 
     #[test]
     fn crlf_separators() {
         let stream = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\r\n\r\n";
-        let text: String = parse_sse_stream(stream).iter().filter_map(|e| if let SseEvent::Delta(s) = e { Some(s.clone()) } else { None }).collect();
+        let text: String = parse_sse_stream(stream)
+            .iter()
+            .filter_map(|e| {
+                if let SseEvent::Delta(s) = e {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(text, "ab");
     }
 
@@ -360,10 +403,10 @@ mod tests {
         assert!(parse_sse_stream("data: 42\n\n").is_empty());
         // 对象但字段类型不符（choices 非数组、usage 非对象）→ 整帧跳过。
         assert!(parse_sse_stream("data: {\"choices\": 5}\n\n").is_empty());
-        assert!(parse_sse_stream(
-            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"x\"}}\n\n"
-        )
-        .is_empty());
+        assert!(
+            parse_sse_stream("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":\"x\"}}\n\n")
+                .is_empty()
+        );
         // 跳过不影响后续正常帧。
         let events = parse_sse_stream(
             "data: [1,2,3]\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"好\"}}]}\n\n",

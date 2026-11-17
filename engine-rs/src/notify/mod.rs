@@ -10,8 +10,10 @@
 pub mod dispatcher;
 pub mod format;
 
-pub use dispatcher::{dispatch_notification, dispatch_webhook_event, parse_notify_channels, WebhookPayload};
 pub use crate::models::project::{NotifyChannel, NotifyFormat};
+pub use dispatcher::{
+    dispatch_notification, dispatch_webhook_event, parse_notify_channels, WebhookPayload,
+};
 
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "export-bindings")]

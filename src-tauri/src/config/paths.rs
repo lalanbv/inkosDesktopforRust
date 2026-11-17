@@ -54,7 +54,8 @@ impl ConfigPaths {
 
     /// 确保工作区配置目录存在
     pub fn ensure_workspace_config_dir(&self, workspace_id: &str) -> anyhow::Result<()> {
-        let ws_config_dir = self.app_data
+        let ws_config_dir = self
+            .app_data
             .join("config")
             .join(format!("workspace-{}", workspace_id));
         if !ws_config_dir.exists() {

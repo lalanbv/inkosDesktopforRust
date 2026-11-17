@@ -18,19 +18,18 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::continuity::{AuditChapterOptions, TruthFileOverrides};
 use crate::agents::reviser::{revise_chapter, ReviseMode, ReviseOptions};
 use crate::llm::agent_router::{AgentRouter, RoutedAgent};
 use crate::pipeline::merged_audit::{
-    evaluate_merged_audit, restore_actionable_audit_if_lost, MergedAuditEvaluation,
-    RevisionGate,
+    evaluate_merged_audit, restore_actionable_audit_if_lost, MergedAuditEvaluation, RevisionGate,
 };
 use crate::pipeline::persisted_governed_plan::relative_to_book_dir;
 use crate::pipeline::write_next::{
@@ -57,12 +56,16 @@ pub struct BooksRuntime {
 /// 有效 router 缓存条目：键 = (inkos.json mtime, secrets.json mtime, 启动
 /// router 指纹)——配置写入或启动态变化即失效。
 struct EffectiveRouterEntry {
-    key: (Option<std::time::SystemTime>, Option<std::time::SystemTime>, usize),
+    key: (
+        Option<std::time::SystemTime>,
+        Option<std::time::SystemTime>,
+        usize,
+    ),
     router: Arc<AgentRouter>,
 }
 
-fn effective_router_cache()
--> &'static std::sync::Mutex<HashMap<std::path::PathBuf, EffectiveRouterEntry>> {
+fn effective_router_cache(
+) -> &'static std::sync::Mutex<HashMap<std::path::PathBuf, EffectiveRouterEntry>> {
     static CACHE: std::sync::OnceLock<
         std::sync::Mutex<HashMap<std::path::PathBuf, EffectiveRouterEntry>>,
     > = std::sync::OnceLock::new();
@@ -70,7 +73,9 @@ fn effective_router_cache()
 }
 
 fn mtime_of(path: &std::path::Path) -> Option<std::time::SystemTime> {
-    std::fs::metadata(path).ok().and_then(|meta| meta.modified().ok())
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
 }
 
 impl BooksRuntime {
@@ -88,7 +93,9 @@ impl BooksRuntime {
             std::sync::Arc::as_ptr(&self.router) as usize,
         );
         {
-            let cache = effective_router_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = effective_router_cache()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(entry) = cache.get(&root) {
                 if entry.key == key {
                     return entry.router.clone();
@@ -96,10 +103,15 @@ impl BooksRuntime {
             }
         }
         let router = match crate::server::project_config_routes::load_raw_config(&root).await {
-            Some(config) => match config.get("llm").and_then(serde_json::Value::as_object).cloned() {
+            Some(config) => match config
+                .get("llm")
+                .and_then(serde_json::Value::as_object)
+                .cloned()
+            {
                 Some(llm) => {
                     let effective =
-                        crate::server::service_routes::resolve_effective_llm_studio(&root, &llm).await;
+                        crate::server::service_routes::resolve_effective_llm_studio(&root, &llm)
+                            .await;
                     let base_url = effective
                         .get("baseUrl")
                         .and_then(serde_json::Value::as_str)
@@ -115,63 +127,78 @@ impl BooksRuntime {
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
-                        effective.get("provider").and_then(serde_json::Value::as_str).unwrap_or("openai"),
-                        Some(&base_url),
-                    );
-                    if !base_url.is_empty() && !model.is_empty() && (!api_key.is_empty() || key_optional) {
-                        let api_format = match effective.get("apiFormat").and_then(serde_json::Value::as_str) {
-                            Some("responses") => crate::llm::providers::TransportApiFormat::Responses,
+                    let key_optional =
+                        crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
+                            effective
+                                .get("provider")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("openai"),
+                            Some(&base_url),
+                        );
+                    if !base_url.is_empty()
+                        && !model.is_empty()
+                        && (!api_key.is_empty() || key_optional)
+                    {
+                        let api_format = match effective
+                            .get("apiFormat")
+                            .and_then(serde_json::Value::as_str)
+                        {
+                            Some("responses") => {
+                                crate::llm::providers::TransportApiFormat::Responses
+                            }
                             _ => crate::llm::providers::TransportApiFormat::Chat,
                         };
-                    let stream = effective.get("stream").and_then(serde_json::Value::as_bool);
-                    // 126 号：流式进度钩子——llm:progress 广播（books 面不带
-                    // sessionId——TS 该面 pipeline 无 sessionIdForSSE）。
-                    let hub = self.hub.clone();
-                    // G16/346 号：项目级任务路由（.inkos/task-routing.json，缺省不注入）。
-                    let task_routing = tokio::fs::read_to_string(
-                        root.join(".inkos").join("task-routing.json")
-                    )
-                    .await
-                    .ok()
-                    .and_then(|raw| serde_json::from_str(&raw).ok());
-                    Arc::new(
-                        AgentRouter::new(
-                            crate::llm::agent_router::LlmEndpointConfig {
-                                base_url,
-                                api_key,
-                                model: model.clone(),
-                                max_tokens: 8192,
-                                extra_headers: HashMap::new(),
-                                // 441 号：生效模型卡窗口（resolve_effective_llm_studio
-                                // 注入；缺项按 TS 128k 缺省口径兜底）。
-                                context_window_tokens: effective
-                                    .get("contextWindowTokens")
-                                    .and_then(serde_json::Value::as_u64)
-                                    .unwrap_or_else(|| {
-                                        crate::llm::lookup::builtin_context_window(
-                                            effective.get("service").and_then(serde_json::Value::as_str).unwrap_or("custom"),
-                                            &model,
-                                        )
-                                    }),
-                            },
-                            HashMap::new(),
+                        let stream = effective.get("stream").and_then(serde_json::Value::as_bool);
+                        // 126 号：流式进度钩子——llm:progress 广播（books 面不带
+                        // sessionId——TS 该面 pipeline 无 sessionIdForSSE）。
+                        let hub = self.hub.clone();
+                        // G16/346 号：项目级任务路由（.inkos/task-routing.json，缺省不注入）。
+                        let task_routing = tokio::fs::read_to_string(
+                            root.join(".inkos").join("task-routing.json"),
                         )
-                        .with_api_format(api_format)
-                        .with_stream(stream)
-                        .with_task_routing(task_routing)
-                        .with_progress_hook({
-                            std::sync::Arc::new(
-                                move |progress: &crate::llm::provider::StreamProgress| {
-                                    hub.broadcast(
-                                        "llm:progress",
-                                        &serde_json::to_value(progress)
-                                            .unwrap_or_else(|_| serde_json::json!({})),
-                                    );
+                        .await
+                        .ok()
+                        .and_then(|raw| serde_json::from_str(&raw).ok());
+                        Arc::new(
+                            AgentRouter::new(
+                                crate::llm::agent_router::LlmEndpointConfig {
+                                    base_url,
+                                    api_key,
+                                    model: model.clone(),
+                                    max_tokens: 8192,
+                                    extra_headers: HashMap::new(),
+                                    // 441 号：生效模型卡窗口（resolve_effective_llm_studio
+                                    // 注入；缺项按 TS 128k 缺省口径兜底）。
+                                    context_window_tokens: effective
+                                        .get("contextWindowTokens")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or_else(|| {
+                                            crate::llm::lookup::builtin_context_window(
+                                                effective
+                                                    .get("service")
+                                                    .and_then(serde_json::Value::as_str)
+                                                    .unwrap_or("custom"),
+                                                &model,
+                                            )
+                                        }),
                                 },
+                                HashMap::new(),
                             )
-                        }),
-                    )
+                            .with_api_format(api_format)
+                            .with_stream(stream)
+                            .with_task_routing(task_routing)
+                            .with_progress_hook({
+                                std::sync::Arc::new(
+                                    move |progress: &crate::llm::provider::StreamProgress| {
+                                        hub.broadcast(
+                                            "llm:progress",
+                                            &serde_json::to_value(progress)
+                                                .unwrap_or_else(|_| serde_json::json!({})),
+                                        );
+                                    },
+                                )
+                            }),
+                        )
                     } else {
                         self.router.clone()
                     }
@@ -181,8 +208,15 @@ impl BooksRuntime {
             None => self.router.clone(),
         };
         effective_router_cache()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(root, EffectiveRouterEntry { key, router: router.clone() });
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                root,
+                EffectiveRouterEntry {
+                    key,
+                    router: router.clone(),
+                },
+            );
         router
     }
 }
@@ -217,7 +251,9 @@ fn book_id_is_unsafe(id: &str) -> bool {
 fn invalid_book_id_response(id: &str) -> (StatusCode, Json<serde_json::Value>) {
     (
         StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": { "code": "INVALID_BOOK_ID", "message": format!("Invalid book ID: \"{id}\"") } })),
+        Json(
+            serde_json::json!({ "error": { "code": "INVALID_BOOK_ID", "message": format!("Invalid book ID: \"{id}\"") } }),
+        ),
     )
 }
 
@@ -231,7 +267,10 @@ pub async fn plan(
     }
     let Json(body) = body.unwrap_or_default();
     match run_plan(&runtime, &book_id, body.context.as_deref()).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&result).unwrap_or_default()),
+        ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error.to_string() })),
@@ -244,13 +283,18 @@ async fn run_plan(
     book_id: &str,
     context: Option<&str>,
 ) -> Result<PlanChapterResult, crate::pipeline::write_next::WriteNextError> {
-    runtime.state.ensure_control_documents(book_id, None).await?;
+    runtime
+        .state
+        .ensure_control_documents(book_id, None)
+        .await?;
     let book = runtime.state.load_book_config(book_id).await?;
     let book_dir = runtime.state.book_dir(book_id);
     let chapter_number = runtime.state.get_next_chapter_number(book_id).await?;
 
-    let planner =
-        RoutedAgent { router: runtime.effective_router().await, agent: "planner" };
+    let planner = RoutedAgent {
+        router: runtime.effective_router().await,
+        agent: "planner",
+    };
     let plan = crate::agents::planner::plan_chapter(
         &planner,
         &crate::agents::planner::PlanChapterInput {
@@ -258,7 +302,7 @@ async fn run_plan(
             book_dir: &book_dir,
             chapter_number,
             external_context: context,
-                    chapter_word_count: 3000,
+            chapter_word_count: 3000,
             book_writing: book.writing.as_ref(),
         },
     )
@@ -307,7 +351,10 @@ pub async fn settle(
         return invalid_book_id_response(&book_id);
     }
     match run_settle(&runtime, &book_id, &body).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&result).unwrap_or_default()),
+        ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -315,7 +362,11 @@ pub async fn settle(
     }
 }
 
-async fn run_settle(runtime: &BooksRuntime, book_id: &str, body: &SettleBody) -> Result<SettleResult, String> {
+async fn run_settle(
+    runtime: &BooksRuntime,
+    book_id: &str,
+    body: &SettleBody,
+) -> Result<SettleResult, String> {
     let book = runtime
         .state
         .load_book_config(book_id)
@@ -323,8 +374,10 @@ async fn run_settle(runtime: &BooksRuntime, book_id: &str, body: &SettleBody) ->
         .map_err(|e| e.to_string())?;
     let book_dir = runtime.state.book_dir(book_id);
 
-    let writer =
-        RoutedAgent { router: runtime.effective_router().await, agent: "writer" };
+    let writer = RoutedAgent {
+        router: runtime.effective_router().await,
+        agent: "writer",
+    };
     let ctx_ports = AgentCtxPorts::new(runtime);
     let output = crate::agents::writer::settle_chapter_state(
         &ctx_ports.writer_ctx(),
@@ -382,7 +435,9 @@ pub async fn draft(
         return invalid_book_id_response(&book_id).into_response();
     }
     let Json(body) = body.unwrap_or_default();
-    runtime.hub.broadcast("draft:start", &serde_json::json!({ "bookId": book_id }));
+    runtime
+        .hub
+        .broadcast("draft:start", &serde_json::json!({ "bookId": book_id }));
 
     let task_runtime = runtime.clone();
     let task_book_id = book_id.clone();
@@ -413,16 +468,22 @@ pub async fn draft(
 
     (
         StatusCode::OK,
-        Json(DraftResponse { status: "drafting", book_id }),
+        Json(DraftResponse {
+            status: "drafting",
+            book_id,
+        }),
     )
-    .into_response()
+        .into_response()
 }
 
 async fn run_draft(
     runtime: &BooksRuntime,
     book_id: &str,
     body: &DraftBody,
-) -> Result<crate::pipeline::write_next::ChapterPipelineResult, crate::pipeline::write_next::WriteNextError> {
+) -> Result<
+    crate::pipeline::write_next::ChapterPipelineResult,
+    crate::pipeline::write_next::WriteNextError,
+> {
     crate::write_next_assembly!(runtime, agents, ctx);
     // 530 号：写作链 craft 激活（longWriting 绑定 ∩ 可用技能），链内全部
     // AgentRouter::chat 出口注入——对齐 TS server 装配 activatedSkills 透传。
@@ -481,17 +542,32 @@ pub async fn revise(
         &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }),
     );
 
-    match run_revise_chain(&runtime, &book_id, chapter_number, &body, resolve_effective_revision_gate(&runtime, &book_id).await).await {
+    match run_revise_chain(
+        &runtime,
+        &book_id,
+        chapter_number,
+        &body,
+        resolve_effective_revision_gate(&runtime, &book_id).await,
+    )
+    .await
+    {
         Ok(result) => {
             runtime.hub.broadcast(
                 "revise:complete",
                 &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }),
             );
-            (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default()))
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(&result).unwrap_or_default()),
+            )
         }
         Err(error) => {
             let message = error.message().to_string();
-            let status = if error.is_not_found() { StatusCode::NOT_FOUND } else { StatusCode::INTERNAL_SERVER_ERROR };
+            let status = if error.is_not_found() {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
             runtime.hub.broadcast(
                 "revise:error",
                 &serde_json::json!({ "bookId": book_id, "error": message }),
@@ -511,11 +587,14 @@ pub async fn rewrite(
     Path((book_id, chapter)): Path<(String, String)>,
     body: Option<Json<serde_json::Value>>,
 ) -> impl IntoResponse {
-    let parsed = body.map(|Json(value)| value).unwrap_or_else(|| serde_json::json!({}));
+    let parsed = body
+        .map(|Json(value)| value)
+        .unwrap_or_else(|| serde_json::json!({}));
     let broadcast_error = |runtime: &BooksRuntime, book_id: &str, message: String| {
-        runtime
-            .hub
-            .broadcast("rewrite:error", &serde_json::json!({ "bookId": book_id, "error": message }));
+        runtime.hub.broadcast(
+            "rewrite:error",
+            &serde_json::json!({ "bookId": book_id, "error": message }),
+        );
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": message })),
@@ -550,10 +629,18 @@ pub async fn rewrite(
                 return broadcast_error(&runtime, &book_id, message);
             }
         };
-        let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
-        if let Err(error) =
-            crate::state::chapter_workspace::save_chapter_user_brief(&FsStateStore, &book_dir, chapter_number, value)
-                .await
+        let book_dir = runtime
+            .state
+            .book_dir(&book_id)
+            .to_string_lossy()
+            .into_owned();
+        if let Err(error) = crate::state::chapter_workspace::save_chapter_user_brief(
+            &FsStateStore,
+            &book_dir,
+            chapter_number,
+            value,
+        )
+        .await
         {
             return broadcast_error(&runtime, &book_id, error.to_string());
         }
@@ -561,9 +648,20 @@ pub async fn rewrite(
 
     let chain_body = ReviseBody {
         mode: Some("rework".to_string()),
-        brief: parsed.get("brief").and_then(serde_json::Value::as_str).map(str::to_string),
+        brief: parsed
+            .get("brief")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
     };
-    match run_revise_chain(&runtime, &book_id, chapter_number, &chain_body, RevisionGate::Always).await {
+    match run_revise_chain(
+        &runtime,
+        &book_id,
+        chapter_number,
+        &chain_body,
+        RevisionGate::Always,
+    )
+    .await
+    {
         Ok(result) => {
             runtime.hub.broadcast(
                 "rewrite:complete",
@@ -597,7 +695,7 @@ use crate::agents::consolidator::consolidate as run_consolidate;
 use crate::agents::state_validator::validate as validate_state;
 use crate::llm::agent_router::FullCycleAuditor;
 use crate::pipeline::chapter_state_recovery::{
-    retry_settlement_after_validation_failure, SettlePort, SettlementRetryParams, SettleRequest,
+    retry_settlement_after_validation_failure, SettlePort, SettleRequest, SettlementRetryParams,
     ValidatePort,
 };
 
@@ -702,17 +800,21 @@ pub(crate) async fn resolve_effective_revision_gate(
     runtime: &BooksRuntime,
     book_id: &str,
 ) -> RevisionGate {
-    let project_gate = crate::server::project_config_routes::load_raw_config(
-        runtime.state.project_root(),
-    )
-    .await
-    .and_then(|config| config.get("writing").cloned())
-    .and_then(|writing| {
-        writing
-            .get("revisionGate")
-            .and_then(serde_json::Value::as_str)
-            .and_then(|value| serde_json::from_value::<crate::models::book::RevisionGateVal>(serde_json::json!(value)).ok())
-    });
+    let project_gate =
+        crate::server::project_config_routes::load_raw_config(runtime.state.project_root())
+            .await
+            .and_then(|config| config.get("writing").cloned())
+            .and_then(|writing| {
+                writing
+                    .get("revisionGate")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| {
+                        serde_json::from_value::<crate::models::book::RevisionGateVal>(
+                            serde_json::json!(value),
+                        )
+                        .ok()
+                    })
+            });
     let book_writing = runtime
         .state
         .load_book_config(book_id)
@@ -747,9 +849,10 @@ pub(crate) async fn run_revise_chain(
 
     // 章节正文（缺文件 → Node 404 "Chapter not found"）。687 号数值等值定位。
     let chapters_dir = book_dir.join("chapters");
-    let file_name = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number)
-        .await
-        .ok_or_else(|| ReviseChainError::NotFound("Chapter not found".to_string()))?;
+    let file_name =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number)
+            .await
+            .ok_or_else(|| ReviseChainError::NotFound("Chapter not found".to_string()))?;
     let raw = tokio::fs::read_to_string(chapters_dir.join(&file_name))
         .await
         .map_err(|_| ReviseChainError::NotFound("Chapter not found".to_string()))?;
@@ -766,7 +869,11 @@ pub(crate) async fn run_revise_chain(
         .find(|m| m.number == chapter_number)
         .ok_or_else(|| internal(format!("Chapter {chapter_number} not found in index")))?;
     let chapter_title = chapter_meta.title.clone();
-    let latest = index.iter().map(|m| m.number).max().unwrap_or(chapter_number);
+    let latest = index
+        .iter()
+        .map(|m| m.number)
+        .max()
+        .unwrap_or(chapter_number);
     let is_latest = chapter_number == latest;
 
     let mode = match body.mode.as_deref() {
@@ -776,7 +883,11 @@ pub(crate) async fn run_revise_chain(
         Some("anti-detect") => ReviseMode::AntiDetect,
         _ => ReviseMode::SpotFix,
     };
-    let explicit_revision = body.brief.as_deref().map(str::trim).is_some_and(|b| !b.is_empty())
+    let explicit_revision = body
+        .brief
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|b| !b.is_empty())
         || mode == ReviseMode::Rewrite
         || mode == ReviseMode::Rework;
 
@@ -827,8 +938,10 @@ pub(crate) async fn run_revise_chain(
     }
 
     // 修稿（以 pre 合并审计问题驱动）。
-    let reviser =
-        RoutedAgent { router: runtime.effective_router().await, agent: "reviser" };
+    let reviser = RoutedAgent {
+        router: runtime.effective_router().await,
+        agent: "reviser",
+    };
     let reviser_ports = AgentCtxPorts::new(runtime);
     let revise_output = revise_chapter(
         &reviser,
@@ -856,8 +969,10 @@ pub(crate) async fn run_revise_chain(
 
     // 131 号合并同步：reviser 契约瘦身（updated_* 标签移除）——修订后的
     // 真相覆盖改由结算器产出（TS reviseDraft 新链：revise → settle → 覆盖审计）。
-    let settler_agent =
-        RoutedAgent { router: runtime.effective_router().await, agent: "writer" };
+    let settler_agent = RoutedAgent {
+        router: runtime.effective_router().await,
+        agent: "writer",
+    };
     let settled = crate::agents::writer::settle_chapter_state(
         &crate::agents::writer::WriterCtx {
             project_root: runtime.state.project_root(),
@@ -914,22 +1029,21 @@ pub(crate) async fn run_revise_chain(
         router: runtime.effective_router().await,
         agent: "state-validator",
     };
-    let state_validation =
-        crate::agents::state_validator::validate(
-            &validator_chat,
-            &crate::agents::state_validator::ValidateParams {
-                chapter_content: &revise_output.revised_content,
-                chapter_number,
-                old_state: &baseline_state,
-                new_state: &settled.updated_state,
-                old_hooks: &baseline_hooks,
-                new_hooks: &settled.updated_hooks,
-                language,
-                authority_context: None,
-            },
-        )
-        .await
-        .map_err(|e| internal(e.to_string()))?;
+    let state_validation = crate::agents::state_validator::validate(
+        &validator_chat,
+        &crate::agents::state_validator::ValidateParams {
+            chapter_content: &revise_output.revised_content,
+            chapter_number,
+            old_state: &baseline_state,
+            new_state: &settled.updated_state,
+            old_hooks: &baseline_hooks,
+            new_hooks: &settled.updated_hooks,
+            language,
+            authority_context: None,
+        },
+    )
+    .await
+    .map_err(|e| internal(e.to_string()))?;
     if !state_validation.passed || state_validation.repair_required {
         let retry_ports = AgentCtxPorts::new(runtime);
         let retry_settler = crate::llm::agent_router::RoutedSettler {
@@ -940,25 +1054,23 @@ pub(crate) async fn run_revise_chain(
         let retry_validator = RoutedValidator {
             router: runtime.effective_router().await,
         };
-        let recovery = retry_settlement_after_validation_failure(
-            SettlementRetryParams {
-                writer: &retry_settler,
-                validator: &retry_validator,
-                book: &book,
-                book_dir: &book_dir,
-                chapter_number,
-                baseline_chapter: Some(baseline),
-                allow_new_hooks: None,
-                title: &chapter_title,
-                content: &revise_output.revised_content,
-                control: None,
-                old_state: &baseline_state,
-                old_hooks: &baseline_hooks,
-                original_validation: &state_validation,
-                language,
-                log_warn: &|zh, en| tracing::warn!(target: "revise", "{zh} / {en}"),
-            },
-        )
+        let recovery = retry_settlement_after_validation_failure(SettlementRetryParams {
+            writer: &retry_settler,
+            validator: &retry_validator,
+            book: &book,
+            book_dir: &book_dir,
+            chapter_number,
+            baseline_chapter: Some(baseline),
+            allow_new_hooks: None,
+            title: &chapter_title,
+            content: &revise_output.revised_content,
+            control: None,
+            old_state: &baseline_state,
+            old_hooks: &baseline_hooks,
+            original_validation: &state_validation,
+            language,
+            log_warn: &|zh, en| tracing::warn!(target: "revise", "{zh} / {en}"),
+        })
         .await
         .map_err(|e| internal(e.to_string()))?;
         match recovery {
@@ -1003,10 +1115,8 @@ pub(crate) async fn run_revise_chain(
         truth_file_overrides: Some(TruthFileOverrides {
             current_state: (!settled.updated_state.is_empty())
                 .then(|| settled.updated_state.clone()),
-            ledger: (!settled.updated_ledger.is_empty())
-                .then(|| settled.updated_ledger.clone()),
-            hooks: (!settled.updated_hooks.is_empty())
-                .then(|| settled.updated_hooks.clone()),
+            ledger: (!settled.updated_ledger.is_empty()).then(|| settled.updated_ledger.clone()),
+            hooks: (!settled.updated_hooks.is_empty()).then(|| settled.updated_hooks.clone()),
         }),
         ..Default::default()
     };
@@ -1063,8 +1173,10 @@ pub(crate) async fn run_revise_chain(
     }
 
     // 落盘：章节文件（标准标题重构，对齐 TS reviseHeading）。
-    let revised_word_count =
-        crate::utils::length_metrics::count_chapter_length(&revise_output.revised_content, counting_mode);
+    let revised_word_count = crate::utils::length_metrics::count_chapter_length(
+        &revise_output.revised_content,
+        counting_mode,
+    );
     let heading = if language == crate::utils::language::WritingLanguage::En {
         format!("# Chapter {chapter_number}: {chapter_title}")
     } else {
@@ -1080,13 +1192,25 @@ pub(crate) async fn run_revise_chain(
     if is_latest {
         let story_dir = book_dir.join("story");
         if !settled.updated_state.is_empty() {
-            let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &settled.updated_state).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(
+                &story_dir.join("current_state.md"),
+                &settled.updated_state,
+            )
+            .await;
         }
         if !settled.updated_ledger.is_empty() {
-            let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("particle_ledger.md"), &settled.updated_ledger).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(
+                &story_dir.join("particle_ledger.md"),
+                &settled.updated_ledger,
+            )
+            .await;
         }
         if !settled.updated_hooks.is_empty() {
-            let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &settled.updated_hooks).await;
+            let _ = crate::utils::atomic_file_set::write_file_atomic(
+                &story_dir.join("pending_hooks.md"),
+                &settled.updated_hooks,
+            )
+            .await;
         }
     }
 
@@ -1112,7 +1236,13 @@ pub(crate) async fn run_revise_chain(
                 .audit_result
                 .issues
                 .iter()
-                .map(|issue| format!("[{}] {}", severity_string(issue.severity), issue.description))
+                .map(|issue| {
+                    format!(
+                        "[{}] {}",
+                        severity_string(issue.severity),
+                        issue.description
+                    )
+                })
                 .collect();
         } else if slot.number > chapter_number {
             slot.status = crate::models::chapter::ChapterStatus::NeedsRevision;
@@ -1135,7 +1265,11 @@ pub(crate) async fn run_revise_chain(
         word_count: revised_word_count,
         fixed_issues: revise_output.fixed_issues,
         applied: true,
-        status: if passed { "ready-for-review" } else { "audit-failed" },
+        status: if passed {
+            "ready-for-review"
+        } else {
+            "audit-failed"
+        },
         skipped_reason: None,
         revision_diagnostics: None,
         revised_content: Some(revise_output.revised_content),
@@ -1188,7 +1322,10 @@ pub async fn compose(
     }
     let Json(body) = body.unwrap_or_default();
     match run_compose(&runtime, &book_id, body.context.as_deref()).await {
-        Ok(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+        Ok(result) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&result).unwrap_or_default()),
+        ),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": error })),
@@ -1285,18 +1422,21 @@ async fn run_compose(
             .join(format!("{series_id}.json"))
     });
     // 963 号：写法绑定读项目级档案池（与 write-next 链同款）。
-    let style_profiles_dir = runtime.state.project_root().join(".inkos").join("style-profiles");
+    let style_profiles_dir = runtime
+        .state
+        .project_root()
+        .join(".inkos")
+        .join("style-profiles");
     // 126 号：context:compression 广播（与 write-next 链同款）。
     let compression_hub = runtime.hub.clone();
-    let on_context_compression: crate::agents::composer::CompressionCallback =
-        std::sync::Arc::new(
-            move |event: &crate::models::context_compression::ContextCompressionEvent| {
-                compression_hub.broadcast(
-                    "context:compression",
-                    &serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
-                );
-            },
-        );
+    let on_context_compression: crate::agents::composer::CompressionCallback = std::sync::Arc::new(
+        move |event: &crate::models::context_compression::ContextCompressionEvent| {
+            compression_hub.broadcast(
+                "context:compression",
+                &serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
+            );
+        },
+    );
     let composed = crate::agents::composer::compose_governed_chapter(
         &crate::agents::composer::ComposeChapterInput {
             book_language: book.language.as_deref(),
@@ -1348,7 +1488,10 @@ pub async fn consolidate_endpoint(
                 "consolidate:complete",
                 &serde_json::json!({ "bookId": book_id, "archivedVolumes": result.archived_volumes }),
             );
-            (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default()))
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(&result).unwrap_or_default()),
+            )
         }
         Err(error) => {
             let message = error.to_string();
@@ -1409,7 +1552,10 @@ struct RepairSettle {
 
 #[async_trait]
 impl crate::pipeline::chapter_state_recovery::SettlePort for RepairSettle {
-    async fn settle(&self, params: SettleRequest<'_>) -> Result<crate::agents::writer::WriteChapterOutput, String> {
+    async fn settle(
+        &self,
+        params: SettleRequest<'_>,
+    ) -> Result<crate::agents::writer::WriteChapterOutput, String> {
         let writer = RoutedAgent {
             router: self.router.clone(),
             agent: "writer",
@@ -1467,7 +1613,10 @@ pub async fn repair_state(
                 "repair-state:complete",
                 &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }),
             );
-            (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default()))
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(&result).unwrap_or_default()),
+            )
         }
         Err(error) => {
             let message = error.to_string();
@@ -1500,7 +1649,9 @@ async fn run_repair_state(
         .await
         .map_err(|e| e.to_string())?;
     if index.is_empty() {
-        return Err(format!("Book \"{book_id}\" has no persisted chapters to repair."));
+        return Err(format!(
+            "Book \"{book_id}\" has no persisted chapters to repair."
+        ));
     }
     let target = chapter_number;
     let Some(target_meta) = index.iter().find(|m| m.number == target) else {
@@ -1545,7 +1696,9 @@ async fn run_repair_state(
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         chapter_number: target,
     };
-    let validator = RoutedValidator { router: runtime.effective_router().await.clone() };
+    let validator = RoutedValidator {
+        router: runtime.effective_router().await.clone(),
+    };
 
     // settle → validate → 失败重试链。
     let repaired = settler
@@ -1599,12 +1752,17 @@ async fn run_repair_state(
         .await
         .map_err(|e| e.to_string())?;
         match recovery {
-            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Recovered { output, validation } => (*output, validation),
+            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Recovered {
+                output,
+                validation,
+            } => (*output, validation),
             crate::pipeline::chapter_state_recovery::SettlementRetryResult::Degraded { issues } => {
                 return Err(issues
                     .first()
                     .map(|i| i.description.clone())
-                    .unwrap_or_else(|| format!("State repair still failed for chapter {target}.")));
+                    .unwrap_or_else(|| {
+                        format!("State repair still failed for chapter {target}.")
+                    }));
             }
         }
     } else {
@@ -1616,15 +1774,24 @@ async fn run_repair_state(
 
     // 真相回写 + 快照。
     if repaired.updated_state != "(状态卡未更新)" {
-        let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &repaired.updated_state).await;
+        let _ = crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("current_state.md"),
+            &repaired.updated_state,
+        )
+        .await;
     }
     if repaired.updated_hooks != "(伏笔池未更新)" {
-        let _ = crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &repaired.updated_hooks).await;
+        let _ = crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("pending_hooks.md"),
+            &repaired.updated_hooks,
+        )
+        .await;
     }
     let _ = runtime.state.snapshot_state(book_id, target).await;
 
     // 索引状态回翻（降级 → 基础状态，注入问题清除）。
-    let base_status = crate::pipeline::chapter_state_recovery::resolve_state_degraded_base_status(target_meta);
+    let base_status =
+        crate::pipeline::chapter_state_recovery::resolve_state_degraded_base_status(target_meta);
     let injected: std::collections::HashSet<String> =
         crate::pipeline::chapter_state_recovery::parse_state_degraded_review_note(
             target_meta.review_note.as_deref(),
@@ -1652,7 +1819,11 @@ async fn run_repair_state(
         .await
         .map_err(|e| e.to_string())?;
 
-    let status: &'static str = if base_status == "audit-failed" { "audit-failed" } else { "ready-for-review" };
+    let status: &'static str = if base_status == "audit-failed" {
+        "audit-failed"
+    } else {
+        "ready-for-review"
+    };
     Ok(RepairStateResult {
         chapter_number: target,
         title: target_meta.title.clone(),
@@ -1704,10 +1875,16 @@ pub async fn resync(
     let chapter_number = match chapter.parse::<i64>() {
         Ok(number) if number >= 1 => number as u32,
         _ => {
-            let display = if chapter.parse::<i64>().is_ok() { chapter.clone() } else { "NaN".to_string() };
+            let display = if chapter.parse::<i64>().is_ok() {
+                chapter.clone()
+            } else {
+                "NaN".to_string()
+            };
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": format!("Chapter {display} not found in \"{book_id}\".") })),
+                Json(
+                    serde_json::json!({ "error": format!("Chapter {display} not found in \"{book_id}\".") }),
+                ),
             );
         }
     };
@@ -1720,7 +1897,10 @@ pub async fn resync(
             // 交互编辑工具（book_edit_tools）复用的 run_resync_chain 链内不加——
             // TS 对偶 _resyncChapterArtifactsLocked 本就不审计。
             match record_resync_audit(&runtime, &book_id, chapter_number).await {
-                Ok(()) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default())),
+                Ok(()) => (
+                    StatusCode::OK,
+                    Json(serde_json::to_value(&result).unwrap_or_default()),
+                ),
                 Err(message) => (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": message })),
@@ -1750,7 +1930,9 @@ async fn record_resync_audit(
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name().to_string_lossy().into_owned();
         if crate::state::manager::leading_number(&name) == Some(chapter_number) {
-            content = tokio::fs::read_to_string(chapters_dir.join(&name)).await.ok();
+            content = tokio::fs::read_to_string(chapters_dir.join(&name))
+                .await
+                .ok();
             break;
         }
     }
@@ -1774,10 +1956,13 @@ async fn record_resync_audit(
         chapter_number,
         genre,
     };
-    let audit = crate::pipeline::chapter_review_cycle::CycleAuditor::audit_chapter(&auditor, &content, None, None)
-        .await
-        .map_err(|error| format!("resync audit failed for chapter {chapter_number}: {error}"))?;
-    crate::pipeline::write_next::record_chapter_review_metric(&book_dir, chapter_number, &audit).await;
+    let audit = crate::pipeline::chapter_review_cycle::CycleAuditor::audit_chapter(
+        &auditor, &content, None, None,
+    )
+    .await
+    .map_err(|error| format!("resync audit failed for chapter {chapter_number}: {error}"))?;
+    crate::pipeline::write_next::record_chapter_review_metric(&book_dir, chapter_number, &audit)
+        .await;
     Ok(())
 }
 
@@ -1803,12 +1988,20 @@ pub(crate) async fn run_resync_chain(
         .await
         .map_err(|e| e.to_string())?;
     if index.is_empty() {
-        return Err(format!("Book \"{book_id}\" has no persisted chapters to sync."));
+        return Err(format!(
+            "Book \"{book_id}\" has no persisted chapters to sync."
+        ));
     }
     let Some(target_meta) = index.iter().find(|m| m.number == chapter_number) else {
-        return Err(format!("Chapter {chapter_number} not found in \"{book_id}\"."));
+        return Err(format!(
+            "Chapter {chapter_number} not found in \"{book_id}\"."
+        ));
     };
-    let latest = index.iter().map(|m| m.number).max().unwrap_or(chapter_number);
+    let latest = index
+        .iter()
+        .map(|m| m.number)
+        .max()
+        .unwrap_or(chapter_number);
     if chapter_number != latest {
         return Err(format!(
             "Only the latest persisted chapter can be synced safely (latest is {latest})."
@@ -1817,7 +2010,8 @@ pub(crate) async fn run_resync_chain(
 
     // 章节正文（去标题行）+ 旧真相。687 号数值等值定位。
     let chapters_dir = book_dir.join("chapters");
-    let matched = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number).await;
+    let matched =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number).await;
     let file_name = matched.ok_or_else(|| "Chapter not found".to_string())?;
     let raw = tokio::fs::read_to_string(chapters_dir.join(&file_name))
         .await
@@ -1843,7 +2037,9 @@ pub(crate) async fn run_resync_chain(
     let language = match book.language.as_deref() {
         Some("en") => crate::utils::language::WritingLanguage::En,
         Some(_) => crate::utils::language::WritingLanguage::Zh,
-        None if parsed_genre.profile.language == "en" => crate::utils::language::WritingLanguage::En,
+        None if parsed_genre.profile.language == "en" => {
+            crate::utils::language::WritingLanguage::En
+        }
         None => crate::utils::language::WritingLanguage::Zh,
     };
 
@@ -1854,7 +2050,9 @@ pub(crate) async fn run_resync_chain(
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
         chapter_number,
     };
-    let validator = RoutedValidator { router: runtime.effective_router().await.clone() };
+    let validator = RoutedValidator {
+        router: runtime.effective_router().await.clone(),
+    };
     let mut synced_output = settler
         .settle(SettleRequest {
             book: &book,
@@ -1905,7 +2103,10 @@ pub(crate) async fn run_resync_chain(
         .await
         .map_err(|e| e.to_string())?;
         match recovery {
-            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Recovered { output, validation: recovered } => {
+            crate::pipeline::chapter_state_recovery::SettlementRetryResult::Recovered {
+                output,
+                validation: recovered,
+            } => {
                 synced_output = *output;
                 validation = recovered;
             }
@@ -1913,19 +2114,29 @@ pub(crate) async fn run_resync_chain(
                 return Err(issues
                     .first()
                     .map(|i| i.description.clone())
-                    .unwrap_or_else(|| format!("Chapter sync still failed for chapter {chapter_number}.")));
+                    .unwrap_or_else(|| {
+                        format!("Chapter sync still failed for chapter {chapter_number}.")
+                    }));
             }
         }
     }
     if !validation.passed {
-        return Err(format!("Chapter sync still failed for chapter {chapter_number}."));
+        return Err(format!(
+            "Chapter sync still failed for chapter {chapter_number}."
+        ));
     }
 
     // 章节与全量真相落盘（saveChapter + saveNewTruthFiles，对齐 TS 调用序）。
     let ctx_ports = AgentCtxPorts::new(runtime);
-    crate::agents::writer::save_chapter(&ctx_ports.writer_ctx(), &book_dir, &synced_output, parsed_genre.profile.numerical_system, language)
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::agents::writer::save_chapter(
+        &ctx_ports.writer_ctx(),
+        &book_dir,
+        &synced_output,
+        parsed_genre.profile.numerical_system,
+        language,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     crate::agents::writer::save_new_truth_files(&book_dir, &synced_output, language)
         .await
         .map_err(|e| e.to_string())?;
@@ -1934,9 +2145,14 @@ pub(crate) async fn run_resync_chain(
     // 索引回写：state-degraded → 基础状态 + 剥注入问题；否则直接 ready-for-review。
     let mut updated_index = index.clone();
     let final_status: &'static str;
-    if let Some(slot) = updated_index.iter_mut().find(|m| m.number == chapter_number) {
+    if let Some(slot) = updated_index
+        .iter_mut()
+        .find(|m| m.number == chapter_number)
+    {
         if target_meta.status == crate::models::chapter::ChapterStatus::StateDegraded {
-            let base = crate::pipeline::chapter_state_recovery::resolve_state_degraded_base_status(target_meta);
+            let base = crate::pipeline::chapter_state_recovery::resolve_state_degraded_base_status(
+                target_meta,
+            );
             let injected: std::collections::HashSet<String> =
                 crate::pipeline::chapter_state_recovery::parse_state_degraded_review_note(
                     target_meta.review_note.as_deref(),
@@ -1955,7 +2171,11 @@ pub(crate) async fn run_resync_chain(
                 .cloned()
                 .collect();
             slot.review_note = None;
-            final_status = if base == "audit-failed" { "audit-failed" } else { "ready-for-review" };
+            final_status = if base == "audit-failed" {
+                "audit-failed"
+            } else {
+                "ready-for-review"
+            };
         } else {
             slot.status = crate::models::chapter::ChapterStatus::ReadyForReview;
             final_status = "ready-for-review";
@@ -1978,7 +2198,8 @@ pub(crate) async fn run_resync_chain(
             passed: final_status != "audit-failed",
             issues: Vec::new(),
             summary: if final_status == "audit-failed" {
-                "chapter truth/state resynced from edited body, but chapter still needs audit fixes".to_string()
+                "chapter truth/state resynced from edited body, but chapter still needs audit fixes"
+                    .to_string()
             } else {
                 "chapter truth/state resynced from edited body".to_string()
             },
@@ -2004,8 +2225,10 @@ pub async fn analytics(
     // 意外错误才 404（`Book "id" not found`）。
     match runtime.state.load_chapter_index(&book_id).await {
         Ok(index) => {
-            let chapters: Vec<crate::utils::analytics::AnalyticsChapter> =
-                index.iter().map(crate::utils::analytics::AnalyticsChapter::from_meta).collect();
+            let chapters: Vec<crate::utils::analytics::AnalyticsChapter> = index
+                .iter()
+                .map(crate::utils::analytics::AnalyticsChapter::from_meta)
+                .collect();
             let data = crate::utils::analytics::compute_analytics(&book_id, &chapters);
             (
                 StatusCode::OK,
@@ -2035,8 +2258,12 @@ pub async fn eval(
     if book_id_is_unsafe(&book_id) {
         return invalid_book_id_response(&book_id);
     }
-    match crate::utils::book_eval::evaluate_book_quality(&runtime.state, &book_id, query.chapters.as_deref())
-        .await
+    match crate::utils::book_eval::evaluate_book_quality(
+        &runtime.state,
+        &book_id,
+        query.chapters.as_deref(),
+    )
+    .await
     {
         Ok(report) => (
             StatusCode::OK,
@@ -2170,7 +2397,10 @@ pub struct WriteNextAgentPorts {
 impl WriteNextAgentPorts {
     pub async fn build(runtime: &BooksRuntime) -> Self {
         let effective = runtime.effective_router().await;
-        let routed = |agent: &'static str| RoutedAgent { router: effective.clone(), agent };
+        let routed = |agent: &'static str| RoutedAgent {
+            router: effective.clone(),
+            agent,
+        };
         Self {
             writer: routed("writer"),
             planner: routed("planner"),
@@ -2237,17 +2467,16 @@ pub struct WriteNextPorts {
 impl WriteNextPorts {
     pub async fn build(runtime: &BooksRuntime) -> Self {
         let router = runtime.effective_router().await;
-        let context_budget = (router.default_context_window() > 0).then(|| crate::agents::composer::ContextBudget {
-            context_window_tokens: router.default_context_window(),
-            reserved_output_tokens: router.default_max_tokens() as u64,
-        });
+        let context_budget =
+            (router.default_context_window() > 0).then(|| crate::agents::composer::ContextBudget {
+                context_window_tokens: router.default_context_window(),
+                reserved_output_tokens: router.default_max_tokens() as u64,
+            });
         Self {
             project_root: runtime.state.project_root().to_path_buf(),
             builtin_genres_dir: runtime.builtin_genres_dir.clone(),
             store: FsStateStore,
-            timeline_beats: crate::agents::timeline_settler::RouterTimelineBeatsChat {
-                router,
-            },
+            timeline_beats: crate::agents::timeline_settler::RouterTimelineBeatsChat { router },
             context_budget,
         }
     }
@@ -2430,8 +2659,14 @@ mod tests {
             .route("/api/v1/books/:id/plan", axum::routing::post(plan))
             .route("/api/v1/books/:id/settle", axum::routing::post(settle))
             .route("/api/v1/books/:id/draft", axum::routing::post(draft))
-            .route("/api/v1/books/:id/revise/:chapter", axum::routing::post(revise))
-            .route("/api/v1/books/:id/repair-state/:chapter", axum::routing::post(repair_state))
+            .route(
+                "/api/v1/books/:id/revise/:chapter",
+                axum::routing::post(revise),
+            )
+            .route(
+                "/api/v1/books/:id/repair-state/:chapter",
+                axum::routing::post(repair_state),
+            )
             .route("/api/v1/books/:id/analytics", axum::routing::get(analytics))
             .route("/api/v1/books/:id/eval", axum::routing::get(eval))
             .route("/api/v1/books/:id/export", axum::routing::get(export))
@@ -2457,7 +2692,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(parsed["error"].as_str().unwrap().contains("chat"));
     }
@@ -2474,7 +2711,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["error"]["code"], "INVALID_BOOK_ID");
     }
@@ -2491,7 +2730,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap().to_vec();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap()
+            .to_vec();
         #[derive(Deserialize)]
         struct TestDto {
             status: String,
@@ -2535,7 +2777,9 @@ mod tests {
             .unwrap();
         // Node 契约：缺章 404 {"error": "Chapter not found"}。
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["error"], "Chapter not found");
     }
@@ -2555,7 +2799,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), 8192).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["totalChapters"], 0);
         assert_eq!(parsed["auditPassRate"], 100);
@@ -2575,7 +2821,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["error"], "Export failed");
     }

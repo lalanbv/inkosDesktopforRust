@@ -114,10 +114,7 @@ fn mode_checks(mode: FanficMode) -> &'static str {
 }
 
 /// 同人写作自检段。对齐 TS `buildFanficModeInstructions`。
-pub fn build_fanfic_mode_instructions(
-    mode: FanficMode,
-    allowed_deviations: &[String],
-) -> String {
+pub fn build_fanfic_mode_instructions(mode: FanficMode, allowed_deviations: &[String]) -> String {
     let deviations_block = if !allowed_deviations.is_empty() {
         let lines: Vec<String> = allowed_deviations
             .iter()
@@ -169,7 +166,9 @@ mod tests {
     #[test]
     fn mode_instructions_with_and_without_deviations() {
         let out = build_fanfic_mode_instructions(FanficMode::Ooc, &[]);
-        assert!(out.starts_with("\n## 同人写作自检（在 PRE_WRITE_CHECK 中额外检查）\n\n- OOC 偏离记录"));
+        assert!(
+            out.starts_with("\n## 同人写作自检（在 PRE_WRITE_CHECK 中额外检查）\n\n- OOC 偏离记录")
+        );
         assert!(!out.contains("允许的偏离"));
 
         let deviations = vec!["口头禅".to_string(), "称呼".to_string()];

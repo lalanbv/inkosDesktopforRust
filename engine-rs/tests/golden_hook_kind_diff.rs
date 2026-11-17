@@ -59,8 +59,7 @@ fn record_kind_zero_migration_matches_shared_vectors() {
         .expect("roundtrip array")
     {
         let name = vector["name"].as_str().unwrap();
-        let parsed: Result<HookRecord, _> =
-            serde_json::from_value(vector["input"].clone());
+        let parsed: Result<HookRecord, _> = serde_json::from_value(vector["input"].clone());
         assert_eq!(
             parsed.is_ok(),
             vector["parses"].as_bool().unwrap(),

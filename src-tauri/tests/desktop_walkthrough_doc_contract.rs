@@ -54,7 +54,8 @@ const ANCHORS: &[&str] = &[
 
 #[test]
 fn desktop_walkthrough_doc_matches_code() {
-    let doc = std::fs::read_to_string(doc_path()).expect("docs/DESKTOP_WALKTHROUGH.md 已入库且必须在场");
+    let doc =
+        std::fs::read_to_string(doc_path()).expect("docs/DESKTOP_WALKTHROUGH.md 已入库且必须在场");
     let main_rs = std::fs::read_to_string(main_rs_path()).expect("src/main.rs 在库");
 
     for anchor in ANCHORS {

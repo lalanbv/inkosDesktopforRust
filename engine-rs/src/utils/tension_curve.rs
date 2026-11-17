@@ -437,7 +437,8 @@ mod tests {
         assert_eq!(metrics.conflict_level, 7);
         assert_eq!(metrics.reveal_level, 3);
 
-        let json = "=== TENSION_METRICS ===\n```json\n{\"conflictLevel\": 8, \"revealLevel\": 9}\n```";
+        let json =
+            "=== TENSION_METRICS ===\n```json\n{\"conflictLevel\": 8, \"revealLevel\": 9}\n```";
         let metrics = parse_tension_metrics(json).unwrap();
         assert_eq!(metrics.conflict_level, 8);
         assert_eq!(metrics.reveal_level, 9);
@@ -445,7 +446,9 @@ mod tests {
 
     #[test]
     fn clamps_and_abandons_partial_sections() {
-        let clamped = parse_tension_metrics("=== TENSION_METRICS ===\nconflictLevel: 15\nrevealLevel: 0\n").unwrap();
+        let clamped =
+            parse_tension_metrics("=== TENSION_METRICS ===\nconflictLevel: 15\nrevealLevel: 0\n")
+                .unwrap();
         assert_eq!(clamped.conflict_level, 10);
         assert_eq!(clamped.reveal_level, 1);
 
@@ -471,7 +474,8 @@ mod tests {
             point(5, 6, 2),
             point(6, 4, 6),
         ];
-        let warnings = detect_tension_warnings(&points, TensionLanguage::Zh, &TENSION_WARNING_DEFAULTS);
+        let warnings =
+            detect_tension_warnings(&points, TensionLanguage::Zh, &TENSION_WARNING_DEFAULTS);
         assert_eq!(warnings.len(), 1);
         assert_eq!(warnings[0].kind, TensionWarningKind::WeakHookStreak);
         assert_eq!(warnings[0].chapters, vec![3, 4, 5]);

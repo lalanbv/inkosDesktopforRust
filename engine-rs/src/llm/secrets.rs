@@ -4,10 +4,10 @@
 //! 纯逻辑（legacy 迁移 / env key 派生）+ std::fs IO 包装。
 
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "export-bindings")]
-use ts_rs::TS;
 use std::collections::HashMap;
 use std::path::Path;
+#[cfg(feature = "export-bindings")]
+use ts_rs::TS;
 
 /// secrets.json 契约：services`id` = { apiKey }。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -57,7 +57,11 @@ pub fn service_env_key(service: &str) -> String {
 
 /// 从 service id 解析 API key：先查 secrets，再查 env var。
 /// 返回 (key, 来源) 便于调试；None 表示未找到。
-pub fn resolve_service_api_key(secrets: &SecretsFile, service: &str, env_lookup: impl Fn(&str) -> Option<String>) -> Option<String> {
+pub fn resolve_service_api_key(
+    secrets: &SecretsFile,
+    service: &str,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
     if let Some(entry) = secrets.services.get(service) {
         if !entry.api_key.is_empty() {
             return Some(entry.api_key.clone());
@@ -276,25 +280,46 @@ mod atomicity_tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let mut services = std::collections::HashMap::new();
-        services.insert("svc".to_string(), ServiceSecret { api_key: "k-1".into() });
+        services.insert(
+            "svc".to_string(),
+            ServiceSecret {
+                api_key: "k-1".into(),
+            },
+        );
         let mut secrets = SecretsFile { services };
         save_secrets(root, &secrets).unwrap();
 
         let secrets_dir = root.join(SECRETS_DIR);
         let entries: Vec<_> = std::fs::read_dir(&secrets_dir).unwrap().collect();
         assert_eq!(entries.len(), 1, "仅 secrets.json，无 temp 残留");
-        assert!(entries[0].as_ref().unwrap().file_name().to_string_lossy().ends_with(".json"));
+        assert!(entries[0]
+            .as_ref()
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".json"));
 
         let loaded = load_secrets(root).unwrap();
-        assert_eq!(loaded.services.get("svc").map(|s| s.api_key.clone()), Some("k-1".to_string()));
+        assert_eq!(
+            loaded.services.get("svc").map(|s| s.api_key.clone()),
+            Some("k-1".to_string())
+        );
 
         // 二次写（覆盖路径）：仍然原子、无残留。
-        secrets.services.insert("svc".to_string(), ServiceSecret { api_key: "k-2".into() });
+        secrets.services.insert(
+            "svc".to_string(),
+            ServiceSecret {
+                api_key: "k-2".into(),
+            },
+        );
         save_secrets(root, &secrets).unwrap();
         let count = std::fs::read_dir(&secrets_dir).unwrap().count();
         assert_eq!(count, 1);
         let loaded = load_secrets(root).unwrap();
-        assert_eq!(loaded.services.get("svc").map(|s| s.api_key.clone()), Some("k-2".to_string()));
+        assert_eq!(
+            loaded.services.get("svc").map(|s| s.api_key.clone()),
+            Some("k-2".to_string())
+        );
     }
 
     /// 227 号：secrets 文件权限 0600（Unix；含明文 API key，不得全局可读）。
@@ -305,7 +330,12 @@ mod atomicity_tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         let mut services = std::collections::HashMap::new();
-        services.insert("svc".to_string(), ServiceSecret { api_key: "k".into() });
+        services.insert(
+            "svc".to_string(),
+            ServiceSecret {
+                api_key: "k".into(),
+            },
+        );
         save_secrets(root, &SecretsFile { services }).unwrap();
 
         let mode = std::fs::metadata(root.join(SECRETS_DIR).join(SECRETS_FILE))
@@ -322,7 +352,9 @@ mod tests {
     use std::collections::HashMap;
 
     fn secret(key: &str) -> ServiceSecret {
-        ServiceSecret { api_key: key.into() }
+        ServiceSecret {
+            api_key: key.into(),
+        }
     }
 
     #[test]
@@ -360,7 +392,10 @@ mod tests {
     fn env_key_derivation() {
         assert_eq!(service_env_key("moonshot"), "MOONSHOT_API_KEY");
         assert_eq!(service_env_key("deepseek"), "DEEPSEEK_API_KEY");
-        assert_eq!(service_env_key("custom:My-Service"), "CUSTOM_MY_SERVICE_API_KEY");
+        assert_eq!(
+            service_env_key("custom:My-Service"),
+            "CUSTOM_MY_SERVICE_API_KEY"
+        );
     }
 
     #[test]
@@ -376,7 +411,11 @@ mod tests {
         // secrets 空 → env
         let empty = SecretsFile::default();
         assert_eq!(
-            resolve_service_api_key(&empty, "deepseek", |k| if k == "DEEPSEEK_API_KEY" { Some("test-key-env".into()) } else { None }),
+            resolve_service_api_key(&empty, "deepseek", |k| if k == "DEEPSEEK_API_KEY" {
+                Some("test-key-env".into())
+            } else {
+                None
+            }),
             Some("test-key-env".into())
         );
         // 都无 → None
@@ -392,7 +431,10 @@ mod tests {
         let s = SecretsFile { services };
         save_secrets(&dir, &s).unwrap();
         let loaded = load_secrets(&dir).unwrap();
-        assert_eq!(loaded.services.get("openai").unwrap().api_key, "test-key-123");
+        assert_eq!(
+            loaded.services.get("openai").unwrap().api_key,
+            "test-key-123"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -404,7 +446,11 @@ mod tests {
         let raw = r#"{"version":1,"services":{"zeta":{"apiKey":"k1"},"moonshot":{"apiKey":"k2"},"alpha":{"apiKey":"k3"}}}"#;
         assert_eq!(
             json_object_keys(raw, "services"),
-            Some(vec!["zeta".to_string(), "moonshot".to_string(), "alpha".to_string()])
+            Some(vec![
+                "zeta".to_string(),
+                "moonshot".to_string(),
+                "alpha".to_string()
+            ])
         );
     }
 
@@ -426,7 +472,10 @@ mod tests {
     #[test]
     fn json_object_keys_missing_or_malformed_returns_none() {
         assert_eq!(json_object_keys("{}", "services"), None);
-        assert_eq!(json_object_keys(r#"{"services": "not-an-object"}"#, "services"), None);
+        assert_eq!(
+            json_object_keys(r#"{"services": "not-an-object"}"#, "services"),
+            None
+        );
         // 扫描越界（截断文本）→ None。
         assert_eq!(json_object_keys(r#"{"services": {"a""#, "services"), None);
     }

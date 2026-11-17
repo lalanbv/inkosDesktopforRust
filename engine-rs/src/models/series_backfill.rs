@@ -38,7 +38,11 @@ impl SeriesBackfillDraft {
 
     /// 从 LLM 文本宽松提取 items JSON：截取首个 `{` 到末个 `}` 再解析
     /// （LLM 常见 ```json 围栏/前后缀说明）。
-    pub fn parse_items_text(book_id: &str, source_book_id: &str, text: &str) -> Result<Self, String> {
+    pub fn parse_items_text(
+        book_id: &str,
+        source_book_id: &str,
+        text: &str,
+    ) -> Result<Self, String> {
         let Some(start) = text.find('{') else {
             return Err("LLM output contains no JSON object".into());
         };
@@ -51,8 +55,8 @@ impl SeriesBackfillDraft {
         struct RawItems {
             items: Vec<SeriesBackfillItem>,
         }
-        let raw: RawItems = serde_json::from_str(json_text)
-            .map_err(|e| format!("LLM items JSON 不可解析: {e}"))?;
+        let raw: RawItems =
+            serde_json::from_str(json_text).map_err(|e| format!("LLM items JSON 不可解析: {e}"))?;
         if raw.items.is_empty() {
             return Err("LLM returned zero backfill items".into());
         }

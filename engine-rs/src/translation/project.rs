@@ -16,7 +16,9 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::harness::contracts::{ArtifactManifest, ArtifactRevision, ArtifactRevisionStatus, WorkManifest};
+use crate::harness::contracts::{
+    ArtifactManifest, ArtifactRevision, ArtifactRevisionStatus, WorkManifest,
+};
 use crate::harness::source_sync::hex_sha256;
 use crate::translation::run_store::{merge_glossary_terms, to_posix_path};
 use crate::translation::source::extract_translation_source;
@@ -57,12 +59,20 @@ struct PendingWrite {
 impl PendingWrite {
     fn new(work_id: &str, work_root_path: String, content: String) -> Self {
         let prefix = format!("works/{work_id}/source/");
-        let source_relative = work_root_path.strip_prefix(&prefix).unwrap_or(&work_root_path).to_string();
+        let source_relative = work_root_path
+            .strip_prefix(&prefix)
+            .unwrap_or(&work_root_path)
+            .to_string();
         let artifact_path = work_root_path
             .strip_prefix(&format!("works/{work_id}/"))
             .unwrap_or(&work_root_path)
             .to_string();
-        Self { work_root_path, artifact_path, source_relative, content }
+        Self {
+            work_root_path,
+            artifact_path,
+            source_relative,
+            content,
+        }
     }
 
     /// TS `artifactId`：baseDir 相对路径去扩展、`/`→`-`（manifest/glossary/
@@ -77,7 +87,11 @@ impl PendingWrite {
 
 /// TS `createCurrentArtifact` 形（单 current 修订，snapshotPath None）。
 fn current_artifact(write: &PendingWrite, now: &str) -> ArtifactManifest {
-    let content_type = if write.work_root_path.ends_with(".md") { "text/markdown" } else { "application/json" };
+    let content_type = if write.work_root_path.ends_with(".md") {
+        "text/markdown"
+    } else {
+        "application/json"
+    };
     let bytes = write.content.as_bytes();
     ArtifactManifest {
         id: write.artifact_id(),
@@ -146,7 +160,11 @@ pub async fn create_translation_project_from_file(
                 title: input.title,
                 segment_max_chars: input.segment_max_chars,
             };
-            (extract_translation_source(project_root, &file_input).await?, Vec::new(), None)
+            (
+                extract_translation_source(project_root, &file_input).await?,
+                Vec::new(),
+                None,
+            )
         }
     };
     let now = crate::utils::utc_time::utc_now_iso();
@@ -161,7 +179,10 @@ pub async fn create_translation_project_from_file(
         writes.push(PendingWrite::new(
             &id,
             source.source_path.clone(),
-            format!("{}\n", serde_json::to_string_pretty(&json!({ "text": source_input })).unwrap_or_default()),
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&json!({ "text": source_input })).unwrap_or_default()
+            ),
         ));
     }
 
@@ -172,19 +193,17 @@ pub async fn create_translation_project_from_file(
         let source_chapter_posix = format!("{base_dir_posix}/source/{file_stem}.json");
         let translated_chapter_posix = format!("{base_dir_posix}/translated/{file_stem}.json");
         // TS 默认 1200 字/段。
-        let segments: Vec<TranslationSegment> = segment_translation_text_vec(
-            &chapter.content,
-            input.segment_max_chars.unwrap_or(1200),
-        )
-        .into_iter()
-        .enumerate()
-        .map(|(segment_index, source)| TranslationSegment {
-            index: (segment_index + 1) as u32,
-            source,
-            target: None,
-            notes: None,
-        })
-        .collect();
+        let segments: Vec<TranslationSegment> =
+            segment_translation_text_vec(&chapter.content, input.segment_max_chars.unwrap_or(1200))
+                .into_iter()
+                .enumerate()
+                .map(|(segment_index, source)| TranslationSegment {
+                    index: (segment_index + 1) as u32,
+                    source,
+                    target: None,
+                    notes: None,
+                })
+                .collect();
         let chapter_file = TranslationChapterFile {
             number,
             title: chapter.title.clone(),
@@ -195,15 +214,21 @@ pub async fn create_translation_project_from_file(
         writes.push(PendingWrite::new(
             &id,
             source_chapter_posix.clone(),
-            format!("{}\n", serde_json::to_string_pretty(&chapter_file).unwrap_or_default()),
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&chapter_file).unwrap_or_default()
+            ),
         ));
         writes.push(PendingWrite::new(
             &id,
             translated_chapter_posix.clone(),
             format!(
                 "{}\n",
-                serde_json::to_string_pretty(&TranslationChapterFile { segments: Vec::new(), ..chapter_file })
-                    .unwrap_or_default()
+                serde_json::to_string_pretty(&TranslationChapterFile {
+                    segments: Vec::new(),
+                    ..chapter_file
+                })
+                .unwrap_or_default()
             ),
         ));
         chapters.push(TranslationChapterManifest {
@@ -244,7 +269,10 @@ pub async fn create_translation_project_from_file(
     writes.push(PendingWrite::new(
         &id,
         manifest_path_posix.clone(),
-        format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap_or_default()),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).unwrap_or_default()
+        ),
     ));
     // 972 号：初始 glossary（TS `input.glossary ?? []`）。
     let initial_terms = merge_glossary_terms(input.glossary);
@@ -253,7 +281,8 @@ pub async fn create_translation_project_from_file(
         format!("{base_dir_posix}/glossary.json"),
         format!(
             "{}\n",
-            serde_json::to_string_pretty(&serde_json::json!({ "terms": initial_terms })).unwrap_or_default()
+            serde_json::to_string_pretty(&serde_json::json!({ "terms": initial_terms }))
+                .unwrap_or_default()
         ),
     ));
     writes.push(PendingWrite::new(
@@ -273,14 +302,27 @@ pub async fn create_translation_project_from_file(
         language: manifest.target_language.clone(),
         status: crate::harness::contracts::WorkStatus::Active,
         lineage: lineage.clone(),
-        artifacts: writes.iter().map(|write| current_artifact(write, &now)).collect(),
+        artifacts: writes
+            .iter()
+            .map(|write| current_artifact(write, &now))
+            .collect(),
         metadata: {
             let mut metadata = serde_json::Map::new();
-            metadata.insert("sourceLanguage".into(), serde_json::json!(manifest.source_language));
-            metadata.insert("targetLanguage".into(), serde_json::json!(manifest.target_language));
+            metadata.insert(
+                "sourceLanguage".into(),
+                serde_json::json!(manifest.source_language),
+            );
+            metadata.insert(
+                "targetLanguage".into(),
+                serde_json::json!(manifest.target_language),
+            );
             metadata.insert(
                 "sourceOrigin".into(),
-                serde_json::json!(if input.resolved.is_some() { "inline" } else { "file" }),
+                serde_json::json!(if input.resolved.is_some() {
+                    "inline"
+                } else {
+                    "file"
+                }),
             );
             metadata
         },
@@ -301,11 +343,13 @@ pub async fn create_translation_project_from_file(
             serde_json::to_string_pretty(&work).unwrap_or_default()
         )),
     });
-    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
-        root_dir: project_root,
-        writes: commit,
-        deletes: Vec::new(),
-    })
+    crate::utils::atomic_file_set::commit_atomic_file_set(
+        &crate::utils::atomic_file_set::AtomicFileSet {
+            root_dir: project_root,
+            writes: commit,
+            deletes: Vec::new(),
+        },
+    )
     .await
     .map_err(|e| e.to_string())?;
 

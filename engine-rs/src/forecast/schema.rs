@@ -4,9 +4,9 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::sync::OnceLock;
 
 pub const FORECAST_MIN_BRANCHES: usize = 2;
 pub const FORECAST_MAX_BRANCHES: usize = 5;
@@ -25,11 +25,17 @@ pub struct ForecastRisk {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"continuity\" | \"causality\" | \"character\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"continuity\" | \"causality\" | \"character\"")
+)]
 pub enum ForecastRiskKind {
-    #[serde(rename = "continuity")] Continuity,
-    #[serde(rename = "causality")] Causality,
-    #[serde(rename = "character")] Character,
+    #[serde(rename = "continuity")]
+    Continuity,
+    #[serde(rename = "causality")]
+    Causality,
+    #[serde(rename = "character")]
+    Character,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -115,10 +121,15 @@ pub struct ForecastBranch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"active\" | \"stale\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"active\" | \"stale\"")
+)]
 pub enum ForecastStatus {
-    #[serde(rename = "active")] Active,
-    #[serde(rename = "stale")] Stale,
+    #[serde(rename = "active")]
+    Active,
+    #[serde(rename = "stale")]
+    Stale,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -231,7 +242,10 @@ pub fn validate_narrative_forecast(forecast: &NarrativeForecast) -> Result<(), S
         return Err("createdAt must be non-empty".to_string());
     }
     if forecast.language != "zh" && forecast.language != "en" {
-        return Err(format!("language must be zh or en, got {}", forecast.language));
+        return Err(format!(
+            "language must be zh or en, got {}",
+            forecast.language
+        ));
     }
     if forecast.divergence.is_empty() {
         return Err("divergence must be non-empty".to_string());
@@ -274,7 +288,9 @@ pub fn validate_narrative_forecast(forecast: &NarrativeForecast) -> Result<(), S
         }
         for (beat_index, beat) in branch.beats.iter().enumerate() {
             if beat.chapter < 1 {
-                return Err(format!("branch[{index}].beats[{beat_index}].chapter must be >= 1"));
+                return Err(format!(
+                    "branch[{index}].beats[{beat_index}].chapter must be >= 1"
+                ));
             }
             if beat.summary.is_empty() {
                 return Err(format!(
@@ -302,10 +318,14 @@ pub fn validate_narrative_forecast(forecast: &NarrativeForecast) -> Result<(), S
             }
         }
         if branch.intent_alignment.score > 100 {
-            return Err(format!("branch[{index}].intentAlignment.score must be <= 100"));
+            return Err(format!(
+                "branch[{index}].intentAlignment.score must be <= 100"
+            ));
         }
         if branch.intent_alignment.rationale.is_empty() {
-            return Err(format!("branch[{index}].intentAlignment.rationale must be non-empty"));
+            return Err(format!(
+                "branch[{index}].intentAlignment.rationale must be non-empty"
+            ));
         }
     }
     Ok(())

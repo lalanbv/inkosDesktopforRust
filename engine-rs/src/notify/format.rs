@@ -32,7 +32,10 @@ mod tests {
     #[test]
     fn strips_code_fence() {
         // 仅剥栅栏标记行（```js\n 与 ```\n），栅栏内代码内容保留（对齐 TS）
-        assert_eq!(strip_markdown_marks("前\n```js\nconst x = 1;\n```\n后"), "前\nconst x = 1;\n后");
+        assert_eq!(
+            strip_markdown_marks("前\n```js\nconst x = 1;\n```\n后"),
+            "前\nconst x = 1;\n后"
+        );
     }
 
     #[test]
@@ -42,7 +45,10 @@ mod tests {
 
     #[test]
     fn unwraps_inline_code() {
-        assert_eq!(strip_markdown_marks("用 `cargo build` 构建"), "用 cargo build 构建");
+        assert_eq!(
+            strip_markdown_marks("用 `cargo build` 构建"),
+            "用 cargo build 构建"
+        );
     }
 
     #[test]

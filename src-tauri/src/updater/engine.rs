@@ -92,7 +92,8 @@ pub fn atomic_replace_with_rollback(
                 "替换 engine 失败({e}) 且回滚失败——engine 缺失，需重装/重试更新"
             ));
         }
-        return Err(e).with_context(|| format!("替换 engine 失败（已回滚）: {}", engine_dir.display()));
+        return Err(e)
+            .with_context(|| format!("替换 engine 失败（已回滚）: {}", engine_dir.display()));
     }
 
     // 3. 健康预检；失败回滚。回滚失败 → 独立错误（C1）。
@@ -313,18 +314,19 @@ impl EngineChannel {
         // 哈希移入阻塞线程）。
         let sha_path_owned = sha_path.to_path_buf();
         let bundle_path_owned = bundle_path.to_path_buf();
-        let (expected, actual) = tokio::task::spawn_blocking(move || -> Result<(String, String)> {
-            let expected = std::fs::read_to_string(&sha_path_owned)
-                .context("读 .sha256 失败")?
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_lowercase();
-            let actual = crate::engine::manifest::sha256_file(&bundle_path_owned)?;
-            Ok((expected, actual))
-        })
-        .await
-        .context("sha256 校验任务失败")??;
+        let (expected, actual) =
+            tokio::task::spawn_blocking(move || -> Result<(String, String)> {
+                let expected = std::fs::read_to_string(&sha_path_owned)
+                    .context("读 .sha256 失败")?
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                let actual = crate::engine::manifest::sha256_file(&bundle_path_owned)?;
+                Ok((expected, actual))
+            })
+            .await
+            .context("sha256 校验任务失败")??;
         if actual != expected {
             anyhow::bail!("engine bundle SHA256 不匹配：期望 {expected}，实际 {actual}");
         }
@@ -351,9 +353,10 @@ impl EngineChannel {
                         .next()
                         .unwrap_or("")
                         .to_string();
-                    let bundle_bytes = std::fs::read(&bundle_path_owned).context("读 bundle 失败")?;
-                    let sig_bytes = crate::updater::sig::decode_hex(&sig_hex)
-                        .context(".sig hex 解析失败")?;
+                    let bundle_bytes =
+                        std::fs::read(&bundle_path_owned).context("读 bundle 失败")?;
+                    let sig_bytes =
+                        crate::updater::sig::decode_hex(&sig_hex).context(".sig hex 解析失败")?;
                     let pubkey_bytes = crate::updater::sig::decode_hex(pubkey)
                         .context("INKOS_ENGINE_PUBKEY hex 解析失败")?;
                     crate::updater::sig::verify(&bundle_bytes, &sig_bytes, &pubkey_bytes)
@@ -441,7 +444,12 @@ const SMALL_ASSET_MAX_BYTES: u64 = 1024 * 1024;
 /// `max_bytes > 0` 时按 GitHub asset size 封顶（H3 防 DoS；超 2× 拒绝）；
 /// `max_bytes == 0`（大小未知）时用 [`SMALL_ASSET_MAX_BYTES`]。
 /// 写错误用 `?`（H1，不再 `.ok()` 吞）。
-async fn download_to(client: &reqwest::Client, url: &str, dest: &Path, max_bytes: u64) -> Result<()> {
+async fn download_to(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &Path,
+    max_bytes: u64,
+) -> Result<()> {
     use std::io::Write;
     // 实际生效的字节上限。max_bytes>0 → 已知 asset size 的 2×（镜像可能有微小差异）；
     // ==0 → 小附件默认上限。恒 >0，故流式循环始终有界。
@@ -480,7 +488,8 @@ async fn download_to(client: &reqwest::Client, url: &str, dest: &Path, max_bytes
         tmp.write_all(&chunk)
             .with_context(|| format!("写下载文件失败: {}", dest.display()))?;
     }
-    tmp.flush().with_context(|| format!("flush 下载失败: {}", dest.display()))?;
+    tmp.flush()
+        .with_context(|| format!("flush 下载失败: {}", dest.display()))?;
     // 786 号：fsync 后再 persist（762 号「落盘后才 rename」形态补齐）——flush 只到
     // page cache，断电可致 persist 后的终名半写。每更新一次的 ms 级开销（网络下载
     // 量级面前可忽略），对齐 util.rs atomic_write_0600 的 M4 审计修复形态。
@@ -563,7 +572,10 @@ fn strip_appledouble(dir: &Path) -> Result<()> {
         .filter_map(Result::ok)
     {
         let path = item.path();
-        let is_junk = item.file_name().to_str().is_some_and(|n| n.starts_with("._"))
+        let is_junk = item
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with("._"))
             && path.is_file();
         if is_junk {
             std::fs::remove_file(&path)
@@ -753,7 +765,10 @@ mod tests {
         std::fs::write(root.join("manifest.json"), "{}").unwrap();
         std::fs::write(root.join("dist/index.js"), "x").unwrap();
         assert!(bundle_health(root, BundleFlavor::Node));
-        assert!(!bundle_health(root, BundleFlavor::Rust), "无 server 二进制不应过 Rust 预检");
+        assert!(
+            !bundle_health(root, BundleFlavor::Rust),
+            "无 server 二进制不应过 Rust 预检"
+        );
 
         // Rust 布局：manifest + inkos-engine-server。
         let rust_dir = root.join("rust-layout");
@@ -761,7 +776,10 @@ mod tests {
         std::fs::write(rust_dir.join("manifest.json"), "{}").unwrap();
         std::fs::write(rust_dir.join("inkos-engine-server"), "bin").unwrap();
         assert!(bundle_health(&rust_dir, BundleFlavor::Rust));
-        assert!(!bundle_health(&rust_dir, BundleFlavor::Node), "无 dist/index.js 不应过 Node 预检");
+        assert!(
+            !bundle_health(&rust_dir, BundleFlavor::Node),
+            "无 dist/index.js 不应过 Node 预检"
+        );
     }
 
     #[test]
@@ -771,7 +789,10 @@ mod tests {
         std::fs::write(dir.join("manifest.json"), "{}").unwrap();
         std::fs::write(dir.join("dist"), "x").unwrap();
         flatten_single_top_dir(dir).unwrap();
-        assert!(dir.join("manifest.json").is_file(), "平铺布局（Node 包）不得被移动");
+        assert!(
+            dir.join("manifest.json").is_file(),
+            "平铺布局（Node 包）不得被移动"
+        );
     }
 
     #[test]
@@ -785,7 +806,10 @@ mod tests {
         std::fs::write(inner.join("static").join("index.html"), "<i/>").unwrap();
 
         flatten_single_top_dir(dir).unwrap();
-        assert!(dir.join("manifest.json").is_file(), "内层 manifest 应上移到根");
+        assert!(
+            dir.join("manifest.json").is_file(),
+            "内层 manifest 应上移到根"
+        );
         assert!(dir.join("inkos-engine-server").is_file());
         assert!(dir.join("static").join("index.html").is_file());
         assert!(!inner.exists(), "空内层壳应删除");
@@ -806,7 +830,10 @@ mod tests {
         std::fs::create_dir_all(&inner).unwrap();
         std::fs::write(inner.join("loose.txt"), "x").unwrap();
         flatten_single_top_dir(tmp2.path()).unwrap();
-        assert!(inner.join("loose.txt").is_file(), "无 manifest 的单目录不动");
+        assert!(
+            inner.join("loose.txt").is_file(),
+            "无 manifest 的单目录不动"
+        );
     }
 
     /// macOS AppleDouble（`._*`）免疫：顶层与内层混入垃圾条目时仍正常展平，
@@ -822,7 +849,11 @@ mod tests {
         std::fs::write(inner.join("inkos-engine-server"), "bin").unwrap();
         std::fs::write(inner.join("static").join("index.html"), "<i/>").unwrap();
         // bsdtar 伪影：顶层 `._{topdir}` 文件 + 内层 `._{file}` 文件。
-        std::fs::write(dir.join("._inkos-engine-9.9.9-aarch64-apple-darwin"), "junk").unwrap();
+        std::fs::write(
+            dir.join("._inkos-engine-9.9.9-aarch64-apple-darwin"),
+            "junk",
+        )
+        .unwrap();
         std::fs::write(inner.join("._manifest.json"), "junk").unwrap();
         std::fs::write(inner.join("._inkos-engine-server"), "junk").unwrap();
 
@@ -832,7 +863,8 @@ mod tests {
         assert!(dir.join("static").join("index.html").is_file());
         assert!(!inner.exists(), "空内层壳应删除");
         assert!(
-            !dir.join("._inkos-engine-9.9.9-aarch64-apple-darwin").exists()
+            !dir.join("._inkos-engine-9.9.9-aarch64-apple-darwin")
+                .exists()
                 && !dir.join("._manifest.json").exists()
                 && !dir.join("._inkos-engine-server").exists(),
             "AppleDouble 垃圾不得落入 engine 目录"
@@ -841,8 +873,8 @@ mod tests {
 
     #[test]
     fn flavor_builder_selects_channel_shape() {
-        let ch = EngineChannel::new("owner/name".into(), "0.0.1".into())
-            .with_flavor(BundleFlavor::Rust);
+        let ch =
+            EngineChannel::new("owner/name".into(), "0.0.1".into()).with_flavor(BundleFlavor::Rust);
         assert_eq!(ch.flavor, BundleFlavor::Rust);
         // 默认保持 Node（既有行为/测试零迁移）。
         let ch = EngineChannel::new("owner/name".into(), "0.0.1".into());
@@ -865,7 +897,11 @@ mod tests {
         let src = tmp.path().join("pkg");
         let top_dir = src.join(&top);
         std::fs::create_dir_all(top_dir.join("static")).unwrap();
-        std::fs::write(top_dir.join("manifest.json"), r#"{"engine_version":"9.9.9"}"#).unwrap();
+        std::fs::write(
+            top_dir.join("manifest.json"),
+            r#"{"engine_version":"9.9.9"}"#,
+        )
+        .unwrap();
         std::fs::write(top_dir.join("static").join("index.html"), "<i/>").unwrap();
         std::fs::write(top_dir.join("inkos-engine-server"), "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(
@@ -901,7 +937,11 @@ mod tests {
             .unwrap()
             .permissions()
             .mode();
-        assert_eq!(mode & 0o111, 0o111, "解压后二进制须保留可执行位，实际 {mode:o}");
+        assert_eq!(
+            mode & 0o111,
+            0o111,
+            "解压后二进制须保留可执行位，实际 {mode:o}"
+        );
     }
 
     // 真实 GitHub release 探测（需网络 + 本仓有 release）。CI 可选跑。

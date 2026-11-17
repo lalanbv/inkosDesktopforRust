@@ -7,7 +7,7 @@
 
 use serde_json::{json, Value};
 
-use crate::interaction::project_tools::{ToolResult, error_result};
+use crate::interaction::project_tools::{error_result, ToolResult};
 use crate::interaction::registry::{MutationKind, ToolCtx, ToolDef, ToolScope};
 
 /// R37 名称保留表：source 枚举保留字（agent 不得占用治理命名空间）。
@@ -18,8 +18,13 @@ pub fn assert_safe_skill_id(name: &str) -> Result<String, String> {
     let trimmed = name.trim();
     let valid = {
         let mut chars = trimmed.chars();
-        let first_ok = chars.next().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-        let rest_ok = trimmed.chars().skip(1).all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        let first_ok = chars
+            .next()
+            .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        let rest_ok = trimmed
+            .chars()
+            .skip(1)
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
         first_ok && rest_ok && trimmed.chars().count() <= 64
     };
     if !valid {
@@ -78,14 +83,23 @@ impl ToolDef for AuthorSkill {
             return error_result("author_skill failed: body is required");
         };
         match execute_author_skill(ctx.root, name, description, body).await {
-            Ok(text) => ToolResult { text, details: None, is_error: false },
+            Ok(text) => ToolResult {
+                text,
+                details: None,
+                is_error: false,
+            },
             Err(message) => error_result(format!("author_skill failed: {message}")),
         }
     }
 }
 
 /// author_skill 执行体（工具壳与逻辑分离——测试直接调逻辑面）。
-pub async fn execute_author_skill(root: &std::path::Path, raw_name: &str, description: &str, body: &str) -> Result<String, String> {
+pub async fn execute_author_skill(
+    root: &std::path::Path,
+    raw_name: &str,
+    description: &str,
+    body: &str,
+) -> Result<String, String> {
     let name = assert_safe_skill_id(raw_name)?;
     let description = description.trim();
     if description.is_empty() || description.chars().count() > 1024 {
@@ -107,7 +121,8 @@ pub async fn execute_author_skill(root: &std::path::Path, raw_name: &str, descri
     }
     // 全源撞名拒绝：builtin+configured 任一同 id 即拒（registry last-write-wins
     // 下 project 件覆盖既有 id，防 agent 自劫持）。
-    let existing = crate::skills::external_loader::load_available_agent_skills(root, &[], None).await;
+    let existing =
+        crate::skills::external_loader::load_available_agent_skills(root, &[], None).await;
     if let Some(skill) = existing.skills.iter().find(|s| s.id == name) {
         let source = match skill.source {
             crate::skills::SkillSource::Builtin => "builtin",
@@ -175,8 +190,14 @@ mod tests {
         assert!(text.contains("skills/chapter-cadence/SKILL.md"));
         assert!(text.contains("NOT active in this session"));
         // loader 回读闭环（下会话拾取形态）。
-        let loaded = crate::skills::external_loader::load_configured_agent_skills(dir.path(), &[], None).await;
-        let skill = loaded.skills.iter().find(|s| s.id == "chapter-cadence").unwrap();
+        let loaded =
+            crate::skills::external_loader::load_configured_agent_skills(dir.path(), &[], None)
+                .await;
+        let skill = loaded
+            .skills
+            .iter()
+            .find(|s| s.id == "chapter-cadence")
+            .unwrap();
         assert_eq!(skill.source, crate::skills::SkillSource::Project);
         assert_eq!(skill.description, "Use when polishing chapter pacing.");
         // 治理字段缺省 None（serde skip 序列化面）。
@@ -188,16 +209,26 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         execute_author_skill(root, "demo", "d", "b").await.unwrap();
-        let again = execute_author_skill(root, "demo", "d", "b").await.unwrap_err();
+        let again = execute_author_skill(root, "demo", "d", "b")
+            .await
+            .unwrap_err();
         assert!(again.contains("already exists"), "{again}");
         // 撞名：预置目录名 ≠ frontmatter name（id 已占用但目标目录不存在）。
         let other = root.join("skills").join("taken-dir");
         tokio::fs::create_dir_all(&other).await.unwrap();
-        tokio::fs::write(other.join("SKILL.md"), "---\nname: collision-test\ndescription: taken\n---\n\nbody")
+        tokio::fs::write(
+            other.join("SKILL.md"),
+            "---\nname: collision-test\ndescription: taken\n---\n\nbody",
+        )
+        .await
+        .unwrap();
+        let collision = execute_author_skill(root, "collision-test", "d", "b")
             .await
-            .unwrap();
-        let collision = execute_author_skill(root, "collision-test", "d", "b").await.unwrap_err();
-        assert!(collision.contains("collides with an existing project skill"), "{collision}");
+            .unwrap_err();
+        assert!(
+            collision.contains("collides with an existing project skill"),
+            "{collision}"
+        );
     }
 
     #[tokio::test]
@@ -211,7 +242,9 @@ mod tests {
         )
         .await
         .unwrap();
-        let loaded = crate::skills::external_loader::load_configured_agent_skills(dir.path(), &[], None).await;
+        let loaded =
+            crate::skills::external_loader::load_configured_agent_skills(dir.path(), &[], None)
+                .await;
         let skill = loaded.skills.iter().find(|s| s.id == "injection").unwrap();
         assert_eq!(
             skill.description,

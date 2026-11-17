@@ -33,7 +33,9 @@ pub fn detection_http_client() -> reqwest::Client {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
-use crate::agents::reviser::{revise_chapter as reviser_revise_chapter, ReviseMode, ReviseOptions, ReviserChat, ReviserCtx};
+use crate::agents::reviser::{
+    revise_chapter as reviser_revise_chapter, ReviseMode, ReviseOptions, ReviserChat, ReviserCtx,
+};
 use crate::models::project::DetectionConfig;
 use crate::utils::utc_time::utc_now_iso;
 
@@ -70,9 +72,15 @@ pub async fn detect_chapter(
     content: &str,
     chapter_number: u32,
 ) -> Result<DetectChapterOutcome, String> {
-    let detection = detect_ai_content(client, config, content, &detection_api_key(config), &utc_now_iso())
-        .await
-        .map_err(|e| e.to_string())?;
+    let detection = detect_ai_content(
+        client,
+        config,
+        content,
+        &detection_api_key(config),
+        &utc_now_iso(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let mut passed = detection.score <= config.threshold;
     // G4/340 号：专名泄露参与 detect——命中即 fail（泄露无法靠降 AI 味修复）。
     let leaks = crate::utils::style_feature_engine::detect_proper_noun_leak(
@@ -106,9 +114,10 @@ pub async fn detect_and_rewrite(
 ) -> Result<DetectAndRewriteOutcome, String> {
     let api_key = detection_api_key(config);
     let mut current_content = content.to_string();
-    let first_detection = detect_ai_content(client, config, &current_content, &api_key, &utc_now_iso())
-        .await
-        .map_err(|e| e.to_string())?;
+    let first_detection =
+        detect_ai_content(client, config, &current_content, &api_key, &utc_now_iso())
+            .await
+            .map_err(|e| e.to_string())?;
     let original_score = first_detection.score;
 
     if first_detection.score <= config.threshold {
@@ -146,7 +155,8 @@ pub async fn detect_and_rewrite(
                 "AI检测分数 {:.2} 超过阈值 {}",
                 final_score, config.threshold
             ),
-            suggestion: "降低AI生成痕迹：增加段落长度差异、减少套话、用口语化表达替代书面语".to_string(),
+            suggestion: "降低AI生成痕迹：增加段落长度差异、减少套话、用口语化表达替代书面语"
+                .to_string(),
             repair_scope: None,
         }];
         let revise_output = reviser_revise_chapter(
@@ -174,9 +184,10 @@ pub async fn detect_and_rewrite(
         }
         current_content = revise_output.revised_content;
 
-        let re_detection = detect_ai_content(client, config, &current_content, &api_key, &utc_now_iso())
-            .await
-            .map_err(|e| e.to_string())?;
+        let re_detection =
+            detect_ai_content(client, config, &current_content, &api_key, &utc_now_iso())
+                .await
+                .map_err(|e| e.to_string())?;
         final_score = re_detection.score;
         record_history(
             book_dir,
@@ -246,22 +257,30 @@ mod tests {
     async fn record_history_appends_and_persists() {
         let dir = tempfile::tempdir().unwrap();
         let book_dir = dir.path();
-        record_history(book_dir, &HistoryEntry {
-            chapter_number: 3,
-            timestamp: "t1".into(),
-            provider: "custom".into(),
-            score: 0.9,
-            action: "rewrite".into(),
-            attempt: 1,
-        }).await;
-        record_history(book_dir, &HistoryEntry {
-            chapter_number: 3,
-            timestamp: "t2".into(),
-            provider: "custom".into(),
-            score: 0.4,
-            action: "rewrite".into(),
-            attempt: 2,
-        }).await;
+        record_history(
+            book_dir,
+            &HistoryEntry {
+                chapter_number: 3,
+                timestamp: "t1".into(),
+                provider: "custom".into(),
+                score: 0.9,
+                action: "rewrite".into(),
+                attempt: 1,
+            },
+        )
+        .await;
+        record_history(
+            book_dir,
+            &HistoryEntry {
+                chapter_number: 3,
+                timestamp: "t2".into(),
+                provider: "custom".into(),
+                score: 0.4,
+                action: "rewrite".into(),
+                attempt: 2,
+            },
+        )
+        .await;
         let loaded = load_history(book_dir).await;
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].action, "rewrite");

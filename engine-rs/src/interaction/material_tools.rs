@@ -15,12 +15,19 @@ use crate::interaction::registry::{MutationKind, ToolDef, ToolRegistry};
 use crate::materials;
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 /// `ingest_material`：归档 URL/文件为可追溯 Markdown 材料卡。
 pub async fn tool_ingest_material(root: &Path, args: &Value) -> ToolResult {
-    let source_kind = args.get("sourceKind").and_then(Value::as_str).unwrap_or_default();
+    let source_kind = args
+        .get("sourceKind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if !matches!(source_kind, "url" | "file") {
         return error_result(format!(
             "Invalid ingest_material.sourceKind: {source_kind}（expected url | file）"
@@ -33,11 +40,16 @@ pub async fn tool_ingest_material(root: &Path, args: &Value) -> ToolResult {
             ));
         }
     }
-    let field = |name: &str| args.get(name).and_then(Value::as_str).filter(|v| !v.is_empty());
+    let field = |name: &str| {
+        args.get(name)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
     // 635 号：SSRF 豁免从项目配置读（researchSearch.allowPrivateEgress）——
     // 不从 LLM 工具参数来（防提示注入自开豁免）。
-    let allow_private_egress =
-        crate::interaction::research_tool::read_research_search_config(root).await.allow_private_egress;
+    let allow_private_egress = crate::interaction::research_tool::read_research_search_config(root)
+        .await
+        .allow_private_egress;
     let input = materials::IngestMaterialInput {
         source_kind,
         allow_private_egress,
@@ -54,7 +66,10 @@ pub async fn tool_ingest_material(root: &Path, args: &Value) -> ToolResult {
             // 行时 Kind 行直连 Excerpt:）。
             let mut lines = vec![
                 format!("Material ingested: {}", asset.markdown_path),
-                format!("Kind: {}; chars: {}; source: {}", asset.kind, asset.char_count, asset.source),
+                format!(
+                    "Kind: {}; chars: {}; source: {}",
+                    asset.kind, asset.char_count, asset.source
+                ),
             ];
             if let Some(pages) = asset.total_pages {
                 lines.push(format!("PDF pages: {pages}"));
@@ -72,7 +87,12 @@ pub async fn tool_ingest_material(root: &Path, args: &Value) -> ToolResult {
 
 /// `retrieve_material`：按语义查询召回已归档材料片段。
 pub async fn tool_retrieve_material(root: &Path, args: &Value) -> ToolResult {
-    let Some(query) = args.get("query").and_then(Value::as_str).map(str::trim).filter(|q| !q.is_empty()) else {
+    let Some(query) = args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+    else {
         return error_result("retrieve_material requires a query argument");
     };
     let purpose = args.get("purpose").and_then(Value::as_str);
@@ -108,7 +128,10 @@ pub async fn tool_retrieve_material(root: &Path, args: &Value) -> ToolResult {
         );
     }
     let plural = if results.len() == 1 { "" } else { "s" };
-    let mut lines = vec![format!("Retrieved {} material snippet{plural}.", results.len()), String::new()];
+    let mut lines = vec![
+        format!("Retrieved {} material snippet{plural}.", results.len()),
+        String::new(),
+    ];
     for (index, result) in results.iter().enumerate() {
         lines.push(format!("## {}. {}", index + 1, result.title));
         lines.push(format!("- source: {}", result.source));
@@ -229,9 +252,25 @@ mod tests {
         )
         .await;
         assert!(!ingested.is_error, "{}", ingested.text);
-        assert!(ingested.text.starts_with("Material ingested: .inkos/materials/"), "{}", ingested.text);
-        assert!(ingested.text.contains("Kind: text; chars: 11; source: note.md"), "{}", ingested.text);
-        assert!(ingested.text.contains("Excerpt:\n账页记载着冷库赔偿款。"), "{}", ingested.text);
+        assert!(
+            ingested
+                .text
+                .starts_with("Material ingested: .inkos/materials/"),
+            "{}",
+            ingested.text
+        );
+        assert!(
+            ingested
+                .text
+                .contains("Kind: text; chars: 11; source: note.md"),
+            "{}",
+            ingested.text
+        );
+        assert!(
+            ingested.text.contains("Excerpt:\n账页记载着冷库赔偿款。"),
+            "{}",
+            ingested.text
+        );
         let details = ingested.details.unwrap();
         assert_eq!(details["kind"], "material_ingested");
         assert_eq!(details["asset"]["title"], "账页资料");
@@ -239,15 +278,28 @@ mod tests {
         // 召回：文本形态（编号/四行元数据/空行保留）。
         let retrieved = tool_retrieve_material(root, &json!({ "query": "冷库赔偿款" })).await;
         assert!(!retrieved.is_error);
-        assert!(retrieved.text.starts_with("Retrieved 1 material snippet.\n\n## 1. 账页资料"), "{}", retrieved.text);
-        assert!(retrieved.text.contains("- purpose: reference"), "{}", retrieved.text);
+        assert!(
+            retrieved
+                .text
+                .starts_with("Retrieved 1 material snippet.\n\n## 1. 账页资料"),
+            "{}",
+            retrieved.text
+        );
+        assert!(
+            retrieved.text.contains("- purpose: reference"),
+            "{}",
+            retrieved.text
+        );
         assert!(retrieved.text.contains("- score: "), "{}", retrieved.text);
         assert!(retrieved.text.contains(".md:0-"), "{}", retrieved.text);
         let details = retrieved.details.unwrap();
         assert_eq!(details["kind"], "material_retrieval");
         assert_eq!(details["query"], "冷库赔偿款");
         assert_eq!(details["results"].as_array().unwrap().len(), 1);
-        assert!(details.get("purpose").is_none(), "未过滤时 purpose 键不出现");
+        assert!(
+            details.get("purpose").is_none(),
+            "未过滤时 purpose 键不出现"
+        );
 
         // purpose 过滤出现在 details。
         let filtered = tool_retrieve_material(
@@ -273,11 +325,19 @@ mod tests {
             &json!({ "sourceKind": "file", "filePath": "x", "purpose": "nope" }),
         )
         .await;
-        assert!(bad_purpose.is_error && bad_purpose.text.contains("Invalid ingest_material.purpose"));
+        assert!(
+            bad_purpose.is_error && bad_purpose.text.contains("Invalid ingest_material.purpose")
+        );
         let missing_query = tool_retrieve_material(root, &json!({})).await;
         assert!(missing_query.is_error && missing_query.text.contains("requires a query"));
-        let bad_retrieve_purpose = tool_retrieve_material(root, &json!({ "query": "x", "purpose": "nope" })).await;
-        assert!(bad_retrieve_purpose.is_error && bad_retrieve_purpose.text.contains("Invalid retrieve_material.purpose"));
+        let bad_retrieve_purpose =
+            tool_retrieve_material(root, &json!({ "query": "x", "purpose": "nope" })).await;
+        assert!(
+            bad_retrieve_purpose.is_error
+                && bad_retrieve_purpose
+                    .text
+                    .contains("Invalid retrieve_material.purpose")
+        );
     }
 
     #[test]
@@ -285,7 +345,10 @@ mod tests {
         let schemas = material_tool_schemas();
         assert_eq!(schemas.len(), 2);
         assert_eq!(schemas[0]["function"]["name"], "ingest_material");
-        assert_eq!(schemas[0]["function"]["parameters"]["required"][0], "sourceKind");
+        assert_eq!(
+            schemas[0]["function"]["parameters"]["required"][0],
+            "sourceKind"
+        );
         assert_eq!(
             schemas[0]["function"]["parameters"]["properties"]["sourceKind"]["enum"]
                 .as_array()

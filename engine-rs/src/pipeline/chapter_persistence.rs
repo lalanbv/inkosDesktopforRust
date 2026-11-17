@@ -68,10 +68,7 @@ pub async fn persist_chapter_artifacts(
     }
 
     let existing_index = hooks.load_chapter_index().await.map_err(hook_err)?;
-    let now = params
-        .now
-        .map(|f| f())
-        .unwrap_or_else(chrono_like_now);
+    let now = params.now.map(|f| f()).unwrap_or_else(chrono_like_now);
     let entry = ChapterMeta {
         number: params.chapter_number,
         title: params.chapter_title.to_string(),
@@ -87,7 +84,11 @@ pub async fn persist_chapter_artifacts(
         length_warnings: params.length_warnings.to_vec(),
         review_note: (params.status == ChapterStatus::StateDegraded).then(|| {
             build_state_degraded_review_note(
-                if params.audit_passed { "ready-for-review" } else { "audit-failed" },
+                if params.audit_passed {
+                    "ready-for-review"
+                } else {
+                    "audit-failed"
+                },
                 params.degraded_issues,
             )
         }),
@@ -95,11 +96,14 @@ pub async fn persist_chapter_artifacts(
         detection_provider: None,
         detected_at: None,
         length_telemetry: params.length_telemetry.clone(),
-        token_usage: params.token_usage.as_ref().map(|usage| crate::models::chapter::TokenUsage {
-            prompt_tokens: usage.prompt_tokens,
-            completion_tokens: usage.completion_tokens,
-            total_tokens: usage.total_tokens,
-        }),
+        token_usage: params
+            .token_usage
+            .as_ref()
+            .map(|usage| crate::models::chapter::TokenUsage {
+                prompt_tokens: usage.prompt_tokens,
+                completion_tokens: usage.completion_tokens,
+                total_tokens: usage.total_tokens,
+            }),
     };
 
     let existing_idx = existing_index
@@ -130,10 +134,7 @@ pub async fn persist_chapter_artifacts(
         .save_chapter_index(&updated_index)
         .await
         .map_err(hook_err)?;
-    hooks
-        .mark_book_active_if_needed()
-        .await
-        .map_err(hook_err)?;
+    hooks.mark_book_active_if_needed().await.map_err(hook_err)?;
 
     let drift_issues: Vec<AuditIssue> = params
         .audit_issues
@@ -226,7 +227,10 @@ mod tests {
         }
 
         fn record(&self, name: &'static str) {
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(name);
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(name);
         }
     }
 
@@ -234,7 +238,11 @@ mod tests {
     impl PersistenceHooks for RecordingHooks {
         async fn load_chapter_index(&self) -> Result<Vec<ChapterMeta>, String> {
             self.record("load_index");
-            Ok(self.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
+            Ok(self
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone())
         }
         async fn save_chapter(&self) -> Result<(), String> {
             self.record("save_chapter");
@@ -246,7 +254,10 @@ mod tests {
         }
         async fn save_chapter_index(&self, index: &[ChapterMeta]) -> Result<(), String> {
             self.record("save_index");
-            *self.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = index.to_vec();
+            *self
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = index.to_vec();
             Ok(())
         }
         async fn mark_book_active_if_needed(&self) -> Result<(), String> {
@@ -323,7 +334,11 @@ mod tests {
         assert_eq!(entry.audit_issues[0], "[warning] desc");
         assert_eq!(entry.review_note, None);
         // 完整链 + 漂移带 critical/warning 子集。
-        let calls = hooks.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        let calls = hooks
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         assert_eq!(
             calls,
             vec![
@@ -337,7 +352,14 @@ mod tests {
                 "fact_history"
             ]
         );
-        assert_eq!(hooks.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 1);
+        assert_eq!(
+            hooks
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -353,16 +375,30 @@ mod tests {
         .await
         .unwrap();
         // 降级注记：baseStatus 按 audit_passed → ready-for-review。
-        assert!(entry.review_note.as_deref().unwrap().contains("\"kind\":\"state-degraded\""));
+        assert!(entry
+            .review_note
+            .as_deref()
+            .unwrap()
+            .contains("\"kind\":\"state-degraded\""));
         assert!(entry
             .review_note
             .as_deref()
             .unwrap()
             .contains("\"baseStatus\":\"ready-for-review\""));
-        let calls = hooks.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        let calls = hooks
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         assert_eq!(
             calls,
-            vec!["save_chapter", "load_index", "save_index", "mark_active", "drift"]
+            vec![
+                "save_chapter",
+                "load_index",
+                "save_index",
+                "mark_active",
+                "drift"
+            ]
         );
     }
 
@@ -398,9 +434,20 @@ mod tests {
         // map 进 index 的是 {...entry, createdAt: e.createdAt}）。
         assert_eq!(entry.created_at, "2026-08-15T00:00:00.000Z");
         assert_eq!(entry.updated_at, "2026-08-15T00:00:00.000Z");
-        assert_eq!(hooks.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 1);
         assert_eq!(
-            hooks.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].created_at,
+            hooks
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
+        assert_eq!(
+            hooks
+                .index
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())[0]
+                .created_at,
             "2020-01-01T00:00:00.000Z"
         );
     }
@@ -422,7 +469,11 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
-        assert!(hooks.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(&"snapshot"));
+        assert!(hooks
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&"snapshot"));
     }
 
     #[test]

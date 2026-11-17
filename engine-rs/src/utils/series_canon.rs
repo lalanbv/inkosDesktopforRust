@@ -111,7 +111,11 @@ fn sanitize_entry(raw: &Value) -> Option<EntityCodexCard> {
                 .iter()
                 .filter_map(|relation| {
                     let rel = relation.as_object()?;
-                    let target = rel.get("target").and_then(Value::as_str)?.trim().to_string();
+                    let target = rel
+                        .get("target")
+                        .and_then(Value::as_str)?
+                        .trim()
+                        .to_string();
                     if target.is_empty() {
                         return None;
                     }
@@ -151,10 +155,7 @@ pub fn parse_series_canon_file(raw: &Value) -> Option<SeriesCanonFile> {
         return None;
     }
     let entries_raw = record.get("entries").and_then(Value::as_array)?;
-    let mut entries: Vec<EntityCodexCard> = entries_raw
-        .iter()
-        .filter_map(sanitize_entry)
-        .collect();
+    let mut entries: Vec<EntityCodexCard> = entries_raw.iter().filter_map(sanitize_entry).collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Some(SeriesCanonFile {
         version: SERIES_CANON_VERSION,
@@ -219,13 +220,21 @@ pub fn render_series_codex_block(
                 }
             }
             if !card.facts.is_empty() {
-                lines.push(if is_en { "Canon facts:".to_string() } else { "正典事实：".to_string() });
+                lines.push(if is_en {
+                    "Canon facts:".to_string()
+                } else {
+                    "正典事实：".to_string()
+                });
                 for fact in &card.facts {
                     lines.push(format!("- {fact}"));
                 }
             }
             if !card.relationships.is_empty() {
-                lines.push(if is_en { "Relationships:".to_string() } else { "关系：".to_string() });
+                lines.push(if is_en {
+                    "Relationships:".to_string()
+                } else {
+                    "关系：".to_string()
+                });
                 for relation in &card.relationships {
                     lines.push(format!("- {}: {}", relation.target, relation.note));
                 }
@@ -244,7 +253,10 @@ pub fn render_series_codex_block(
 }
 
 /// 读系列正典文件（缺失/解析失败 → None，调用方兜底空文件）。
-pub fn load_series_canon(project_root: &std::path::Path, series_id: &str) -> Option<SeriesCanonFile> {
+pub fn load_series_canon(
+    project_root: &std::path::Path,
+    series_id: &str,
+) -> Option<SeriesCanonFile> {
     let raw = std::fs::read_to_string(
         project_root
             .join(".inkos")

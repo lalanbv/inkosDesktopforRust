@@ -18,7 +18,13 @@ pub struct ActionError {
 
 impl ActionError {
     pub fn plain(message: impl Into<String>) -> Self {
-        Self { message: message.into(), code: None, recovery: None, path: None, capability_id: None }
+        Self {
+            message: message.into(),
+            code: None,
+            recovery: None,
+            path: None,
+            capability_id: None,
+        }
     }
 
     pub fn coded(message: impl Into<String>, code: &str) -> Self {

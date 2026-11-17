@@ -32,7 +32,10 @@ pub const PUBKEY_LEN: usize = 32;
 /// 验证失败返回 Err，调用方应据此拒绝该 bundle。
 pub fn verify(data: &[u8], sig: &[u8], pubkey: &[u8]) -> Result<()> {
     if pubkey.len() != PUBKEY_LEN {
-        bail!("Ed25519 公钥长度必须 {PUBKEY_LEN} 字节，实际 {}", pubkey.len());
+        bail!(
+            "Ed25519 公钥长度必须 {PUBKEY_LEN} 字节，实际 {}",
+            pubkey.len()
+        );
     }
     if sig.len() != SIG_LEN {
         bail!("Ed25519 签名长度必须 {SIG_LEN} 字节，实际 {}", sig.len());
@@ -45,7 +48,8 @@ pub fn verify(data: &[u8], sig: &[u8], pubkey: &[u8]) -> Result<()> {
 
     let vk = VerifyingKey::from_bytes(&pk_arr).context("无效的 Ed25519 公钥")?;
     let signature = Signature::from_bytes(&sig_arr);
-    vk.verify(data, &signature).context("Ed25519 签名验证失败")?;
+    vk.verify(data, &signature)
+        .context("Ed25519 签名验证失败")?;
     Ok(())
 }
 

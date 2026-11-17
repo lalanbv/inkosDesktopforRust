@@ -75,7 +75,10 @@ pub fn analyze_detection_insights(history: &[DetectionHistoryEntry]) -> Detectio
     // 按章分组，保持首次出现顺序（TS Map 迭代序）。
     let mut groups: Vec<(u32, Vec<&DetectionHistoryEntry>)> = Vec::new();
     for entry in history {
-        match groups.iter_mut().find(|(number, _)| *number == entry.chapter_number) {
+        match groups
+            .iter_mut()
+            .find(|(number, _)| *number == entry.chapter_number)
+        {
             Some((_, entries)) => entries.push(entry),
             None => groups.push((entry.chapter_number, vec![entry])),
         }
@@ -176,12 +179,22 @@ mod tests {
         let stats = analyze_detection_insights(&history);
         assert_eq!(stats.total_detections, 2);
         assert_eq!(stats.total_rewrites, 3);
-        let numbers: Vec<u32> = stats.chapter_breakdown.iter().map(|c| c.chapter_number).collect();
+        let numbers: Vec<u32> = stats
+            .chapter_breakdown
+            .iter()
+            .map(|c| c.chapter_number)
+            .collect();
         assert_eq!(numbers, vec![2, 1]);
         let c2 = &stats.chapter_breakdown[0];
-        assert_eq!((c2.original_score, c2.final_score, c2.rewrite_attempts), (0.9, 0.4, 2));
+        assert_eq!(
+            (c2.original_score, c2.final_score, c2.rewrite_attempts),
+            (0.9, 0.4, 2)
+        );
         let c1 = &stats.chapter_breakdown[1];
-        assert_eq!((c1.original_score, c1.final_score, c1.rewrite_attempts), (0.8, 0.75, 1));
+        assert_eq!(
+            (c1.original_score, c1.final_score, c1.rewrite_attempts),
+            (0.8, 0.75, 1)
+        );
         // 均值：original (0.9+0.8)/2 = 0.85；final (0.4+0.75)/2 = 0.575。
         assert_eq!(stats.avg_original_score, 0.85);
         assert_eq!(stats.avg_final_score, 0.575);
@@ -209,7 +222,9 @@ mod tests {
         let book = dir.path().join("book");
         assert!(load_detection_history(&book).await.is_empty());
         tokio::fs::create_dir_all(book.join("story")).await.unwrap();
-        tokio::fs::write(book.join("story").join("detection_history.json"), "{oops").await.unwrap();
+        tokio::fs::write(book.join("story").join("detection_history.json"), "{oops")
+            .await
+            .unwrap();
         assert!(load_detection_history(&book).await.is_empty());
         tokio::fs::write(
             book.join("story").join("detection_history.json"),

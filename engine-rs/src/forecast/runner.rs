@@ -42,7 +42,10 @@ pub async fn create_narrative_forecast(
         .ok_or_else(|| format!("Invalid forecast.bookId: \"{}\"", options.book_id))?;
     let divergence = options.divergence.trim();
     if divergence.is_empty() {
-        return Err("divergence is required: describe the decision point the forecast should branch on.".to_string());
+        return Err(
+            "divergence is required: describe the decision point the forecast should branch on."
+                .to_string(),
+        );
     }
     let branch_count = bounded_integer(
         options.branch_count,
@@ -108,7 +111,11 @@ pub async fn create_narrative_forecast(
     let (forecast_json_path, comparison_path) = store
         .save(&forecast, &render_forecast_comparison_markdown(&forecast))
         .await?;
-    Ok(NarrativeForecastCreateResult { forecast, forecast_json_path, comparison_path })
+    Ok(NarrativeForecastCreateResult {
+        forecast,
+        forecast_json_path,
+        comparison_path,
+    })
 }
 
 #[derive(Debug)]
@@ -193,10 +200,19 @@ pub async fn select_narrative_branch(
             &render_selected_branch_plan_markdown(&forecast, &branch, &utc_now_iso(), stale),
         )
         .await?;
-    Ok(NarrativeForecastSelectResult { forecast, branch, stale, plan_path })
+    Ok(NarrativeForecastSelectResult {
+        forecast,
+        branch,
+        stale,
+        plan_path,
+    })
 }
 
-async fn is_forecast_stale(book_dir: &Path, book_id: &str, forecast: &NarrativeForecast) -> Result<bool, String> {
+async fn is_forecast_stale(
+    book_dir: &Path,
+    book_id: &str,
+    forecast: &NarrativeForecast,
+) -> Result<bool, String> {
     if forecast.status == ForecastStatus::Stale {
         return Ok(true);
     }
@@ -215,10 +231,18 @@ async fn resolve_book_dir(project_root: &Path, book_id: &str) -> Result<PathBuf,
     Ok(book_dir)
 }
 
-fn bounded_integer(value: Option<u32>, fallback: u32, name: &str, min: u32, max: u32) -> Result<u32, String> {
+fn bounded_integer(
+    value: Option<u32>,
+    fallback: u32,
+    name: &str,
+    min: u32,
+    max: u32,
+) -> Result<u32, String> {
     let parsed = value.unwrap_or(fallback);
     if parsed < min || parsed > max {
-        return Err(format!("{name} must be an integer between {min} and {max}."));
+        return Err(format!(
+            "{name} must be an integer between {min} and {max}."
+        ));
     }
     Ok(parsed)
 }
@@ -257,7 +281,9 @@ mod tests {
 
     async fn fixture(root: &Path) {
         let book = root.join("books").join("b1");
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(book.join("story")).await.unwrap();
         tokio::fs::write(
             book.join("book.json"),
@@ -265,8 +291,15 @@ mod tests {
         )
         .await
         .unwrap();
-        tokio::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章").await.unwrap();
-        tokio::fs::write(book.join("story").join("current_focus.md"), "聚焦：主线推进").await.unwrap();
+        tokio::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            book.join("story").join("current_focus.md"),
+            "聚焦：主线推进",
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -276,28 +309,56 @@ mod tests {
         fixture(&root).await;
 
         // create：守卫（空分歧/越界分支数）。
-        let empty = create_narrative_forecast(&ScriptChat, &CreateNarrativeForecastOptions {
-            project_root: &root, book_id: "b1", divergence: "  ", branch_count: None, horizon: None,
-        })
+        let empty = create_narrative_forecast(
+            &ScriptChat,
+            &CreateNarrativeForecastOptions {
+                project_root: &root,
+                book_id: "b1",
+                divergence: "  ",
+                branch_count: None,
+                horizon: None,
+            },
+        )
         .await
         .unwrap_err();
         assert!(empty.starts_with("divergence is required"));
-        let bad_count = create_narrative_forecast(&ScriptChat, &CreateNarrativeForecastOptions {
-            project_root: &root, book_id: "b1", divergence: "分歧", branch_count: Some(6), horizon: None,
-        })
+        let bad_count = create_narrative_forecast(
+            &ScriptChat,
+            &CreateNarrativeForecastOptions {
+                project_root: &root,
+                book_id: "b1",
+                divergence: "分歧",
+                branch_count: Some(6),
+                horizon: None,
+            },
+        )
         .await
         .unwrap_err();
         assert_eq!(bad_count, "branchCount must be an integer between 2 and 5.");
-        let missing_book = create_narrative_forecast(&ScriptChat, &CreateNarrativeForecastOptions {
-            project_root: &root, book_id: "nope", divergence: "分歧", branch_count: None, horizon: None,
-        })
+        let missing_book = create_narrative_forecast(
+            &ScriptChat,
+            &CreateNarrativeForecastOptions {
+                project_root: &root,
+                book_id: "nope",
+                divergence: "分歧",
+                branch_count: None,
+                horizon: None,
+            },
+        )
         .await
         .unwrap_err();
         assert!(missing_book.starts_with("Book \"nope\" not found"));
 
-        let created = create_narrative_forecast(&ScriptChat, &CreateNarrativeForecastOptions {
-            project_root: &root, book_id: "b1", divergence: "合作还是对抗", branch_count: Some(2), horizon: Some(5),
-        })
+        let created = create_narrative_forecast(
+            &ScriptChat,
+            &CreateNarrativeForecastOptions {
+                project_root: &root,
+                book_id: "b1",
+                divergence: "合作还是对抗",
+                branch_count: Some(2),
+                horizon: Some(5),
+            },
+        )
         .await
         .unwrap();
         let forecast_id = created.forecast.forecast_id.clone();
@@ -306,24 +367,36 @@ mod tests {
         assert_eq!(created.forecast.branches[0].branch_id, "branch-1");
         assert_eq!(created.forecast.base_chapter, 1);
         // 工件落盘。
-        let forecast_dir = root.join("books/b1/story/runtime/narrative-forecasts").join(&forecast_id);
+        let forecast_dir = root
+            .join("books/b1/story/runtime/narrative-forecasts")
+            .join(&forecast_id);
         assert!(forecast_dir.join("forecast.json").is_file());
-        let comparison = tokio::fs::read_to_string(forecast_dir.join("comparison.md")).await.unwrap();
+        let comparison = tokio::fs::read_to_string(forecast_dir.join("comparison.md"))
+            .await
+            .unwrap();
         assert!(comparison.starts_with("# 叙事推演对比：合作还是对抗"));
         assert!(comparison.contains("| branch-1 | 合作 | 88 | 1 | 接受提议 |"));
 
         // get：正史未变 → 非 stale。
-        let got = get_narrative_forecast(&root, "b1", &forecast_id).await.unwrap();
+        let got = get_narrative_forecast(&root, "b1", &forecast_id)
+            .await
+            .unwrap();
         assert!(!got.stale);
 
         // select：写 selected-branch-plan.md。
-        let selected = select_narrative_branch(&root, "b1", &forecast_id, "branch-2").await.unwrap();
+        let selected = select_narrative_branch(&root, "b1", &forecast_id, "branch-2")
+            .await
+            .unwrap();
         assert_eq!(selected.branch.branch_id, "branch-2");
         assert!(!selected.stale);
-        let plan = tokio::fs::read_to_string(forecast_dir.join("selected-branch-plan.md")).await.unwrap();
+        let plan = tokio::fs::read_to_string(forecast_dir.join("selected-branch-plan.md"))
+            .await
+            .unwrap();
         assert!(plan.starts_with("# 已选分支计划：对抗"));
         assert!(plan.contains("- 分支：branch-2"));
-        let branch_error = select_narrative_branch(&root, "b1", &forecast_id, "branch-9").await.unwrap_err();
+        let branch_error = select_narrative_branch(&root, "b1", &forecast_id, "branch-9")
+            .await
+            .unwrap_err();
         assert_eq!(
             branch_error,
             format!(
@@ -332,14 +405,28 @@ mod tests {
         );
 
         // 正史变化（新章）→ get 检出 stale 并持久化标记。
-        tokio::fs::write(root.join("books/b1/chapters").join("0002_夜行.md"), "# 第2章").await.unwrap();
-        let stale = get_narrative_forecast(&root, "b1", &forecast_id).await.unwrap();
+        tokio::fs::write(
+            root.join("books/b1/chapters").join("0002_夜行.md"),
+            "# 第2章",
+        )
+        .await
+        .unwrap();
+        let stale = get_narrative_forecast(&root, "b1", &forecast_id)
+            .await
+            .unwrap();
         assert!(stale.stale);
-        assert!(matches!(stale.forecast.status, crate::forecast::schema::ForecastStatus::Stale));
+        assert!(matches!(
+            stale.forecast.status,
+            crate::forecast::schema::ForecastStatus::Stale
+        ));
         // stale 后 select 带警告行。
-        let selected = select_narrative_branch(&root, "b1", &forecast_id, "branch-1").await.unwrap();
+        let selected = select_narrative_branch(&root, "b1", &forecast_id, "branch-1")
+            .await
+            .unwrap();
         assert!(selected.stale);
-        let plan = tokio::fs::read_to_string(forecast_dir.join("selected-branch-plan.md")).await.unwrap();
+        let plan = tokio::fs::read_to_string(forecast_dir.join("selected-branch-plan.md"))
+            .await
+            .unwrap();
         assert!(plan.contains("⚠️ 该推演已过期"));
     }
 }

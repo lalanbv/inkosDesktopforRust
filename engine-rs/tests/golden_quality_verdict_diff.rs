@@ -60,10 +60,12 @@ fn governance_resolution_matches_shared_vectors() {
         max_consecutive_debts: u32,
     }
     for vector in vectors["policy"].as_array().expect("policy array") {
-        let case: PolicyCase = serde_json::from_value(vector["input"].clone()).expect("policy case shape");
+        let case: PolicyCase =
+            serde_json::from_value(vector["input"].clone()).expect("policy case shape");
         let expected: GovernanceExpectation =
             serde_json::from_value(vector["expected"].clone()).expect("policy expected shape");
-        let (policy, threshold) = resolve_governance_policy(case.book.as_ref(), case.project.as_ref());
+        let (policy, threshold) =
+            resolve_governance_policy(case.book.as_ref(), case.project.as_ref());
         assert_eq!(
             (policy.as_str(), threshold),
             (expected.policy.as_str(), expected.max_consecutive_debts),

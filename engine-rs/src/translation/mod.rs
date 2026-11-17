@@ -44,37 +44,62 @@ mod tests {
     async fn create_project_from_text_lays_out_directory() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::write(root.join("novel.txt"), "Chapter 1\n\nFirst paragraph.\n\nSecond paragraph.\n\nChapter 2\n\nMore text here.").unwrap();
+        std::fs::write(
+            root.join("novel.txt"),
+            "Chapter 1\n\nFirst paragraph.\n\nSecond paragraph.\n\nChapter 2\n\nMore text here.",
+        )
+        .unwrap();
 
         let result = project::create_translation_project_from_file(root, &input("novel.txt"))
             .await
             .unwrap();
         // 970 号 P4：布局=works/<id>/source（TS 2.0 works 存储）+ work.json。
-        assert!(result.project_dir.starts_with("works/"), "{}", result.project_dir);
+        assert!(
+            result.project_dir.starts_with("works/"),
+            "{}",
+            result.project_dir
+        );
         assert_eq!(result.manifest.source_language, "en");
         assert_eq!(result.manifest.chapters.len(), 2);
-        assert_eq!(result.manifest.chapters[0].status, TranslationChapterStatus::Pending);
+        assert_eq!(
+            result.manifest.chapters[0].status,
+            TranslationChapterStatus::Pending
+        );
         assert_eq!(result.manifest.source.kind, TranslationSourceKind::Text);
         // 685 号：source.path 必须是项目根相对路径——tempdir 在 macOS 走
         // /var→/private/var 符号链接，canonicalize 后 strip_prefix 对原始根
         // 失配曾泄漏绝对路径（contract-diff translations/:id 活体捕获）。
-        assert!(!std::path::Path::new(&result.manifest.source.path).is_absolute(), "{}", result.manifest.source.path);
+        assert!(
+            !std::path::Path::new(&result.manifest.source.path).is_absolute(),
+            "{}",
+            result.manifest.source.path
+        );
         assert_eq!(result.manifest.source.path, "novel.txt");
         // source/translated 章节文件 + manifest + glossary + review 报告 + work.json。
         let work_root = root.join("works").join(&result.manifest.id);
         assert!(work_root.join("work.json").is_file());
-        let work: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(work_root.join("work.json")).unwrap()).unwrap();
+        let work: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(work_root.join("work.json")).unwrap())
+                .unwrap();
         assert_eq!(work["profileId"], "translation");
         assert_eq!(work["version"], 2);
-        assert_eq!(work["artifacts"].as_array().unwrap().len(), 2 * result.manifest.chapters.len() + 3);
+        assert_eq!(
+            work["artifacts"].as_array().unwrap().len(),
+            2 * result.manifest.chapters.len() + 3
+        );
         assert!(work_root.join("source").join("manifest.json").is_file());
-        assert!(root.join(&result.manifest.chapters[0].source_path).is_file());
-        assert!(root.join(&result.manifest.chapters[0].translated_path).is_file());
+        assert!(root
+            .join(&result.manifest.chapters[0].source_path)
+            .is_file());
+        assert!(root
+            .join(&result.manifest.chapters[0].translated_path)
+            .is_file());
         assert!(work_root.join("source").join("glossary.json").is_file());
         assert!(work_root.join("source").join("review-report.md").is_file());
         // translated 章节空段起步。
         let translated: TranslationChapterFile = serde_json::from_str(
-            &std::fs::read_to_string(root.join(&result.manifest.chapters[0].translated_path)).unwrap(),
+            &std::fs::read_to_string(root.join(&result.manifest.chapters[0].translated_path))
+                .unwrap(),
         )
         .unwrap();
         assert!(translated.segments.is_empty());
@@ -94,11 +119,17 @@ mod tests {
         std::fs::write(root.join("in.txt"), "hello").unwrap();
 
         let escape = input("../../etc/passwd");
-        assert!(project::create_translation_project_from_file(root, &escape).await.is_err());
+        assert!(project::create_translation_project_from_file(root, &escape)
+            .await
+            .is_err());
         let _ = &escape;
 
         let missing = input("ghost.txt");
-        assert!(project::create_translation_project_from_file(root, &missing).await.is_err());
+        assert!(
+            project::create_translation_project_from_file(root, &missing)
+                .await
+                .is_err()
+        );
 
         std::fs::write(root.join("doc.pdf"), b"%PDF-fake").unwrap();
         let pdf = input("doc.pdf");
@@ -130,14 +161,20 @@ mod tests {
                 .compression_method(zip::CompressionMethod::Deflated);
             writer.start_file("mimetype", stored).unwrap();
             writer.write_all(b"application/epub+zip").unwrap();
-            writer.start_file("META-INF/container.xml", deflated).unwrap();
+            writer
+                .start_file("META-INF/container.xml", deflated)
+                .unwrap();
             writer.write_all(br#"<?xml version="1.0"?><container><rootfile full-path="OEBPS/content.opf"/></container>"#).unwrap();
             writer.start_file("OEBPS/content.opf", deflated).unwrap();
             writer.write_all("<?xml version=\"1.0\"?><package><metadata><dc:title>测试书</dc:title></metadata><manifest><item id=\"c1\" href=\"c1.xhtml\"/><item id=\"c2\" href=\"c2.xhtml\"/></manifest><spine><itemref idref=\"c1\"/><itemref idref=\"c2\"/></spine></package>".as_bytes()).unwrap();
             writer.start_file("OEBPS/c1.xhtml", deflated).unwrap();
-            writer.write_all(b"<html><body><h1>Alpha</h1><p>First &amp; only.</p></body></html>").unwrap();
+            writer
+                .write_all(b"<html><body><h1>Alpha</h1><p>First &amp; only.</p></body></html>")
+                .unwrap();
             writer.start_file("OEBPS/c2.xhtml", deflated).unwrap();
-            writer.write_all(b"<html><body><h1>Beta</h1><p>Second chapter.</p></body></html>").unwrap();
+            writer
+                .write_all(b"<html><body><h1>Beta</h1><p>Second chapter.</p></body></html>")
+                .unwrap();
             writer.finish().unwrap();
         }
         let extracted = source::extract_epub(&buffer.into_inner()).unwrap();
@@ -162,33 +199,35 @@ mod tests {
             },
             chapters: Vec::new(),
         };
-        let chapters = vec![
-            TranslationChapterFile {
-                number: 1,
-                title: "一章".into(),
-                source_language: "en".into(),
-                target_language: "zh".into(),
-                segments: vec![TranslationSegment {
-                    index: 1,
-                    source: "hello".into(),
-                    target: Some("你好 <世界>".into()),
-                    notes: None,
-                }],
-            },
-        ];
+        let chapters = vec![TranslationChapterFile {
+            number: 1,
+            title: "一章".into(),
+            source_language: "en".into(),
+            target_language: "zh".into(),
+            segments: vec![TranslationSegment {
+                index: 1,
+                source: "hello".into(),
+                target: Some("你好 <世界>".into()),
+                notes: None,
+            }],
+        }];
         let epub = export::tests_support::build_epub_for_test(&manifest, &chapters).unwrap();
         let mut reader = zip::ZipArchive::new(std::io::Cursor::new(&epub[..])).unwrap();
-        assert_eq!(reader.by_name("mimetype").unwrap().compression(), zip::CompressionMethod::Stored);
+        assert_eq!(
+            reader.by_name("mimetype").unwrap().compression(),
+            zip::CompressionMethod::Stored
+        );
         let mut content = String::new();
         {
             let mut archive = reader.clone();
-        // 974 号：章节文件名 = TS epub-gen-memory 形 `${index}_.xhtml`；段落
-        // ASCII 实体转义（&lt;）+ 非 ASCII 数字引用（你好→&#x4F60;&#x597D;）。
-        let mut file = archive.by_name("OEBPS/0_.xhtml").unwrap();
-        std::io::Read::read_to_string(&mut file, &mut content).unwrap();
+            // 974 号：章节文件名 = TS epub-gen-memory 形 `${index}_.xhtml`；段落
+            // ASCII 实体转义（&lt;）+ 非 ASCII 数字引用（你好→&#x4F60;&#x597D;）。
+            let mut file = archive.by_name("OEBPS/0_.xhtml").unwrap();
+            std::io::Read::read_to_string(&mut file, &mut content).unwrap();
         }
         assert!(
-            content.contains("你好 &lt;世界&gt;") || (content.contains("&#x4F60;&#x597D;") && content.contains("&lt;")),
+            content.contains("你好 &lt;世界&gt;")
+                || (content.contains("&#x4F60;&#x597D;") && content.contains("&lt;")),
             "XHTML 转义（实体+数字引用）: {content}"
         );
     }
@@ -198,15 +237,11 @@ mod tests {
         let model = llm_model::tests_support::noop();
         let _ = model;
         // fence 剥离 + 子串提取。
-        let v = llm_model::tests_support::parse_json_object_pub(
-            "```json\n{\"segments\": []}\n```",
-        )
-        .unwrap();
+        let v = llm_model::tests_support::parse_json_object_pub("```json\n{\"segments\": []}\n```")
+            .unwrap();
         assert!(v.get("segments").is_some());
-        let v = llm_model::tests_support::parse_json_object_pub(
-            "前置噪音 {\"passed\": true} 尾部",
-        )
-        .unwrap();
+        let v = llm_model::tests_support::parse_json_object_pub("前置噪音 {\"passed\": true} 尾部")
+            .unwrap();
         assert_eq!(v.get("passed"), Some(&serde_json::json!(true)));
         assert!(llm_model::tests_support::parse_json_object_pub("no json").is_err());
     }
@@ -223,9 +258,21 @@ mod tests {
     #[test]
     fn glossary_merge_dedupes_by_lowercase_source() {
         let terms = vec![
-            TranslationGlossaryTerm { source: "Mana".into(), target: "魔力".into(), note: None },
-            TranslationGlossaryTerm { source: "mana".into(), target: "法力".into(), note: Some("后写覆盖".into()) },
-            TranslationGlossaryTerm { source: "  ".into(), target: "x".into(), note: None },
+            TranslationGlossaryTerm {
+                source: "Mana".into(),
+                target: "魔力".into(),
+                note: None,
+            },
+            TranslationGlossaryTerm {
+                source: "mana".into(),
+                target: "法力".into(),
+                note: Some("后写覆盖".into()),
+            },
+            TranslationGlossaryTerm {
+                source: "  ".into(),
+                target: "x".into(),
+                note: None,
+            },
         ];
         let merged = run_store::merge_glossary_terms(&terms);
         assert_eq!(merged.len(), 1);
@@ -272,7 +319,6 @@ mod tests {
         }
     }
 
-
     // ── 143 号：翻译运行快照生命周期 ────────────────────────────────────
 
     #[tokio::test]
@@ -290,7 +336,13 @@ mod tests {
 
         // 终态快照：complete / stage complete / artifacts = base + 章 + 报告。
         let run: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&id).join("source").join("status.json")).unwrap(),
+            &std::fs::read_to_string(
+                root.join("works")
+                    .join(&id)
+                    .join("source")
+                    .join("status.json"),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(run["version"], 1);
@@ -298,11 +350,28 @@ mod tests {
         assert_eq!(run["id"], id);
         assert_eq!(run["status"], "complete");
         assert_eq!(run["stage"], "complete");
-        let artifacts: Vec<&str> = run["artifacts"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
-        assert!(artifacts.contains(&format!("works/{id}/source/manifest.json").as_str()), "{artifacts:?}");
-        assert!(artifacts.contains(&format!("works/{id}/source/glossary.json").as_str()), "{artifacts:?}");
-        assert!(artifacts.iter().any(|a| a.contains("/translated/")), "章译文在清单：{artifacts:?}");
-        assert!(artifacts.contains(&format!("works/{id}/source/review-report.md").as_str()), "{artifacts:?}");
+        let artifacts: Vec<&str> = run["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            artifacts.contains(&format!("works/{id}/source/manifest.json").as_str()),
+            "{artifacts:?}"
+        );
+        assert!(
+            artifacts.contains(&format!("works/{id}/source/glossary.json").as_str()),
+            "{artifacts:?}"
+        );
+        assert!(
+            artifacts.iter().any(|a| a.contains("/translated/")),
+            "章译文在清单：{artifacts:?}"
+        );
+        assert!(
+            artifacts.contains(&format!("works/{id}/source/review-report.md").as_str()),
+            "{artifacts:?}"
+        );
         assert!(run.get("error").is_none());
     }
 
@@ -337,7 +406,13 @@ mod tests {
         assert!(err.contains("model exploded"), "{err}");
         // failed 快照落地（吞写错不覆盖原错）。
         let run: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(root.join("works").join(&id).join("source").join("status.json")).unwrap(),
+            &std::fs::read_to_string(
+                root.join("works")
+                    .join(&id)
+                    .join("source")
+                    .join("status.json"),
+            )
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(run["status"], "failed");
@@ -360,15 +435,32 @@ mod tests {
             .unwrap();
         assert_eq!(result.translated_segments, 1);
         assert_eq!(result.reviewed_chapters, 1);
-        assert_eq!(result.report_path, format!("works/{id}/source/review-report.md"));
+        assert_eq!(
+            result.report_path,
+            format!("works/{id}/source/review-report.md")
+        );
 
         // 状态推进 + 报告内容 + 术语表。
-        let manifest = run_store::load_translation_manifest(root, &id).await.unwrap();
-        assert_eq!(manifest.chapters[0].status, TranslationChapterStatus::Reviewed);
-        let report = std::fs::read_to_string(root.join("works").join(&id).join("source").join("review-report.md")).unwrap();
+        let manifest = run_store::load_translation_manifest(root, &id)
+            .await
+            .unwrap();
+        assert_eq!(
+            manifest.chapters[0].status,
+            TranslationChapterStatus::Reviewed
+        );
+        let report = std::fs::read_to_string(
+            root.join("works")
+                .join(&id)
+                .join("source")
+                .join("review-report.md"),
+        )
+        .unwrap();
         // 969 号：报告=TS 2.0 逐字形（`## 标题` + `- summary:`，passed 行退役）；EchoModel
         // 不返回 chapterTitle → 标题保持原文。
-        assert!(report.contains("## Chapter 1\n\n- summary: Looks good.\n"), "{report}");
+        assert!(
+            report.contains("## Chapter 1\n\n- summary: Looks good.\n"),
+            "{report}"
+        );
         assert!(!report.contains("- passed:"), "{report}");
         let glossary = run_store::load_translation_glossary(root, &id).await;
         assert_eq!(glossary.len(), 1);
@@ -393,7 +485,11 @@ mod tests {
             .unwrap();
         // 970 号 P4：导出根=works/<id>/source/exports（TS 2.0 translationProjectDir）。
         assert!(md.output_path.starts_with("works/"), "{}", md.output_path);
-        assert!(md.output_path.contains("/source/exports/"), "{}", md.output_path);
+        assert!(
+            md.output_path.contains("/source/exports/"),
+            "{}",
+            md.output_path
+        );
         assert!(md.output_path.ends_with(".md"));
         let text = std::fs::read_to_string(root.join(&md.output_path)).unwrap();
         assert!(text.starts_with("# in"), "{text}");

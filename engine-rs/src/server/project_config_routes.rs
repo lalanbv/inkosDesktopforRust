@@ -39,7 +39,9 @@ type ApiError = (StatusCode, Json<Value>);
 fn internal_error() -> ApiError {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } })),
+        Json(
+            json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } }),
+        ),
     )
 }
 
@@ -49,7 +51,9 @@ fn ok_json(payload: Value) -> ApiError {
 
 /// 读 inkos.json（raw JSON，保未知字段）。失败 → onError 500 语义。
 pub(crate) async fn load_raw_config(root: &std::path::Path) -> Option<Value> {
-    let raw = tokio::fs::read_to_string(root.join("inkos.json")).await.ok()?;
+    let raw = tokio::fs::read_to_string(root.join("inkos.json"))
+        .await
+        .ok()?;
     serde_json::from_str(&raw).ok()
 }
 
@@ -67,7 +71,9 @@ pub(crate) async fn save_raw_config(root: &std::path::Path, raw: &Value) -> bool
 
 /// 简化 URL 校验（zod `z.string().url()`）：scheme 字母开头 + `://` + 非空余部。
 fn is_valid_url(s: &str) -> bool {
-    let Some(idx) = s.find("://") else { return false };
+    let Some(idx) = s.find("://") else {
+        return false;
+    };
     let scheme = &s[..idx];
     let mut chars = scheme.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -128,7 +134,11 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
     // 而读取层 llm 永远先被填充成合法对象，不应在此处拦截。
     let obj: Map<String, Value> = raw.as_object().cloned().unwrap_or_default();
     // ProjectConfigSchema 校验（响应所需字段面）。
-    let Some(name) = obj.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()) else {
+    let Some(name) = obj
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|n| !n.is_empty())
+    else {
         return invalid("name must contain at least 1 character(s)".to_string());
     };
     let language = match obj.get("language") {
@@ -156,15 +166,20 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
         return invalid("Invalid url".to_string());
     };
     let provider = get_str("provider");
-    let Some(provider) =
-        provider.filter(|p| matches!(*p, "anthropic" | "openai" | "custom"))
+    let Some(provider) = provider.filter(|p| matches!(*p, "anthropic" | "openai" | "custom"))
     else {
         return invalid(
             "Invalid enum value. Expected 'anthropic' | 'openai' | 'custom'".to_string(),
         );
     };
-    let stream = effective.get("stream").and_then(Value::as_bool).unwrap_or(true);
-    let temperature = effective.get("temperature").and_then(Value::as_f64).unwrap_or(0.7);
+    let stream = effective
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let temperature = effective
+        .get("temperature")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.7);
     // TS `"language" in raw && raw.language !== ""`。
     let language_explicit = obj
         .get("language")
@@ -188,10 +203,7 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
 /// PUT /project：合并更新（server.ts L4324）。temperature/stream 走
 /// `existing.llm.x = v` 直写——llm 缺失且给出任一字段 → TypeError → 500
 /// 平铺（TS 怪癖）；language 仅 zh/en 精确命中；值透传不校验。
-pub async fn put_project(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn put_project(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     let flat_internal = |message: String| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -221,7 +233,8 @@ pub async fn put_project(
             llm.insert("stream".to_string(), parsed["stream"].clone());
         }
     }
-    if parsed.get("language") == Some(&json!("zh")) || parsed.get("language") == Some(&json!("en")) {
+    if parsed.get("language") == Some(&json!("zh")) || parsed.get("language") == Some(&json!("en"))
+    {
         // 非对象根（合法 JSON 如 `42`/`[...]`）：Node strict-mode 对原始值赋属性
         // 抛 TypeError → 500；不得 panic（会打断连接任务）。
         let Some(obj) = raw.as_object_mut() else {
@@ -247,9 +260,13 @@ fn parse_detection_config(value: &Value) -> Result<Value, String> {
     let mut errors: Vec<String> = Vec::new();
     let provider = match obj.get("provider") {
         None => "custom".to_string(),
-        Some(Value::String(s)) if s == "gptzero" || s == "originality" || s == "custom" => s.clone(),
+        Some(Value::String(s)) if s == "gptzero" || s == "originality" || s == "custom" => {
+            s.clone()
+        }
         Some(_) => {
-            errors.push("Invalid enum value. Expected 'gptzero' | 'originality' | 'custom'".to_string());
+            errors.push(
+                "Invalid enum value. Expected 'gptzero' | 'originality' | 'custom'".to_string(),
+            );
             "custom".to_string()
         }
     };
@@ -344,10 +361,7 @@ pub async fn get_detection(State(runtime): State<BooksRuntime>) -> impl IntoResp
     ok_json(json!({ "detection": raw.get("detection").cloned().unwrap_or(Value::Null) }))
 }
 
-pub async fn put_detection(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn put_detection(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return internal_error();
     };
@@ -395,7 +409,10 @@ pub async fn get_model_overrides(State(runtime): State<BooksRuntime>) -> impl In
     let Some(raw) = load_raw_config(runtime.state.project_root()).await else {
         return internal_error();
     };
-    let overrides = raw.get("modelOverrides").cloned().unwrap_or_else(|| json!({}));
+    let overrides = raw
+        .get("modelOverrides")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     ok_json(json!({ "overrides": overrides }))
 }
 
@@ -437,17 +454,16 @@ pub async fn get_default_model(State(runtime): State<BooksRuntime>) -> impl Into
     };
     // llm 须为对象且非数组；否则视作 {}。
     let empty = Map::new();
-    let llm = raw
-        .get("llm")
-        .and_then(Value::as_object)
-        .unwrap_or(&empty);
+    let llm = raw.get("llm").and_then(Value::as_object).unwrap_or(&empty);
     let service = llm.get("service").and_then(Value::as_str);
     let default_model = llm
         .get("defaultModel")
         .and_then(Value::as_str)
         .filter(|v| !v.trim().is_empty())
         .or_else(|| {
-            llm.get("model").and_then(Value::as_str).filter(|v| !v.trim().is_empty())
+            llm.get("model")
+                .and_then(Value::as_str)
+                .filter(|v| !v.trim().is_empty())
         });
     ok_json(json!({
         "service": service,
@@ -462,9 +478,16 @@ pub async fn put_default_model(
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return internal_error();
     };
-    let default_model = parsed.get("defaultModel").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let default_model = parsed
+        .get("defaultModel")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
     if default_model.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "defaultModel is required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "defaultModel is required" })),
+        );
     }
     let root = runtime.state.project_root();
     let Some(mut raw) = load_raw_config(root).await else {
@@ -494,9 +517,7 @@ pub async fn put_default_model(
         // llm.model/baseUrl/provider 镜像随选中服务与 defaultModel 更新）。
         crate::server::service_routes::sync_top_level_llm_mirror(llm);
     }
-    let service_value = service
-        .clone()
-        .or_else(|| llm_service(&raw));
+    let service_value = service.clone().or_else(|| llm_service(&raw));
     if !save_raw_config(root, &raw).await {
         return internal_error();
     }
@@ -527,9 +548,7 @@ fn parse_research_search(value: Option<&Value>) -> Result<Value, String> {
     let provider = match obj.get("provider") {
         None => "tavily".to_string(),
         Some(Value::String(s)) if s == "tavily" || s == "custom" => s.clone(),
-        Some(_) => {
-            return Err("Invalid enum value. Expected 'tavily' | 'custom'".to_string())
-        }
+        Some(_) => return Err("Invalid enum value. Expected 'tavily' | 'custom'".to_string()),
     };
     // 684 号：TS schema `allowPrivateEgress: z.boolean().default(false)` 镜像——
     // 旧形态整键缺失，GET 形状漂移且 PUT 往返把用户显式配置的私网豁免
@@ -543,7 +562,9 @@ fn parse_research_search(value: Option<&Value>) -> Result<Value, String> {
     if let Some(base_url) = obj.get("baseUrl") {
         match base_url {
             Value::String(s) if is_valid_url(s) => {
-                out.as_object_mut().unwrap().insert("baseUrl".to_string(), json!(s));
+                out.as_object_mut()
+                    .unwrap()
+                    .insert("baseUrl".to_string(), json!(s));
             }
             Value::String(_) => return Err("Invalid url".to_string()),
             _ => return Err("Invalid input: expected string, received other".to_string()),
@@ -553,7 +574,9 @@ fn parse_research_search(value: Option<&Value>) -> Result<Value, String> {
         if let Some(value) = obj.get(key) {
             match value {
                 Value::String(s) => {
-                    out.as_object_mut().unwrap().insert(key.to_string(), json!(s));
+                    out.as_object_mut()
+                        .unwrap()
+                        .insert(key.to_string(), json!(s));
                 }
                 _ => return Err("Invalid input: expected string, received other".to_string()),
             }
@@ -620,7 +643,11 @@ pub async fn put_chapter_review_mode(
         return internal_error();
     };
     // TS normalizeChapterReviewMode：仅 "manual" 精确命中，其余归 auto。
-    let next = if parsed.get("mode") == Some(&json!("manual")) { "manual" } else { "auto" };
+    let next = if parsed.get("mode") == Some(&json!("manual")) {
+        "manual"
+    } else {
+        "auto"
+    };
     let root = runtime.state.project_root();
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
@@ -651,10 +678,7 @@ pub async fn get_notify(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     ok_json(json!({ "channels": channels }))
 }
 
-pub async fn put_notify(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn put_notify(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return internal_error();
     };
@@ -681,10 +705,7 @@ pub async fn put_notify(
 
 // ── POST /api/v1/project/language ────────────────────────────────
 
-pub async fn post_language(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn post_language(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     // TS 自带 catch → 500 平铺 error（区别于 onError 形状）。
     let flat_internal = |message: String| {
         (
@@ -706,7 +727,9 @@ pub async fn post_language(
         Some(value) => {
             // 非对象根 → Node strict-mode TypeError → 端点自带 catch → 平铺 500。
             let Some(obj) = raw.as_object_mut() else {
-                return flat_internal("Cannot create property 'language' on a primitive".to_string());
+                return flat_internal(
+                    "Cannot create property 'language' on a primitive".to_string(),
+                );
             };
             obj.insert("language".to_string(), value.clone());
             response["language"] = value;
@@ -752,10 +775,13 @@ mod project_routes_tests {
         body: Option<&str>,
     ) -> (StatusCode, Value) {
         // 经完整路由跑（与真实挂载一致），避免直接调 handler 的提取器差异。
-        let state = crate::server::AppState { version: "test".to_string() };
+        let state = crate::server::AppState {
+            version: "test".to_string(),
+        };
         let hub = Arc::new(BroadcastHub::new());
         let sm = Arc::new(StateManager::new(root.to_path_buf()));
-        let runner: crate::server::WriteNextRunner = Arc::new(|_, _, _, _, _, _| Box::pin(async { Err("unused".to_string()) }));
+        let runner: crate::server::WriteNextRunner =
+            Arc::new(|_, _, _, _, _, _| Box::pin(async { Err("unused".to_string()) }));
         let default = LlmEndpointConfig {
             context_window_tokens: 128_000,
             base_url: "http://127.0.0.1:9".to_string(),
@@ -789,12 +815,21 @@ mod project_routes_tests {
             builder = builder.header("Content-Type", "application/json");
         }
         let request = builder
-            .body(body.map(str::to_string).map(Body::from).unwrap_or_else(Body::empty))
+            .body(
+                body.map(str::to_string)
+                    .map(Body::from)
+                    .unwrap_or_else(Body::empty),
+            )
             .unwrap();
         let response = app.oneshot(request).await.unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     async fn run(root: &std::path::Path) -> (StatusCode, Value) {
@@ -811,7 +846,11 @@ mod project_routes_tests {
         )
         .unwrap();
         let (status, body) = run(dir.path()).await;
-        assert_eq!(status, StatusCode::OK, "无 llm 键应 noop 填充返回 200: {body}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "无 llm 键应 noop 填充返回 200: {body}"
+        );
         assert_eq!(body["model"], "noop-model");
         assert_eq!(body["provider"], "openai");
         assert_eq!(body["baseUrl"], "https://example.invalid/v1");
@@ -861,7 +900,10 @@ mod project_routes_tests {
             msg.starts_with("Failed to load inkos.json: inkos.json not found in "),
             "文案应以 Node 指引开头: {msg}"
         );
-        assert!(msg.contains("Make sure you are inside an InkOS project directory"), "{msg}");
+        assert!(
+            msg.contains("Make sure you are inside an InkOS project directory"),
+            "{msg}"
+        );
     }
 
     /// JSON 非法：Node 文案。
@@ -898,11 +940,31 @@ mod project_routes_tests {
     async fn non_object_root_puts_return_500_not_panic() {
         for (uri, body, expect_flat) in [
             ("/api/v1/project", r#"{ "language": "zh" }"#, true),
-            ("/api/v1/project/detection", r#"{ "detection": null }"#, false),
-            ("/api/v1/project/model-overrides", r#"{ "overrides": {} }"#, false),
-            ("/api/v1/project/default-model", r#"{ "defaultModel": "m" }"#, false),
-            ("/api/v1/project/research-search", r#"{ "researchSearch": {} }"#, false),
-            ("/api/v1/project/chapter-review-mode", r#"{ "mode": "manual" }"#, false),
+            (
+                "/api/v1/project/detection",
+                r#"{ "detection": null }"#,
+                false,
+            ),
+            (
+                "/api/v1/project/model-overrides",
+                r#"{ "overrides": {} }"#,
+                false,
+            ),
+            (
+                "/api/v1/project/default-model",
+                r#"{ "defaultModel": "m" }"#,
+                false,
+            ),
+            (
+                "/api/v1/project/research-search",
+                r#"{ "researchSearch": {} }"#,
+                false,
+            ),
+            (
+                "/api/v1/project/chapter-review-mode",
+                r#"{ "mode": "manual" }"#,
+                false,
+            ),
             ("/api/v1/project/notify", r#"{ "channels": [] }"#, false),
         ] {
             let dir = tempfile::tempdir().unwrap();
@@ -910,7 +972,10 @@ mod project_routes_tests {
             let (status, resp) = run_req(dir.path(), "PUT", uri, Some(body)).await;
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{uri}: {resp}");
             if expect_flat {
-                assert!(resp.get("error").is_some_and(|e| e.is_string()), "{uri}: {resp}");
+                assert!(
+                    resp.get("error").is_some_and(|e| e.is_string()),
+                    "{uri}: {resp}"
+                );
             } else {
                 assert_eq!(resp["error"]["code"], "INTERNAL_ERROR", "{uri}: {resp}");
             }
@@ -952,7 +1017,8 @@ mod project_routes_tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{resp}");
-        let (status, resp) = run_req(dir.path(), "GET", "/api/v1/project/research-search", None).await;
+        let (status, resp) =
+            run_req(dir.path(), "GET", "/api/v1/project/research-search", None).await;
         assert_eq!(status, StatusCode::OK, "{resp}");
         assert_eq!(resp["researchSearch"]["allowPrivateEgress"], true, "{resp}");
         assert_eq!(resp["researchSearch"]["enabled"], true, "{resp}");
@@ -966,8 +1032,12 @@ mod project_routes_tests {
             r#"{"name":"t","version":"0.1.0"}"#,
         )
         .unwrap();
-        let (status, resp) = run_req(dir.path(), "GET", "/api/v1/project/research-search", None).await;
+        let (status, resp) =
+            run_req(dir.path(), "GET", "/api/v1/project/research-search", None).await;
         assert_eq!(status, StatusCode::OK, "{resp}");
-        assert_eq!(resp["researchSearch"]["allowPrivateEgress"], false, "{resp}");
+        assert_eq!(
+            resp["researchSearch"]["allowPrivateEgress"], false,
+            "{resp}"
+        );
     }
 }

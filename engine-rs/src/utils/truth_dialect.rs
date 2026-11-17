@@ -66,9 +66,7 @@ pub fn is_dangerous_truth_value(flat: &str) -> bool {
 /// TS `/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i`。
 fn numeric_shape_re() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"(?i)^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$").unwrap()
-    })
+    RE.get_or_init(|| regex::Regex::new(r"(?i)^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$").unwrap())
 }
 
 /// 双引号包裹 + 反斜杠/双引号转义。入参须已平铺。
@@ -139,10 +137,16 @@ mod tests {
 
     #[test]
     fn quotes_yaml_indicators_and_escapes() {
-        assert_eq!(render_truth_value("他说\"走\"便走"), "\"他说\\\"走\\\"便走\"");
+        assert_eq!(
+            render_truth_value("他说\"走\"便走"),
+            "\"他说\\\"走\\\"便走\""
+        );
         assert_eq!(render_truth_value("@某人"), "\"@某人\"");
         assert_eq!(render_truth_value("42"), "\"42\"");
-        assert_eq!(render_truth_value("2026-09-12T00:00:00.000Z"), "2026-09-12T00:00:00.000Z");
+        assert_eq!(
+            render_truth_value("2026-09-12T00:00:00.000Z"),
+            "2026-09-12T00:00:00.000Z"
+        );
         assert_eq!(render_truth_value("第一行\n第二行"), "第一行 第二行");
     }
 

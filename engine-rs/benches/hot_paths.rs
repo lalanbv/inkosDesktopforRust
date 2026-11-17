@@ -12,8 +12,8 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use inkos_engine::agents::sensitive_words::analyze_sensitive_words;
-use inkos_engine::utils::language::WritingLanguage;
 use inkos_engine::server::sse::BroadcastHub;
+use inkos_engine::utils::language::WritingLanguage;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -22,8 +22,9 @@ fn chapter_content() -> String {
     let paragraph = "林动盘膝而坐，经脉中的灵气如溪流般缓缓运转，丹田处的元气旋涡愈发凝实。\
                      窗外暮色四合，远山如黛，演武场上隐约传来同门的喝声。\
                      他想起白日里长老的一番话，心中警兆顿生——宗门暗流涌动，怕是要变天了。\
-                     罢了，兵来将挡水来土掩，且先将这周天运转圆满再说。".repeat(6);
-    format!("第41章 风起于青萍之末\n\n{paragraph}\n\n他提到了文革和台独的旧事。", )
+                     罢了，兵来将挡水来土掩，且先将这周天运转圆满再说。"
+        .repeat(6);
+    format!("第41章 风起于青萍之末\n\n{paragraph}\n\n他提到了文革和台独的旧事。",)
 }
 
 /// 50 个自定义敏感词（studio 配置面典型规模；2 个真实命中）。
@@ -75,9 +76,9 @@ fn bench_sse_broadcast(c: &mut Criterion) {
         let mut drainers = Vec::new();
         for _ in 0..subscribers {
             let mut rx = hub.subscribe();
-            drainers.push(tokio::spawn(async move {
-                while rx.recv().await.is_ok() {}
-            }));
+            drainers.push(tokio::spawn(
+                async move { while rx.recv().await.is_ok() {} },
+            ));
         }
         group.bench_with_input(
             BenchmarkId::new("dispatch", subscribers),
@@ -290,29 +291,34 @@ fn bench_story_markdown_render(c: &mut Criterion) {
     let proj_hooks: inkos_engine::models::runtime_state::HooksState =
         serde_json::from_value(proj_hooks_val).expect("hooks state seed");
     let summary_rows: Vec<inkos_engine::models::runtime_state::ChapterSummaryRow> = (1..=100)
-        .map(|i| serde_json::from_value(json!({
-            "chapter": i,
-            "title": format!("第{i}章 风起"),
-            "characters": "林动，苏檀",
-            "events": format!("第{i}场冲突与推进"),
-            "stateChanges": "修为精进",
-            "hookActivity": format!("H{:02} 推进", i % 20),
-            "mood": "紧张",
-            "chapterType": "冲突",
-        })).expect("summary row seed"))
+        .map(|i| {
+            serde_json::from_value(json!({
+                "chapter": i,
+                "title": format!("第{i}章 风起"),
+                "characters": "林动，苏檀",
+                "events": format!("第{i}场冲突与推进"),
+                "stateChanges": "修为精进",
+                "hookActivity": format!("H{:02} 推进", i % 20),
+                "mood": "紧张",
+                "chapterType": "冲突",
+            }))
+            .expect("summary row seed")
+        })
         .collect();
-    let summaries_state = inkos_engine::models::runtime_state::ChapterSummariesState {
-        rows: summary_rows,
-    };
+    let summaries_state =
+        inkos_engine::models::runtime_state::ChapterSummariesState { rows: summary_rows };
     let facts: Vec<inkos_engine::models::runtime_state::CurrentStateFact> = (1..=100)
-        .map(|i| serde_json::from_value(json!({
-            "subject": format!("实体{i}"),
-            "predicate": "持有",
-            "object": format!("信物{i}"),
-            "validFromChapter": i,
-            "validUntilChapter": null,
-            "sourceChapter": i,
-        })).expect("fact seed"))
+        .map(|i| {
+            serde_json::from_value(json!({
+                "subject": format!("实体{i}"),
+                "predicate": "持有",
+                "object": format!("信物{i}"),
+                "validFromChapter": i,
+                "validUntilChapter": null,
+                "sourceChapter": i,
+            }))
+            .expect("fact seed")
+        })
         .collect();
     let current_state = inkos_engine::models::runtime_state::CurrentStateState {
         chapter: 100,
@@ -323,10 +329,7 @@ fn bench_story_markdown_render(c: &mut Criterion) {
     group.sample_size(30);
     group.bench_function("render_hook_snapshot_100", |b| {
         b.iter(|| {
-            inkos_engine::utils::story_markdown::render_hook_snapshot(
-                &hooks,
-                WritingLanguage::Zh,
-            )
+            inkos_engine::utils::story_markdown::render_hook_snapshot(&hooks, WritingLanguage::Zh)
         })
     });
     // 719 号分段定位：settle 结算链全貌（resolve→normalize→infer 推导与渲染
@@ -334,17 +337,29 @@ fn bench_story_markdown_render(c: &mut Criterion) {
     group.bench_function("resolve_timing_x100", |b| {
         b.iter(|| {
             for hook in std::iter::once(&hooks[0]).cycle().take(100) {
-                std::hint::black_box(inkos_engine::utils::hook_lifecycle::resolve_hook_payoff_timing(
-                    hook.payoff_timing.as_ref().map(|t| match t {
-                        inkos_engine::models::runtime_state::HookPayoffTiming::Immediate => "immediate",
-                        inkos_engine::models::runtime_state::HookPayoffTiming::NearTerm => "near-term",
-                        inkos_engine::models::runtime_state::HookPayoffTiming::MidArc => "mid-arc",
-                        inkos_engine::models::runtime_state::HookPayoffTiming::SlowBurn => "slow-burn",
-                        inkos_engine::models::runtime_state::HookPayoffTiming::Endgame => "endgame",
-                    }),
-                    Some(&hook.expected_payoff),
-                    Some(&hook.notes),
-                ));
+                std::hint::black_box(
+                    inkos_engine::utils::hook_lifecycle::resolve_hook_payoff_timing(
+                        hook.payoff_timing.as_ref().map(|t| match t {
+                            inkos_engine::models::runtime_state::HookPayoffTiming::Immediate => {
+                                "immediate"
+                            }
+                            inkos_engine::models::runtime_state::HookPayoffTiming::NearTerm => {
+                                "near-term"
+                            }
+                            inkos_engine::models::runtime_state::HookPayoffTiming::MidArc => {
+                                "mid-arc"
+                            }
+                            inkos_engine::models::runtime_state::HookPayoffTiming::SlowBurn => {
+                                "slow-burn"
+                            }
+                            inkos_engine::models::runtime_state::HookPayoffTiming::Endgame => {
+                                "endgame"
+                            }
+                        }),
+                        Some(&hook.expected_payoff),
+                        Some(&hook.notes),
+                    ),
+                );
             }
         })
     });
@@ -397,7 +412,9 @@ fn bench_export_artifact(c: &mut Criterion) {
     for i in 1..=12 {
         let title = format!("第{i}章 风起于青萍之末");
         std::fs::write(
-            source_dir.join("chapters").join(format!("{:04}_{}.md", i, title)),
+            source_dir
+                .join("chapters")
+                .join(format!("{:04}_{}.md", i, title)),
             format!("# {}\n\n{}\n", title, body),
         )
         .expect("chapter file");
@@ -423,7 +440,9 @@ fn bench_export_artifact(c: &mut Criterion) {
                     inkos_engine::interaction::export_artifact::build_export_artifact(
                         &state,
                         "b1",
-                        inkos_engine::interaction::export_artifact::ExportFormat::parse(Some("epub")),
+                        inkos_engine::interaction::export_artifact::ExportFormat::parse(Some(
+                            "epub",
+                        )),
                         false,
                         None,
                     )
@@ -449,13 +468,16 @@ fn bench_backup_export(c: &mut Criterion) {
         r#"{"id":"b1","title":"镜花缘","platform":"qidian","genre":"xuanhuan","status":"active","targetChapters":12,"chapterWordCount":3000,"language":"zh","createdAt":"2026-10-16T00:00:00.000Z","updatedAt":"2026-10-16T00:00:00.000Z"}"#,
     )
     .expect("book.json");
-    let paragraph = "坊市的喧嚣在身后渐渐远去，山道上的风带着初秋的凉意，祖符玉佩在他掌心微微发烫。";
+    let paragraph =
+        "坊市的喧嚣在身后渐渐远去，山道上的风带着初秋的凉意，祖符玉佩在他掌心微微发烫。";
     let body: String = (0..24).map(|_| paragraph).collect::<Vec<_>>().join("\n\n");
     let mut index_rows = Vec::new();
     for i in 1..=12 {
         let title = format!("第{i}章 山道");
         std::fs::write(
-            book_dir.join("chapters").join(format!("{:04}_{}.md", i, title)),
+            book_dir
+                .join("chapters")
+                .join(format!("{:04}_{}.md", i, title)),
             format!("# {}\n\n{}\n", title, body),
         )
         .expect("chapter");
@@ -465,7 +487,11 @@ fn bench_backup_export(c: &mut Criterion) {
             "observations": [], "provenance": "generated",
         }));
     }
-    std::fs::write(book_dir.join("chapters").join("index.json"), serde_json::to_string(&index_rows).expect("index")).expect("write");
+    std::fs::write(
+        book_dir.join("chapters").join("index.json"),
+        serde_json::to_string(&index_rows).expect("index"),
+    )
+    .expect("write");
     std::fs::write(
         root.join("inkos.json"),
         r#"{"name":"probe","version":"0.1.0","language":"zh"}"#,
@@ -532,7 +558,9 @@ fn bench_read_chain(c: &mut Criterion) {
     for i in 1..=12 {
         let title = format!("第{i}章 风起于青萍之末");
         std::fs::write(
-            book_dir.join("chapters").join(format!("{:04}_{}.md", i, title)),
+            book_dir
+                .join("chapters")
+                .join(format!("{:04}_{}.md", i, title)),
             format!("# {title}\n\n{body}\n"),
         )
         .expect("chapter file");
@@ -547,9 +575,16 @@ fn bench_read_chain(c: &mut Criterion) {
         serde_json::to_string(&index_rows).expect("index"),
     )
     .expect("index.json");
-    std::fs::write(book_dir.join("story").join("brief.md"), "# 简介\n\n试炼之路。\n").expect("truth");
     std::fs::write(
-        book_dir.join("story").join("outline").join("story_frame.md"),
+        book_dir.join("story").join("brief.md"),
+        "# 简介\n\n试炼之路。\n",
+    )
+    .expect("truth");
+    std::fs::write(
+        book_dir
+            .join("story")
+            .join("outline")
+            .join("story_frame.md"),
         "# 故事框架\n\n三幕。\n",
     )
     .expect("outline");
@@ -579,11 +614,10 @@ fn bench_read_chain(c: &mut Criterion) {
         },
         Default::default(),
     ));
-    let runner: inkos_engine::server::write_next_route::WriteNextRunner = Arc::new(
-        |_state, _book, _target, _quality, _abort, _mode| {
+    let runner: inkos_engine::server::write_next_route::WriteNextRunner =
+        Arc::new(|_state, _book, _target, _quality, _abort, _mode| {
             Box::pin(async { Err("read-chain bench 不触写链".to_string()) }) as WriteNextFuture
-        },
-    );
+        });
     let books = inkos_engine::server::books_routes::BooksRuntime {
         hub: hub.clone(),
         state: state.clone(),
@@ -604,7 +638,9 @@ fn bench_read_chain(c: &mut Criterion) {
         project_root: root.clone(),
     };
     let app = inkos_engine::server::router_books(
-        inkos_engine::server::AppState { version: "bench".into() },
+        inkos_engine::server::AppState {
+            version: "bench".into(),
+        },
         hub,
         write_next,
         audit,
@@ -627,9 +663,7 @@ fn bench_read_chain(c: &mut Criterion) {
             .uri(*path)
             .body(axum::body::Body::empty())
             .expect("request");
-        let response = rt
-            .block_on(app.clone().oneshot(request))
-            .expect("oneshot");
+        let response = rt.block_on(app.clone().oneshot(request)).expect("oneshot");
         assert_eq!(
             response.status(),
             axum::http::StatusCode::OK,

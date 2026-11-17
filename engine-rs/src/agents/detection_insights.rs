@@ -28,13 +28,22 @@ pub fn analyze_detection_insights(history: &[DetectionHistoryEntry]) -> Detectio
         };
     }
 
-    let total_detections = history.iter().filter(|h| h.action == DetectionAction::Detect).count() as u32;
-    let total_rewrites = history.iter().filter(|h| h.action == DetectionAction::Rewrite).count() as u32;
+    let total_detections = history
+        .iter()
+        .filter(|h| h.action == DetectionAction::Detect)
+        .count() as u32;
+    let total_rewrites = history
+        .iter()
+        .filter(|h| h.action == DetectionAction::Rewrite)
+        .count() as u32;
 
     // 按章节分组（BTreeMap 自动按键升序，稳定输出）。
     let mut chapter_map: BTreeMap<u32, Vec<&DetectionHistoryEntry>> = BTreeMap::new();
     for entry in history {
-        chapter_map.entry(entry.chapter_number).or_default().push(entry);
+        chapter_map
+            .entry(entry.chapter_number)
+            .or_default()
+            .push(entry);
     }
 
     let mut chapter_breakdown: Vec<ChapterDetectionBreakdown> = Vec::new();
@@ -46,7 +55,10 @@ pub fn analyze_detection_insights(history: &[DetectionHistoryEntry]) -> Detectio
         sorted.sort_by_key(|e| e.attempt);
         let original_score = sorted.first().map(|e| e.score).unwrap_or(0.0);
         let final_score = sorted.last().map(|e| e.score).unwrap_or(original_score);
-        let rewrite_attempts = entries.iter().filter(|e| e.action == DetectionAction::Rewrite).count() as u32;
+        let rewrite_attempts = entries
+            .iter()
+            .filter(|e| e.action == DetectionAction::Rewrite)
+            .count() as u32;
         chapter_breakdown.push(ChapterDetectionBreakdown {
             chapter_number: *chapter_number,
             original_score,
@@ -58,9 +70,20 @@ pub fn analyze_detection_insights(history: &[DetectionHistoryEntry]) -> Detectio
     }
 
     let chapter_count = chapter_breakdown.len();
-    let avg_original = if chapter_count > 0 { total_original / chapter_count as f64 } else { 0.0 };
-    let avg_final = if chapter_count > 0 { total_final / chapter_count as f64 } else { 0.0 };
-    let passed = chapter_breakdown.iter().filter(|c| c.final_score <= c.original_score).count();
+    let avg_original = if chapter_count > 0 {
+        total_original / chapter_count as f64
+    } else {
+        0.0
+    };
+    let avg_final = if chapter_count > 0 {
+        total_final / chapter_count as f64
+    } else {
+        0.0
+    };
+    let passed = chapter_breakdown
+        .iter()
+        .filter(|c| c.final_score <= c.original_score)
+        .count();
     let pass_rate = if chapter_count > 0 {
         (passed as f64 / chapter_count as f64 * 100.0).round() / 100.0
     } else {
@@ -87,7 +110,12 @@ fn round3(x: f64) -> f64 {
 mod tests {
     use super::*;
 
-    fn entry(chapter: u32, attempt: u32, score: f64, action: DetectionAction) -> DetectionHistoryEntry {
+    fn entry(
+        chapter: u32,
+        attempt: u32,
+        score: f64,
+        action: DetectionAction,
+    ) -> DetectionHistoryEntry {
         DetectionHistoryEntry {
             chapter_number: chapter,
             attempt,

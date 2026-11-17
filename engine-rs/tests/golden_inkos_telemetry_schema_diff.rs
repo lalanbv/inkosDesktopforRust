@@ -101,7 +101,12 @@ fn telemetry_schema_matches_shared_golden() {
         .collect();
     assert_eq!(
         operation_values,
-        ["stream", "fetch_deferred", "cancel_deferred", "generate_images"],
+        [
+            "stream",
+            "fetch_deferred",
+            "cancel_deferred",
+            "generate_images"
+        ],
         "pi.ai.operation 枚举漂移"
     );
 

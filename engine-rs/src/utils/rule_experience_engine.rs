@@ -124,7 +124,10 @@ pub fn validate_anti_ai_rule(raw: &Value) -> RuleValidateResult {
             errors: vec!["message: required, 1-200 chars".to_string()],
         };
     }
-    RuleValidateResult { rule: Some(rule), errors: Vec::new() }
+    RuleValidateResult {
+        rule: Some(rule),
+        errors: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -155,7 +158,9 @@ pub fn scan_anti_ai_rules(text: &str, rules: &[AntiAiRule]) -> Vec<AntiAiHit> {
             continue;
         }
         if rule.is_regex {
-            let Ok(re) = regex::Regex::new(&rule.pattern) else { continue };
+            let Ok(re) = regex::Regex::new(&rule.pattern) else {
+                continue;
+            };
             let matches: Vec<regex::Captures> = re.captures_iter(text).collect();
             if matches.is_empty() {
                 continue;
@@ -198,7 +203,9 @@ pub fn scan_anti_ai_rules(text: &str, rules: &[AntiAiRule]) -> Vec<AntiAiHit> {
                 }
                 from = index + pattern_chars.max(1);
             }
-            let Some(first_char) = first_index else { continue };
+            let Some(first_char) = first_index else {
+                continue;
+            };
             let excerpt_start = first_char.saturating_sub(EXCERPT_WINDOW);
             let excerpt_end = (first_char + pattern_chars + EXCERPT_WINDOW).min(char_len);
             let excerpt: String = text
@@ -251,13 +258,11 @@ pub fn render_anti_ai_fix_guidance(
     }
     let is_en = language == GuidanceLanguage::En;
     let mut parts: Vec<String> = Vec::new();
-    parts.push(
-        if is_en {
-            "## Anti-AI violations (fix before delivery)".to_string()
-        } else {
-            "## 反AI规则命中（交付前修复）".to_string()
-        },
-    );
+    parts.push(if is_en {
+        "## Anti-AI violations (fix before delivery)".to_string()
+    } else {
+        "## 反AI规则命中（交付前修复）".to_string()
+    });
     for hit in hits {
         parts.push(format!(
             "- [{}] {}（×{}）",
@@ -268,10 +273,18 @@ pub fn render_anti_ai_fix_guidance(
     }
     let replacements: Vec<String> = hits
         .iter()
-        .filter_map(|hit| hit.replacement.as_ref().map(|value| format!("- {} → {}", hit.rule_id, value)))
+        .filter_map(|hit| {
+            hit.replacement
+                .as_ref()
+                .map(|value| format!("- {} → {}", hit.rule_id, value))
+        })
         .collect();
     if !replacements.is_empty() {
-        parts.push(if is_en { "Suggested rewrites:".to_string() } else { "建议改法：".to_string() });
+        parts.push(if is_en {
+            "Suggested rewrites:".to_string()
+        } else {
+            "建议改法：".to_string()
+        });
         parts.extend(replacements);
     }
     Some(parts.join("\n"))
@@ -327,7 +340,12 @@ pub fn compose_anti_ai_guidance(
                     }
                 })
                 .unwrap_or_default();
-            format!("- [{}] {}{}", rule.severity.severity_str(), rule.message, replacement)
+            format!(
+                "- [{}] {}{}",
+                rule.severity.severity_str(),
+                rule.message,
+                replacement
+            )
         })
         .collect();
     let mut parts = vec![header.to_string()];
@@ -416,7 +434,10 @@ pub fn render_experience_guidance(
     } else {
         "## 本书验证有效的手法（经验记忆——复用）"
     };
-    let lines: Vec<String> = selected.iter().map(|entry| format!("- {}", entry.text)).collect();
+    let lines: Vec<String> = selected
+        .iter()
+        .map(|entry| format!("- {}", entry.text))
+        .collect();
     let mut parts = vec![header.to_string()];
     parts.extend(lines);
     let text = parts.join("\n");

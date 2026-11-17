@@ -5,9 +5,7 @@
 
 use serde_json::Value;
 
-const VECTORS: &str = include_str!(
-    "../../packages/core/src/__tests__/golden/run-log-vectors.json"
-);
+const VECTORS: &str = include_str!("../../packages/core/src/__tests__/golden/run-log-vectors.json");
 
 #[test]
 fn input_shape_matches_expected_hierarchy() {

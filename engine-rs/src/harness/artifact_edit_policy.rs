@@ -65,7 +65,8 @@ pub fn artifact_domain_owner(
     {
         return Some("longform");
     }
-    if has("interactive-world") && (path == "source/world.json" || path.starts_with("source/runs/")) {
+    if has("interactive-world") && (path == "source/world.json" || path.starts_with("source/runs/"))
+    {
         return Some("interactive-world");
     }
     if profile.artifact_schemas.get(path).and_then(|v| v.as_str()) == Some("story-graph") {

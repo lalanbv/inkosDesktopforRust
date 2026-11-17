@@ -43,13 +43,20 @@ pub fn append_log_event_checked(
         "tag": tag,
         "message": message,
     });
-    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
     writeln!(file, "{entry}")
 }
 
 /// 截头轮转：超 `max_bytes` 时按行边界保留尾部 `keep_bytes`，temp+rename
 /// 原子替换（参数化上限供测试注入小值）。
-fn rotate_if_oversized(path: &std::path::Path, max_bytes: u64, keep_bytes: usize) -> std::io::Result<()> {
+fn rotate_if_oversized(
+    path: &std::path::Path,
+    max_bytes: u64,
+    keep_bytes: usize,
+) -> std::io::Result<()> {
     let Ok(meta) = std::fs::metadata(path) else {
         return Ok(());
     };
@@ -99,7 +106,10 @@ mod tests {
         assert!(!after.contains("line-0\""));
         assert!(after.contains("line-39"));
         for line in after.trim().split('\n') {
-            assert!(serde_json::from_str::<serde_json::Value>(line).is_ok(), "行边界保持完整：{line}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "行边界保持完整：{line}"
+            );
         }
         // 未超限时不动文件。
         rotate_if_oversized(&path, 512, 256).unwrap();
@@ -111,7 +121,8 @@ mod tests {
     fn appends_json_lines_parsable_by_get_logs() {
         let dir = tempfile::tempdir().unwrap();
         append_log_event_checked(dir.path(), "warn", "write-next", "已完成 1/2 章并落盘").unwrap();
-        append_log_event_checked(dir.path(), "error", "write-next", "第 3 章失败：HTTP 429").unwrap();
+        append_log_event_checked(dir.path(), "error", "write-next", "第 3 章失败：HTTP 429")
+            .unwrap();
         let content = std::fs::read_to_string(dir.path().join("inkos.log")).unwrap();
         let lines: Vec<&str> = content.trim().split('\n').collect();
         assert_eq!(lines.len(), 2);

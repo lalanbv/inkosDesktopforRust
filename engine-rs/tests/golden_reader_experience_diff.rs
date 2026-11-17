@@ -6,11 +6,11 @@
 //! 审稿维度 40 激活、planner 提示词合同面、writer 备忘对齐合同面。
 
 use inkos_engine::agents::continuity::build_dimension_list;
-use inkos_engine::models::book::FanficMode;
 use inkos_engine::agents::planner_prompts::{
     PLANNER_MEMO_SYSTEM_PROMPT, PLANNER_MEMO_SYSTEM_PROMPT_EN,
 };
 use inkos_engine::agents::writer_prompts::build_chapter_memo_contract;
+use inkos_engine::models::book::FanficMode;
 use inkos_engine::models::genre_profile::GenreProfile;
 use inkos_engine::models::input_governance::ChapterMemo;
 use inkos_engine::utils::chapter_memo_parser::parse_memo;
@@ -29,7 +29,8 @@ fn parse_matches_shared_vectors() {
         let got = parse_memo(input, 12, false).expect("memo should parse");
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            expected, vector["expected"],
+            expected,
+            vector["expected"],
             "parse vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -40,8 +41,7 @@ fn parse_matches_shared_vectors() {
 fn narrative_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     for vector in vectors["narrative"].as_array().expect("narrative array") {
-        let memo: ChapterMemo =
-            serde_json::from_value(vector["memo"].clone()).expect("memo shape");
+        let memo: ChapterMemo = serde_json::from_value(vector["memo"].clone()).expect("memo shape");
         let language = match vector["language"].as_str().unwrap() {
             "en" => WritingLanguage::En,
             _ => WritingLanguage::Zh,
@@ -95,7 +95,8 @@ fn dimensions_match_shared_vectors() {
             .map(|v| v.as_u64().unwrap() as u32)
             .collect();
         assert_eq!(
-            got, expected,
+            got,
+            expected,
             "dimensions vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

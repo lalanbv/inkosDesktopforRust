@@ -42,7 +42,8 @@ fn decision_table_matches_shared_vectors() {
         );
         let expected_resume = case.expected["resumeFrom"].as_i64();
         assert_eq!(
-            got.resume_from, expected_resume,
+            got.resume_from,
+            expected_resume,
             "advice vector '{}' resumeFrom drifted",
             vector["name"].as_str().unwrap()
         );

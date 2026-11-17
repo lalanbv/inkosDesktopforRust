@@ -67,11 +67,10 @@ impl ProjectDetector {
         }
 
         // 解析 package.json 获取项目名称
-        let content = fs::read_to_string(&package_json)
-            .context("Failed to read package.json")?;
+        let content = fs::read_to_string(&package_json).context("Failed to read package.json")?;
 
-        let json: serde_json::Value = serde_json::from_str(&content)
-            .context("Failed to parse package.json")?;
+        let json: serde_json::Value =
+            serde_json::from_str(&content).context("Failed to parse package.json")?;
 
         let name = if let Some(name_str) = json.get("name").and_then(|v| v.as_str()) {
             name_str.to_string()
@@ -87,8 +86,8 @@ impl ProjectDetector {
         // 优先 pyproject.toml
         let pyproject = path.join("pyproject.toml");
         if pyproject.exists() {
-            let content = fs::read_to_string(&pyproject)
-                .context("Failed to read pyproject.toml")?;
+            let content =
+                fs::read_to_string(&pyproject).context("Failed to read pyproject.toml")?;
 
             // 简单解析 TOML（避免引入 toml crate，手动提取 name）
             if let Some(name) = Self::extract_toml_name(&content, "project.name") {
@@ -118,8 +117,7 @@ impl ProjectDetector {
             return Ok(None);
         }
 
-        let content = fs::read_to_string(&cargo_toml)
-            .context("Failed to read Cargo.toml")?;
+        let content = fs::read_to_string(&cargo_toml).context("Failed to read Cargo.toml")?;
 
         // 提取 [package] name
         let name = Self::extract_toml_name(&content, "package.name")
@@ -135,8 +133,7 @@ impl ProjectDetector {
             return Ok(None);
         }
 
-        let content = fs::read_to_string(&go_mod)
-            .context("Failed to read go.mod")?;
+        let content = fs::read_to_string(&go_mod).context("Failed to read go.mod")?;
 
         // 提取 module 名称（第一行 "module xxx"）
         let name = content
@@ -145,7 +142,11 @@ impl ProjectDetector {
             .and_then(|line| line.strip_prefix("module "))
             .map(|module_path| {
                 // 提取最后一段作为项目名（例如 github.com/user/repo → repo）
-                module_path.split('/').next_back().unwrap_or(module_path).to_string()
+                module_path
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(module_path)
+                    .to_string()
             })
             .unwrap_or_else(|| Self::extract_dir_name(path));
 
@@ -157,8 +158,7 @@ impl ProjectDetector {
         // Maven
         let pom_xml = path.join("pom.xml");
         if pom_xml.exists() {
-            let content = fs::read_to_string(&pom_xml)
-                .context("Failed to read pom.xml")?;
+            let content = fs::read_to_string(&pom_xml).context("Failed to read pom.xml")?;
 
             // 简单提取 <artifactId>
             let name = Self::extract_xml_tag(&content, "artifactId")

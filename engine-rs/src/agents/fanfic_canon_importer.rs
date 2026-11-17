@@ -16,7 +16,11 @@ const SOURCE_CHUNK_CHARS: usize = 50_000;
 /// 导入器 chat 端口。
 #[async_trait::async_trait]
 pub trait FanficCanonImporterChat: Send + Sync {
-    async fn chat(&self, messages: Vec<LLMMessage>, temperature: f64) -> Result<ChatOutcome, String>;
+    async fn chat(
+        &self,
+        messages: Vec<LLMMessage>,
+        temperature: f64,
+    ) -> Result<ChatOutcome, String>;
 }
 
 /// 导入产出。对齐 TS `FanficCanonOutput`。
@@ -61,11 +65,17 @@ pub async fn import_from_text(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
                 LLMMessage {
                     role: LLMRole::User,
                     content: format!("以下是原作《{source_name}》的素材：\n\n{}", source.text),
-                    tool_calls: None, tool_call_id: None,
+                    tool_calls: None,
+                    tool_call_id: None,
                 },
             ],
             0.3,
@@ -97,19 +107,39 @@ pub async fn import_from_text(
         format!("# 同人正典（《{source_name}》）"),
         String::new(),
         "## 世界规则".to_string(),
-        if world_rules.is_empty() { "（素材中未提取到明确世界规则）".to_string() } else { world_rules.clone() },
+        if world_rules.is_empty() {
+            "（素材中未提取到明确世界规则）".to_string()
+        } else {
+            world_rules.clone()
+        },
         String::new(),
         "## 角色档案".to_string(),
-        if character_profiles.is_empty() { "（素材中未提取到角色信息）".to_string() } else { character_profiles.clone() },
+        if character_profiles.is_empty() {
+            "（素材中未提取到角色信息）".to_string()
+        } else {
+            character_profiles.clone()
+        },
         String::new(),
         "## 关键事件时间线".to_string(),
-        if key_events.is_empty() { "（素材中未提取到关键事件）".to_string() } else { key_events.clone() },
+        if key_events.is_empty() {
+            "（素材中未提取到关键事件）".to_string()
+        } else {
+            key_events.clone()
+        },
         String::new(),
         "## 力量体系".to_string(),
-        if power_system.is_empty() { "（原作无明确力量体系）".to_string() } else { power_system.clone() },
+        if power_system.is_empty() {
+            "（原作无明确力量体系）".to_string()
+        } else {
+            power_system.clone()
+        },
         String::new(),
         "## 原作写作风格".to_string(),
-        if writing_style.is_empty() { "（素材不足以提取风格特征）".to_string() } else { writing_style.clone() },
+        if writing_style.is_empty() {
+            "（素材不足以提取风格特征）".to_string()
+        } else {
+            writing_style.clone()
+        },
         String::new(),
         meta,
     ]
@@ -155,7 +185,10 @@ async fn prepare_source_text(
     source_name: &str,
 ) -> Result<PreparedSource, String> {
     if source_text.encode_utf16().count() <= SOURCE_CHUNK_CHARS {
-        return Ok(PreparedSource { text: source_text.to_string(), compiled: false });
+        return Ok(PreparedSource {
+            text: source_text.to_string(),
+            compiled: false,
+        });
     }
     let chunks = split_into_chunks(source_text, SOURCE_CHUNK_CHARS);
     let total = chunks.len();
@@ -195,7 +228,10 @@ async fn prepare_source_text(
         text.push('\n');
         text.push_str(&note);
     }
-    Ok(PreparedSource { text, compiled: true })
+    Ok(PreparedSource {
+        text,
+        compiled: true,
+    })
 }
 
 /// UTF-16 码元分块（TS slice 语义）。

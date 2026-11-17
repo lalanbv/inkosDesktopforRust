@@ -8,9 +8,7 @@
 
 use std::path::Path;
 
-use crate::agents::chapter_analyzer::{
-    analyze_chapter, ChapterAnalyzerChat, ChapterAnalyzerCtx,
-};
+use crate::agents::chapter_analyzer::{analyze_chapter, ChapterAnalyzerChat, ChapterAnalyzerCtx};
 use crate::agents::writer::WriteChapterOutput;
 use crate::models::book::BookConfig;
 use crate::models::input_governance::{ContextPackage, RuleStack};
@@ -113,7 +111,8 @@ mod tests {
             _temperature: f64,
         ) -> Result<ChatOutcome, String> {
             self.user_prompts
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push(messages[1].content.clone());
             Ok(ChatOutcome {
                 content: self.response.clone(),
@@ -181,7 +180,10 @@ mod tests {
     #[tokio::test]
     async fn unchanged_content_returns_writer_output_untouched() {
         let dir = tempfile::tempdir().unwrap();
-        let chat = MockChat { response: String::new(), user_prompts: Mutex::new(Vec::new()) };
+        let chat = MockChat {
+            response: String::new(),
+            user_prompts: Mutex::new(Vec::new()),
+        };
         let ctx = ChapterAnalyzerCtx {
             project_root: dir.path(),
             builtin_genres_dir: dir.path(),
@@ -210,7 +212,11 @@ mod tests {
         assert_eq!(result.title, output.title);
         assert_eq!(result.updated_state, output.updated_state);
         assert_eq!(result.word_count, output.word_count);
-        assert!(chat.user_prompts.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
+        assert!(chat
+            .user_prompts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
     }
 
     #[tokio::test]
@@ -266,7 +272,11 @@ mod tests {
         assert_eq!(result.hook_health_issues.len(), 1);
         assert_eq!(result.token_usage.total_tokens, 30);
         // user prompt 含修订后正文。
-        assert!(chat.user_prompts.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].contains("修订后的新正文。"));
+        assert!(chat
+            .user_prompts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())[0]
+            .contains("修订后的新正文。"));
     }
 
     #[tokio::test]

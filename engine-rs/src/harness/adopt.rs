@@ -21,10 +21,14 @@ use super::action_error::ActionError;
 use super::artifact_edit_policy::assert_generic_artifact_editable;
 use super::artifact_reader::read_artifact_revision_bytes;
 use super::artifact_validation::validated_artifact_writes;
-use super::contracts::{CreativeEpisode, EpisodeStatus, HARNESS_VERSION, WorkManifest, WorkProfile};
+use super::contracts::{
+    CreativeEpisode, EpisodeStatus, WorkManifest, WorkProfile, HARNESS_VERSION,
+};
 use super::episode_store::CreativeEpisodeStore;
 use super::profile_registry::create_built_in_work_profile_registry;
-use super::source_sync::{hex_sha256, sync_work_source_artifacts, SyncEvidence, SyncWorkSourceInput};
+use super::source_sync::{
+    hex_sha256, sync_work_source_artifacts, SyncEvidence, SyncWorkSourceInput,
+};
 use super::work_store::{load_work_manifest, work_directory};
 use crate::utils::atomic_file_set::{AtomicFileWrite, FileContent};
 
@@ -46,7 +50,9 @@ static WORK_MUTATION_LOCKS: std::sync::Mutex<Option<HashMap<String, Arc<Mutex<()
 /// 本地 Arc，二者同作用域存活）。
 pub(crate) fn acquire_work_mutation_lock(project_root: &Path, work_id: &str) -> Arc<Mutex<()>> {
     let key = format!("{}\0{work_id}", project_root.display());
-    let mut guards = WORK_MUTATION_LOCKS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guards = WORK_MUTATION_LOCKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     guards
         .get_or_insert_with(HashMap::new)
         .entry(key)
@@ -112,21 +118,36 @@ async fn execute_adopt_tool(
         .require(&work.profile_id)
         .map_err(|error| ActionError::plain(error.to_string()))?;
     let artifact = work.artifacts.iter().find(|item| item.id == artifact_id);
-    let revision = artifact
-        .and_then(|item| item.revisions.iter().find(|candidate| candidate.id == revision_id));
+    let revision = artifact.and_then(|item| {
+        item.revisions
+            .iter()
+            .find(|candidate| candidate.id == revision_id)
+    });
     let (Some(artifact), Some(revision)) = (artifact, revision) else {
-        return Err(ActionError::coded("Unknown artifact revision", "ARTIFACT_NOT_FOUND"));
+        return Err(ActionError::coded(
+            "Unknown artifact revision",
+            "ARTIFACT_NOT_FOUND",
+        ));
     };
     assert_generic_artifact_editable(&work, &revision.path, profile)?;
     if artifact.current_revision_id.as_deref() != expected_current_revision_id {
-        return Err(ActionError::coded("Current revision changed", "ARTIFACT_REVISION_CONFLICT"));
+        return Err(ActionError::coded(
+            "Current revision changed",
+            "ARTIFACT_REVISION_CONFLICT",
+        ));
     }
     if !revision.path.starts_with("source/") {
-        return Err(ActionError::coded("Use this domain's revision action", "ARTIFACT_DERIVED"));
+        return Err(ActionError::coded(
+            "Use this domain's revision action",
+            "ARTIFACT_DERIVED",
+        ));
     }
     let work_root = work_directory(project_root, work_id)
         .map_err(|error| ActionError::plain(error.to_string()))?;
-    let snapshot_file = revision.snapshot_path.clone().unwrap_or_else(|| revision.path.clone());
+    let snapshot_file = revision
+        .snapshot_path
+        .clone()
+        .unwrap_or_else(|| revision.path.clone());
     let bytes = tokio::fs::read(work_root.join(&snapshot_file))
         .await
         .map_err(|error| ActionError::plain(error.to_string()))?;
@@ -138,32 +159,37 @@ async fn execute_adopt_tool(
     }
     let current_bytes: Option<Vec<u8>> = match &artifact.current_revision_id {
         Some(current_revision_id) => Some(
-            read_artifact_revision_bytes(project_root, work_id, artifact_id, Some(current_revision_id))
-                .await
-                .map_err(|error| ActionError::plain(error.to_string()))?,
+            read_artifact_revision_bytes(
+                project_root,
+                work_id,
+                artifact_id,
+                Some(current_revision_id),
+            )
+            .await
+            .map_err(|error| ActionError::plain(error.to_string()))?,
         ),
         None => None,
     };
     // TS bytes.toString("utf8") 是有损解码——lossy 对齐。
-    let writes: Vec<AtomicFileWrite> =
-        if revision.content_type.starts_with("text/") || revision.content_type == "application/json"
-        {
-            validated_artifact_writes(
-                &work,
-                &revision.path,
-                &String::from_utf8_lossy(&bytes),
-                Some(profile),
-                current_bytes
-                    .as_deref()
-                    .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-                    .as_deref(),
-            )?
-        } else {
-            vec![AtomicFileWrite {
-                relative_path: format!("works/{}/{}", work_id, revision.path),
-                content: FileContent::Bytes(bytes.clone()),
-            }]
-        };
+    let writes: Vec<AtomicFileWrite> = if revision.content_type.starts_with("text/")
+        || revision.content_type == "application/json"
+    {
+        validated_artifact_writes(
+            &work,
+            &revision.path,
+            &String::from_utf8_lossy(&bytes),
+            Some(profile),
+            current_bytes
+                .as_deref()
+                .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+                .as_deref(),
+        )?
+    } else {
+        vec![AtomicFileWrite {
+            relative_path: format!("works/{}/{}", work_id, revision.path),
+            content: FileContent::Bytes(bytes.clone()),
+        }]
+    };
     // TS：revision.path === "source/final/short-story.json" 时以文档 storyTitle
     // 更新 work 标题（887 号 M3a 接通——884 号 fail-closed 边界已兑换，authority
     // 采纳路径可达；此分支处 bytes 已在 validatedArtifactWeights 内通过 strict
@@ -172,7 +198,10 @@ async fn execute_adopt_tool(
         serde_json::from_str::<Value>(&String::from_utf8_lossy(&bytes))
             .ok()
             .and_then(|document| {
-                document.get("storyTitle").and_then(Value::as_str).map(str::to_string)
+                document
+                    .get("storyTitle")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
             })
     } else {
         None
@@ -211,9 +240,15 @@ pub async fn adopt_work_revision(
     let store_path = project_root.join(".inkos").join("harness.sqlite");
     let episodes = CreativeEpisodeStore::new(&store_path)
         .map_err(|error| AdoptError(ActionError::plain(error.to_string())))?;
-    let outcome =
-        run_adopt_ring(project_root, &episodes, work_id, artifact_id, revision_id, expected_current_revision_id)
-            .await;
+    let outcome = run_adopt_ring(
+        project_root,
+        &episodes,
+        work_id,
+        artifact_id,
+        revision_id,
+        expected_current_revision_id,
+    )
+    .await;
     episodes.close();
     outcome
 }
@@ -280,7 +315,11 @@ async fn run_adopt_ring(
     let ring_result: Result<(Value, SyncEvidence), ActionError> = async {
         // 授权面：source=explicit + confirmed=true → isActionAuthorized 恒真，
         // 但 profile 缺能力仍拒（executeAction 首检查）。
-        if !profile.capability_ids.iter().any(|id| id == ADOPT_CAPABILITY_ID) {
+        if !profile
+            .capability_ids
+            .iter()
+            .any(|id| id == ADOPT_CAPABILITY_ID)
+        {
             return Err(ActionError::plain(format!(
                 "Profile \"{}\" cannot use capability \"{ADOPT_CAPABILITY_ID}\"",
                 profile.id
@@ -328,7 +367,10 @@ async fn run_adopt_ring(
             // evidence sink：work-artifacts-synced（payload + actionExecutionId）。
             let mut synced = super::source_sync::evidence_payload(&evidence);
             if let Value::Object(map) = &mut synced {
-                map.insert("actionExecutionId".into(), Value::String(action_execution_id.clone()));
+                map.insert(
+                    "actionExecutionId".into(),
+                    Value::String(action_execution_id.clone()),
+                );
             }
             // adopt 路径 episode 已绑定 work（bindWork 仅对未绑定 episode 生效——TS 同）。
             episodes
@@ -375,7 +417,10 @@ async fn run_adopt_ring(
                 .map_err(|error| AdoptError(ActionError::plain(error)))?;
             finish_episode(episodes, &episode.id, "completed")
                 .map_err(|error| AdoptError(ActionError::plain(error)))?;
-            Ok(AdoptOutcome { action_result: result, episode_id: episode.id })
+            Ok(AdoptOutcome {
+                action_result: result,
+                episode_id: episode.id,
+            })
         }
         Err(error) => {
             // TS catch：action-failed（facts 提取合并）→ episode-failed（finish
@@ -413,7 +458,15 @@ fn finish_episode(
     status: &str,
 ) -> Result<(), String> {
     let now = crate::utils::utc_time::utc_now_iso();
-    episodes.append(episode_id, &format!("episode-{status}"), None, None, None, &json!({}), &now)?;
+    episodes.append(
+        episode_id,
+        &format!("episode-{status}"),
+        None,
+        None,
+        None,
+        &json!({}),
+        &now,
+    )?;
     let final_status = match status {
         "completed" => EpisodeStatus::Completed,
         "failed" => EpisodeStatus::Failed,
@@ -425,12 +478,20 @@ fn finish_episode(
 
 /// TS `normalizeToolResult` 的 artifact ref 组装（before/after currentRevisionId
 /// 差异面——before = ring 起点清单快照）。
-fn artifact_refs_between(before: Option<&WorkManifest>, after: &WorkManifest) -> Vec<ActionArtifactRef> {
+fn artifact_refs_between(
+    before: Option<&WorkManifest>,
+    after: &WorkManifest,
+) -> Vec<ActionArtifactRef> {
     let prior_revisions: HashMap<&str, Option<&str>> = before
         .map(|work| {
             work.artifacts
                 .iter()
-                .map(|artifact| (artifact.id.as_str(), artifact.current_revision_id.as_deref()))
+                .map(|artifact| {
+                    (
+                        artifact.id.as_str(),
+                        artifact.current_revision_id.as_deref(),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -450,13 +511,10 @@ fn artifact_refs_between(before: Option<&WorkManifest>, after: &WorkManifest) ->
                 .iter()
                 .find(|candidate| candidate.id == artifact.id)
                 .and_then(|candidate| {
-                    candidate
-                        .revisions
-                        .iter()
-                        .find(|revision| {
-                            Some(revision.id.as_str())
-                                == prior_revisions.get(artifact.id.as_str()).copied().flatten()
-                        })
+                    candidate.revisions.iter().find(|revision| {
+                        Some(revision.id.as_str())
+                            == prior_revisions.get(artifact.id.as_str()).copied().flatten()
+                    })
                 })
         });
         refs.push(ActionArtifactRef {

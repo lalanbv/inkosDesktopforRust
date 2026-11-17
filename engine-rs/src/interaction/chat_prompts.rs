@@ -116,11 +116,15 @@ pub fn build_edit_prompt(book_id: Option<&str>, is_zh: bool) -> String {
     let binding = if is_zh {
         book_id
             .map(|id| format!("当前书籍：{id}"))
-            .unwrap_or_else(|| "当前没有绑定书籍；如果用户没有明确文件或作品上下文，只能先询问。".to_string())
+            .unwrap_or_else(|| {
+                "当前没有绑定书籍；如果用户没有明确文件或作品上下文，只能先询问。".to_string()
+            })
     } else {
         book_id
             .map(|id| format!("Active book: {id}"))
-            .unwrap_or_else(|| "No book is bound; ask for the file or project context before editing.".to_string())
+            .unwrap_or_else(|| {
+                "No book is bound; ask for the file or project context before editing.".to_string()
+            })
     };
     let body = if is_zh {
         format!(
@@ -397,7 +401,9 @@ mod tests {
     fn chat_prompt_bilingual_and_tool_list() {
         let zh = build_chat_prompt(true);
         assert!(zh.starts_with("你是 InkOS 普通聊天助手。"));
-        assert!(zh.contains("propose_action、research_web、ingest_material、retrieve_material、import_chapters"));
+        assert!(zh.contains(
+            "propose_action、research_web、ingest_material、retrieve_material、import_chapters"
+        ));
         assert!(zh.ends_with("需要结构时用短列表；不要虚报工具执行结果。"));
         let en = build_chat_prompt(false);
         assert!(en.starts_with("You are the InkOS general chat assistant."));
@@ -446,7 +452,8 @@ mod tests {
         let film = build_system_prompt(SessionKind::InteractiveFilm, None, true);
         assert!(film.contains("互动影游创作助手"));
         // 256 号：authoring 会话双语面（无 bookId 兜底 chat——TS 同落空分支）。
-        let authoring = build_system_prompt(SessionKind::InteractiveFilmAuthoring, Some("p1"), true);
+        let authoring =
+            build_system_prompt(SessionKind::InteractiveFilmAuthoring, Some("p1"), true);
         assert!(authoring.contains("互动影游创作向导"), "{authoring}");
         assert!(authoring.contains("当前项目是「p1」"));
         assert!(authoring.contains("唯一权威来源"));

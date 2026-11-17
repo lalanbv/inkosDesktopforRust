@@ -79,7 +79,11 @@ pub async fn read_transcript(project_root: &Path, world_id: &str, run_id: &str) 
 }
 
 /// `loadCurrentState`：state/current.json（缺失/坏 → None；端点 catch null）。
-pub async fn load_current_state(project_root: &Path, world_id: &str, run_id: &str) -> Option<Value> {
+pub async fn load_current_state(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+) -> Option<Value> {
     let run_dir = run_dir(project_root, world_id, run_id).ok()?;
     let raw = tokio::fs::read_to_string(run_dir.join("state").join("current.json"))
         .await
@@ -105,7 +109,9 @@ pub async fn read_projection(
 ) -> Result<String, String> {
     let run_dir = run_dir(project_root, world_id, run_id)?;
     let target = safe_run_child_path(&run_dir, relative_path)?;
-    tokio::fs::read_to_string(&target).await.map_err(|e| e.to_string())
+    tokio::fs::read_to_string(&target)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── 图谱快照（createPlayDB(runDir).snapshot()） ─────────────────
@@ -205,7 +211,10 @@ fn is_valid_event(value: &Value) -> bool {
     non_empty_str(value, "id")
         && non_empty_str(value, "rawInput")
         && non_empty_str(value, "createdAt")
-        && value.get("turn").and_then(Value::as_i64).is_some_and(|t| t >= 0)
+        && value
+            .get("turn")
+            .and_then(Value::as_i64)
+            .is_some_and(|t| t >= 0)
 }
 
 /// sqlite 主后端只读快照（play-db.ts snapshot 的 SELECT + 行转换）。
@@ -250,8 +259,9 @@ fn snapshot_from_sqlite(path: &Path) -> Option<Value> {
             .ok()?;
         let rows = stmt
             .query_map([], |row| {
-                let value: Value = serde_json::from_str(&row.get::<_, String>(4).unwrap_or_default())
-                    .unwrap_or_else(|_| json!({}));
+                let value: Value =
+                    serde_json::from_str(&row.get::<_, String>(4).unwrap_or_default())
+                        .unwrap_or_else(|_| json!({}));
                 let visibility: Value =
                     serde_json::from_str(&row.get::<_, String>(8).unwrap_or_default())
                         .unwrap_or_else(|_| json!({}));
@@ -283,8 +293,13 @@ fn snapshot_from_sqlite(path: &Path) -> Option<Value> {
             .ok()?;
         let rows = stmt
             .query_map([], |row| {
-                let value: Value = serde_json::from_str(row.get::<_, Option<String>>(4).unwrap_or_default().as_deref().unwrap_or("null"))
-                    .unwrap_or(Value::Null);
+                let value: Value = serde_json::from_str(
+                    row.get::<_, Option<String>>(4)
+                        .unwrap_or_default()
+                        .as_deref()
+                        .unwrap_or("null"),
+                )
+                .unwrap_or(Value::Null);
                 Ok(json!({
                     "id": row.get::<_, String>(0)?,
                     "ownerEntityId": row.get::<_, Option<String>>(1)?,
@@ -354,7 +369,11 @@ pub fn play_image_file_name(key: &str, extension: &str) -> String {
         out.push(ch);
         units += ch_units;
     }
-    let stem = if out.is_empty() { "image".to_string() } else { out };
+    let stem = if out.is_empty() {
+        "image".to_string()
+    } else {
+        out
+    };
     format!("{stem}.{extension}")
 }
 
@@ -371,11 +390,7 @@ pub async fn read_play_image_manifest(run_dir: &Path) -> BTreeMap<String, Value>
 }
 
 /// `setPlayImageEntry`：单条目并入 manifest 落盘（返回新 manifest）。
-pub async fn set_play_image_entry(
-    run_dir: &Path,
-    key: &str,
-    entry: &Value,
-) -> Result<(), String> {
+pub async fn set_play_image_entry(run_dir: &Path, key: &str, entry: &Value) -> Result<(), String> {
     let manifest = read_play_image_manifest(run_dir).await;
     let mut object = serde_json::Map::new();
     for (existing_key, value) in manifest.iter() {
@@ -383,7 +398,9 @@ pub async fn set_play_image_entry(
     }
     object.insert(key.to_string(), entry.clone());
     let dir = run_dir.join("images");
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| e.to_string())?;
     let payload = format!(
         "{}\n",
         serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_default()
@@ -396,7 +413,9 @@ pub async fn set_play_image_entry(
 /// `readPlayImageSettings`：三开关（默认全关；坏文件回退默认）。
 pub async fn read_play_image_settings(run_dir: &Path) -> Value {
     let read = tokio::fs::read_to_string(run_dir.join("images").join("settings.json")).await;
-    let parsed = read.ok().and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    let parsed = read
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
     let flag = |name: &str| -> bool {
         parsed
             .as_ref()
@@ -413,15 +432,13 @@ pub async fn read_play_image_settings(run_dir: &Path) -> Value {
 
 /// `writePlayImageSettings`：目录递归 + pretty JSON。
 pub async fn write_play_image_settings(run_dir: &Path, settings: &Value) -> Result<(), String> {
-    let flag = |name: &str| -> bool {
-        settings
-            .get(name)
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    };
+    let flag =
+        |name: &str| -> bool { settings.get(name).and_then(Value::as_bool).unwrap_or(false) };
     let (actors, moments, inventory) = (flag("actors"), flag("moments"), flag("inventory"));
     let dir = run_dir.join("images");
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|e| e.to_string())?;
     let payload = format!(
         "{}\n",
         serde_json::to_string_pretty(&json!({
@@ -488,13 +505,21 @@ fn render_world_context(context: &Option<PlayWorldContext<'_>>) -> String {
             clamp_text(premise, 600)
         ));
     }
-    if let Some(contract) = context.world_contract.map(str::trim).filter(|c| !c.is_empty()) {
+    if let Some(contract) = context
+        .world_contract
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         lines.push(format!(
             "世界契约（只遵守用户定义的规则，不要自行发明 RPG/数值/等级系统）：{}",
             clamp_text(contract, 700)
         ));
     }
-    if let Some(visual) = context.visual_contract.map(str::trim).filter(|c| !c.is_empty()) {
+    if let Some(visual) = context
+        .visual_contract
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+    {
         lines.push(format!(
             "视觉契约（图片必须按这条表达语义）：{}",
             clamp_text(visual, 700)
@@ -541,7 +566,11 @@ pub fn build_play_scene_image_prompt(
 // ── 写入面（73 号：play-store.ts 写方法） ─────────────────────────
 
 /// `ensureRun`：run 目录骨架（state/projections/summaries/checkpoints）。
-pub async fn ensure_run(project_root: &Path, world_id: &str, run_id: &str) -> Result<PathBuf, String> {
+pub async fn ensure_run(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+) -> Result<PathBuf, String> {
     let dir = run_dir(project_root, world_id, run_id)?;
     for sub in ["state", "projections", "summaries", "checkpoints"] {
         tokio::fs::create_dir_all(dir.join(sub))
@@ -579,7 +608,10 @@ pub async fn create_world(
     tokio::fs::create_dir_all(&world_dir)
         .await
         .map_err(|e| e.to_string())?;
-    let payload = format!("{}\n", serde_json::to_string_pretty(&world).unwrap_or_default());
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&world).unwrap_or_default()
+    );
     crate::utils::atomic_file_set::write_file_atomic(&world_dir.join("world.json"), &payload)
         .await
         .map_err(|e| e.to_string())?;
@@ -619,7 +651,10 @@ pub async fn update_world(
         json!(crate::utils::utc_time::utc_now_iso()),
     );
     let world_dir = world_dir(project_root, world_id)?;
-    let payload = format!("{}\n", serde_json::to_string_pretty(&world).unwrap_or_default());
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&world).unwrap_or_default()
+    );
     crate::utils::atomic_file_set::write_file_atomic(&world_dir.join("world.json"), &payload)
         .await
         .map_err(|e| e.to_string())?;
@@ -635,10 +670,16 @@ pub async fn save_current_state(
 ) -> Result<(), String> {
     ensure_run(project_root, world_id, run_id).await?;
     let run = run_dir(project_root, world_id, run_id)?;
-    let payload = format!("{}\n", serde_json::to_string_pretty(state).unwrap_or_default());
-    crate::utils::atomic_file_set::write_file_atomic(&run.join("state").join("current.json"), &payload)
-        .await
-        .map_err(|e| e.to_string())
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(state).unwrap_or_default()
+    );
+    crate::utils::atomic_file_set::write_file_atomic(
+        &run.join("state").join("current.json"),
+        &payload,
+    )
+    .await
+    .map_err(|e| e.to_string())
 }
 
 fn transcript_jsonl_path(run_dir: &Path) -> PathBuf {
@@ -664,7 +705,12 @@ pub async fn append_transcript_turn(
 }
 
 /// `appendEvent`：事件行追加（形态校验由调用方 reducer 保证）。
-pub async fn append_event(project_root: &Path, world_id: &str, run_id: &str, event: &Value) -> Result<(), String> {
+pub async fn append_event(
+    project_root: &Path,
+    world_id: &str,
+    run_id: &str,
+    event: &Value,
+) -> Result<(), String> {
     ensure_run(project_root, world_id, run_id).await?;
     let run = run_dir(project_root, world_id, run_id)?;
     append_json_line(&events_jsonl_path(&run), event).await
@@ -696,9 +742,13 @@ pub async fn write_projection(
     let run = run_dir(project_root, world_id, run_id)?;
     let target = safe_run_child_path(&run, relative_path)?;
     if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    crate::utils::atomic_file_set::write_file_atomic(&target, content).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&target, content)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn append_json_line(path: &Path, value: &Value) -> Result<(), String> {
@@ -710,7 +760,9 @@ async fn append_json_line(path: &Path, value: &Value) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
     let line = format!("{}\n", serde_json::to_string(value).unwrap_or_default());
-    file.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
+    file.write_all(line.as_bytes())
+        .await
+        .map_err(|e| e.to_string())?;
     // 见 68 号：tokio File 缓冲需显式 flush 后对同进程读取可见。
     let _ = file.flush().await;
     Ok(())
@@ -764,13 +816,24 @@ pub async fn capture_run_snapshot(
     })
 }
 
-async fn write_snapshot_json(run: &Path, relative: &str, snapshot: &PlayRunSnapshot) -> Result<(), String> {
+async fn write_snapshot_json(
+    run: &Path,
+    relative: &str,
+    snapshot: &PlayRunSnapshot,
+) -> Result<(), String> {
     let target = safe_run_child_path(run, relative)?;
     if let Some(parent) = target.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    let payload = format!("{}\n", serde_json::to_string_pretty(snapshot).unwrap_or_default());
-    crate::utils::atomic_file_set::write_file_atomic(&target, &payload).await.map_err(|e| e.to_string())
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(snapshot).unwrap_or_default()
+    );
+    crate::utils::atomic_file_set::write_file_atomic(&target, &payload)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// `saveCheckpoint`：checkpoints/{id}.json（id 段校验，不安全 → 报错）。
@@ -799,9 +862,12 @@ pub async fn load_checkpoint(
         return None;
     }
     let run = run_dir(project_root, world_id, run_id).ok()?;
-    let raw = tokio::fs::read_to_string(run.join("checkpoints").join(format!("{checkpoint_id}.json")))
-        .await
-        .ok()?;
+    let raw = tokio::fs::read_to_string(
+        run.join("checkpoints")
+            .join(format!("{checkpoint_id}.json")),
+    )
+    .await
+    .ok()?;
     serde_json::from_str(&raw).ok()
 }
 
@@ -818,7 +884,12 @@ pub async fn save_variant(
     let run = run_dir(project_root, world_id, run_id)?;
     let mut record = snapshot.clone();
     record.id = variant_id.clone();
-    write_snapshot_json(&run, &format!("variants/turn-{turn}/{variant_id}.json"), &record).await?;
+    write_snapshot_json(
+        &run,
+        &format!("variants/turn-{turn}/{variant_id}.json"),
+        &record,
+    )
+    .await?;
     Ok(variant_id)
 }
 
@@ -856,9 +927,12 @@ pub async fn restore_run_snapshot(
     let mut db = crate::play_graph::open_play_graph_db(&run)?;
     db.replace_with_snapshot(&snapshot.graph)?;
     db.flush()?;
-    crate::utils::atomic_file_set::write_file_atomic(&events_jsonl_path(&run), &snapshot.events_raw)
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &events_jsonl_path(&run),
+        &snapshot.events_raw,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     crate::utils::atomic_file_set::write_file_atomic(
         &transcript_jsonl_path(&run),
         &snapshot.transcript_raw,
@@ -871,8 +945,22 @@ pub async fn restore_run_snapshot(
     )
     .await
     .map_err(|e| e.to_string())?;
-    write_projection(project_root, world_id, run_id, "projections/scene.md", &snapshot.scene_projection).await?;
-    write_projection(project_root, world_id, run_id, "projections/state.md", &snapshot.state_projection).await?;
+    write_projection(
+        project_root,
+        world_id,
+        run_id,
+        "projections/scene.md",
+        &snapshot.scene_projection,
+    )
+    .await?;
+    write_projection(
+        project_root,
+        world_id,
+        run_id,
+        "projections/state.md",
+        &snapshot.state_projection,
+    )
+    .await?;
     Ok(())
 }
 
@@ -943,10 +1031,20 @@ mod tests {
         )
         .unwrap();
         let snapshot = play_graph_snapshot(run);
-        let ids: Vec<&str> = snapshot["entities"].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = snapshot["entities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
         assert_eq!(ids, ["a", "b"]);
         // events 按 (turn, id)：e2(turn 0) 先于 e1(turn 1)。
-        let events: Vec<&str> = snapshot["events"].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap()).collect();
+        let events: Vec<&str> = snapshot["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["id"].as_str().unwrap())
+            .collect();
         assert_eq!(events, ["e2", "e1"]);
 
         // 无任何后端 → 空快照四数组。
@@ -1015,8 +1113,13 @@ mod tests {
             world_contract: None,
             visual_contract: Some("水墨风格"),
         });
-        let entity_prompt = build_play_entity_image_prompt("actor", "林动", Some("坚韧少年"), &world);
-        assert!(entity_prompt.contains("世界设定（决定时代、场景与整体美术风格，必须贴合）：东方修真世界"), "{entity_prompt}");
+        let entity_prompt =
+            build_play_entity_image_prompt("actor", "林动", Some("坚韧少年"), &world);
+        assert!(
+            entity_prompt
+                .contains("世界设定（决定时代、场景与整体美术风格，必须贴合）：东方修真世界"),
+            "{entity_prompt}"
+        );
         assert!(entity_prompt.contains("为这个角色生成配图"));
         assert!(entity_prompt.contains("对象：林动"));
         assert!(entity_prompt.contains("细节：坚韧少年"));
@@ -1029,9 +1132,16 @@ mod tests {
 
         // 截断：600 码元以上补省略号。
         let long_premise = "长".repeat(700);
-        let prompt = build_play_entity_image_prompt("actor", "X", None, &Some(PlayWorldContext {
-            premise: Some(&long_premise), world_contract: None, visual_contract: None,
-        }));
+        let prompt = build_play_entity_image_prompt(
+            "actor",
+            "X",
+            None,
+            &Some(PlayWorldContext {
+                premise: Some(&long_premise),
+                world_contract: None,
+                visual_contract: None,
+            }),
+        );
         assert!(prompt.contains('…'));
     }
 }

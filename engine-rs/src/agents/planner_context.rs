@@ -125,7 +125,10 @@ pub fn format_recent_summaries(
 ) -> String {
     let mut rows: Vec<Vec<String>> = parse_markdown_table_rows(chapter_summaries_raw)
         .into_iter()
-        .filter(|row| row.first().is_some_and(|cell| digit_only_re().is_match(cell)))
+        .filter(|row| {
+            row.first()
+                .is_some_and(|cell| digit_only_re().is_match(cell))
+        })
         .filter(|row| {
             row.first()
                 .and_then(|cell| cell.parse::<i64>().ok())
@@ -145,7 +148,8 @@ pub fn format_recent_summaries(
         return "（暂无前章摘要）".to_string();
     }
 
-    let header = "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |";
+    let header =
+        "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |";
     let divider = "| --- | --- | --- | --- | --- | --- | --- | --- |";
     let body = recent
         .iter()
@@ -240,7 +244,10 @@ fn extract_recent_emotional_arc_lines(raw: &str, chapter_number: u32, limit: usi
     // 章节号在第 2 列（row[1]）。
     let filtered: Vec<Vec<String>> = rows
         .into_iter()
-        .filter(|row| row.get(1).is_some_and(|cell| digit_only_re().is_match(cell)))
+        .filter(|row| {
+            row.get(1)
+                .is_some_and(|cell| digit_only_re().is_match(cell))
+        })
         .filter(|row| {
             row.get(1)
                 .and_then(|cell| cell.parse::<i64>().ok())
@@ -259,10 +266,10 @@ fn extract_recent_emotional_arc_lines(raw: &str, chapter_number: u32, limit: usi
 /// 首个非头行数据行（惯例上主角几乎总在首行）。
 pub fn extract_protagonist_row(character_matrix_raw: &str) -> String {
     let rows = parse_markdown_table_rows(character_matrix_raw);
-    if let Some(protagonist) = rows
-        .iter()
-        .find(|row| row.iter().any(|cell| protagonist_cell_re().is_match(cell.trim())))
-    {
+    if let Some(protagonist) = rows.iter().find(|row| {
+        row.iter()
+            .any(|cell| protagonist_cell_re().is_match(cell.trim()))
+    }) {
         return format!("| {} |", protagonist.join(" | "));
     }
     if let Some(first_data_row) = rows.iter().find(|row| !is_likely_header_row(row)) {
@@ -272,11 +279,17 @@ pub fn extract_protagonist_row(character_matrix_raw: &str) -> String {
 }
 
 fn is_likely_header_row(row: &[String]) -> bool {
-    row.iter().any(|cell| matrix_header_cell_re().is_match(cell.trim()))
+    row.iter()
+        .any(|cell| matrix_header_cell_re().is_match(cell.trim()))
 }
 
 pub fn extract_opponent_rows(character_matrix_raw: &str, limit: usize) -> String {
-    extract_rows_by_relation(character_matrix_raw, opponent_re(), limit, "（暂无明确对手登场）")
+    extract_rows_by_relation(
+        character_matrix_raw,
+        opponent_re(),
+        limit,
+        "（暂无明确对手登场）",
+    )
 }
 
 pub fn extract_collaborator_rows(character_matrix_raw: &str, limit: usize) -> String {
@@ -298,8 +311,7 @@ fn extract_rows_by_relation(
         .into_iter()
         .filter(|row| row.iter().any(|cell| pattern.is_match(cell)))
         .filter(|row| {
-            !row
-                .iter()
+            !row.iter()
                 .any(|cell| relation_protagonist_re().is_match(cell.trim()))
         })
         .take(limit)
@@ -318,8 +330,7 @@ pub fn extract_relevant_threads(pending_hooks_raw: &str, subplot_board_raw: &str
     let hook_rows = parse_markdown_table_rows(pending_hooks_raw)
         .into_iter()
         .filter(|row| {
-            !row
-                .first()
+            !row.first()
                 .is_some_and(|cell| hook_id_header_re().is_match(cell))
         })
         .filter(|row| row.iter().any(|cell| thread_relevant_re().is_match(cell)))
@@ -336,14 +347,18 @@ pub fn extract_relevant_threads(pending_hooks_raw: &str, subplot_board_raw: &str
             let kind_prefix = kind_cell
                 .map(|kind| format!("kind={} | ", hook_kind_id(kind)))
                 .unwrap_or_default();
-            format!("- {}: {}{}", row[0], kind_prefix, join_non_empty_cells(&row[1..base_len]))
+            format!(
+                "- {}: {}{}",
+                row[0],
+                kind_prefix,
+                join_non_empty_cells(&row[1..base_len])
+            )
         });
 
     let subplot_rows = parse_markdown_table_rows(subplot_board_raw)
         .into_iter()
         .filter(|row| {
-            !row
-                .first()
+            !row.first()
                 .is_some_and(|cell| subplot_id_header_re().is_match(cell))
         })
         .filter(|row| row.iter().any(|cell| thread_relevant_re().is_match(cell)))
@@ -381,7 +396,9 @@ pub fn format_recyclable_hooks(
             let silence = if last_touch == 0 {
                 i64::from(chapter_number)
             } else {
-                i64::from(chapter_number).saturating_sub(i64::from(last_touch)).max(0)
+                i64::from(chapter_number)
+                    .saturating_sub(i64::from(last_touch))
+                    .max(0)
             };
             let payoff = if hook.expected_payoff.trim().is_empty() {
                 hook.notes.trim()
@@ -389,7 +406,11 @@ pub fn format_recyclable_hooks(
                 hook.expected_payoff.trim()
             };
             let core = if hook.core_hook == Some(true) {
-                if language == WritingLanguage::En { " [core]" } else { " [核心]" }
+                if language == WritingLanguage::En {
+                    " [core]"
+                } else {
+                    " [核心]"
+                }
             } else {
                 ""
             };
@@ -401,12 +422,22 @@ pub fn format_recyclable_hooks(
             if language == WritingLanguage::En {
                 format!(
                     "- {} \"{}\" — status={}, silent {} ch{}{}",
-                    hook.hook_id, payoff, hook_status_text(hook), silence, kind_tag, core
+                    hook.hook_id,
+                    payoff,
+                    hook_status_text(hook),
+                    silence,
+                    kind_tag,
+                    core
                 )
             } else {
                 format!(
                     "- {} \"{}\" — 状态={}，已沉默 {} 章{}{}",
-                    hook.hook_id, payoff, hook_status_text(hook), silence, kind_tag, core
+                    hook.hook_id,
+                    payoff,
+                    hook_status_text(hook),
+                    silence,
+                    kind_tag,
+                    core
                 )
             }
         })
@@ -508,7 +539,8 @@ mod tests {
 
     #[test]
     fn format_recent_summaries_slices_last_n_with_header() {
-        let md = "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n\
+        let md =
+            "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n\
                   | --- | --- | --- | --- | --- | --- | --- | --- |\n\
                   | 1 | a | 甲 | e | s | h | m | t |\n\
                   | 2 | b | 乙 | e | s | h | m | t |\n\
@@ -525,7 +557,8 @@ mod tests {
     #[test]
     fn compose_current_arc_prose_merges_active_and_recent() {
         let subplot = "| id | 状态 |\n| --- | --- |\n| S1 | 推进中 |\n| S2 | 暂挂 |\n";
-        let arcs = "| 角色 | 章节 | 情绪 |\n| --- | --- | --- |\n| 甲 | 1 | 焦虑 |\n| 乙 | 2 | 坚定 |\n";
+        let arcs =
+            "| 角色 | 章节 | 情绪 |\n| --- | --- | --- |\n| 甲 | 1 | 焦虑 |\n| 乙 | 2 | 坚定 |\n";
         let out = compose_current_arc_prose(subplot, arcs, 5);
         assert!(out.contains("活跃支线：\n- S1 | 推进中"));
         assert!(out.contains("近期情感线：\n- 甲 | 1 | 焦虑"));
@@ -556,14 +589,17 @@ mod tests {
         assert_eq!(extract_opponent_rows(matrix, 1), "| 甲 | 敌对 |");
         // 主角行被排除（关系列命中 ^(主角|protagonist)$）。
         let opponents = extract_opponent_rows(matrix, 3);
-        assert!(opponents.contains("甲") && opponents.contains("丙") && !opponents.contains("主角"));
+        assert!(
+            opponents.contains("甲") && opponents.contains("丙") && !opponents.contains("主角")
+        );
         assert_eq!(extract_collaborator_rows(matrix, 3), "| 乙 | 盟友 |");
         assert_eq!(extract_opponent_rows("空", 3), "（暂无明确对手登场）");
     }
 
     #[test]
     fn extract_relevant_threads_filters_stale_and_headers() {
-        let hooks = "| hook_id | 状态 |\n| --- | --- |\n| H01 | progressing |\n| H02 | resolved |\n";
+        let hooks =
+            "| hook_id | 状态 |\n| --- | --- |\n| H01 | progressing |\n| H02 | resolved |\n";
         let subplots = "| id | 状态 |\n| --- | --- |\n| S1 | open |\n";
         let out = extract_relevant_threads(hooks, subplots);
         // TS row.slice(1)——首列（id）只作前缀，不进尾部拼接。

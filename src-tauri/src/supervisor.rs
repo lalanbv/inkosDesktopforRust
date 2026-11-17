@@ -43,8 +43,7 @@ pub struct LaunchSpec {
 ///   下两个 `pick_free_port` 几乎必然抢同一端口，使测试 flaky。
 ///   正确断言是「返回 `Some` 且端口落在探测区间内」。
 pub fn pick_free_port(start: u16) -> Option<u16> {
-    (start..start.saturating_add(1000))
-        .find(|p| TcpListener::bind(("127.0.0.1", *p)).is_ok())
+    (start..start.saturating_add(1000)).find(|p| TcpListener::bind(("127.0.0.1", *p)).is_ok())
 }
 
 /// 根据路径解析器与端口构造 `LaunchSpec`。
@@ -205,11 +204,7 @@ pub fn kill_tree(child: &std::process::Child) -> anyhow::Result<()> {
 /// 单次请求 timeout=2s，避免 reqwest 默认行为把整个 `timeout` 预算耗在一个连不上的端口。
 /// 间隔由 [`crate::config::HEALTH_PROBE_INTERVAL`] 决定（默认 200ms）。
 /// 任何 reqwest 错误都按"未就绪"处理（连接拒绝、TLS 失败、解析失败等），返回 false 继续轮询。
-pub async fn health_probe(
-    port: u16,
-    timeout: std::time::Duration,
-    probe_path: &str,
-) -> bool {
+pub async fn health_probe(port: u16, timeout: std::time::Duration, probe_path: &str) -> bool {
     let url = format!("http://127.0.0.1:{port}{probe_path}");
     let deadline = std::time::Instant::now() + timeout;
     let client = match reqwest::Client::builder()
@@ -365,7 +360,10 @@ pub enum SupervisionAction {
     Continue,
     /// 判死且允许重启：冷却后重跑启动链；`attempt`=已用重启次数（通知
     /// 「第 n 次」用）。
-    Respawn { cooldown: std::time::Duration, attempt: u32 },
+    Respawn {
+        cooldown: std::time::Duration,
+        attempt: u32,
+    },
     /// 判死且达重启上限：停监督，用户重启 app 是唯一恢复路径。
     Halt,
 }
@@ -533,7 +531,10 @@ mod tests {
         }
         assert_eq!(
             core.step(false, &mut policy),
-            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 1 },
+            SupervisionAction::Respawn {
+                cooldown: RESPAWN_COOLDOWN,
+                attempt: 1
+            },
             "恢复后代内计数清零，须再满阈值才判死"
         );
     }
@@ -547,14 +548,17 @@ mod tests {
     #[test]
     fn supervision_core_generations_until_halt() {
         let mut policy = RespawnPolicy::new(2); // 跨代持久（生产=RespawnState）
-        // 第 1 代：阈值-1 次容忍 → 第阈值 次判死 Respawn(attempt=1)。
+                                                // 第 1 代：阈值-1 次容忍 → 第阈值 次判死 Respawn(attempt=1)。
         let mut gen0 = SupervisorCore::default();
         for _ in 0..(RESUPERVISE_FAILURE_THRESHOLD - 1) {
             assert_eq!(gen0.step(false, &mut policy), SupervisionAction::Continue);
         }
         assert_eq!(
             gen0.step(false, &mut policy),
-            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 1 }
+            SupervisionAction::Respawn {
+                cooldown: RESPAWN_COOLDOWN,
+                attempt: 1
+            }
         );
         // 换代：新 core（failures 归零）+ 同一 policy（attempt 累计）。
         let mut gen1 = SupervisorCore::default();
@@ -567,7 +571,10 @@ mod tests {
         }
         assert_eq!(
             gen1.step(false, &mut policy),
-            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 2 },
+            SupervisionAction::Respawn {
+                cooldown: RESPAWN_COOLDOWN,
+                attempt: 2
+            },
             "policy 跨代持久：第 2 次判死 attempt=2"
         );
         // 第 3 代：policy 已达上限 2 → 第阈值 次判死即 Halt。
@@ -600,7 +607,10 @@ mod tests {
             let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
             l.local_addr().unwrap().port()
         };
-        assert!(!probe_once(dead_port, "/api/v1/health").await, "无服务端口应判死");
+        assert!(
+            !probe_once(dead_port, "/api/v1/health").await,
+            "无服务端口应判死"
+        );
     }
 
     #[test]
@@ -635,9 +645,8 @@ mod tests {
                         Ok((mut conn, _)) => {
                             let mut buf = [0u8; 256];
                             let _ = std::io::Read::read(&mut conn, &mut buf);
-                            let _ = conn.write_all(
-                                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
-                            );
+                            let _ =
+                                conn.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -654,7 +663,8 @@ mod tests {
         }
 
         fn stop(self) {
-            self.shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+            self.shutdown
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             // 非阻塞 accept 轮询 20ms 一拍：join 前多等一拍保证循环退出。
             std::thread::sleep(std::time::Duration::from_millis(30));
             let _ = self.handle.join();
@@ -689,7 +699,10 @@ mod tests {
         assert!(!probe_once(dead_port, "/api/v1/health").await);
         assert_eq!(
             core.step(false, &mut policy),
-            SupervisionAction::Respawn { cooldown: RESPAWN_COOLDOWN, attempt: 1 }
+            SupervisionAction::Respawn {
+                cooldown: RESPAWN_COOLDOWN,
+                attempt: 1
+            }
         );
 
         // 换代重启：新服务（新端口）→ 新 core → 判活。

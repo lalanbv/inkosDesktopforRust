@@ -17,22 +17,20 @@ pub type WorkspaceId = String;
 pub struct Workspace {
     pub id: WorkspaceId,
     pub name: String,
-    pub created_at: i64,       // Unix 时间戳（秒）
-    pub last_used: i64,        // 最近使用时间
-    pub projects: Vec<String>, // 项目绝对路径列表
+    pub created_at: i64,                // Unix 时间戳（秒）
+    pub last_used: i64,                 // 最近使用时间
+    pub projects: Vec<String>,          // 项目绝对路径列表
     pub engine_version: Option<String>, // 独立 Engine 版本（None = 全局默认）
 }
 
 /// 工作区列表（workspaces.json schema）
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct WorkspaceList {
     #[serde(default)]
     pub workspaces: Vec<Workspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_id: Option<WorkspaceId>,
 }
-
 
 impl WorkspaceList {
     /// 创建新工作区（UUID v4 ID，Unix 时间戳）
@@ -151,15 +149,15 @@ impl WorkspaceList {
                 // 文件不存在 → 返回空列表（首次运行）
                 Ok(Self::default())
             }
-            Err(e) => Err(e)
-                .with_context(|| format!("读取 workspaces.json 失败: {}", path.display())),
+            Err(e) => {
+                Err(e).with_context(|| format!("读取 workspaces.json 失败: {}", path.display()))
+            }
         }
     }
 
     /// 写入工作区列表（原子写入 + 0600 权限）
     pub fn write(&self, path: &Path) -> anyhow::Result<()> {
-        let json =
-            serde_json::to_string_pretty(self).context("序列化 workspaces.json 失败")?;
+        let json = serde_json::to_string_pretty(self).context("序列化 workspaces.json 失败")?;
 
         crate::util::atomic_write_0600(path, json.as_bytes())
             .with_context(|| format!("写入 workspaces.json 失败: {}", path.display()))
@@ -182,25 +180,19 @@ fn workspaces_path(app: &AppHandle) -> std::path::PathBuf {
 #[tauri::command]
 pub async fn cmd_list_workspaces(app: AppHandle) -> Result<WorkspaceList, AppError> {
     let path = workspaces_path(&app);
-    WorkspaceList::read(&path).map_err(|e| {
-        AppError::filesystem(format!("读取工作区列表失败: {}", e))
-    })
+    WorkspaceList::read(&path)
+        .map_err(|e| AppError::filesystem(format!("读取工作区列表失败: {}", e)))
 }
 
 #[tauri::command]
-pub async fn cmd_create_workspace(
-    app: AppHandle,
-    name: String,
-) -> Result<WorkspaceId, AppError> {
+pub async fn cmd_create_workspace(app: AppHandle, name: String) -> Result<WorkspaceId, AppError> {
     let path = workspaces_path(&app);
-    let mut list = WorkspaceList::read(&path).map_err(|e| {
-        AppError::filesystem(format!("读取工作区列表失败: {}", e))
-    })?;
+    let mut list = WorkspaceList::read(&path)
+        .map_err(|e| AppError::filesystem(format!("读取工作区列表失败: {}", e)))?;
 
     let id = list.create(&name);
-    list.write(&path).map_err(|e| {
-        AppError::filesystem(format!("保存工作区失败: {}", e))
-    })?;
+    list.write(&path)
+        .map_err(|e| AppError::filesystem(format!("保存工作区失败: {}", e)))?;
 
     Ok(id)
 }
@@ -208,33 +200,27 @@ pub async fn cmd_create_workspace(
 #[tauri::command]
 pub async fn cmd_switch_workspace(app: AppHandle, id: WorkspaceId) -> Result<(), AppError> {
     let path = workspaces_path(&app);
-    let mut list = WorkspaceList::read(&path).map_err(|e| {
-        AppError::filesystem(format!("读取工作区列表失败: {}", e))
-    })?;
+    let mut list = WorkspaceList::read(&path)
+        .map_err(|e| AppError::filesystem(format!("读取工作区列表失败: {}", e)))?;
 
-    list.switch(&id).map_err(|e| {
-        AppError::new(crate::error::ErrorKind::Project, e)
-    })?;
+    list.switch(&id)
+        .map_err(|e| AppError::new(crate::error::ErrorKind::Project, e))?;
 
-    list.write(&path).map_err(|e| {
-        AppError::filesystem(format!("保存工作区失败: {}", e))
-    })
+    list.write(&path)
+        .map_err(|e| AppError::filesystem(format!("保存工作区失败: {}", e)))
 }
 
 #[tauri::command]
 pub async fn cmd_delete_workspace(app: AppHandle, id: WorkspaceId) -> Result<(), AppError> {
     let path = workspaces_path(&app);
-    let mut list = WorkspaceList::read(&path).map_err(|e| {
-        AppError::filesystem(format!("读取工作区列表失败: {}", e))
-    })?;
+    let mut list = WorkspaceList::read(&path)
+        .map_err(|e| AppError::filesystem(format!("读取工作区列表失败: {}", e)))?;
 
-    list.delete(&id).map_err(|e| {
-        AppError::new(crate::error::ErrorKind::Project, e)
-    })?;
+    list.delete(&id)
+        .map_err(|e| AppError::new(crate::error::ErrorKind::Project, e))?;
 
-    list.write(&path).map_err(|e| {
-        AppError::filesystem(format!("保存工作区失败: {}", e))
-    })
+    list.write(&path)
+        .map_err(|e| AppError::filesystem(format!("保存工作区失败: {}", e)))
 }
 
 #[tauri::command]
@@ -244,17 +230,14 @@ pub async fn cmd_add_project_to_workspace(
     path: String,
 ) -> Result<(), AppError> {
     let ws_path = workspaces_path(&app);
-    let mut list = WorkspaceList::read(&ws_path).map_err(|e| {
-        AppError::filesystem(format!("读取工作区列表失败: {}", e))
-    })?;
+    let mut list = WorkspaceList::read(&ws_path)
+        .map_err(|e| AppError::filesystem(format!("读取工作区列表失败: {}", e)))?;
 
-    list.add_project(&id, &path).map_err(|e| {
-        AppError::new(crate::error::ErrorKind::Project, e)
-    })?;
+    list.add_project(&id, &path)
+        .map_err(|e| AppError::new(crate::error::ErrorKind::Project, e))?;
 
-    list.write(&ws_path).map_err(|e| {
-        AppError::filesystem(format!("保存工作区失败: {}", e))
-    })
+    list.write(&ws_path)
+        .map_err(|e| AppError::filesystem(format!("保存工作区失败: {}", e)))
 }
 
 #[cfg(test)]

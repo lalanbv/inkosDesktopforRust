@@ -13,10 +13,21 @@ use crate::interaction::project_tools::{error_result, ToolResult};
 use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 
 pub const PROPOSE_ACTIONS: &[&str] = &[
-    "create_book", "short_run", "play_start", "generate_cover", "fanfic_init",
-    "continuation_import", "spinoff_create", "style_imitation", "script_create",
-    "storyboard_create", "interactive_film_create", "translation_create",
-    "draft_structure", "connect_choice", "remove_node",
+    "create_book",
+    "short_run",
+    "play_start",
+    "generate_cover",
+    "fanfic_init",
+    "continuation_import",
+    "spinoff_create",
+    "style_imitation",
+    "script_create",
+    "storyboard_create",
+    "interactive_film_create",
+    "translation_create",
+    "draft_structure",
+    "connect_choice",
+    "remove_node",
 ];
 
 /// 工具依赖：表面语言 + 同会话标记（sessionKind !== "chat"）+ 请求技能。
@@ -27,7 +38,11 @@ pub struct ProposeDeps<'a> {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 /// `proposedActionSessionKind`：action → 目标会话 kind。
@@ -94,7 +109,11 @@ fn proposed_action_fallback_summary(action: &str, is_en: bool) -> &'static str {
 }
 
 fn pick(is_en: bool, zh: &'static str, en: &'static str) -> &'static str {
-    if is_en { en } else { zh }
+    if is_en {
+        en
+    } else {
+        zh
+    }
 }
 
 /// `compactObject`：子域清洗——字符串 trim 非空、数组滤空 trim、正数保留、
@@ -149,8 +168,29 @@ fn ends_with_incomplete_scene_suffix(text: &str) -> bool {
     };
     matches!(
         last,
-        '叫' | '是' | '为' | '在' | '向' | '把' | '将' | '和' | '与' | '或' | '但' | '却'
-            | '当' | '等' | '、' | '，' | '：' | '；' | '—' | '“' | '‘' | '《' | '（' | '('
+        '叫' | '是'
+            | '为'
+            | '在'
+            | '向'
+            | '把'
+            | '将'
+            | '和'
+            | '与'
+            | '或'
+            | '但'
+            | '却'
+            | '当'
+            | '等'
+            | '、'
+            | '，'
+            | '：'
+            | '；'
+            | '—'
+            | '“'
+            | '‘'
+            | '《'
+            | '（'
+            | '('
     )
 }
 
@@ -201,16 +241,35 @@ fn compact_play_start_payload(value: Option<&Value>) -> Option<Value> {
             out.insert(key.to_string(), json!(text));
         }
     };
-    trim_insert(&mut out, "title", object.get("title").and_then(Value::as_str));
-    trim_insert(&mut out, "premise", object.get("premise").and_then(Value::as_str));
-    trim_insert(&mut out, "worldContract", object.get("worldContract").and_then(Value::as_str));
-    trim_insert(&mut out, "visualContract", object.get("visualContract").and_then(Value::as_str));
+    trim_insert(
+        &mut out,
+        "title",
+        object.get("title").and_then(Value::as_str),
+    );
+    trim_insert(
+        &mut out,
+        "premise",
+        object.get("premise").and_then(Value::as_str),
+    );
+    trim_insert(
+        &mut out,
+        "worldContract",
+        object.get("worldContract").and_then(Value::as_str),
+    );
+    trim_insert(
+        &mut out,
+        "visualContract",
+        object.get("visualContract").and_then(Value::as_str),
+    );
     if let Some(mode) = object.get("mode").and_then(Value::as_str) {
         out.insert("mode".into(), json!(mode));
     }
     let initial_scene = object.get("initialScene").and_then(Value::as_str);
     if is_usable_play_initial_scene(initial_scene) {
-        out.insert("initialScene".into(), json!(initial_scene.unwrap_or_default().trim()));
+        out.insert(
+            "initialScene".into(),
+            json!(initial_scene.unwrap_or_default().trim()),
+        );
     }
     let suggested = normalize_suggested_actions(object.get("suggestedActions"));
     if !suggested.is_empty() {
@@ -229,16 +288,31 @@ fn proposed_action_payload(args: &Value, language: &str) -> Option<Value> {
         ("generate_cover", "generateCover", "generateCover"),
         ("script_create", "scriptCreate", "scriptCreate"),
         ("storyboard_create", "storyboardCreate", "storyboardCreate"),
-        ("interactive_film_create", "interactiveFilmCreate", "interactiveFilmCreate"),
-        ("translation_create", "translationCreate", "translationCreate"),
+        (
+            "interactive_film_create",
+            "interactiveFilmCreate",
+            "interactiveFilmCreate",
+        ),
+        (
+            "translation_create",
+            "translationCreate",
+            "translationCreate",
+        ),
         // 301 号：四件创建域结构化字段补齐（TS agent-tools.ts L379-424 同名，
         // 此前 schema 未宣传导致提示词指示的必填字段无处落）。
         ("fanfic_init", "fanficCreate", "fanficCreate"),
-        ("continuation_import", "continuationImport", "continuationImport"),
+        (
+            "continuation_import",
+            "continuationImport",
+            "continuationImport",
+        ),
         ("spinoff_create", "spinoffCreate", "spinoffCreate"),
         ("style_imitation", "imitationCreate", "imitationCreate"),
     ];
-    let action = args.get("action").and_then(Value::as_str).unwrap_or_default();
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let (_, arg_key, payload_key) = domains.iter().find(|(act, _, _)| *act == action)?;
     let compact = if action == "play_start" {
         compact_play_start_payload(args.get(arg_key))
@@ -307,7 +381,10 @@ fn assert_executable_proposed_action(action: &str, payload: Option<&Value>) -> R
 
 /// `propose_action` 执行器：确认卡生成。
 pub async fn tool_propose_action(deps: &ProposeDeps<'_>, args: &Value) -> ToolResult {
-    let action = args.get("action").and_then(Value::as_str).unwrap_or_default();
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if !PROPOSE_ACTIONS.contains(&action) {
         return error_result(format!(
             "Invalid propose_action.action: {action}（expected one of {}）",
@@ -612,7 +689,6 @@ pub fn propose_action_schema() -> Value {
     })
 }
 
-
 // ── 注册模块（R38b）：propose_action 单件——schema 经同文件
 //    propose_action_schema 拆解引用（码点零搬移）；写 intents 提案 →
 //    ProjectWrite，不在后台生产剔除名单。 ──
@@ -621,7 +697,8 @@ crate::interaction::registry::tool_def!(
     ProposeAction,
     "propose_action",
     MutationKind::ProjectWrite,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[propose_action_schema()], "propose_action") },
     schema_parameters(&[propose_action_schema()], "propose_action"),
     ctx.propose_deps.is_some(),
@@ -650,27 +727,55 @@ mod tests {
         assert_eq!(proposed_action_session_kind("create_book"), "book-create");
         assert_eq!(proposed_action_session_kind("short_run"), "short");
         assert_eq!(proposed_action_session_kind("translation_create"), "chat");
-        assert_eq!(proposed_action_session_kind("remove_node"), "interactive-film-authoring");
-        assert_eq!(proposed_action_target_route("fanfic_init"), Some("import:fanfic"));
-        assert_eq!(proposed_action_target_route("continuation_import"), Some("import:chapters"));
-        assert_eq!(proposed_action_target_route("style_imitation"), Some("import:imitation"));
+        assert_eq!(
+            proposed_action_session_kind("remove_node"),
+            "interactive-film-authoring"
+        );
+        assert_eq!(
+            proposed_action_target_route("fanfic_init"),
+            Some("import:fanfic")
+        );
+        assert_eq!(
+            proposed_action_target_route("continuation_import"),
+            Some("import:chapters")
+        );
+        assert_eq!(
+            proposed_action_target_route("style_imitation"),
+            Some("import:imitation")
+        );
         assert_eq!(proposed_action_target_route("create_book"), None);
         // 回退文案：生产动作 vs 辅助入口。
-        assert_eq!(proposed_action_fallback_title("create_book", false), "创建长篇书籍");
-        assert_eq!(proposed_action_fallback_title("create_book", true), "Create a long-form book");
-        assert_eq!(proposed_action_fallback_title("remove_node", false), "删除节点");
+        assert_eq!(
+            proposed_action_fallback_title("create_book", false),
+            "创建长篇书籍"
+        );
+        assert_eq!(
+            proposed_action_fallback_title("create_book", true),
+            "Create a long-form book"
+        );
+        assert_eq!(
+            proposed_action_fallback_title("remove_node", false),
+            "删除节点"
+        );
         assert!(proposed_action_fallback_summary("create_book", false).contains("切换到对应入口"));
-        assert!(proposed_action_fallback_summary("fanfic_init", false).contains("只会打开现有 Studio 工具"));
+        assert!(proposed_action_fallback_summary("fanfic_init", false)
+            .contains("只会打开现有 Studio 工具"));
     }
 
     #[test]
     fn initial_scene_usability() {
-        assert!(is_usable_play_initial_scene(Some("雪夜的古宅里，灯火在穿堂风里明明灭灭，门厅深处传来一声轻响。")));
+        assert!(is_usable_play_initial_scene(Some(
+            "雪夜的古宅里，灯火在穿堂风里明明灭灭，门厅深处传来一声轻响。"
+        )));
         // 过短。
         assert!(!is_usable_play_initial_scene(Some("太短的场景。")));
         // 句末悬垂（连词/标点）。
-        assert!(!is_usable_play_initial_scene(Some("雪夜的古宅里灯火明灭，门厅深处似乎有人在，")));
-        assert!(!is_usable_play_initial_scene(Some("他推开门，看见一个人影站在")));
+        assert!(!is_usable_play_initial_scene(Some(
+            "雪夜的古宅里灯火明灭，门厅深处似乎有人在，"
+        )));
+        assert!(!is_usable_play_initial_scene(Some(
+            "他推开门，看见一个人影站在"
+        )));
         assert!(!is_usable_play_initial_scene(None));
     }
 
@@ -689,13 +794,19 @@ mod tests {
         })))
         .unwrap();
         assert_eq!(compacted["title"], "雪夜谜案");
-        assert!(compacted.get("genre").is_none(), "空白字符串被剥：{compacted}");
+        assert!(
+            compacted.get("genre").is_none(),
+            "空白字符串被剥：{compacted}"
+        );
         assert_eq!(compacted["targetChapters"], 200);
         assert!(compacted.get("chapterWordCount").is_none(), "非正数被剥");
         assert_eq!(compacted["tags"], json!(["a", "b"]));
         assert!(compacted.get("emptyTags").is_none(), "全空数组被剥");
         assert_eq!(compacted["cover"], true, "布尔保留");
-        assert!(compact_object(Some(&json!({ "a": " " }))).is_none(), "空结果 → None");
+        assert!(
+            compact_object(Some(&json!({ "a": " " }))).is_none(),
+            "空结果 → None"
+        );
     }
 
     #[tokio::test]
@@ -765,7 +876,11 @@ mod tests {
         )
         .await;
         assert!(invalid.is_error);
-        assert!(invalid.text.starts_with("Invalid proposed action payload:"), "{}", invalid.text);
+        assert!(
+            invalid.text.starts_with("Invalid proposed action payload:"),
+            "{}",
+            invalid.text
+        );
     }
 
     #[tokio::test]
@@ -793,7 +908,13 @@ mod tests {
         )
         .await;
         assert!(translation.is_error);
-        assert!(translation.text.contains("propose_action is missing /translationCreate/targetLanguage"), "{}", translation.text);
+        assert!(
+            translation
+                .text
+                .contains("propose_action is missing /translationCreate/targetLanguage"),
+            "{}",
+            translation.text
+        );
 
         // play_start：initialScene 悬垂被剥 → 必填断言拦截。
         let play = tool_propose_action(
@@ -811,7 +932,12 @@ mod tests {
         )
         .await;
         assert!(play.is_error);
-        assert!(play.text.contains("propose_action is missing /playStart/initialScene"), "{}", play.text);
+        assert!(
+            play.text
+                .contains("propose_action is missing /playStart/initialScene"),
+            "{}",
+            play.text
+        );
 
         // 合法 play_start：suggestedActions 对象归一 + ≤4。
         let ok = tool_propose_action(
@@ -837,7 +963,8 @@ mod tests {
         );
 
         // 非法 action / 缺 instruction。
-        let bad_action = tool_propose_action(&deps, &json!({ "action": "bogus", "instruction": "x" })).await;
+        let bad_action =
+            tool_propose_action(&deps, &json!({ "action": "bogus", "instruction": "x" })).await;
         assert!(bad_action.is_error && bad_action.text.contains("Invalid propose_action.action"));
         let no_instruction = tool_propose_action(&deps, &json!({ "action": "short_run" })).await;
         assert!(no_instruction.is_error && no_instruction.text.contains("requires an instruction"));
@@ -847,19 +974,42 @@ mod tests {
     fn schema_shape_and_requested_skills() {
         let schema = propose_action_schema();
         assert_eq!(schema["function"]["name"], "propose_action");
-        assert_eq!(schema["function"]["parameters"]["required"], json!(["action", "instruction"]));
+        assert_eq!(
+            schema["function"]["parameters"]["required"],
+            json!(["action", "instruction"])
+        );
         // 301 号：12 个结构化子域全宣传（含四件创建域）。
         let props = &schema["function"]["parameters"]["properties"];
-        for key in ["createBook", "shortRun", "playStart", "generateCover", "scriptCreate", "storyboardCreate", "interactiveFilmCreate", "translationCreate", "fanficCreate", "continuationImport", "spinoffCreate", "imitationCreate"] {
+        for key in [
+            "createBook",
+            "shortRun",
+            "playStart",
+            "generateCover",
+            "scriptCreate",
+            "storyboardCreate",
+            "interactiveFilmCreate",
+            "translationCreate",
+            "fanficCreate",
+            "continuationImport",
+            "spinoffCreate",
+            "imitationCreate",
+        ] {
             assert!(props.get(key).is_some(), "schema 缺 {key}");
         }
         assert_eq!(
-            schema["function"]["parameters"]["properties"]["action"]["enum"].as_array().unwrap().len(),
+            schema["function"]["parameters"]["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap()
+                .len(),
             15
         );
         // requestedSkills 非空时进 details。
         let skills = vec!["style-a".to_string(), "Style-A".to_string()];
-        let deps = ProposeDeps { language: "zh", same_session: true, requested_skills: &skills };
+        let deps = ProposeDeps {
+            language: "zh",
+            same_session: true,
+            requested_skills: &skills,
+        };
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let result = runtime.block_on(tool_propose_action(
             &deps,
@@ -869,7 +1019,11 @@ mod tests {
                 "fanficCreate": { "title": "同人书", "sourcePath": ".inkos/uploads/canon/a.txt" }
             }),
         ));
-        assert!(result.text.starts_with("打开同人创作"), "actual: {}", result.text);
+        assert!(
+            result.text.starts_with("打开同人创作"),
+            "actual: {}",
+            result.text
+        );
         let details = result.details.unwrap();
         assert_eq!(details["targetRoute"], "import:fanfic");
         assert_eq!(details["sameSession"], true);
@@ -881,22 +1035,38 @@ mod tests {
             &deps,
             &json!({ "action": "fanfic_init", "instruction": "开同人" }),
         ));
-        assert!(no_title.is_error && no_title.text.contains("/fanficCreate/title"), "{}", no_title.text);
+        assert!(
+            no_title.is_error && no_title.text.contains("/fanficCreate/title"),
+            "{}",
+            no_title.text
+        );
         let no_source = runtime.block_on(tool_propose_action(
             &deps,
             &json!({ "action": "continuation_import", "instruction": "续写导入" }),
         ));
-        assert!(no_source.is_error && no_source.text.contains("/continuationImport/sourcePath"), "{}", no_source.text);
+        assert!(
+            no_source.is_error && no_source.text.contains("/continuationImport/sourcePath"),
+            "{}",
+            no_source.text
+        );
         let no_parent = runtime.block_on(tool_propose_action(
             &deps,
             &json!({ "action": "spinoff_create", "instruction": "开番外", "spinoffCreate": { "title": "番外" } }),
         ));
-        assert!(no_parent.is_error && no_parent.text.contains("/spinoffCreate/parentBookId"), "{}", no_parent.text);
+        assert!(
+            no_parent.is_error && no_parent.text.contains("/spinoffCreate/parentBookId"),
+            "{}",
+            no_parent.text
+        );
         let no_idea = runtime.block_on(tool_propose_action(
             &deps,
             &json!({ "action": "style_imitation", "instruction": "仿写", "imitationCreate": { "title": "仿写书", "referenceText": "林动睁开双眼。" } }),
         ));
-        assert!(no_idea.is_error && no_idea.text.contains("/imitationCreate/storyIdea"), "{}", no_idea.text);
+        assert!(
+            no_idea.is_error && no_idea.text.contains("/imitationCreate/storyIdea"),
+            "{}",
+            no_idea.text
+        );
 
         // 合法 imitation：payload 带结构化子域。
         let ok_imit = runtime.block_on(tool_propose_action(
@@ -909,6 +1079,9 @@ mod tests {
         ));
         assert!(!ok_imit.is_error, "{}", ok_imit.text);
         let ok_details = ok_imit.details.unwrap();
-        assert_eq!(ok_details["actionPayload"]["imitationCreate"]["storyIdea"], "全新的江湖故事");
+        assert_eq!(
+            ok_details["actionPayload"]["imitationCreate"]["storyIdea"],
+            "全新的江湖故事"
+        );
     }
 }

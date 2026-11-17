@@ -90,7 +90,10 @@ fn strip_code_fence(value: &str) -> String {
     let trimmed = value.trim();
     let re: &Regex = fence_re();
     match re.captures(trimmed) {
-        Some(caps) => caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| trimmed.to_string()),
+        Some(caps) => caps
+            .get(1)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_else(|| trimmed.to_string()),
         None => trimmed.to_string(),
     }
 }
@@ -161,8 +164,7 @@ mod tests {
     ///（default 字段缺省），锁「清偿未收窄解析接受面」。
     #[test]
     fn minimal_new_form_delta_parses_without_panel_ops() {
-        let content =
-            "=== RUNTIME_STATE_DELTA ===\n{\"chapter\":9,\"notes\":[\"n\"]}\n";
+        let content = "=== RUNTIME_STATE_DELTA ===\n{\"chapter\":9,\"notes\":[\"n\"]}\n";
         let out = parse_settler_delta_output(content).unwrap();
         assert_eq!(out.runtime_state_delta.chapter, 9);
         assert_eq!(out.runtime_state_delta.notes, vec!["n".to_string()]);

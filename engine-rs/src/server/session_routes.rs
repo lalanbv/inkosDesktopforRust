@@ -38,7 +38,10 @@ fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> ApiE
 }
 
 fn not_found() -> (StatusCode, Json<Value>) {
-    (StatusCode::NOT_FOUND, Json(json!({ "error": "Session not found" })))
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": "Session not found" })),
+    )
 }
 
 /// 已删除会话标记集（DELETE 先标记；POST 重建同 id 时复活）。
@@ -48,7 +51,10 @@ pub(crate) fn deleted_session_ids() -> &'static Mutex<HashSet<String>> {
 }
 
 /// `normalizeApiBookId`：undefined/null → None；非串 400；空/不安全 400。
-pub(crate) fn normalize_api_book_id(value: Option<&Value>, field: &str) -> Result<Option<String>, ApiErrorResponse> {
+pub(crate) fn normalize_api_book_id(
+    value: Option<&Value>,
+    field: &str,
+) -> Result<Option<String>, ApiErrorResponse> {
     let Some(value) = value else {
         return Ok(None);
     };
@@ -103,9 +109,7 @@ pub(crate) fn normalize_studio_session_kind(
 /// `normalizeStudioPlayMode`：空/非法 → None（TS normalizeCorePlayMode 的
 /// safeParse 失败返回 undefined——studio 侧静默回退）。
 fn normalize_studio_play_mode(value: Option<&Value>) -> Option<PlayMode> {
-    value
-        .and_then(Value::as_str)
-        .and_then(PlayMode::parse)
+    value.and_then(Value::as_str).and_then(PlayMode::parse)
 }
 
 /// `loadReconciledTaskSnapshot`：67 号起由 agent_production 统一实现（running
@@ -114,9 +118,7 @@ use crate::server::agent_production::load_reconciled_task_snapshot;
 
 // ── GET /api/v1/interaction/session ────────────────────────────
 
-pub async fn get_interaction_session(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn get_interaction_session(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root();
     let session = load_project_session(root).await;
     let active_book_id = resolve_session_active_book(root, &session).await;
@@ -170,20 +172,17 @@ pub async fn get_session(
     let task = load_reconciled_task_snapshot(root, &session_id).await;
     let mut payload = json!({ "session": session.to_response_json() });
     if let Some(task) = task {
-        payload
-            .as_object_mut()
-            .unwrap()
-            .insert("task".to_string(), serde_json::to_value(&task).unwrap_or(Value::Null));
+        payload.as_object_mut().unwrap().insert(
+            "task".to_string(),
+            serde_json::to_value(&task).unwrap_or(Value::Null),
+        );
     }
     (StatusCode::OK, Json(payload))
 }
 
 // ── POST /api/v1/sessions ──────────────────────────────────────
 
-pub async fn create_session(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn create_session(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     let root = runtime.state.project_root();
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let book_id = match normalize_api_book_id(payload.get("bookId"), "bookId") {
@@ -195,11 +194,11 @@ pub async fn create_session(
     } else {
         SessionKind::Chat
     };
-    let session_kind = match normalize_studio_session_kind(payload.get("sessionKind"), fallback_kind)
-    {
-        Ok(kind) => kind,
-        Err(response) => return response.into_response(),
-    };
+    let session_kind =
+        match normalize_studio_session_kind(payload.get("sessionKind"), fallback_kind) {
+            Ok(kind) => kind,
+            Err(response) => return response.into_response(),
+        };
     let play_mode = normalize_studio_play_mode(payload.get("playMode"));
     // sessionId 仅允许 timestamp-random 形态（防任意文件名注入）
     let safe_session_id = payload
@@ -213,7 +212,9 @@ pub async fn create_session(
             !timestamp.is_empty()
                 && timestamp.bytes().all(|b| b.is_ascii_digit())
                 && !random.is_empty()
-                && random.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())
+                && random
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())
         });
     let session = create_and_persist_book_session(
         root,
@@ -224,8 +225,15 @@ pub async fn create_session(
     )
     .await;
     // 同 id 重建 → 复活（清除删除标记）
-    deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&session.session_id);
-    (StatusCode::OK, Json(json!({ "session": session.to_response_json() }))).into_response()
+    deleted_session_ids()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&session.session_id);
+    (
+        StatusCode::OK,
+        Json(json!({ "session": session.to_response_json() })),
+    )
+        .into_response()
 }
 
 // ── PUT /api/v1/sessions/:sessionId/play-mode ──────────────────
@@ -238,8 +246,12 @@ pub async fn put_session_play_mode(
     let root = runtime.state.project_root();
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let Some(play_mode) = normalize_studio_play_mode(payload.get("playMode")) else {
-        return api_error(StatusCode::BAD_REQUEST, "INVALID_PLAY_MODE", "playMode is required")
-            .into_response();
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_PLAY_MODE",
+            "playMode is required",
+        )
+        .into_response();
     };
     let Some(existing) = load_book_session(root, &session_id).await else {
         return not_found().into_response();
@@ -252,7 +264,11 @@ pub async fn put_session_play_mode(
         Some(play_mode),
     )
     .await;
-    (StatusCode::OK, Json(json!({ "session": session.to_response_json() }))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({ "session": session.to_response_json() })),
+    )
+        .into_response()
 }
 
 // ── POST /api/v1/sessions/:sessionId/branch ────────────────────
@@ -286,7 +302,8 @@ pub async fn branch_session(
             .await
             .is_some();
     let chat_running = crate::server::agent_route::running_agent_sessions()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains_key(&session_id);
     if task_running || chat_running {
         return api_error(
@@ -327,7 +344,11 @@ pub async fn session_branch_points(
 ) -> impl IntoResponse {
     let root = runtime.state.project_root();
     match derive_branch_points(root, &session_id).await {
-        Some(result) => (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or(json!({})))).into_response(),
+        Some(result) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(&result).unwrap_or(json!({}))),
+        )
+            .into_response(),
         None => not_found().into_response(),
     }
 }
@@ -373,7 +394,10 @@ pub async fn delete_session(
     let root = runtime.state.project_root();
     // 先标记（中止后的错误持久化检查该标记）；运行中任务控制器随 65 号
     // agent 执行体接入注册表——当前无生产者，abort 为 no-op。
-    deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(session_id.clone());
+    deleted_session_ids()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(session_id.clone());
     delete_book_session(root, &session_id).await;
     delete_studio_task_snapshot(root, &session_id).await;
     (StatusCode::OK, Json(json!({ "ok": true })))
@@ -396,14 +420,15 @@ pub async fn abort_session(
     };
     let mut task_aborted = false;
     if scope == "all" {
-        if let Some(handle) =
-            crate::server::agent_production::find_running_task_controller(
-                runtime.state.project_root(),
-                &session_id,
-            )
-            .await
+        if let Some(handle) = crate::server::agent_production::find_running_task_controller(
+            runtime.state.project_root(),
+            &session_id,
+        )
+        .await
         {
-            *handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+            *handle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             task_aborted = true;
         }
     }
@@ -414,26 +439,40 @@ pub async fn abort_session(
     // :829 会新建 abort_flag 冲掉此前置位）由受理点按入队序裁决受理即中止。
     // 空闲时置位无害：标记在下一次受理时因入队序更新而未命中并自清除。
     if crate::server::agent_route::running_agent_sessions()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains_key(&session_id)
     {
-        crate::server::agent_route::mark_pending_session_abort(runtime.state.project_root(), &session_id);
+        crate::server::agent_route::mark_pending_session_abort(
+            runtime.state.project_root(),
+            &session_id,
+        );
     }
     runtime.hub.broadcast(
         "agent:aborted",
         &json!({ "sessionId": session_id, "aborted": aborted }),
     );
-    (StatusCode::OK, Json(json!({ "ok": true, "aborted": aborted })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "aborted": aborted })),
+    )
 }
 
 /// `abortAgentSession`：置位该会话聊天轮的 loop 轮询句柄（68 号起与 loop
 /// 共享同一 Arc）；返回是否存在活跃条目。
 fn abort_agent_session(session_id: &str) -> bool {
     let registry = crate::server::agent_route::running_agent_sessions();
-    let guard = registry.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = registry
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match guard.get(session_id) {
         Some(handle) => {
-            *handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).abort_flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+            *handle
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .abort_flag
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             true
         }
         None => false,

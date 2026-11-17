@@ -24,40 +24,88 @@ pub async fn revise_translation_segment(
 ) -> Result<serde_json::Value, String> {
     if let Some(number) = paragraph {
         if number == 0 {
-            return Err(coded("TRANSLATION_PARAGRAPH_REQUIRED", "Select last or a paragraph number starting at 1"));
+            return Err(coded(
+                "TRANSLATION_PARAGRAPH_REQUIRED",
+                "Select last or a paragraph number starting at 1",
+            ));
         }
     }
     let manifest = load_translation_manifest(project_root, project_id)
         .await
         .map_err(|e| match e {
-            LoadManifestError::NotFound => coded("TRANSLATION_CHAPTER_NOT_FOUND", "Translation chapter not found"),
-            LoadManifestError::BadPayload(message) => coded("TRANSLATION_MANIFEST_INVALID", &message),
+            LoadManifestError::NotFound => coded(
+                "TRANSLATION_CHAPTER_NOT_FOUND",
+                "Translation chapter not found",
+            ),
+            LoadManifestError::BadPayload(message) => {
+                coded("TRANSLATION_MANIFEST_INVALID", &message)
+            }
         })?;
-    let Some(info) = manifest.chapters.iter().find(|chapter| chapter.number == chapter_number) else {
-        return Err(coded("TRANSLATION_CHAPTER_NOT_FOUND", "Translation chapter not found"));
+    let Some(info) = manifest
+        .chapters
+        .iter()
+        .find(|chapter| chapter.number == chapter_number)
+    else {
+        return Err(coded(
+            "TRANSLATION_CHAPTER_NOT_FOUND",
+            "Translation chapter not found",
+        ));
     };
     let source = load_translation_chapter(project_root, &info.source_path).await?;
     let chapter = load_translation_chapter(project_root, &info.translated_path).await?;
     let paragraph_number = paragraph.unwrap_or(source.segments.len() as u32);
-    let Some(source_segment) = source.segments.get((paragraph_number as usize).checked_sub(1).unwrap_or(usize::MAX)) else {
-        return Err(coded("TRANSLATION_SEGMENT_NOT_FOUND", "Translation source paragraph not found"));
+    let Some(source_segment) = source.segments.get(
+        (paragraph_number as usize)
+            .checked_sub(1)
+            .unwrap_or(usize::MAX),
+    ) else {
+        return Err(coded(
+            "TRANSLATION_SEGMENT_NOT_FOUND",
+            "Translation source paragraph not found",
+        ));
     };
-    let Some(current) = chapter.segments.iter().find(|segment| segment.index == source_segment.index) else {
-        return Err(coded("TRANSLATION_SEGMENT_NOT_FOUND", "Translation source paragraph not found"));
+    let Some(current) = chapter
+        .segments
+        .iter()
+        .find(|segment| segment.index == source_segment.index)
+    else {
+        return Err(coded(
+            "TRANSLATION_SEGMENT_NOT_FOUND",
+            "Translation source paragraph not found",
+        ));
     };
-    let Some(current_target) = current.target.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
-        return Err(coded("TRANSLATION_TARGET_MISSING", "Translate the target paragraph before revising it"));
+    let Some(current_target) = current
+        .target
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    else {
+        return Err(coded(
+            "TRANSLATION_TARGET_MISSING",
+            "Translate the target paragraph before revising it",
+        ));
     };
-    let position = source.segments.iter().position(|segment| segment.index == source_segment.index).unwrap_or_default();
+    let position = source
+        .segments
+        .iter()
+        .position(|segment| segment.index == source_segment.index)
+        .unwrap_or_default();
     let neighbors: Vec<TranslationSegment> = source
         .segments
-        .get(position.saturating_sub(1)..=(position + 1).min(source.segments.len().saturating_sub(1)))
+        .get(
+            position.saturating_sub(1)
+                ..=(position + 1).min(source.segments.len().saturating_sub(1)),
+        )
         .map(|range| {
             range
                 .iter()
                 .filter(|segment| segment.index != source_segment.index)
                 .map(|segment| TranslationSegment {
-                    target: chapter.segments.iter().find(|c| c.index == segment.index).and_then(|c| c.target.clone()),
+                    target: chapter
+                        .segments
+                        .iter()
+                        .find(|c| c.index == segment.index)
+                        .and_then(|c| c.target.clone()),
                     ..segment.clone()
                 })
                 .collect()
@@ -70,14 +118,20 @@ pub async fn revise_translation_segment(
             source_language: &manifest.source_language,
             target_language: &manifest.target_language,
             chapter_title: &chapter.title,
-            segment: &TranslationSegment { target: Some(current_target.clone()), ..source_segment.clone() },
+            segment: &TranslationSegment {
+                target: Some(current_target.clone()),
+                ..source_segment.clone()
+            },
             neighbors: &neighbors,
             glossary: &glossary,
             instruction,
         })
         .await?;
     if outcome.target.trim().is_empty() {
-        return Err(coded("TRANSLATION_TARGET_EMPTY", "A revised paragraph cannot be empty"));
+        return Err(coded(
+            "TRANSLATION_TARGET_EMPTY",
+            "A revised paragraph cannot be empty",
+        ));
     }
     let next_target = outcome.target.trim().to_string();
     let changed = next_target != current_target;
@@ -88,7 +142,10 @@ pub async fn revise_translation_segment(
                 .iter()
                 .map(|segment| {
                     if segment.index == current.index {
-                        TranslationSegment { target: Some(next_target.clone()), ..segment.clone() }
+                        TranslationSegment {
+                            target: Some(next_target.clone()),
+                            ..segment.clone()
+                        }
                     } else {
                         segment.clone()
                     }
@@ -108,32 +165,34 @@ pub async fn revise_translation_segment(
         // 971 号：sync_work_source_artifacts accept（工件修订账随写生效）。run 阶段已在
         // 结尾按 changed-paths 对过账（与 TS runner 同款），此处 checksum 与磁盘一致，
         // 无 legacy 取证窗口。
-        crate::harness::source_sync::sync_work_source_artifacts(crate::harness::source_sync::SyncWorkSourceInput {
-            project_root,
-            work_id: project_id,
-            accept: true,
-            accept_paths: None,
-            episode_id: None,
-            updated_at: Some(next_manifest.updated_at.clone()),
-            writes: vec![
-                crate::utils::atomic_file_set::AtomicFileWrite {
-                    relative_path: info.translated_path.clone(),
-                    content: crate::utils::atomic_file_set::FileContent::Text(format!(
-                        "{}\n",
-                        serde_json::to_string_pretty(&next_chapter).unwrap_or_default()
-                    )),
-                },
-                crate::utils::atomic_file_set::AtomicFileWrite {
-                    relative_path: format!("works/{project_id}/source/manifest.json"),
-                    content: crate::utils::atomic_file_set::FileContent::Text(format!(
-                        "{}\n",
-                        serde_json::to_string_pretty(&next_manifest).unwrap_or_default()
-                    )),
-                },
-            ],
-            title: None,
-            status: None,
-        })
+        crate::harness::source_sync::sync_work_source_artifacts(
+            crate::harness::source_sync::SyncWorkSourceInput {
+                project_root,
+                work_id: project_id,
+                accept: true,
+                accept_paths: None,
+                episode_id: None,
+                updated_at: Some(next_manifest.updated_at.clone()),
+                writes: vec![
+                    crate::utils::atomic_file_set::AtomicFileWrite {
+                        relative_path: info.translated_path.clone(),
+                        content: crate::utils::atomic_file_set::FileContent::Text(format!(
+                            "{}\n",
+                            serde_json::to_string_pretty(&next_chapter).unwrap_or_default()
+                        )),
+                    },
+                    crate::utils::atomic_file_set::AtomicFileWrite {
+                        relative_path: format!("works/{project_id}/source/manifest.json"),
+                        content: crate::utils::atomic_file_set::FileContent::Text(format!(
+                            "{}\n",
+                            serde_json::to_string_pretty(&next_manifest).unwrap_or_default()
+                        )),
+                    },
+                ],
+                title: None,
+                status: None,
+            },
+        )
         .await
         .map_err(|error| error.to_string())?;
     }
@@ -164,5 +223,8 @@ fn coded(code: &str, message: &str) -> String {
 }
 
 fn sha256_tagged(text: &str) -> String {
-    format!("sha256:{}", crate::harness::source_sync::hex_sha256(text.as_bytes()))
+    format!(
+        "sha256:{}",
+        crate::harness::source_sync::hex_sha256(text.as_bytes())
+    )
 }

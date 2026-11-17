@@ -28,7 +28,10 @@ pub struct PlayToolDeps<'a> {
 
 /// `safePlayId`：trim || fallback → 80 码元截断 → 拒绝 `.`/`..`/`/`/`\`/NUL。
 fn safe_play_id(value: Option<&str>, fallback: &str) -> Result<String, String> {
-    let base = value.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(fallback);
+    let base = value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback);
     let mut raw = String::new();
     let mut units = 0usize;
     for ch in base.chars() {
@@ -54,13 +57,19 @@ fn safe_play_id(value: Option<&str>, fallback: &str) -> Result<String, String> {
 /// 会话绑定的世界是否存在（注册条件探测；非法 id 视为不存在）。
 pub async fn session_world_exists(project_root: &Path, session_id: &str) -> bool {
     match safe_play_id(Some(session_id), session_id) {
-        Ok(world_id) => crate::play::load_world(project_root, &world_id).await.is_some(),
+        Ok(world_id) => crate::play::load_world(project_root, &world_id)
+            .await
+            .is_some(),
         Err(_) => false,
     }
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 fn no_world_result(language: &str, redo: bool) -> ToolResult {
@@ -89,7 +98,12 @@ fn no_world_edit_result(language: &str) -> ToolResult {
 
 /// `play_step`：推进会话绑定的世界一回合。
 async fn tool_play_step(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
-    let input = args.get("input").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let input = args
+        .get("input")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if input.is_empty() {
         return text_result("Play input is empty.", None);
     }
@@ -100,7 +114,10 @@ async fn tool_play_step(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
     let Some(world) = crate::play::load_world(deps.project_root, &world_id).await else {
         return no_world_result(deps.language, false);
     };
-    let agents = PlayAgents { router: deps.router, root: deps.project_root };
+    let agents = PlayAgents {
+        router: deps.router,
+        root: deps.project_root,
+    };
     let runner = PlayRunner {
         project_root: deps.project_root,
         world_id: world_id.clone(),
@@ -138,8 +155,7 @@ async fn tool_play_step(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
         .ok()
         .map(|dir| crate::play::play_graph_snapshot(&dir))
         .unwrap_or_else(|| json!({}));
-    let current_state =
-        crate::play::load_current_state(deps.project_root, &world_id, run_id).await;
+    let current_state = crate::play::load_current_state(deps.project_root, &world_id, run_id).await;
     text_result(
         step.scene_text.clone(),
         Some(json!({
@@ -159,8 +175,15 @@ async fn tool_play_step(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
 
 /// `play_revise`：重做/改输入/恢复变体。
 async fn tool_play_revise(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
-    let action = args.get("action").and_then(Value::as_str).unwrap_or_default().to_string();
-    if !matches!(action.as_str(), "regenerate_last" | "edit_last_input" | "restore_variant") {
+    let action = args
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    if !matches!(
+        action.as_str(),
+        "regenerate_last" | "edit_last_input" | "restore_variant"
+    ) {
         return error_result(format!(
             "Invalid play_revise action: {action}（expected regenerate_last | edit_last_input | restore_variant）"
         ));
@@ -177,7 +200,10 @@ async fn tool_play_revise(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
         .and_then(Value::as_str)
         .unwrap_or("zh")
         != "en";
-    let agents = PlayAgents { router: deps.router, root: deps.project_root };
+    let agents = PlayAgents {
+        router: deps.router,
+        root: deps.project_root,
+    };
     let runner = PlayRunner {
         project_root: deps.project_root,
         world_id: world_id.clone(),
@@ -205,7 +231,10 @@ async fn tool_play_revise(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
             );
         };
         // restoreVariant 的错误不吞：原始消息透传（TS 该分支无 catch）。
-        return match runner.restore_variant(turn.trunc() as i64, variant_id).await {
+        return match runner
+            .restore_variant(turn.trunc() as i64, variant_id)
+            .await
+        {
             Ok(restored) => {
                 let fallback = if is_zh {
                     "已切换到指定互动回合版本。"
@@ -235,7 +264,10 @@ async fn tool_play_revise(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
     }
 
     let replacement = if action == "edit_last_input" {
-        args.get("input").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty())
+        args.get("input")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     } else {
         None
     };
@@ -275,8 +307,7 @@ async fn tool_play_revise(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
         .ok()
         .map(|dir| crate::play::play_graph_snapshot(&dir))
         .unwrap_or_else(|| json!({}));
-    let current_state =
-        crate::play::load_current_state(deps.project_root, &world_id, run_id).await;
+    let current_state = crate::play::load_current_state(deps.project_root, &world_id, run_id).await;
     text_result(
         replay.scene_text.clone(),
         Some(json!({
@@ -310,8 +341,16 @@ fn merge_contract(
     }
     let mut current = existing.to_string();
     for patch in replacements.and_then(Value::as_array).into_iter().flatten() {
-        let from = patch.get("from").and_then(Value::as_str).map(str::trim).unwrap_or_default();
-        let to = patch.get("to").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+        let from = patch
+            .get("from")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let to = patch
+            .get("to")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
         if from.is_empty() || to.is_empty() || !current.contains(from) {
             continue;
         }
@@ -437,7 +476,10 @@ fn upsert_play_edit_entity(
             .map(String::from)
     };
     let id = entity_id.clone().unwrap_or_else(|| {
-        let type_for_id = update.get("type").and_then(Value::as_str).unwrap_or("actor");
+        let type_for_id = update
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("actor");
         play_edit_entity_id(type_for_id, label.unwrap_or_default())
     });
     let entity_type = update
@@ -451,8 +493,14 @@ fn upsert_play_edit_entity(
         .map(String::from)
         .or_else(|| existing_field("label"))
         .unwrap_or_else(|| id.clone());
-    let summary_value = summary.map(String::from).or_else(|| existing_field("summary")).unwrap_or_default();
-    let status_value = status.map(String::from).or_else(|| existing_field("status")).unwrap_or_default();
+    let summary_value = summary
+        .map(String::from)
+        .or_else(|| existing_field("summary"))
+        .unwrap_or_default();
+    let status_value = status
+        .map(String::from)
+        .or_else(|| existing_field("status"))
+        .unwrap_or_default();
     db.upsert_entity(&json!({
         "id": id,
         "type": entity_type,
@@ -480,8 +528,14 @@ async fn tool_play_edit(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
         .and_then(Value::as_str)
         .unwrap_or("zh")
         != "en";
-    let world_contract = world.get("worldContract").and_then(Value::as_str).unwrap_or_default();
-    let visual_contract = world.get("visualContract").and_then(Value::as_str).unwrap_or_default();
+    let world_contract = world
+        .get("worldContract")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let visual_contract = world
+        .get("visualContract")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
 
     let mut patch = serde_json::Map::new();
     let next_world_contract = merge_contract(
@@ -515,7 +569,9 @@ async fn tool_play_edit(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
     let updated_world = if patch.is_empty() {
         world.clone()
     } else {
-        match crate::play::update_world(deps.project_root, &world_id, &Value::Object(patch.clone())).await {
+        match crate::play::update_world(deps.project_root, &world_id, &Value::Object(patch.clone()))
+            .await
+        {
             Ok(world) => world,
             Err(message) => return error_result(message),
         }
@@ -571,11 +627,17 @@ async fn tool_play_edit(deps: &PlayToolDeps<'_>, args: &Value) -> ToolResult {
         let mut next_state = current_state.as_object().cloned().unwrap_or_default();
         next_state.insert(
             "worldContract".into(),
-            updated_world.get("worldContract").cloned().unwrap_or_default(),
+            updated_world
+                .get("worldContract")
+                .cloned()
+                .unwrap_or_default(),
         );
         next_state.insert(
             "visualContract".into(),
-            updated_world.get("visualContract").cloned().unwrap_or_default(),
+            updated_world
+                .get("visualContract")
+                .cloned()
+                .unwrap_or_default(),
         );
         next_state.insert(
             "premise".into(),
@@ -826,9 +888,6 @@ pub fn play_chat_system_prompt(is_en: bool) -> String {
         .to_string()
 }
 
-
-
-
 // ── 注册模块（R38b）：play 三件——推进/修订/编辑互动世界（TS 剔除名单
 //    不含 play 面）；available = play 世界在场；schema 经同文件
 //    play_tool_schemas 拆解引用。 ──
@@ -837,15 +896,20 @@ crate::interaction::registry::tool_def!(
     PlayStep,
     "play_step",
     MutationKind::ProjectWrite,
-    ctx, args,
-    { {
-        let schemas = play_tool_schemas();
-        schema_description(&schemas, "play_step")
-    } },
-    { {
-        let schemas = play_tool_schemas();
-        schema_parameters(&schemas, "play_step")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = play_tool_schemas();
+            schema_description(&schemas, "play_step")
+        }
+    },
+    {
+        {
+            let schemas = play_tool_schemas();
+            schema_parameters(&schemas, "play_step")
+        }
+    },
     ctx.play_deps.is_some(),
     tool_play_step(ctx.play_deps.as_ref().expect("available 门控"), args).await
 );
@@ -854,15 +918,20 @@ crate::interaction::registry::tool_def!(
     PlayRevise,
     "play_revise",
     MutationKind::ProjectWrite,
-    ctx, args,
-    { {
-        let schemas = play_tool_schemas();
-        schema_description(&schemas, "play_revise")
-    } },
-    { {
-        let schemas = play_tool_schemas();
-        schema_parameters(&schemas, "play_revise")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = play_tool_schemas();
+            schema_description(&schemas, "play_revise")
+        }
+    },
+    {
+        {
+            let schemas = play_tool_schemas();
+            schema_parameters(&schemas, "play_revise")
+        }
+    },
     ctx.play_deps.is_some(),
     tool_play_revise(ctx.play_deps.as_ref().expect("available 门控"), args).await
 );
@@ -871,26 +940,27 @@ crate::interaction::registry::tool_def!(
     PlayEdit,
     "play_edit",
     MutationKind::ProjectWrite,
-    ctx, args,
-    { {
-        let schemas = play_tool_schemas();
-        schema_description(&schemas, "play_edit")
-    } },
-    { {
-        let schemas = play_tool_schemas();
-        schema_parameters(&schemas, "play_edit")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = play_tool_schemas();
+            schema_description(&schemas, "play_edit")
+        }
+    },
+    {
+        {
+            let schemas = play_tool_schemas();
+            schema_parameters(&schemas, "play_edit")
+        }
+    },
     ctx.play_deps.is_some(),
     tool_play_edit(ctx.play_deps.as_ref().expect("available 门控"), args).await
 );
 
 /// 注册表汇聚口（registry 装配序 = 原 execute_play_tool match 序）。
 pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
-    vec![
-        Box::new(PlayStep),
-        Box::new(PlayRevise),
-        Box::new(PlayEdit),
-    ]
+    vec![Box::new(PlayStep), Box::new(PlayRevise), Box::new(PlayEdit)]
 }
 
 #[cfg(test)]
@@ -898,11 +968,7 @@ mod tests {
     use super::*;
     /// 注册表路由测试通道（R38b）：与生产同路径（find→execute），替代原
     /// match 分发壳——装配错名在此红。
-    async fn route(
-        deps: &PlayToolDeps<'_>,
-        name: &str,
-        args: &Value,
-    ) -> Option<ToolResult> {
+    async fn route(deps: &PlayToolDeps<'_>, name: &str, args: &Value) -> Option<ToolResult> {
         let mut ctx = crate::interaction::registry::ToolCtx::root_only(deps.project_root);
         ctx.play_deps = Some(deps);
         let def = crate::interaction::registry::ToolRegistry::global().find(name, &ctx)?;
@@ -969,7 +1035,10 @@ mod tests {
         let step = route(&deps, "play_step", &json!({ "input": "我走" }))
             .await
             .unwrap();
-        assert_eq!(step.text, "还没有可推进的互动世界。先用 play_start 开一局。");
+        assert_eq!(
+            step.text,
+            "还没有可推进的互动世界。先用 play_start 开一局。"
+        );
         assert!(!step.is_error);
         let revise = route(
             &deps,
@@ -978,9 +1047,15 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(revise.text, "还没有可重做的互动世界。先用 play_start 开一局。");
+        assert_eq!(
+            revise.text,
+            "还没有可重做的互动世界。先用 play_start 开一局。"
+        );
         // 英文表面语言。
-        let deps_en = PlayToolDeps { language: "en", ..deps };
+        let deps_en = PlayToolDeps {
+            language: "en",
+            ..deps
+        };
         let step_en = route(&deps_en, "play_step", &json!({ "input": "go" }))
             .await
             .unwrap();
@@ -1039,7 +1114,11 @@ mod tests {
             .await
             .unwrap();
         assert!(bogus.is_error);
-        assert!(bogus.text.contains("Invalid play_revise action"), "{}", bogus.text);
+        assert!(
+            bogus.text.contains("Invalid play_revise action"),
+            "{}",
+            bogus.text
+        );
         // 未知工具 → None 回落。
         // read 不归 play 族——注册表下落文件层（缺参数错误为文件层语义）。
         let fallback = route(&deps, "read", &json!({})).await.unwrap();
@@ -1060,9 +1139,7 @@ mod tests {
             11
         );
         assert_eq!(schemas[1]["function"]["name"], "play_step");
-        assert_eq!(
-            schemas[1]["function"]["parameters"]["required"][0], "input"
-        );
+        assert_eq!(schemas[1]["function"]["parameters"]["required"][0], "input");
         assert_eq!(schemas[2]["function"]["name"], "play_revise");
         let actions = schemas[2]["function"]["parameters"]["properties"]["action"]["enum"]
             .as_array()
@@ -1096,18 +1173,26 @@ mod tests {
             merge_contract("已有规则", None, None, Some("新条款")),
             "已有规则\n- 新条款"
         );
-        assert_eq!(merge_contract("已有规则", None, None, Some("已有规则")), "已有规则");
+        assert_eq!(
+            merge_contract("已有规则", None, None, Some("已有规则")),
+            "已有规则"
+        );
         assert_eq!(merge_contract("", None, None, Some("首条")), "首条");
     }
 
     #[test]
     fn play_edit_entity_id_collapse_and_fallback() {
-        assert_eq!(play_edit_entity_id("actor", " 室友 林青！ "), "actor_室友_林青");
+        assert_eq!(
+            play_edit_entity_id("actor", " 室友 林青！ "),
+            "actor_室友_林青"
+        );
         assert_eq!(play_edit_entity_id("rule", "No.1 taboo"), "rule_no_1_taboo");
         // 纯符号 → 时间戳 36 进制回退。
         let fallback = play_edit_entity_id("actor", "！！");
         assert!(fallback.starts_with("actor_"), "{fallback}");
-        assert!(fallback["actor_".len()..].chars().all(|c| c.is_ascii_alphanumeric()));
+        assert!(fallback["actor_".len()..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric()));
         // 48 码元截断。
         let long = "字".repeat(60);
         let id = play_edit_entity_id("item", &long);
@@ -1129,7 +1214,9 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::play::ensure_run(root, world_id, "main").await.unwrap();
+        crate::play::ensure_run(root, world_id, "main")
+            .await
+            .unwrap();
         crate::play::save_current_state(
             root,
             world_id,
@@ -1189,13 +1276,21 @@ mod tests {
         assert_eq!(details["updatedPremise"], false);
         assert_eq!(details["updatedEntities"], 2);
 
-        let world = crate::play::load_world(&root, "play-edit-session").await.unwrap();
+        let world = crate::play::load_world(&root, "play-edit-session")
+            .await
+            .unwrap();
         assert!(
-            world["worldContract"].as_str().unwrap().contains("室友会自主行动"),
+            world["worldContract"]
+                .as_str()
+                .unwrap()
+                .contains("室友会自主行动"),
             "{}",
             world["worldContract"]
         );
-        assert!(world["visualContract"].as_str().unwrap().contains("物件情绪重量"));
+        assert!(world["visualContract"]
+            .as_str()
+            .unwrap()
+            .contains("物件情绪重量"));
         assert!(world["updatedAt"].as_str().is_some_and(|v| !v.is_empty()));
 
         let state = crate::play::load_current_state(&root, "play-edit-session", "main")
@@ -1203,10 +1298,15 @@ mod tests {
             .unwrap();
         assert_eq!(state["scene"], "餐桌上有一只旧瓷杯。");
         assert!(
-            state["worldContract"].as_str().unwrap().contains("室友会自主行动"),
+            state["worldContract"]
+                .as_str()
+                .unwrap()
+                .contains("室友会自主行动"),
             "{state}"
         );
-        assert!(state["graphEditedAt"].as_str().is_some_and(|v| !v.is_empty()));
+        assert!(state["graphEditedAt"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()));
 
         let graph = details["graph"].clone();
         let player = graph["entities"]
@@ -1226,7 +1326,10 @@ mod tests {
             .find(|e| e["id"] == "actor_linqing")
             .unwrap();
         assert_eq!(linqing["status"], "戒备");
-        assert_eq!(linqing["summary"], "隐瞒停电夜真相，目标是试探玩家是否可信。");
+        assert_eq!(
+            linqing["summary"],
+            "隐瞒停电夜真相，目标是试探玩家是否可信。"
+        );
     }
 
     #[tokio::test]
@@ -1239,7 +1342,8 @@ mod tests {
                 id: "play-contract-replace",
                 title: "午夜药房",
                 premise: "实习药剂师值夜班。",
-                world_contract: "风险重量：普通差错 / 需要复核 / 可能追责 / 不能公开。时间按动作自然流动。",
+                world_contract:
+                    "风险重量：普通差错 / 需要复核 / 可能追责 / 不能公开。时间按动作自然流动。",
                 visual_contract: "监控冷光。",
                 mode: "open",
                 language: "zh",
@@ -1285,14 +1389,22 @@ mod tests {
         let contract = details["world"]["worldContract"].as_str().unwrap();
         assert!(contract.contains("涉及追责 / 需要主任签字"), "{contract}");
         assert!(!contract.contains("可能追责 / 不能公开"), "{contract}");
-        let world = crate::play::load_world(&root, "play-contract-replace").await.unwrap();
-        assert!(world["worldContract"].as_str().unwrap().contains("涉及追责"));
+        let world = crate::play::load_world(&root, "play-contract-replace")
+            .await
+            .unwrap();
+        assert!(world["worldContract"]
+            .as_str()
+            .unwrap()
+            .contains("涉及追责"));
         let state = crate::play::load_current_state(&root, "play-contract-replace", "main")
             .await
             .unwrap();
         assert_eq!(state["turn"], 0);
         assert!(
-            state["worldContract"].as_str().unwrap().contains("涉及追责 / 需要主任签字"),
+            state["worldContract"]
+                .as_str()
+                .unwrap()
+                .contains("涉及追责 / 需要主任签字"),
             "{state}"
         );
     }
@@ -1308,7 +1420,10 @@ mod tests {
             language: "zh",
         };
         let result = route(&deps, "play_edit", &json!({})).await.unwrap();
-        assert_eq!(result.text, "还没有可编辑的互动世界。先用 play_start 开一局。");
+        assert_eq!(
+            result.text,
+            "还没有可编辑的互动世界。先用 play_start 开一局。"
+        );
         assert!(!result.is_error);
         // 空参数 + 已有世界 → 默认文案 + 零更新。
         crate::play::create_world(

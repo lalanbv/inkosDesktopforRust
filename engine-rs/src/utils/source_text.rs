@@ -53,6 +53,9 @@ mod tests {
     #[test]
     fn numbering_matches_ts_layout() {
         let source = "# 标题\n\n正文一行";
-        assert_eq!(number_source_lines(source, 1), "1\t# 标题\n2\t\n3\t正文一行");
+        assert_eq!(
+            number_source_lines(source, 1),
+            "1\t# 标题\n2\t\n3\t正文一行"
+        );
     }
 }

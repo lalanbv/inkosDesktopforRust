@@ -2,9 +2,7 @@
 //!
 //! 负责插件的安装、卸载、启用、禁用、版本管理。
 
-use crate::plugin::{
-    parse_manifest, PluginError, PluginMetadata, PluginProcess, WasmPlugin,
-};
+use crate::plugin::{parse_manifest, PluginError, PluginMetadata, PluginProcess, WasmPlugin};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -115,9 +113,8 @@ impl PluginManager {
     /// 创建插件管理器
     pub fn new(plugins_dir: &Path) -> Result<Self, PluginError> {
         // 确保插件目录存在
-        std::fs::create_dir_all(plugins_dir).map_err(|e| {
-            PluginError::InstallFailed(format!("创建插件目录失败: {}", e))
-        })?;
+        std::fs::create_dir_all(plugins_dir)
+            .map_err(|e| PluginError::InstallFailed(format!("创建插件目录失败: {}", e)))?;
 
         let mut manager = Self {
             plugins_dir: plugins_dir.to_path_buf(),
@@ -131,7 +128,9 @@ impl PluginManager {
             exec_failures: std::sync::atomic::AtomicU64::new(0),
             exec_auto_disabled: std::sync::atomic::AtomicU64::new(0),
             consec_failures: HashMap::new(),
-            recently_auto_disabled: std::collections::VecDeque::with_capacity(AUTO_DISABLED_RING_CAP),
+            recently_auto_disabled: std::collections::VecDeque::with_capacity(
+                AUTO_DISABLED_RING_CAP,
+            ),
         };
 
         // 加载已安装的插件
@@ -142,9 +141,8 @@ impl PluginManager {
 
     /// 加载已安装的插件
     fn load_installed_plugins(&mut self) -> Result<(), PluginError> {
-        let entries = std::fs::read_dir(&self.plugins_dir).map_err(|e| {
-            PluginError::InstallFailed(format!("读取插件目录失败: {}", e))
-        })?;
+        let entries = std::fs::read_dir(&self.plugins_dir)
+            .map_err(|e| PluginError::InstallFailed(format!("读取插件目录失败: {}", e)))?;
 
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -223,14 +221,12 @@ impl PluginManager {
         // 复制插件到安装目录
         let target_dir = self.plugins_dir.join(&manifest.id);
         if target_dir.exists() {
-            std::fs::remove_dir_all(&target_dir).map_err(|e| {
-                PluginError::InstallFailed(format!("清理旧插件目录失败: {}", e))
-            })?;
+            std::fs::remove_dir_all(&target_dir)
+                .map_err(|e| PluginError::InstallFailed(format!("清理旧插件目录失败: {}", e)))?;
         }
 
-        copy_dir_all(source_path, &target_dir).map_err(|e| {
-            PluginError::InstallFailed(format!("复制插件文件失败: {}", e))
-        })?;
+        copy_dir_all(source_path, &target_dir)
+            .map_err(|e| PluginError::InstallFailed(format!("复制插件文件失败: {}", e)))?;
 
         // 注册插件
         let metadata = manifest;
@@ -273,14 +269,12 @@ impl PluginManager {
             }
         }
         if target_dir.exists() {
-            std::fs::remove_dir_all(&target_dir).map_err(|e| {
-                PluginError::InstallFailed(format!("清理旧插件目录失败: {}", e))
-            })?;
+            std::fs::remove_dir_all(&target_dir)
+                .map_err(|e| PluginError::InstallFailed(format!("清理旧插件目录失败: {}", e)))?;
         }
 
-        copy_dir_all(source_path, &target_dir).map_err(|e| {
-            PluginError::InstallFailed(format!("复制插件文件失败: {}", e))
-        })?;
+        copy_dir_all(source_path, &target_dir)
+            .map_err(|e| PluginError::InstallFailed(format!("复制插件文件失败: {}", e)))?;
 
         let metadata = manifest;
         self.installed.insert(metadata.id.clone(), metadata.clone());
@@ -310,9 +304,8 @@ impl PluginManager {
 
         // 删除插件目录
         let plugin_dir = self.plugins_dir.join(id);
-        std::fs::remove_dir_all(&plugin_dir).map_err(|e| {
-            PluginError::InstallFailed(format!("删除插件目录失败: {}", e))
-        })?;
+        std::fs::remove_dir_all(&plugin_dir)
+            .map_err(|e| PluginError::InstallFailed(format!("删除插件目录失败: {}", e)))?;
 
         // 从注册表中移除
         self.installed.remove(id);
@@ -538,10 +531,7 @@ impl PluginManager {
         };
 
         if !enabled {
-            return Err(PluginError::ExecutionFailed(format!(
-                "插件未启用: {}",
-                id
-            )));
+            return Err(PluginError::ExecutionFailed(format!("插件未启用: {}", id)));
         }
 
         let plugin_dir = self.plugins_dir.join(id);
@@ -593,7 +583,10 @@ impl PluginManager {
                 .expect("installed 刚校验过存在，本方法内不修改它")
                 .clone();
             let executable = entry.to_str().ok_or_else(|| {
-                PluginError::ExecutionFailed(format!("入口路径含非 UTF-8 字符: {}", entry.display()))
+                PluginError::ExecutionFailed(format!(
+                    "入口路径含非 UTF-8 字符: {}",
+                    entry.display()
+                ))
             })?;
             let process = PluginProcess::spawn(metadata, executable)
                 .map_err(|e| PluginError::ExecutionFailed(format!("启动插件进程失败: {e}")))?;
@@ -857,7 +850,10 @@ entrypoint = "plugin.wasm"
         assert_eq!(m.avg_us, 0);
         assert_eq!(m.auto_disabled_count, 0);
         assert!(m.per_plugin.is_empty());
-        assert!(m.recently_auto_disabled.is_empty(), "初始 ring buffer 应为空");
+        assert!(
+            m.recently_auto_disabled.is_empty(),
+            "初始 ring buffer 应为空"
+        );
     }
 
     #[tokio::test]
@@ -876,7 +872,9 @@ entrypoint = "plugin.wasm"
         for i in 0..n {
             let id = format!("flaky-{}", i);
             create_test_plugin(&staging, &id);
-            manager.install_plugin(&staging.join(&id).to_string_lossy()).unwrap();
+            manager
+                .install_plugin(&staging.join(&id).to_string_lossy())
+                .unwrap();
             plugin_ids.push(id);
         }
 
@@ -891,7 +889,10 @@ entrypoint = "plugin.wasm"
 
         let m = manager.metrics();
         // 总禁用次数 = n
-        assert_eq!(m.auto_disabled_count, n as u64, "auto_disabled_count 应等于禁用插件数");
+        assert_eq!(
+            m.auto_disabled_count, n as u64,
+            "auto_disabled_count 应等于禁用插件数"
+        );
         // ring buffer 容量上限 = AUTO_DISABLED_RING_CAP
         assert_eq!(
             m.recently_auto_disabled.len(),
@@ -938,7 +939,9 @@ entrypoint = "plugin.wasm"
         create_test_plugin(&staging, "flaky-plugin");
 
         let mut manager = PluginManager::new(&plugins_dir).unwrap();
-        manager.install_plugin(&staging.join("flaky-plugin").to_string_lossy()).unwrap();
+        manager
+            .install_plugin(&staging.join("flaky-plugin").to_string_lossy())
+            .unwrap();
 
         // 初始应为启用
         assert!(manager.get_plugin("flaky-plugin").unwrap().enabled);
@@ -968,7 +971,6 @@ entrypoint = "plugin.wasm"
         );
     }
 
-
     #[tokio::test]
     async fn test_consecutive_failures_reset_on_success() {
         // 成功执行后连续失败计数应归零（插件恢复不应仍被累计）。
@@ -978,12 +980,18 @@ entrypoint = "plugin.wasm"
         let mut manager = PluginManager::new(&plugins_dir).unwrap();
 
         // 模拟中途积累了连续失败（不依赖真实执行，直接设状态）
-        manager.consec_failures.insert("fake-plugin".to_string(), CONSECUTIVE_FAIL_THRESHOLD - 1);
+        manager
+            .consec_failures
+            .insert("fake-plugin".to_string(), CONSECUTIVE_FAIL_THRESHOLD - 1);
 
         // 成功路径(NotFound 是 Err，用 count 归零逻辑：成功时 remove)
         // 直接测 consec_failures 归零语义：插入后模拟成功分支 remove。
         manager.consec_failures.remove("fake-plugin");
-        assert_eq!(manager.consec_failures.get("fake-plugin"), None, "成功后计数应归零");
+        assert_eq!(
+            manager.consec_failures.get("fake-plugin"),
+            None,
+            "成功后计数应归零"
+        );
     }
 
     #[test]
@@ -1009,7 +1017,9 @@ entrypoint = "plugin.wasm"
         create_test_plugin(&staging, "wasm-plugin");
 
         let mut manager = PluginManager::new(&plugins_dir).unwrap();
-        manager.install_plugin(&staging.join("wasm-plugin").to_string_lossy()).unwrap();
+        manager
+            .install_plugin(&staging.join("wasm-plugin").to_string_lossy())
+            .unwrap();
         manager.disable_plugin("wasm-plugin").unwrap();
 
         // 禁用插件 → filter 排除 → ids 为空 → no-op，不 panic。

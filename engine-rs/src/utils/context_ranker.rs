@@ -104,7 +104,10 @@ pub fn rank_entries_for_composition(
     for entry in entries {
         let tier = crate::utils::context_source_tier::context_source_tier(&entry.source);
         let precedence = tier.precedence();
-        match tiers.iter_mut().find(|(tier_precedence, _)| *tier_precedence == precedence) {
+        match tiers
+            .iter_mut()
+            .find(|(tier_precedence, _)| *tier_precedence == precedence)
+        {
             Some((_, items)) => items.push(entry.clone()),
             None => tiers.push((precedence, vec![entry.clone()])),
         }
@@ -139,17 +142,15 @@ pub fn build_opening_hint(
     } else {
         trimmed.to_string()
     };
-    Some(
-        if language == crate::utils::language::WritingLanguage::En {
-            format!(
+    Some(if language == crate::utils::language::WritingLanguage::En {
+        format!(
                 "## Opening constraint (carry over the previous ending)\nThe first paragraphs of this chapter must pick up exactly where the previous chapter ended — same scene, same tension, no reset.\nPrevious ending:\n{clipped}"
             )
-        } else {
-            format!(
+    } else {
+        format!(
                 "## 开头承接约束（上章结尾）\n本章开头必须真实接住上一章结尾——同一场景、同一张力，不得重置或跳过。\n上章结尾：\n{clipped}"
             )
-        },
-    )
+    })
 }
 
 /// ContextSource 适配：G2 层间 precedence 之上做层内确定性排序，

@@ -171,7 +171,11 @@ pub fn render_chapter_summaries_projection(
     language: WritingLanguage,
 ) -> String {
     let en = language == WritingLanguage::En;
-    let title = if en { "# Chapter Summaries" } else { "# 章节摘要" };
+    let title = if en {
+        "# Chapter Summaries"
+    } else {
+        "# 章节摘要"
+    };
     // R2/359 号：末尾增冲突强度/揭示强度两列；缺分（旧章/旧书）渲染空单元格。
     let headers = if en {
         [
@@ -247,21 +251,48 @@ pub fn render_current_state_projection(
     }
     let labels = if en {
         (
-            "Current Location", "Protagonist State", "Current Goal",
-            "Current Constraint", "Current Alliances", "Current Conflict",
+            "Current Location",
+            "Protagonist State",
+            "Current Goal",
+            "Current Constraint",
+            "Current Alliances",
+            "Current Conflict",
         )
     } else {
         (
-            "当前位置", "主角状态", "当前目标", "当前限制", "当前敌我", "当前冲突",
+            "当前位置",
+            "主角状态",
+            "当前目标",
+            "当前限制",
+            "当前敌我",
+            "当前冲突",
         )
     };
     let slots: [Slot; 6] = [
-        Slot { label: labels.0, aliases: &["Current Location", "当前位置"] },
-        Slot { label: labels.1, aliases: &["Protagonist State", "主角状态"] },
-        Slot { label: labels.2, aliases: &["Current Goal", "当前目标"] },
-        Slot { label: labels.3, aliases: &["Current Constraint", "当前限制"] },
-        Slot { label: labels.4, aliases: &["Current Alliances", "Current Relationships", "当前敌我"] },
-        Slot { label: labels.5, aliases: &["Current Conflict", "当前冲突"] },
+        Slot {
+            label: labels.0,
+            aliases: &["Current Location", "当前位置"],
+        },
+        Slot {
+            label: labels.1,
+            aliases: &["Protagonist State", "主角状态"],
+        },
+        Slot {
+            label: labels.2,
+            aliases: &["Current Goal", "当前目标"],
+        },
+        Slot {
+            label: labels.3,
+            aliases: &["Current Constraint", "当前限制"],
+        },
+        Slot {
+            label: labels.4,
+            aliases: &["Current Alliances", "Current Relationships", "当前敌我"],
+        },
+        Slot {
+            label: labels.5,
+            aliases: &["Current Conflict", "当前冲突"],
+        },
     ];
 
     let known_predicates: std::collections::HashSet<String> = slots
@@ -274,11 +305,19 @@ pub fn render_current_state_projection(
         String::new(),
         table_header.into(),
         "| --- | --- |".into(),
-        format!("| {} | {} |", label_chapter, escape_table_cell(&state.chapter.to_string())),
+        format!(
+            "| {} | {} |",
+            label_chapter,
+            escape_table_cell(&state.chapter.to_string())
+        ),
     ];
     for slot in &slots {
         let value = find_fact_value(state, slot.aliases).unwrap_or_else(|| placeholder.into());
-        lines.push(format!("| {} | {} |", slot.label, escape_table_cell(&value)));
+        lines.push(format!(
+            "| {} | {} |",
+            slot.label,
+            escape_table_cell(&value)
+        ));
     }
 
     let mut additional: Vec<&CurrentStateFact> = state
@@ -342,9 +381,7 @@ fn normalize_predicate(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::runtime_state::{
-        ChapterSummaryRow, HookRecord, HookStatus, HooksState,
-    };
+    use crate::models::runtime_state::{ChapterSummaryRow, HookRecord, HookStatus, HooksState};
 
     fn hook(id: &str) -> HookRecord {
         HookRecord {
@@ -369,7 +406,9 @@ mod tests {
 
     #[test]
     fn hooks_projection_zh_headers() {
-        let state = HooksState { hooks: vec![hook("h1")] };
+        let state = HooksState {
+            hooks: vec![hook("h1")],
+        };
         let md = render_hooks_projection(&state, WritingLanguage::Zh, None);
         assert!(md.contains("# 伏笔池"));
         assert!(md.contains("| 起始章节 |"));
@@ -382,12 +421,22 @@ mod tests {
         use crate::models::runtime_state::HookKind;
         let mut seeded = hook("H01");
         seeded.kind = Some(HookKind::Suspense);
-        let md = render_hooks_projection(&HooksState { hooks: vec![seeded] }, WritingLanguage::Zh, None);
+        let md = render_hooks_projection(
+            &HooksState {
+                hooks: vec![seeded],
+            },
+            WritingLanguage::Zh,
+            None,
+        );
         assert!(md.contains("| hook_id | 起始章节 | 类型 | 状态 | 最近推进 | 预期回收 | 回收节奏 | 上游依赖 | 回收卷 | 核心 | 半衰期 | 升级 | 备注 | 分类 |"));
-        assert!(md.contains("| H01 | 1 | plot | open | 0 | soon | 近期 | 无 |  | 否 |  |  |  | suspense |"));
+        assert!(md.contains(
+            "| H01 | 1 | plot | open | 0 | soon | 近期 | 无 |  | 否 |  |  |  | suspense |"
+        ));
         // 无 kind：第 14 列输出空单元格（列数保持 14）。
         let bare = render_hooks_projection(
-            &HooksState { hooks: vec![hook("h2")] },
+            &HooksState {
+                hooks: vec![hook("h2")],
+            },
             WritingLanguage::Zh,
             None,
         );
@@ -397,7 +446,9 @@ mod tests {
 
     #[test]
     fn hooks_projection_en_with_diagnostics() {
-        let state = HooksState { hooks: vec![hook("h1")] };
+        let state = HooksState {
+            hooks: vec![hook("h1")],
+        };
         let md = render_hooks_projection(&state, WritingLanguage::En, Some(50));
         // distance 49 > halfLife 30 → stale marker
         assert!(md.contains("stale"));
@@ -407,8 +458,16 @@ mod tests {
     fn chapter_summaries_projection_sorted() {
         let state = ChapterSummariesState {
             rows: vec![
-                ChapterSummaryRow { chapter: 5, title: "five".into(), ..Default::default() },
-                ChapterSummaryRow { chapter: 2, title: "two".into(), ..Default::default() },
+                ChapterSummaryRow {
+                    chapter: 5,
+                    title: "five".into(),
+                    ..Default::default()
+                },
+                ChapterSummaryRow {
+                    chapter: 2,
+                    title: "two".into(),
+                    ..Default::default()
+                },
             ],
         };
         let md = render_chapter_summaries_projection(&state, WritingLanguage::Zh);
@@ -423,12 +482,20 @@ mod tests {
             chapter: 7,
             facts: vec![
                 CurrentStateFact {
-                    subject: "p".into(), predicate: "当前位置".into(), object: "图书馆".into(),
-                    valid_from_chapter: 1, valid_until_chapter: None, source_chapter: 1,
+                    subject: "p".into(),
+                    predicate: "当前位置".into(),
+                    object: "图书馆".into(),
+                    valid_from_chapter: 1,
+                    valid_until_chapter: None,
+                    source_chapter: 1,
                 },
                 CurrentStateFact {
-                    subject: "p".into(), predicate: "note_1".into(), object: "随笔".into(),
-                    valid_from_chapter: 1, valid_until_chapter: None, source_chapter: 1,
+                    subject: "p".into(),
+                    predicate: "note_1".into(),
+                    object: "随笔".into(),
+                    valid_from_chapter: 1,
+                    valid_until_chapter: None,
+                    source_chapter: 1,
                 },
             ],
         };
@@ -442,7 +509,10 @@ mod tests {
     fn escape_table_cell_pipes() {
         assert_eq!(escape_table_cell("a|b"), "a\\|b");
         // 810 号：换行 → <br>（TS escapeTableCell 同款），单元格不得把表格行截断。
-        assert_eq!(escape_table_cell("既有。\n撤回依据。"), "既有。<br>撤回依据。");
+        assert_eq!(
+            escape_table_cell("既有。\n撤回依据。"),
+            "既有。<br>撤回依据。"
+        );
         assert_eq!(escape_table_cell("a\r\nb"), "a<br>b");
     }
 
@@ -455,17 +525,29 @@ mod tests {
         withdrawn.kind = Some(HookKind::Artifact);
         withdrawn.status = HookStatus::Superseded;
         withdrawn.notes = "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01|H04。".into();
-        let md = render_hooks_projection(&HooksState { hooks: vec![withdrawn] }, WritingLanguage::Zh, None);
+        let md = render_hooks_projection(
+            &HooksState {
+                hooks: vec![withdrawn],
+            },
+            WritingLanguage::Zh,
+            None,
+        );
         let rows: Vec<&str> = md.lines().filter(|l| l.contains("H03")).collect();
         assert_eq!(rows.len(), 1, "多行 notes 必须渲染为单行：{md}");
         assert!(rows[0].contains("<br>"), "{}", rows[0]);
         assert!(rows[0].contains("| superseded |"), "{}", rows[0]);
         let parsed = crate::utils::story_markdown::parse_pending_hooks_markdown(&md);
-        let h03 = parsed.iter().find(|h| h.hook_id == "H03").expect("H03 回读");
+        let h03 = parsed
+            .iter()
+            .find(|h| h.hook_id == "H03")
+            .expect("H03 回读");
         assert_eq!(h03.kind, Some(HookKind::Artifact));
         assert_eq!(h03.status, HookStatus::Superseded);
         // 811/812 号：换行经 <br>、竖线经 \| 往返无损（渲染转义 ↔ 解析还原成对）。
-        assert_eq!(h03.notes, "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01|H04。");
+        assert_eq!(
+            h03.notes,
+            "母亲留下的碎镜在镜界发光。\n作者修订撤回：碎镜线并入 H01|H04。"
+        );
     }
 
     #[test]
@@ -477,7 +559,10 @@ mod tests {
     #[test]
     fn compare_additional_facts_note_ordering() {
         use std::cmp::Ordering;
-        assert_eq!(compare_additional_facts("note_2", "note_10"), Ordering::Less); // 2 < 10
+        assert_eq!(
+            compare_additional_facts("note_2", "note_10"),
+            Ordering::Less
+        ); // 2 < 10
         assert_eq!(compare_additional_facts("note_1", "目标"), Ordering::Less); // note 先
         assert_eq!(compare_additional_facts("b", "a"), Ordering::Greater);
     }

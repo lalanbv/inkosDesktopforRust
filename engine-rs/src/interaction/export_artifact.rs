@@ -90,7 +90,9 @@ async fn build_chapter_file_lookup(chapters_dir: &Path) -> std::collections::Has
 }
 
 fn escape_html(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// markdown → 简单 xhtml：首个 `# ` 标题 + 非 # 行变 `<p>`。
@@ -131,10 +133,19 @@ pub async fn build_export_artifact(
     approved_only: bool,
     output_path: Option<&Path>,
 ) -> Result<ExportArtifact, String> {
-    let index = state.load_chapter_index(book_id).await.map_err(|e| e.to_string())?;
-    let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
+    let index = state
+        .load_chapter_index(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let book = state
+        .load_book_config(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let chapters: Vec<&crate::models::chapter::ChapterMeta> = if approved_only {
-        index.iter().filter(|ch| ch.status == crate::models::chapter::ChapterStatus::Approved).collect()
+        index
+            .iter()
+            .filter(|ch| ch.status == crate::models::chapter::ChapterStatus::Approved)
+            .collect()
     } else {
         index.iter().collect()
     };
@@ -164,7 +175,11 @@ pub async fn build_export_artifact(
                 let (title, html) = markdown_to_simple_html(&markdown);
                 epub_chapters.push((title, html));
             }
-            let lang = if book.language.as_deref() == Some("en") { "en" } else { "zh-CN" };
+            let lang = if book.language.as_deref() == Some("en") {
+                "en"
+            } else {
+                "zh-CN"
+            };
             (
                 format!("{book_id}.epub"),
                 build_epub(&book.title, lang, book_id, &epub_chapters),
@@ -187,8 +202,15 @@ pub async fn build_export_artifact(
                 parts.push(content);
                 parts.push("\n\n".to_string());
             }
-            let joiner = if format == ExportFormat::Md { "\n---\n\n" } else { "\n" };
-            (format!("{book_id}.{}", format.extension()), parts.join(joiner).into_bytes())
+            let joiner = if format == ExportFormat::Md {
+                "\n---\n\n"
+            } else {
+                "\n"
+            };
+            (
+                format!("{book_id}.{}", format.extension()),
+                parts.join(joiner).into_bytes(),
+            )
         }
     };
 
@@ -213,7 +235,11 @@ fn crc32(data: &[u8]) -> u32 {
         for (i, slot) in table.iter_mut().enumerate() {
             let mut crc = i as u32;
             for _ in 0..8 {
-                crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
             }
             *slot = crc;
         }
@@ -241,7 +267,10 @@ struct StoredZipWriter {
 
 impl StoredZipWriter {
     fn new() -> Self {
-        StoredZipWriter { out: Vec::new(), entries: Vec::new() }
+        StoredZipWriter {
+            out: Vec::new(),
+            entries: Vec::new(),
+        }
     }
 
     fn add(&mut self, name: &str, data: &[u8]) {
@@ -257,13 +286,21 @@ impl StoredZipWriter {
         self.out.extend_from_slice(&0u16.to_le_bytes());
         self.out.extend_from_slice(&0x0021u16.to_le_bytes());
         self.out.extend_from_slice(&crc.to_le_bytes());
-        self.out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        self.out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-        self.out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        self.out
+            .extend_from_slice(&(data.len() as u32).to_le_bytes());
+        self.out
+            .extend_from_slice(&(data.len() as u32).to_le_bytes());
+        self.out
+            .extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
         self.out.extend_from_slice(&0u16.to_le_bytes());
         self.out.extend_from_slice(name_bytes);
         self.out.extend_from_slice(data);
-        self.entries.push(ZipEntry { name: name.to_string(), crc, size: data.len() as u32, offset });
+        self.entries.push(ZipEntry {
+            name: name.to_string(),
+            crc,
+            size: data.len() as u32,
+            offset,
+        });
     }
 
     fn finish(mut self) -> Vec<u8> {
@@ -280,7 +317,8 @@ impl StoredZipWriter {
             self.out.extend_from_slice(&entry.crc.to_le_bytes());
             self.out.extend_from_slice(&entry.size.to_le_bytes());
             self.out.extend_from_slice(&entry.size.to_le_bytes());
-            self.out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+            self.out
+                .extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
             self.out.extend_from_slice(&0u16.to_le_bytes()); // extra len
             self.out.extend_from_slice(&0u16.to_le_bytes()); // comment len
             self.out.extend_from_slice(&0u16.to_le_bytes()); // disk number
@@ -294,8 +332,10 @@ impl StoredZipWriter {
         self.out.extend_from_slice(&0x0605_4B50u32.to_le_bytes());
         self.out.extend_from_slice(&0u16.to_le_bytes()); // disk number
         self.out.extend_from_slice(&0u16.to_le_bytes()); // central dir disk
-        self.out.extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
-        self.out.extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
+        self.out
+            .extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
+        self.out
+            .extend_from_slice(&(self.entries.len() as u16).to_le_bytes());
         self.out.extend_from_slice(&central_size.to_le_bytes());
         self.out.extend_from_slice(&central_start.to_le_bytes());
         self.out.extend_from_slice(&0u16.to_le_bytes()); // comment len
@@ -334,7 +374,12 @@ fn build_epub(title: &str, lang: &str, book_id: &str, chapters: &[(String, Strin
         ));
     }
 
-    let modified = format!("{}Z", &crate::utils::utc_time::utc_now_iso().get(..19).unwrap_or("1970-01-01T00:00:00"));
+    let modified = format!(
+        "{}Z",
+        &crate::utils::utc_time::utc_now_iso()
+            .get(..19)
+            .unwrap_or("1970-01-01T00:00:00")
+    );
     let opf = format!(
         concat!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
@@ -385,7 +430,10 @@ fn build_epub(title: &str, lang: &str, book_id: &str, chapters: &[(String, Strin
             title = escape_html(chapter_title),
             body = html,
         );
-        zip.add(&format!("OEBPS/chapter{}.xhtml", idx + 1), document.as_bytes());
+        zip.add(
+            &format!("OEBPS/chapter{}.xhtml", idx + 1),
+            document.as_bytes(),
+        );
     }
 
     zip.finish()
@@ -435,9 +483,21 @@ mod tests {
             .await
             .unwrap();
         let book_dir = state.book_dir("b1");
-        tokio::fs::create_dir_all(book_dir.join("chapters")).await.unwrap();
-        tokio::fs::write(book_dir.join("chapters").join("0001_风.md"), "# 第1章\n\n正文一。").await.unwrap();
-        tokio::fs::write(book_dir.join("chapters").join("0002_云.md"), "# 第2章\n\n正文二。").await.unwrap();
+        tokio::fs::create_dir_all(book_dir.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            book_dir.join("chapters").join("0001_风.md"),
+            "# 第1章\n\n正文一。",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            book_dir.join("chapters").join("0002_云.md"),
+            "# 第2章\n\n正文二。",
+        )
+        .await
+        .unwrap();
         state
     }
 
@@ -445,7 +505,9 @@ mod tests {
     async fn txt_export_joins_title_and_chapters() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None).await.unwrap();
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None)
+            .await
+            .unwrap();
         assert_eq!(artifact.file_name, "b1.txt");
         assert_eq!(artifact.content_type, "text/plain; charset=utf-8");
         assert_eq!(artifact.chapters_exported, 2);
@@ -461,7 +523,9 @@ mod tests {
     async fn md_export_uses_heading_and_divider() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Md, false, None).await.unwrap();
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Md, false, None)
+            .await
+            .unwrap();
         assert_eq!(artifact.content_type, "text/markdown; charset=utf-8");
         let text = String::from_utf8(artifact.payload).unwrap();
         // parts[0] 以 "---\n" 结尾 + joiner "\n---\n\n" → 头部出现双分隔线（TS 同款）。
@@ -473,7 +537,9 @@ mod tests {
     async fn approved_only_filters_index() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, true, None).await.unwrap();
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, true, None)
+            .await
+            .unwrap();
         assert_eq!(artifact.chapters_exported, 1);
         let text = String::from_utf8(artifact.payload).unwrap();
         assert!(text.contains("正文一。"));
@@ -495,7 +561,9 @@ mod tests {
     async fn epub_is_valid_stored_zip_with_mimetype_first() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Epub, false, None).await.unwrap();
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Epub, false, None)
+            .await
+            .unwrap();
         assert_eq!(artifact.content_type, "application/epub+zip");
         assert_eq!(artifact.file_name, "b1.epub");
         // zip 魔数 + 首文件名 mimetype（stored）。
@@ -518,7 +586,10 @@ mod tests {
     fn crc32_known_vectors() {
         assert_eq!(crc32(b""), 0);
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(crc32(b"The quick brown fox jumps over the lazy dog"), 0x414F_A339);
+        assert_eq!(
+            crc32(b"The quick brown fox jumps over the lazy dog"),
+            0x414F_A339
+        );
     }
 
     #[test]

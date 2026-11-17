@@ -79,10 +79,7 @@ impl ConfigWatcher {
                 .watch(parent, RecursiveMode::NonRecursive)
                 .with_context(|| format!("监听工作区配置目录失败: {}", parent.display()))?;
 
-            let mut watched = self
-                .watched_paths
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut watched = self.watched_paths.lock().unwrap_or_else(|e| e.into_inner());
             watched.insert(
                 normalize_config_path(&config_path),
                 ConfigChangeEvent::WorkspaceChanged(workspace_id.to_string()),
@@ -101,10 +98,7 @@ impl ConfigWatcher {
                 .watch(parent, RecursiveMode::NonRecursive)
                 .with_context(|| format!("监听项目配置目录失败: {}", parent.display()))?;
 
-            let mut watched = self
-                .watched_paths
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut watched = self.watched_paths.lock().unwrap_or_else(|e| e.into_inner());
             watched.insert(
                 normalize_config_path(&config_path),
                 ConfigChangeEvent::ProjectChanged(project_root.to_path_buf()),
@@ -127,10 +121,7 @@ impl ConfigWatcher {
                 .unwatch(parent)
                 .with_context(|| format!("停止监听工作区配置失败: {}", parent.display()))?;
 
-            let mut watched = self
-                .watched_paths
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut watched = self.watched_paths.lock().unwrap_or_else(|e| e.into_inner());
             // 键在 watch 时归一化过，这里必须用同样的形式，否则条目会残留。
             watched.remove(&normalize_config_path(&config_path));
 
@@ -147,10 +138,7 @@ impl ConfigWatcher {
                 .unwatch(parent)
                 .with_context(|| format!("停止监听项目配置失败: {}", parent.display()))?;
 
-            let mut watched = self
-                .watched_paths
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut watched = self.watched_paths.lock().unwrap_or_else(|e| e.into_inner());
             // 键在 watch 时归一化过，这里必须用同样的形式，否则条目会残留。
             watched.remove(&normalize_config_path(&config_path));
 
@@ -167,10 +155,7 @@ impl ConfigWatcher {
                 .watch(parent, RecursiveMode::NonRecursive)
                 .with_context(|| format!("监听用户全局配置目录失败: {}", parent.display()))?;
 
-            let mut watched = self
-                .watched_paths
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut watched = self.watched_paths.lock().unwrap_or_else(|e| e.into_inner());
             watched.insert(
                 normalize_config_path(&config_path),
                 ConfigChangeEvent::UserChanged,
@@ -189,10 +174,7 @@ impl ConfigWatcher {
                 .unwatch(parent)
                 .with_context(|| format!("停止监听用户全局配置失败: {}", parent.display()))?;
 
-            let mut watched = self
-                .watched_paths
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut watched = self.watched_paths.lock().unwrap_or_else(|e| e.into_inner());
             watched.remove(&normalize_config_path(&config_path));
 
             tracing::info!("停止监听用户全局配置: {}", config_path.display());
@@ -214,10 +196,8 @@ impl ConfigWatcher {
                             // 事件路径已由后端解析过符号链接；监听表的键在插入时做过
                             // 同样的归一化，因此可以直接比对。
                             let change_event = {
-                                let watched = self
-                                    .watched_paths
-                                    .lock()
-                                    .unwrap_or_else(|e| e.into_inner());
+                                let watched =
+                                    self.watched_paths.lock().unwrap_or_else(|e| e.into_inner());
                                 match watched.get(&path) {
                                     Some(e) => e.clone(),
                                     None => continue,
@@ -226,10 +206,8 @@ impl ConfigWatcher {
 
                             // 防抖：同一文件在窗口内的多次写入只上报一次
                             // （编辑器保存常触发 truncate + write 两个事件）
-                            let mut debounce = self
-                                .debounce_map
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
+                            let mut debounce =
+                                self.debounce_map.lock().unwrap_or_else(|e| e.into_inner());
 
                             let should_notify = debounce
                                 .get(&path)

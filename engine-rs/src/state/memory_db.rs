@@ -387,7 +387,8 @@ impl MemoryDb {
     ///
     /// 注意：只删 `valid_until_chapter IS NULL` 的行（当前有效），历史 facts 保留——与 TS 一致。
     pub fn replace_current_facts(&self, facts: &[NewFact]) -> Result<()> {
-        self.conn.execute("DELETE FROM facts WHERE valid_until_chapter IS NULL", [])?;
+        self.conn
+            .execute("DELETE FROM facts WHERE valid_until_chapter IS NULL", [])?;
         for fact in facts {
             self.add_fact(fact)?;
         }
@@ -427,9 +428,9 @@ impl MemoryDb {
 
     /// chunk 向量全量（检索侧载入后内存余弦）。坏 JSON 行跳过。
     pub fn list_chunk_vectors(&self) -> Result<Vec<StoredChunkVector>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT chunk_id, source, fingerprint, dim, vector, created_at FROM retrieval_chunks")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT chunk_id, source, fingerprint, dim, vector, created_at FROM retrieval_chunks",
+        )?;
         let rows = stmt.query_map([], |row| {
             Ok(StoredChunkVector {
                 chunk_id: row.get(0)?,
@@ -451,9 +452,11 @@ impl MemoryDb {
     /// 545 号备案：接线后仍无生产消费（TS chunkVectorCount 同态）——与
     /// upsert/list 构成检索缓存 API 面整体对称保留。
     pub fn chunk_vector_count(&self) -> Result<u32> {
-        let count: u32 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM retrieval_chunks", [], |row| row.get(0))?;
+        let count: u32 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM retrieval_chunks", [], |row| {
+                    row.get(0)
+                })?;
         Ok(count)
     }
 
@@ -560,9 +563,7 @@ impl MemoryDb {
         sql.push_str(" ORDER BY chapter DESC, created_at DESC");
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(
-            rusqlite::params_from_iter(
-                book_id.iter().copied().chain(status.iter().copied()),
-            ),
+            rusqlite::params_from_iter(book_id.iter().copied().chain(status.iter().copied())),
             |row| {
                 Ok(StoredQualityDebt {
                     debt_id: row.get(0)?,
@@ -789,11 +790,11 @@ fn row_to_summary(row: &Row) -> rusqlite::Result<StoredSummary> {
         characters: row.get("characters")?,
         events: row.get("events")?,
         state_changes: row.get("state_changes")?,
-            hook_activity: row.get("hook_activity")?,
-            mood: row.get("mood")?,
-            chapter_type: row.get("chapter_type")?,
-            conflict_level: None,
-            reveal_level: None,
+        hook_activity: row.get("hook_activity")?,
+        mood: row.get("mood")?,
+        chapter_type: row.get("chapter_type")?,
+        conflict_level: None,
+        reveal_level: None,
     })
 }
 
@@ -919,7 +920,9 @@ mod tests {
         assert_eq!(open[0].debt_id, "d2");
 
         // 书过滤 + 状态更新。
-        assert!(db.update_debt_status("d2", "resolved", Some("patched")).unwrap());
+        assert!(db
+            .update_debt_status("d2", "resolved", Some("patched"))
+            .unwrap());
         let resolved: Vec<_> = db.list_debts(Some("book-1"), Some("resolved")).unwrap();
         assert_eq!(resolved.len(), 2);
         let d2 = resolved.iter().find(|d| d.debt_id == "d2").unwrap();
@@ -976,16 +979,15 @@ mod tests {
         // 迁移时 hooks.status 默认 'open'：插入仅含主键的行应得到 'open'。
         let db = db();
         db.conn
-            .execute(
-                "INSERT INTO hooks (hook_id) VALUES ('h-default')",
-                [],
-            )
+            .execute("INSERT INTO hooks (hook_id) VALUES ('h-default')", [])
             .unwrap();
         let status: String = db
             .conn
-            .query_row("SELECT status FROM hooks WHERE hook_id='h-default'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT status FROM hooks WHERE hook_id='h-default'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(status, "open");
     }
@@ -1022,7 +1024,9 @@ mod tests {
     #[test]
     fn add_fact_returns_autoincrement_id() {
         let db = db();
-        let id1 = db.add_fact(&fact("alice", "location", "forest", 1, 1)).unwrap();
+        let id1 = db
+            .add_fact(&fact("alice", "location", "forest", 1, 1))
+            .unwrap();
         let id2 = db.add_fact(&fact("bob", "location", "town", 1, 1)).unwrap();
         assert!(id2 > id1, "自增 id 应递增（got {id1} → {id2}）");
     }
@@ -1030,9 +1034,13 @@ mod tests {
     #[test]
     fn get_current_facts_excludes_invalidated_and_sorts_by_subject_then_predicate() {
         let db = db();
-        db.add_fact(&fact("alice", "weapon", "sword", 1, 1)).unwrap();
-        db.add_fact(&fact("alice", "location", "forest", 1, 1)).unwrap();
-        let old = db.add_fact(&fact("alice", "location", "village", 1, 1)).unwrap();
+        db.add_fact(&fact("alice", "weapon", "sword", 1, 1))
+            .unwrap();
+        db.add_fact(&fact("alice", "location", "forest", 1, 1))
+            .unwrap();
+        let old = db
+            .add_fact(&fact("alice", "location", "village", 1, 1))
+            .unwrap();
         db.add_fact(&fact("bob", "mood", "happy", 2, 2)).unwrap();
         db.invalidate_fact(old, 3).unwrap();
 
@@ -1056,10 +1064,13 @@ mod tests {
     fn get_facts_at_respects_temporal_window() {
         let db = db();
         // alice.location: 第 1-5 章（valid_until=6 表示 >6 有效即 [1,6)）
-        let loc_id = db.add_fact(&fact("alice", "location", "forest", 1, 1)).unwrap();
+        let loc_id = db
+            .add_fact(&fact("alice", "location", "forest", 1, 1))
+            .unwrap();
         db.invalidate_fact(loc_id, 6).unwrap();
         // alice.weapon: 第 3 章起，持续有效
-        db.add_fact(&fact("alice", "weapon", "sword", 3, 3)).unwrap();
+        db.add_fact(&fact("alice", "weapon", "sword", 3, 3))
+            .unwrap();
 
         // 第 2 章：location 有效（1<=2 且 6>2），weapon 无效（3>2）
         let at_2 = db.get_facts_at("alice", 2).unwrap();
@@ -1079,9 +1090,12 @@ mod tests {
     #[test]
     fn get_fact_history_includes_invalidated_sorted_by_valid_from() {
         let db = db();
-        let old = db.add_fact(&fact("alice", "location", "village", 1, 1)).unwrap();
+        let old = db
+            .add_fact(&fact("alice", "location", "village", 1, 1))
+            .unwrap();
         db.invalidate_fact(old, 5).unwrap();
-        db.add_fact(&fact("alice", "location", "forest", 5, 5)).unwrap();
+        db.add_fact(&fact("alice", "location", "forest", 5, 5))
+            .unwrap();
 
         let history = db.get_fact_history("alice").unwrap();
         assert_eq!(history.len(), 2);
@@ -1093,11 +1107,14 @@ mod tests {
     #[test]
     fn get_facts_by_predicate_filters_current_only_and_sorts_by_subject() {
         let db = db();
-        db.add_fact(&fact("alice", "location", "forest", 1, 1)).unwrap();
-        db.add_fact(&fact("carol", "location", "lake", 1, 1)).unwrap();
+        db.add_fact(&fact("alice", "location", "forest", 1, 1))
+            .unwrap();
+        db.add_fact(&fact("carol", "location", "lake", 1, 1))
+            .unwrap();
         let bob_old = db.add_fact(&fact("bob", "location", "inn", 1, 1)).unwrap();
         db.invalidate_fact(bob_old, 2).unwrap();
-        db.add_fact(&fact("alice", "weapon", "sword", 1, 1)).unwrap();
+        db.add_fact(&fact("alice", "weapon", "sword", 1, 1))
+            .unwrap();
 
         let locs = db.get_facts_by_predicate("location").unwrap();
         let subjects: Vec<&str> = locs.iter().map(|f| f.subject.as_str()).collect();
@@ -1108,14 +1125,16 @@ mod tests {
     #[test]
     fn get_facts_for_characters_empty_names_returns_empty() {
         let db = db();
-        db.add_fact(&fact("alice", "location", "forest", 1, 1)).unwrap();
+        db.add_fact(&fact("alice", "location", "forest", 1, 1))
+            .unwrap();
         assert!(db.get_facts_for_characters(&[]).unwrap().is_empty());
     }
 
     #[test]
     fn get_facts_for_characters_matches_any_current_only() {
         let db = db();
-        db.add_fact(&fact("alice", "location", "forest", 1, 1)).unwrap();
+        db.add_fact(&fact("alice", "location", "forest", 1, 1))
+            .unwrap();
         db.add_fact(&fact("bob", "mood", "happy", 1, 1)).unwrap();
         db.add_fact(&fact("carol", "weapon", "bow", 1, 1)).unwrap();
         let names = vec!["alice".to_string(), "carol".to_string()];
@@ -1127,13 +1146,17 @@ mod tests {
     #[test]
     fn invalidate_fact_sets_valid_until_chapter() {
         let db = db();
-        let id = db.add_fact(&fact("alice", "location", "forest", 1, 1)).unwrap();
+        let id = db
+            .add_fact(&fact("alice", "location", "forest", 1, 1))
+            .unwrap();
         db.invalidate_fact(id, 9).unwrap();
         let until: Option<i64> = db
             .conn
-            .query_row("SELECT valid_until_chapter FROM facts WHERE id=?", params![id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT valid_until_chapter FROM facts WHERE id=?",
+                params![id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(until, Some(9));
     }
@@ -1141,11 +1164,15 @@ mod tests {
     #[test]
     fn replace_current_facts_clears_current_but_keeps_history() {
         let db = db();
-        let old = db.add_fact(&fact("alice", "location", "village", 1, 1)).unwrap();
+        let old = db
+            .add_fact(&fact("alice", "location", "village", 1, 1))
+            .unwrap();
         db.invalidate_fact(old, 3).unwrap(); // 历史保留
-        db.add_fact(&fact("alice", "location", "forest", 3, 3)).unwrap(); // 当前
+        db.add_fact(&fact("alice", "location", "forest", 3, 3))
+            .unwrap(); // 当前
 
-        db.replace_current_facts(&[fact("bob", "location", "town", 5, 5)]).unwrap();
+        db.replace_current_facts(&[fact("bob", "location", "town", 5, 5)])
+            .unwrap();
 
         let current = db.get_current_facts().unwrap();
         assert_eq!(current.len(), 1);
@@ -1159,9 +1186,12 @@ mod tests {
     #[test]
     fn reset_facts_clears_everything() {
         let db = db();
-        let old = db.add_fact(&fact("alice", "location", "village", 1, 1)).unwrap();
+        let old = db
+            .add_fact(&fact("alice", "location", "village", 1, 1))
+            .unwrap();
         db.invalidate_fact(old, 3).unwrap();
-        db.add_fact(&fact("alice", "location", "forest", 3, 3)).unwrap();
+        db.add_fact(&fact("alice", "location", "forest", 3, 3))
+            .unwrap();
 
         db.reset_facts().unwrap();
         assert_eq!(db.get_current_facts().unwrap().len(), 0);
@@ -1200,7 +1230,8 @@ mod tests {
     fn get_summaries_returns_inclusive_range_sorted_ascending() {
         let db = db();
         for ch in [1, 2, 3, 4, 5] {
-            db.upsert_summary(&summary(ch, &format!("t{ch}"), "")).unwrap();
+            db.upsert_summary(&summary(ch, &format!("t{ch}"), ""))
+                .unwrap();
         }
         let got = db.get_summaries(2, 4).unwrap();
         let chapters: Vec<i64> = got.iter().map(|s| s.chapter).collect();
@@ -1253,7 +1284,8 @@ mod tests {
     fn get_recent_summaries_returns_n_sorted_desc() {
         let db = db();
         for ch in [1, 2, 3] {
-            db.upsert_summary(&summary(ch, &format!("t{ch}"), "")).unwrap();
+            db.upsert_summary(&summary(ch, &format!("t{ch}"), ""))
+                .unwrap();
         }
         let got = db.get_recent_summaries(2).unwrap();
         let chapters: Vec<i64> = got.iter().map(|s| s.chapter).collect();
@@ -1302,9 +1334,11 @@ mod tests {
         db.upsert_hook(&hook("h1", 1, "open", 1)).unwrap();
         let timing: String = db
             .conn
-            .query_row("SELECT payoff_timing FROM hooks WHERE hook_id='h1'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT payoff_timing FROM hooks WHERE hook_id='h1'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(timing, "");
     }
@@ -1315,10 +1349,13 @@ mod tests {
         db.upsert_hook(&hook("h-open", 1, "open", 1)).unwrap();
         db.upsert_hook(&hook("h-pending", 2, "pending", 2)).unwrap();
         // 大小写 + 中英文状态黑名单。
-        db.upsert_hook(&hook("h-resolved", 3, "resolved", 3)).unwrap();
+        db.upsert_hook(&hook("h-resolved", 3, "resolved", 3))
+            .unwrap();
         db.upsert_hook(&hook("h-closed", 4, "closed", 4)).unwrap();
-        db.upsert_hook(&hook("h-resolved-cn", 5, "已解决", 5)).unwrap();
-        db.upsert_hook(&hook("h-recycled-cn", 6, "已回收", 6)).unwrap();
+        db.upsert_hook(&hook("h-resolved-cn", 5, "已解决", 5))
+            .unwrap();
+        db.upsert_hook(&hook("h-recycled-cn", 6, "已回收", 6))
+            .unwrap();
 
         let active = db.get_active_hooks().unwrap();
         let ids: Vec<&str> = active.iter().map(|h| h.hook_id.as_str()).collect();
@@ -1357,7 +1394,8 @@ mod tests {
     fn replace_hooks_clears_then_inserts() {
         let db = db();
         db.upsert_hook(&hook("old", 1, "open", 1)).unwrap();
-        db.replace_hooks(&[hook("new1", 2, "open", 2), hook("new2", 3, "open", 3)]).unwrap();
+        db.replace_hooks(&[hook("new1", 2, "open", 2), hook("new2", 3, "open", 3)])
+            .unwrap();
         let active = db.get_active_hooks().unwrap();
         let ids: Vec<&str> = active.iter().map(|h| h.hook_id.as_str()).collect();
         assert_eq!(ids, vec!["new2", "new1"]); // 按 last_advanced 降序

@@ -10,9 +10,9 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::sync::OnceLock;
 
 /// token 用量统计 + 最近 5 章趋势。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -173,26 +173,45 @@ pub fn compute_analytics(book_id: &str, chapters: &[AnalyticsChapter]) -> Analyt
         .collect();
 
     // 问题最多的章节（issueCount desc，并列保原序）
-    let mut with_issues: Vec<&AnalyticsChapter> = chapters.iter().filter(|c| !c.audit_issues.is_empty()).collect();
+    let mut with_issues: Vec<&AnalyticsChapter> = chapters
+        .iter()
+        .filter(|c| !c.audit_issues.is_empty())
+        .collect();
     with_issues.sort_by(|a, b| (b.audit_issues.len() as u32).cmp(&(a.audit_issues.len() as u32)));
     let chapters_with_most_issues: Vec<ChapterIssueCount> = with_issues
         .into_iter()
         .take(5)
-        .map(|c| ChapterIssueCount { chapter: c.number, issue_count: c.audit_issues.len() as u32 })
+        .map(|c| ChapterIssueCount {
+            chapter: c.number,
+            issue_count: c.audit_issues.len() as u32,
+        })
         .collect();
 
     // 状态分布
-    let mut status_distribution: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut status_distribution: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
     for ch in chapters {
         *status_distribution.entry(ch.status.clone()).or_insert(0) += 1;
     }
 
     // token 统计（仅有 tokenUsage 的章节参与）
-    let chapters_with_usage: Vec<&AnalyticsChapter> = chapters.iter().filter(|c| c.token_usage.is_some()).collect();
+    let chapters_with_usage: Vec<&AnalyticsChapter> = chapters
+        .iter()
+        .filter(|c| c.token_usage.is_some())
+        .collect();
     let token_stats = if !chapters_with_usage.is_empty() {
-        let total_prompt_tokens: u64 = chapters_with_usage.iter().map(|c| c.token_usage.as_ref().unwrap().prompt_tokens).sum();
-        let total_completion_tokens: u64 = chapters_with_usage.iter().map(|c| c.token_usage.as_ref().unwrap().completion_tokens).sum();
-        let total_tokens: u64 = chapters_with_usage.iter().map(|c| c.token_usage.as_ref().unwrap().total_tokens).sum();
+        let total_prompt_tokens: u64 = chapters_with_usage
+            .iter()
+            .map(|c| c.token_usage.as_ref().unwrap().prompt_tokens)
+            .sum();
+        let total_completion_tokens: u64 = chapters_with_usage
+            .iter()
+            .map(|c| c.token_usage.as_ref().unwrap().completion_tokens)
+            .sum();
+        let total_tokens: u64 = chapters_with_usage
+            .iter()
+            .map(|c| c.token_usage.as_ref().unwrap().total_tokens)
+            .sum();
         let avg_tokens_per_chapter = total_tokens / chapters_with_usage.len() as u64;
         let mut sorted_usage = chapters_with_usage.clone();
         sorted_usage.sort_by_key(|c| c.number);
@@ -203,9 +222,18 @@ pub fn compute_analytics(book_id: &str, chapters: &[AnalyticsChapter]) -> Analyt
             .collect::<Vec<_>>()
             .into_iter()
             .rev()
-            .map(|c| ChapterTokenPoint { chapter: c.number, total_tokens: c.token_usage.as_ref().unwrap().total_tokens })
+            .map(|c| ChapterTokenPoint {
+                chapter: c.number,
+                total_tokens: c.token_usage.as_ref().unwrap().total_tokens,
+            })
             .collect();
-        Some(TokenStats { total_prompt_tokens, total_completion_tokens, total_tokens, avg_tokens_per_chapter, recent_trend })
+        Some(TokenStats {
+            total_prompt_tokens,
+            total_completion_tokens,
+            total_tokens,
+            avg_tokens_per_chapter,
+            recent_trend,
+        })
     } else {
         None
     };
@@ -227,7 +255,13 @@ pub fn compute_analytics(book_id: &str, chapters: &[AnalyticsChapter]) -> Analyt
 mod tests {
     use super::*;
 
-    fn ch(n: u32, status: &str, words: u64, issues: &[&str], usage: Option<AnalyticsTokenUsage>) -> AnalyticsChapter {
+    fn ch(
+        n: u32,
+        status: &str,
+        words: u64,
+        issues: &[&str],
+        usage: Option<AnalyticsTokenUsage>,
+    ) -> AnalyticsChapter {
         AnalyticsChapter {
             number: n,
             status: status.into(),
@@ -264,7 +298,10 @@ mod tests {
     fn avg_words_per_chapter_rounds_half_up_like_ts_math_round() {
         // 684 号：TS Math.round 镜像——61.5 必须舍入 62（截断除法给 61，
         // contract-diff analytics 活体捕获）。
-        let chapters = vec![ch(1, "approved", 61, &[], None), ch(2, "approved", 62, &[], None)];
+        let chapters = vec![
+            ch(1, "approved", 61, &[], None),
+            ch(2, "approved", 62, &[], None),
+        ];
         let a = compute_analytics("b", &chapters);
         assert_eq!(a.avg_words_per_chapter, 62);
     }
@@ -272,7 +309,13 @@ mod tests {
     #[test]
     fn top_issue_categories_extract_and_rank() {
         let chapters = vec![
-            ch(1, "approved", 0, &["[critical] 节奏: a", "[warning] 节奏: b", "[info] 对话: c"], None),
+            ch(
+                1,
+                "approved",
+                0,
+                &["[critical] 节奏: a", "[warning] 节奏: b", "[info] 对话: c"],
+                None,
+            ),
             ch(2, "approved", 0, &["[critical] 节奏: d"], None),
         ];
         let a = compute_analytics("b", &chapters);
@@ -308,8 +351,14 @@ mod tests {
 
     #[test]
     fn token_stats_recent_trend_last_five() {
-        let usage = |t: u64| AnalyticsTokenUsage { prompt_tokens: t, completion_tokens: 0, total_tokens: t };
-        let chapters: Vec<AnalyticsChapter> = (1..=7u32).map(|n| ch(n, "approved", 0, &[], Some(usage(n as u64 * 100)))).collect();
+        let usage = |t: u64| AnalyticsTokenUsage {
+            prompt_tokens: t,
+            completion_tokens: 0,
+            total_tokens: t,
+        };
+        let chapters: Vec<AnalyticsChapter> = (1..=7u32)
+            .map(|n| ch(n, "approved", 0, &[], Some(usage(n as u64 * 100))))
+            .collect();
         let a = compute_analytics("b", &chapters);
         let ts = a.token_stats.unwrap();
         assert_eq!(ts.recent_trend.len(), 5);

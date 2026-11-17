@@ -36,7 +36,11 @@ use crate::utils::story_markdown::render_hook_snapshot;
 /// 架构师 chat 端口（TS `BaseAgent.chat` 的最小面）。
 #[async_trait::async_trait]
 pub trait ArchitectChat: Send + Sync {
-    async fn chat(&self, messages: Vec<LLMMessage>, temperature: f64) -> Result<ChatOutcome, String>;
+    async fn chat(
+        &self,
+        messages: Vec<LLMMessage>,
+        temperature: f64,
+    ) -> Result<ChatOutcome, String>;
 }
 
 /// 架构师上下文（I/O 注入）。
@@ -125,7 +129,9 @@ pub async fn generate_foundation_inner(
 
     let context_block = external_context
         .filter(|c| !c.is_empty())
-        .map(|c| format!("\n\n## 外部指令\n以下是来自外部系统的创作指令，请将其融入设定中：\n\n{c}\n"))
+        .map(|c| {
+            format!("\n\n## 外部指令\n以下是来自外部系统的创作指令，请将其融入设定中：\n\n{c}\n")
+        })
         .unwrap_or_default();
     let review_feedback_block = build_review_feedback_block(review_feedback, language);
     let numerical_block = if gp.numerical_system {
@@ -133,7 +139,11 @@ pub async fn generate_foundation_inner(
     } else {
         "- 本题材无数值系统，不需要资源账本"
     };
-    let power_block = if gp.power_scaling { "- 有明确的战力等级体系" } else { "" };
+    let power_block = if gp.power_scaling {
+        "- 有明确的战力等级体系"
+    } else {
+        ""
+    };
     let era_block = if gp.era_research {
         "- 需要年代考据支撑（在 story_frame 中织入时代锚，在 book_rules 中写清不可违背的年代限制）"
     } else {
@@ -141,9 +151,27 @@ pub async fn generate_foundation_inner(
     };
 
     let system_prompt = if language == WritingLanguage::En {
-        build_english_foundation_prompt(book, gp, genre_body, &context_block, &review_feedback_block, numerical_block, power_block, era_block)
+        build_english_foundation_prompt(
+            book,
+            gp,
+            genre_body,
+            &context_block,
+            &review_feedback_block,
+            numerical_block,
+            power_block,
+            era_block,
+        )
     } else {
-        build_chinese_foundation_prompt(book, gp, genre_body, &context_block, &review_feedback_block, numerical_block, power_block, era_block)
+        build_chinese_foundation_prompt(
+            book,
+            gp,
+            genre_body,
+            &context_block,
+            &review_feedback_block,
+            numerical_block,
+            power_block,
+            era_block,
+        )
     };
     let lang_prefix = if language == WritingLanguage::En {
         "【LANGUAGE OVERRIDE】ALL output (story_frame, volume_map, roles, book_rules, pending_hooks) MUST be written in English. Character names, place names, and all prose must be in English. The === SECTION: === tags remain unchanged. Do NOT emit rhythm_principles or current_state sections — rhythm principles live inside the last paragraph of volume_map; environment/era anchors (when relevant) are woven into story_frame's world-tonal-ground paragraph.\n\n"
@@ -153,14 +181,30 @@ pub async fn generate_foundation_inner(
     let user_message = if language == WritingLanguage::En {
         format!("Generate the complete foundation for a {} novel titled \"{}\". Write everything in English.", gp.name, book.title)
     } else {
-        format!("请为标题为\"{}\"的{}小说生成完整基础设定。", book.title, gp.name)
+        format!(
+            "请为标题为\"{}\"的{}小说生成完整基础设定。",
+            book.title, gp.name
+        )
     };
 
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: format!("{lang_prefix}{system_prompt}{}", revise_prompt.unwrap_or("")), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_message, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: format!(
+                        "{lang_prefix}{system_prompt}{}",
+                        revise_prompt.unwrap_or("")
+                    ),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_message,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.8,
         )
@@ -178,7 +222,11 @@ pub fn build_revise_prompt(
     user_feedback: &str,
 ) -> String {
     fn or_none(text: &str) -> &str {
-        if text.is_empty() { "（无）" } else { text }
+        if text.is_empty() {
+            "（无）"
+        } else {
+            text
+        }
     }
     format!(
         "\n\n## 既有架构稿修订模式\n你在把一本已有书的架构稿从条目式升级为当前的段落式架构稿 + 一人一卡角色目录；如果它已经是 Phase 5 结构，则按用户反馈二次重写。\n\n原书信息（这是权威内容，必须完整保留其中的世界观、角色、主线、伏笔和语气）：\n\n【story_bible / story_frame 全文】\n{}\n\n【volume_outline / volume_map 全文】\n{}\n\n【book_rules 全文】\n{}\n\n【character_matrix / roles 全文】\n{}\n\n你的任务：\n1. 把现有内容重新组织成当前 5 段 SECTION：story_frame / volume_map / roles / book_rules / pending_hooks\n2. story_frame 使用段落式世界观与核心冲突，不要退回条目表格\n3. volume_map 使用段落式卷/章级方向，并把节奏原则放进末段\n4. roles 必须按一人一卡输出，主要/次要角色判断沿用原内容，缺失才按主线重要性推断\n5. pending_hooks 必须保留原有未回收伏笔，不要因为重写架构稿而清空\n6. 不要改动已写章节的运行时事实，不要重置 current_state / pending_hooks 之外的运行时日志\n\n用户额外要求：\n{}\n",
@@ -267,14 +315,27 @@ pub async fn generate_foundation_from_import(
             gp.name, book.title
         )
     } else {
-        format!("以下是《{}》的已有正文资料包，请从中反向推导完整基础设定：\n\n{chapters_text}", book.title)
+        format!(
+            "以下是《{}》的已有正文资料包，请从中反向推导完整基础设定：\n\n{chapters_text}",
+            book.title
+        )
     };
 
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_message, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_message,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.5,
         )
@@ -311,10 +372,18 @@ pub async fn generate_fanfic_foundation(
         crate::models::book::FanficMode::Cp => "cp",
     };
     let mode_instruction = match fanfic_mode {
-        crate::models::book::FanficMode::Canon => "剧情发生在原作空白期或未详述的角度。不可改变原作已确立的事实。",
-        crate::models::book::FanficMode::Au => "标注AU设定与原作的关键分歧点，分歧后的世界线自由发展。保留角色核心性格。",
-        crate::models::book::FanficMode::Ooc => "标注角色性格偏离的起点和驱动事件。偏离必须有逻辑驱动。",
-        crate::models::book::FanficMode::Cp => "以配对角色的关系线为主线规划卷纲。每卷必须有关系推进节点。",
+        crate::models::book::FanficMode::Canon => {
+            "剧情发生在原作空白期或未详述的角度。不可改变原作已确立的事实。"
+        }
+        crate::models::book::FanficMode::Au => {
+            "标注AU设定与原作的关键分歧点，分歧后的世界线自由发展。保留角色核心性格。"
+        }
+        crate::models::book::FanficMode::Ooc => {
+            "标注角色性格偏离的起点和驱动事件。偏离必须有逻辑驱动。"
+        }
+        crate::models::book::FanficMode::Cp => {
+            "以配对角色的关系线为主线规划卷纲。每卷必须有关系推进节点。"
+        }
     };
     let system_prompt = format!(
         "你是专业同人架构师。基于原作正典为同人生成散文密度的基础设定。\n\n## 同人模式：{mode}\n{mode_instruction}\n\n## 新时空要求\n必须为这本同人设计原创叙事空间，不是复述原作剧情：\n1. 明确分岔点——story_frame 必须标注本作从原作的哪个节点分岔\n2. 独立核心冲突——volume_map 的核心冲突必须是原创的\n3. 5章内引爆\n4. 场景新鲜度 ≥ 50%\n{review_feedback_block}\n\n## 原作正典\n{fanfic_canon}\n\n## 题材底色\n{genre_body}\n\n## 输出契约\n严格按合并后的 5 段 === SECTION: === 块输出：story_frame / volume_map / roles / book_rules / pending_hooks。**不要输出 rhythm_principles 或 current_state**：节奏原则合并进 volume_map 尾段；角色初始状态写在 roles.当前现状，初始钩子写在 pending_hooks startChapter=0 行；环境/时代锚（仅当同人的原作/本作锚定真实年份时）织进 story_frame.世界观底色，其他情况省略。\n\n- 主要角色必须来自原作正典\n- 可添加原创配角，标注\"原创\"\n- book_rules 用普通 Markdown 规则卡；必须写清同人模式：{mode}\n- 长篇散文规则写进 story_frame.世界观底色，book_rules 只保留主角、题材锁、同人模式、禁止事项等可执行规则\n- 主角弧线只写在 roles/主要角色/<主角>.md，不在 story_frame 重复\n- 所有 outline 必须是散文密度"
@@ -326,8 +395,18 @@ pub async fn generate_fanfic_foundation(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_message, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_message,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.7,
         )
@@ -381,11 +460,13 @@ async fn parse_sections_with_repair(
                     } else {
                         format!("基础设定没有生成完整(缺少:{missing_list})。这通常是模型一次没把所有部分写全,不是你的输入有问题。点重试,或换更强的模型(如 deepseek-v4-pro / gpt-5.5)再生成一次,通常就能解决。")
                     };
-                    Err(ArchitectFlowError::Incomplete(ArchitectIncompleteFoundationError {
-                        missing: repair_error.missing,
-                        partial_content: repair_error.content,
-                        message,
-                    }))
+                    Err(ArchitectFlowError::Incomplete(
+                        ArchitectIncompleteFoundationError {
+                            missing: repair_error.missing,
+                            partial_content: repair_error.content,
+                            message,
+                        },
+                    ))
                 }
             }
         }
@@ -429,8 +510,18 @@ async fn repair_missing_sections(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.2,
         )
@@ -440,12 +531,18 @@ async fn repair_missing_sections(
 
 /// SECTION 解析（标记/标题双模式 + legacy 段名回退 + 5 段必需契约）。
 /// 对齐 TS `parseSections`。
-fn parse_sections(content: &str, language: WritingLanguage) -> Result<ArchitectOutput, MissingSectionsError> {
+fn parse_sections(
+    content: &str,
+    language: WritingLanguage,
+) -> Result<ArchitectOutput, MissingSectionsError> {
     let sections = parse_architect_section_map(content);
 
     let story_frame_raw = sections.get("story_frame").cloned().unwrap_or_default();
     let volume_map_raw = sections.get("volume_map").cloned().unwrap_or_default();
-    let rhythm_principles = sections.get("rhythm_principles").cloned().unwrap_or_default();
+    let rhythm_principles = sections
+        .get("rhythm_principles")
+        .cloned()
+        .unwrap_or_default();
     let roles_raw = sections.get("roles").cloned().unwrap_or_default();
     let legacy_story_bible = sections.get("story_bible").cloned().unwrap_or_default();
     let legacy_volume_outline = sections.get("volume_outline").cloned().unwrap_or_default();
@@ -458,8 +555,16 @@ fn parse_sections(content: &str, language: WritingLanguage) -> Result<ArchitectO
         && volume_map_raw.is_empty()
         && (!legacy_story_bible.is_empty() || !legacy_volume_outline.is_empty());
 
-    let effective_story_frame = if !story_frame_raw.is_empty() { story_frame_raw } else { legacy_story_bible.clone() };
-    let effective_volume_map = if !volume_map_raw.is_empty() { volume_map_raw } else { legacy_volume_outline.clone() };
+    let effective_story_frame = if !story_frame_raw.is_empty() {
+        story_frame_raw
+    } else {
+        legacy_story_bible.clone()
+    };
+    let effective_volume_map = if !volume_map_raw.is_empty() {
+        volume_map_raw
+    } else {
+        legacy_volume_outline.clone()
+    };
 
     let mut missing: Vec<String> = Vec::new();
     if effective_story_frame.is_empty() {
@@ -478,7 +583,10 @@ fn parse_sections(content: &str, language: WritingLanguage) -> Result<ArchitectO
         missing.push("pending_hooks".to_string());
     }
     if !missing.is_empty() {
-        return Err(MissingSectionsError { missing, content: content.to_string() });
+        return Err(MissingSectionsError {
+            missing,
+            content: content.to_string(),
+        });
     }
 
     let roles = parse_roles(&roles_raw);
@@ -492,7 +600,11 @@ fn parse_sections(content: &str, language: WritingLanguage) -> Result<ArchitectO
     } else {
         build_story_bible_shim(&effective_story_frame, language)
     };
-    let volume_outline = if !legacy_volume_outline.is_empty() { legacy_volume_outline } else { effective_volume_map.clone() };
+    let volume_outline = if !legacy_volume_outline.is_empty() {
+        legacy_volume_outline
+    } else {
+        effective_volume_map.clone()
+    };
 
     Ok(ArchitectOutput {
         story_bible,
@@ -521,7 +633,9 @@ fn section_marker_re() -> &'static Regex {
 fn heading_re() -> &'static Regex {
     // TS: /^\s{0,3}#{1,3}\s+(.+?)\s*$/gim
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?im)^[\t ]{0,3}#{1,3}[\t ]+(.+?)[\t ]*$").expect("heading regex"))
+    R.get_or_init(|| {
+        Regex::new(r"(?im)^[\t ]{0,3}#{1,3}[\t ]+(.+?)[\t ]*$").expect("heading regex")
+    })
 }
 
 /// 双模式 SECTION 切片。对齐 TS `parseArchitectSectionMap` + `sliceArchitectSections`。
@@ -530,7 +644,11 @@ fn parse_architect_section_map(content: &str) -> HashMap<String, String> {
         .captures_iter(content)
         .map(|caps| {
             let whole = caps.get(0).unwrap();
-            (normalize_section_name(&caps[1]), whole.start(), whole.as_str().len())
+            (
+                normalize_section_name(&caps[1]),
+                whole.start(),
+                whole.as_str().len(),
+            )
         })
         .collect();
     if !markers.is_empty() {
@@ -553,8 +671,14 @@ fn slice_sections(content: &str, matches: &[(String, usize, usize)]) -> HashMap<
     let mut out: HashMap<String, String> = HashMap::new();
     for (i, (name, index, marker_len)) in matches.iter().enumerate() {
         let start = index + marker_len;
-        let end = matches.get(i + 1).map(|(_, next, _)| *next).unwrap_or(content.len());
-        out.insert(name.clone(), content[start..end.min(content.len())].trim().to_string());
+        let end = matches
+            .get(i + 1)
+            .map(|(_, next, _)| *next)
+            .unwrap_or(content.len());
+        out.insert(
+            name.clone(),
+            content[start..end.min(content.len())].trim().to_string(),
+        );
     }
     out
 }
@@ -591,9 +715,17 @@ fn canonical_section_name_from_heading(heading: &str) -> String {
     let normalized = normalize_section_name(heading);
     let contains_any = |names: &[&str]| names.iter().any(|n| normalized.contains(n));
     // 冷路径（SECTION 标记缺失时的标题回退）——直接编译，不做缓存。
-    let zh = |pattern: &str| Regex::new(pattern).expect("heading keyword regex").is_match(heading);
-    if contains_any(&["story_frame", "story_bible", "story_foundation", "foundation"])
-        || zh("故事框架|故事圣经|基础设定|世界框架|故事底座")
+    let zh = |pattern: &str| {
+        Regex::new(pattern)
+            .expect("heading keyword regex")
+            .is_match(heading)
+    };
+    if contains_any(&[
+        "story_frame",
+        "story_bible",
+        "story_foundation",
+        "foundation",
+    ]) || zh("故事框架|故事圣经|基础设定|世界框架|故事底座")
     {
         return "story_frame".to_string();
     }
@@ -651,11 +783,20 @@ fn parse_roles(raw: &str) -> Vec<ArchitectRole> {
                 t if t.eq_ignore_ascii_case("major") || t == "主要" => ArchitectRoleTier::Major,
                 _ => ArchitectRoleTier::Minor,
             })?;
-            let name = name_re.captures(header_raw)?.get(1)?.as_str().trim().to_string();
+            let name = name_re
+                .captures(header_raw)?
+                .get(1)?
+                .as_str()
+                .trim()
+                .to_string();
             if name.is_empty() || content.is_empty() {
                 return None;
             }
-            Some(ArchitectRole { tier, name, content })
+            Some(ArchitectRole {
+                tier,
+                name,
+                content,
+            })
         })
         .collect()
 }
@@ -685,12 +826,10 @@ fn name_cell_re() -> &'static Regex {
 fn strip_trailing_assistant_coda(section: &str) -> String {
     let coda_re = assistant_coda_re();
     let lines: Vec<&str> = section.split('\n').collect();
-    let cutoff = lines
-        .iter()
-        .position(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty() && coda_re.is_match(trimmed)
-        });
+    let cutoff = lines.iter().position(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && coda_re.is_match(trimmed)
+    });
     match cutoff {
         None => section.to_string(),
         Some(index) => lines[..index].join("\n").trim_end().to_string(),
@@ -734,14 +873,30 @@ fn build_character_matrix_shim(roles: &[ArchitectRole], language: WritingLanguag
         .map(|r| format!("- roles/次要角色/{}.md", r.name))
         .collect();
     if language == WritingLanguage::En {
-        let major = if majors.is_empty() { "(none)".to_string() } else { majors.join("\n") };
-        let minor = if minors.is_empty() { "(none)".to_string() } else { minors.join("\n") };
+        let major = if majors.is_empty() {
+            "(none)".to_string()
+        } else {
+            majors.join("\n")
+        };
+        let minor = if minors.is_empty() {
+            "(none)".to_string()
+        } else {
+            minors.join("\n")
+        };
         format!(
             "# Character Matrix (compat pointer — deprecated)\n\n> This file is kept for external readers only. Authoritative source is now the roles/ directory (one-file-per-character).\n\n## Major characters\n\n{major}\n\n## Minor characters\n\n{minor}\n"
         )
     } else {
-        let major = if majors.is_empty() { "（无）".to_string() } else { majors.join("\n") };
-        let minor = if minors.is_empty() { "（无）".to_string() } else { minors.join("\n") };
+        let major = if majors.is_empty() {
+            "（无）".to_string()
+        } else {
+            majors.join("\n")
+        };
+        let minor = if minors.is_empty() {
+            "（无）".to_string()
+        } else {
+            minors.join("\n")
+        };
         format!(
             "# 角色矩阵（兼容指针——已废弃）\n\n> 本文件仅为外部读取保留。权威来源已迁移至 roles/ 文件夹（一人一卡）。\n\n## 主要角色\n\n{major}\n\n## 次要角色\n\n{minor}\n"
         )
@@ -790,14 +945,24 @@ pub fn normalize_pending_hooks_section(section: &str, volume_map_raw: &str) -> S
     }
     let data_rows: Vec<&Vec<String>> = rows
         .iter()
-        .filter(|row| !row.first().map(|c| c.to_lowercase() == "hook_id").unwrap_or(false))
+        .filter(|row| {
+            !row.first()
+                .map(|c| c.to_lowercase() == "hook_id")
+                .unwrap_or(false)
+        })
         .collect();
     if data_rows.is_empty() {
         return section.to_string();
     }
 
-    let has_chinese = section.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
-    let language = if has_chinese { WritingLanguage::Zh } else { WritingLanguage::En };
+    let has_chinese = section
+        .chars()
+        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+    let language = if has_chinese {
+        WritingLanguage::Zh
+    } else {
+        WritingLanguage::En
+    };
 
     let mut hooks: Vec<HookRecord> = data_rows
         .iter()
@@ -818,7 +983,13 @@ pub fn normalize_pending_hooks_section(section: &str, volume_map_raw: &str) -> S
 
             let phase7 = row.len() >= 12;
             let phase6 = row.len() >= 8;
-            let note_cell_index = if phase7 { 11 } else if phase6 { 7 } else { 6 };
+            let note_cell_index = if phase7 {
+                11
+            } else if phase6 {
+                7
+            } else {
+                6
+            };
             let notes = merge_hook_notes(&cell(note_cell_index), &seed_note, language);
 
             let status_cell = cell(3);
@@ -828,20 +999,48 @@ pub fn normalize_pending_hooks_section(section: &str, volume_map_raw: &str) -> S
                 kind: seed_kind,
                 hook_id: {
                     let id = cell(0);
-                    if id.is_empty() { format!("hook-{}", index + 1) } else { id }
+                    if id.is_empty() {
+                        format!("hook-{}", index + 1)
+                    } else {
+                        id
+                    }
                 },
                 start_chapter: parse_hook_chapter_number(&cell(1)),
                 hook_type: cell(2),
                 status: HookStatus::Open,
-                status_raw: if status_cell.is_empty() { "open".to_string() } else { status_cell },
+                status_raw: if status_cell.is_empty() {
+                    "open".to_string()
+                } else {
+                    status_cell
+                },
                 last_advanced_chapter: normalized_progress,
                 expected_payoff: cell(5),
-                payoff_timing: if phase6 { normalize_payoff_timing(&cell(6)) } else { None },
+                payoff_timing: if phase6 {
+                    normalize_payoff_timing(&cell(6))
+                } else {
+                    None
+                },
                 notes,
-                depends_on: if phase7 { Some(parse_depends_on_cell(&cell(7))) } else { None },
-                pays_off_in_arc: if phase7 { Some(cell(8).trim().to_string()) } else { None },
-                core_hook: if phase7 { Some(parse_boolean_cell(&cell(9))) } else { None },
-                half_life_chapters: if phase7 { parse_optional_int(&cell(10)) } else { None },
+                depends_on: if phase7 {
+                    Some(parse_depends_on_cell(&cell(7)))
+                } else {
+                    None
+                },
+                pays_off_in_arc: if phase7 {
+                    Some(cell(8).trim().to_string())
+                } else {
+                    None
+                },
+                core_hook: if phase7 {
+                    Some(parse_boolean_cell(&cell(9)))
+                } else {
+                    None
+                },
+                half_life_chapters: if phase7 {
+                    parse_optional_int(&cell(10))
+                } else {
+                    None
+                },
                 advanced_count: None,
                 promoted: None,
             }
@@ -850,8 +1049,10 @@ pub fn normalize_pending_hooks_section(section: &str, volume_map_raw: &str) -> S
 
     // 种子预晋升（三结构规则；advanced_count 运行期由 consolidator 处理）。
     let boundaries = parse_volume_boundaries_for_promotion(volume_map_raw);
-    let all_seed_start: HashMap<String, u32> =
-        hooks.iter().map(|h| (h.hook_id.clone(), h.start_chapter)).collect();
+    let all_seed_start: HashMap<String, u32> = hooks
+        .iter()
+        .map(|h| (h.hook_id.clone(), h.start_chapter))
+        .collect();
     for hook in hooks.iter_mut() {
         let decision = should_promote_hook(hook, &boundaries, &all_seed_start);
         hook.promoted = Some(decision);
@@ -872,7 +1073,11 @@ fn normalize_payoff_timing(cell: &str) -> Option<HookPayoffTiming> {
 }
 
 fn parse_hook_chapter_number(value: &str) -> u32 {
-    let first_digits: String = value.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+    let first_digits: String = value
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     first_digits.parse().unwrap_or(0)
 }
 
@@ -911,7 +1116,10 @@ fn parse_boolean_cell(value: &str) -> bool {
     if normalized.is_empty() {
         return false;
     }
-    matches!(normalized.as_str(), "true" | "yes" | "y" | "是" | "核心" | "core" | "1" | "✓" | "✔")
+    matches!(
+        normalized.as_str(),
+        "true" | "yes" | "y" | "是" | "核心" | "core" | "1" | "✓" | "✔"
+    )
 }
 
 fn parse_optional_int(value: &str) -> Option<u32> {
@@ -919,7 +1127,11 @@ fn parse_optional_int(value: &str) -> Option<u32> {
     if normalized.is_empty() {
         return None;
     }
-    let digits: String = normalized.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = normalized
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     let parsed = digits.parse().ok()?;
     (parsed > 0).then_some(parsed)
 }
@@ -929,7 +1141,10 @@ fn has_narrative_progress(value: &str) -> bool {
     if normalized.is_empty() {
         return false;
     }
-    !matches!(normalized.as_str(), "0" | "none" | "n/a" | "na" | "-" | "无" | "未推进")
+    !matches!(
+        normalized.as_str(),
+        "0" | "none" | "n/a" | "na" | "-" | "无" | "未推进"
+    )
 }
 
 fn merge_hook_notes(notes: &str, seed_note: &str, language: WritingLanguage) -> String {
@@ -952,11 +1167,19 @@ fn merge_hook_notes(notes: &str, seed_note: &str, language: WritingLanguage) -> 
 fn normalize_dormant_seed_status(status: &str, language: WritingLanguage) -> String {
     let normalized = status.trim().to_lowercase();
     if normalized.is_empty() || matches!(normalized.as_str(), "open" | "opened" | "active") {
-        return if language == WritingLanguage::Zh { "暂缓".to_string() } else { "deferred".to_string() };
+        return if language == WritingLanguage::Zh {
+            "暂缓".to_string()
+        } else {
+            "deferred".to_string()
+        };
     }
     let original = status.trim();
     if original.is_empty() {
-        if language == WritingLanguage::Zh { "暂缓".to_string() } else { "deferred".to_string() }
+        if language == WritingLanguage::Zh {
+            "暂缓".to_string()
+        } else {
+            "deferred".to_string()
+        }
     } else {
         original.to_string()
     }
@@ -1018,8 +1241,10 @@ fn is_cross_volume(
         }
     }
     // Case C：endgame / slow-burn 回收节奏 + 早卷种子。
-    if matches!(hook.payoff_timing, Some(HookPayoffTiming::Endgame) | Some(HookPayoffTiming::SlowBurn))
-        && (seed_volume as usize) < boundaries.len() - 1
+    if matches!(
+        hook.payoff_timing,
+        Some(HookPayoffTiming::Endgame) | Some(HookPayoffTiming::SlowBurn)
+    ) && (seed_volume as usize) < boundaries.len() - 1
     {
         return true;
     }
@@ -1098,10 +1323,20 @@ fn parse_volume_boundaries_for_promotion(raw: &str) -> Vec<PromotionVolumeBounda
         if !header_re.is_match(line) {
             continue;
         }
-        let Some(caps) = range_re.captures(line) else { continue };
+        let Some(caps) = range_re.captures(line) else {
+            continue;
+        };
         // TS 双分支正则：组 1/2 或组 3/4。
-        let start_raw = caps.get(1).or_else(|| caps.get(3)).map(|m| m.as_str()).unwrap_or("0");
-        let end_raw = caps.get(2).or_else(|| caps.get(4)).map(|m| m.as_str()).unwrap_or("0");
+        let start_raw = caps
+            .get(1)
+            .or_else(|| caps.get(3))
+            .map(|m| m.as_str())
+            .unwrap_or("0");
+        let end_raw = caps
+            .get(2)
+            .or_else(|| caps.get(4))
+            .map(|m| m.as_str())
+            .unwrap_or("0");
         let (Ok(start_ch), Ok(end_ch)) = (start_raw.parse::<u32>(), end_raw.parse::<u32>()) else {
             continue;
         };
@@ -1109,9 +1344,16 @@ fn parse_volume_boundaries_for_promotion(raw: &str) -> Vec<PromotionVolumeBounda
             continue;
         }
         let range_index = caps.get(0).unwrap().start();
-        let name = line[..range_index].trim_end_matches(['（', '(']).trim().to_string();
+        let name = line[..range_index]
+            .trim_end_matches(['（', '('])
+            .trim()
+            .to_string();
         if !name.is_empty() {
-            volumes.push(PromotionVolumeBoundary { name, start_ch, end_ch });
+            volumes.push(PromotionVolumeBoundary {
+                name,
+                start_ch,
+                end_ch,
+            });
         }
     }
     volumes
@@ -1121,7 +1363,8 @@ fn volume_header_re() -> &'static Regex {
     // TS: /^(第[一二三四五六七八九十百千万零〇\d]+卷|Volume\s+\d+)/i
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"(?i)^(第[一二三四五六七八九十百千万零〇0-9]+卷|Volume\s+[0-9]+)").expect("volume header")
+        Regex::new(r"(?i)^(第[一二三四五六七八九十百千万零〇0-9]+卷|Volume\s+[0-9]+)")
+            .expect("volume header")
     })
 }
 
@@ -1173,11 +1416,21 @@ pub async fn write_foundation_files(
     let roles_major_dir = roles_dir.join("主要角色");
     let roles_minor_dir = roles_dir.join("次要角色");
     for dir in [&story_dir, &outline_dir, &roles_major_dir, &roles_minor_dir] {
-        tokio::fs::create_dir_all(dir).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(dir)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
-    let story_frame_body = if output.story_frame.is_empty() { output.story_bible.clone() } else { output.story_frame.clone() };
-    let volume_map = if output.volume_map.is_empty() { output.volume_outline.clone() } else { output.volume_map.clone() };
+    let story_frame_body = if output.story_frame.is_empty() {
+        output.story_bible.clone()
+    } else {
+        output.story_frame.clone()
+    };
+    let volume_map = if output.volume_map.is_empty() {
+        output.volume_outline.clone()
+    } else {
+        output.volume_map.clone()
+    };
     let is_phase5_output = !output.story_frame.trim().is_empty();
 
     if mode == FoundationWriteMode::Revise && !is_phase5_output {
@@ -1189,27 +1442,37 @@ pub async fn write_foundation_files(
     if mode == FoundationWriteMode::Revise {
         let _ = tokio::fs::remove_dir_all(&roles_major_dir).await;
         let _ = tokio::fs::remove_dir_all(&roles_minor_dir).await;
-        tokio::fs::create_dir_all(&roles_major_dir).await.map_err(|e| e.to_string())?;
-        tokio::fs::create_dir_all(&roles_minor_dir).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(&roles_major_dir)
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(&roles_minor_dir)
+            .await
+            .map_err(|e| e.to_string())?;
     }
 
     if !is_phase5_output {
         // Legacy 产物面（v12 前）。
         let writes: Vec<(std::path::PathBuf, String)> = vec![
             (story_dir.join("story_bible.md"), output.story_bible.clone()),
-            (story_dir.join("volume_outline.md"), output.volume_outline.clone()),
+            (
+                story_dir.join("volume_outline.md"),
+                output.volume_outline.clone(),
+            ),
             (story_dir.join("book_rules.md"), output.book_rules.clone()),
             (
                 story_dir.join("character_matrix.md"),
                 if language == WritingLanguage::En {
                     "# Character Matrix\n\n<!-- One ## section per character. Add new characters as new ## blocks. -->\n".to_string()
                 } else {
-                    "# 角色矩阵\n\n<!-- 每个角色一个 ## 块，新角色追加新 ## 即可。 -->\n".to_string()
+                    "# 角色矩阵\n\n<!-- 每个角色一个 ## 块，新角色追加新 ## 即可。 -->\n"
+                        .to_string()
                 },
             ),
         ];
         for (path, content) in writes {
-            crate::utils::atomic_file_set::write_file_atomic(&path, &content).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(&path, &content)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         if mode == FoundationWriteMode::Init {
             let current_state_seed = if !output.current_state.trim().is_empty() {
@@ -1217,16 +1480,32 @@ pub async fn write_foundation_files(
             } else if language == WritingLanguage::En {
                 "# Current State\n\n> Seeded at book creation. Runtime state is appended by the consolidator after each chapter.\n".to_string()
             } else {
-                "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。\n".to_string()
+                "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。\n"
+                    .to_string()
             };
-            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &current_state_seed).await.map_err(|e| e.to_string())?;
-            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &output.pending_hooks).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(
+                &story_dir.join("current_state.md"),
+                &current_state_seed,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(
+                &story_dir.join("pending_hooks.md"),
+                &output.pending_hooks,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
             let emotional_seed = if language == WritingLanguage::En {
                 "# Emotional Arcs\n\n| Character | Chapter | Emotional State | Trigger Event | Intensity (1-10) | Arc Direction |\n| --- | --- | --- | --- | --- | --- |\n"
             } else {
                 "# 情感弧线\n\n| 角色 | 章节 | 情绪状态 | 触发事件 | 强度(1-10) | 弧线方向 |\n|------|------|----------|----------|------------|----------|\n"
             };
-            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("emotional_arcs.md"), emotional_seed).await.map_err(|e| e.to_string())?;
+            crate::utils::atomic_file_set::write_file_atomic(
+                &story_dir.join("emotional_arcs.md"),
+                emotional_seed,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
         }
         return Ok(());
     }
@@ -1234,11 +1513,30 @@ pub async fn write_foundation_files(
     let story_frame = story_frame_body.trim().to_string();
 
     // Phase 5 主产物。
-    crate::utils::atomic_file_set::write_file_atomic(&outline_dir.join("story_frame.md"), &story_frame).await.map_err(|e| e.to_string())?;
-    crate::utils::atomic_file_set::write_file_atomic(&outline_dir.join("volume_map.md"), &volume_map).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &outline_dir.join("story_frame.md"),
+        &story_frame,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &outline_dir.join("volume_map.md"),
+        &volume_map,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     if !output.rhythm_principles.trim().is_empty() {
-        let rhythm_file = if language == WritingLanguage::En { "rhythm_principles.md" } else { "节奏原则.md" };
-        crate::utils::atomic_file_set::write_file_atomic(&outline_dir.join(rhythm_file), &output.rhythm_principles).await.map_err(|e| e.to_string())?;
+        let rhythm_file = if language == WritingLanguage::En {
+            "rhythm_principles.md"
+        } else {
+            "节奏原则.md"
+        };
+        crate::utils::atomic_file_set::write_file_atomic(
+            &outline_dir.join(rhythm_file),
+            &output.rhythm_principles,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     // 一人一卡。
@@ -1248,20 +1546,38 @@ pub async fn write_foundation_files(
         if safe_name.is_empty() {
             continue;
         }
-        let target = if role.tier == ArchitectRoleTier::Major { &roles_major_dir } else { &roles_minor_dir };
-        crate::utils::atomic_file_set::write_file_atomic(&target.join(format!("{safe_name}.md")), &role.content).await.map_err(|e| e.to_string())?;
+        let target = if role.tier == ArchitectRoleTier::Major {
+            &roles_major_dir
+        } else {
+            &roles_minor_dir
+        };
+        crate::utils::atomic_file_set::write_file_atomic(
+            &target.join(format!("{safe_name}.md")),
+            &role.content,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     }
 
     // 兼容 shim。
-    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("story_bible.md"), &build_story_bible_shim(&story_frame, language))
-        .await
-        .map_err(|e| e.to_string())?;
-    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("character_matrix.md"), &build_character_matrix_shim(&output.roles, language))
-        .await
-        .map_err(|e| e.to_string())?;
-    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("book_rules.md"), &format!("{}\n", output.book_rules.trim()))
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &story_dir.join("story_bible.md"),
+        &build_story_bible_shim(&story_frame, language),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &story_dir.join("character_matrix.md"),
+        &build_character_matrix_shim(&output.roles, language),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &story_dir.join("book_rules.md"),
+        &format!("{}\n", output.book_rules.trim()),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     if mode == FoundationWriteMode::Init {
         let current_state_seed = if !output.current_state.trim().is_empty() {
@@ -1271,14 +1587,29 @@ pub async fn write_foundation_files(
         } else {
             "# 当前状态\n\n> 建书时占位。运行时每章之后由 consolidator 追加最新状态。每个角色的初始状态详见 roles/*.当前现状；承重的初始世界设定见 pending_hooks 里 startChapter=0 的行。\n".to_string()
         };
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("current_state.md"), &current_state_seed).await.map_err(|e| e.to_string())?;
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("pending_hooks.md"), &output.pending_hooks).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("current_state.md"),
+            &current_state_seed,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("pending_hooks.md"),
+            &output.pending_hooks,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         let emotional_seed = if language == WritingLanguage::En {
             "# Emotional Arcs\n\n| Character | Chapter | Emotional State | Trigger Event | Intensity (1-10) | Arc Direction |\n| --- | --- | --- | --- | --- | --- |\n"
         } else {
             "# 情感弧线\n\n| 角色 | 章节 | 情绪状态 | 触发事件 | 强度(1-10) | 弧线方向 |\n|------|------|----------|----------|------------|----------|\n"
         };
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("emotional_arcs.md"), emotional_seed).await.map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("emotional_arcs.md"),
+            emotional_seed,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1343,15 +1674,26 @@ name: 药老
         assert!(output.book_rules.contains("林动"));
         // pending_hooks 规范化：H01 core=true 预晋升、H02 普通种子休眠（暂缓）。
         assert!(output.pending_hooks.contains("H01"));
-        assert!(output.pending_hooks.contains("暂缓"), "hooks: {}", output.pending_hooks);
+        assert!(
+            output.pending_hooks.contains("暂缓"),
+            "hooks: {}",
+            output.pending_hooks
+        );
         // legacy 面由 shim 填充。
         assert!(output.story_bible.contains("兼容指针"));
     }
 
     #[test]
     fn parse_sections_missing_blocks_reported() {
-        let err = parse_sections("=== SECTION: story_frame ===\n只有一段。", WritingLanguage::Zh).unwrap_err();
-        assert_eq!(err.missing, vec!["volume_map", "roles", "book_rules", "pending_hooks"]);
+        let err = parse_sections(
+            "=== SECTION: story_frame ===\n只有一段。",
+            WritingLanguage::Zh,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err.missing,
+            vec!["volume_map", "roles", "book_rules", "pending_hooks"]
+        );
     }
 
     #[test]
@@ -1477,14 +1819,27 @@ name: 中文tier
         let dir = tempfile::tempdir().unwrap();
         let book = dir.path().join("b1");
         let output = parse_sections(SAMPLE_OUTPUT, WritingLanguage::Zh).unwrap();
-        write_foundation_files(&book, &output, WritingLanguage::Zh, FoundationWriteMode::Init)
-            .await
-            .unwrap();
+        write_foundation_files(
+            &book,
+            &output,
+            WritingLanguage::Zh,
+            FoundationWriteMode::Init,
+        )
+        .await
+        .unwrap();
         let story = book.join("story");
         assert!(story.join("outline").join("story_frame.md").exists());
         assert!(story.join("outline").join("volume_map.md").exists());
-        assert!(story.join("roles").join("主要角色").join("林动.md").exists());
-        assert!(story.join("roles").join("次要角色").join("药老.md").exists());
+        assert!(story
+            .join("roles")
+            .join("主要角色")
+            .join("林动.md")
+            .exists());
+        assert!(story
+            .join("roles")
+            .join("次要角色")
+            .join("药老.md")
+            .exists());
         assert!(story.join("story_bible.md").exists());
         assert!(story.join("character_matrix.md").exists());
         assert!(story.join("book_rules.md").exists());
@@ -1498,9 +1853,14 @@ name: 中文tier
             book_rules: "旧规则".into(),
             ..Default::default()
         };
-        let err = write_foundation_files(&book, &legacy, WritingLanguage::Zh, FoundationWriteMode::Revise)
-            .await
-            .unwrap_err();
+        let err = write_foundation_files(
+            &book,
+            &legacy,
+            WritingLanguage::Zh,
+            FoundationWriteMode::Revise,
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("legacy-format output"));
     }
 }

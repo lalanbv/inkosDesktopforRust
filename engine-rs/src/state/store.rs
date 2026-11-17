@@ -65,7 +65,8 @@ impl StateStore for FsStateStore {
     }
 
     async fn write_string(&self, path: &str, content: &str) -> Result<()> {
-        crate::utils::atomic_file_set::write_file_atomic(std::path::Path::new(path), content).await?;
+        crate::utils::atomic_file_set::write_file_atomic(std::path::Path::new(path), content)
+            .await?;
         Ok(())
     }
 
@@ -118,7 +119,10 @@ impl InMemoryStateStore {
 
     /// 预置一个文件内容（测试 setup 用）。
     pub fn set(&self, path: &str, content: &str) {
-        self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(path.to_string(), content.to_string());
+        self.files
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(path.to_string(), content.to_string());
     }
 }
 
@@ -133,14 +137,16 @@ impl StateStore for InMemoryStateStore {
     async fn read_to_string(&self, path: &str) -> Result<Option<String>> {
         Ok(self
             .files
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(path)
             .cloned())
     }
 
     async fn write_string(&self, path: &str, content: &str) -> Result<()> {
         self.files
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(path.to_string(), content.to_string());
         Ok(())
     }
@@ -156,7 +162,10 @@ impl StateStore for InMemoryStateStore {
         } else {
             format!("{path}/")
         };
-        let files = self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let files = self
+            .files
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let mut children: Vec<String> = files
             .keys()
             .filter_map(|k| k.strip_prefix(&prefix))
@@ -175,12 +184,18 @@ impl StateStore for InMemoryStateStore {
     }
 
     async fn remove_file(&self, path: &str) -> Result<()> {
-        self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(path);
+        self.files
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(path);
         Ok(())
     }
 
     async fn exists(&self, path: &str) -> Result<bool> {
-        let files = self.files.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let files = self
+            .files
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // 文件存在，或作为某文件路径前缀（目录语义）。
         Ok(files.contains_key(path) || files.keys().any(|k| k.starts_with(&format!("{path}/"))))
     }
@@ -205,7 +220,10 @@ mod tests {
     async fn in_memory_write_then_read_roundtrip() {
         let s = InMemoryStateStore::new();
         s.write_string("a/b.json", "{}").await.unwrap();
-        assert_eq!(s.read_to_string("a/b.json").await.unwrap(), Some("{}".to_string()));
+        assert_eq!(
+            s.read_to_string("a/b.json").await.unwrap(),
+            Some("{}".to_string())
+        );
         assert!(s.exists("a/b.json").await.unwrap());
     }
 
@@ -217,7 +235,14 @@ mod tests {
         s.set("chapters/sub/3_z.md", "z");
         s.set("state/manifest.json", "{}");
         let children = s.list_dir("chapters").await.unwrap();
-        assert_eq!(children, vec!["1_x.md".to_string(), "2_y.md".to_string(), "sub".to_string()]);
+        assert_eq!(
+            children,
+            vec![
+                "1_x.md".to_string(),
+                "2_y.md".to_string(),
+                "sub".to_string()
+            ]
+        );
     }
 
     #[tokio::test]
@@ -240,7 +265,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("missing.json");
         let s = FsStateStore;
-        assert_eq!(s.read_to_string(path.to_str().unwrap()).await.unwrap(), None);
+        assert_eq!(
+            s.read_to_string(path.to_str().unwrap()).await.unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -264,8 +292,12 @@ mod tests {
         let chapters = tmp.path().join("chapters");
         let s = FsStateStore;
         s.mkdir_p(chapters.to_str().unwrap()).await.unwrap();
-        s.write_string(chapters.join("1_a.md").to_str().unwrap(), "x").await.unwrap();
-        s.write_string(chapters.join("2_b.md").to_str().unwrap(), "y").await.unwrap();
+        s.write_string(chapters.join("1_a.md").to_str().unwrap(), "x")
+            .await
+            .unwrap();
+        s.write_string(chapters.join("2_b.md").to_str().unwrap(), "y")
+            .await
+            .unwrap();
         let mut entries = s.list_dir(chapters.to_str().unwrap()).await.unwrap();
         entries.sort();
         assert_eq!(entries, vec!["1_a.md".to_string(), "2_b.md".to_string()]);
@@ -273,6 +305,9 @@ mod tests {
 
     #[test]
     fn join_path_handles_trailing_slash_and_segments() {
-        assert_eq!(join_path("a", "b"), format!("a{}b", std::path::MAIN_SEPARATOR));
+        assert_eq!(
+            join_path("a", "b"),
+            format!("a{}b", std::path::MAIN_SEPARATOR)
+        );
     }
 }

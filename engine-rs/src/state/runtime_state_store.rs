@@ -12,17 +12,20 @@
 //!
 //! 全部方法消费 `&dyn StateStore`，可注入 [`InMemoryStateStore`](crate::state::store::InMemoryStateStore) 单测。
 
-use crate::models::runtime_state::{ChapterSummaryRow, CurrentStateFact, 
-    ChapterSummariesState, CurrentStateState, HooksState, RuntimeStateDelta, StateManifest,
+use crate::models::runtime_state::{
+    ChapterSummariesState, ChapterSummaryRow, CurrentStateFact, CurrentStateState, HooksState,
+    RuntimeStateDelta, StateManifest,
 };
-use crate::utils::hook_arbiter::arbitrate_runtime_state_delta_hooks;
 use crate::state::projections::{
     render_chapter_summaries_projection, render_current_state_projection, render_hooks_projection,
 };
 use crate::state::reducer::{apply_runtime_state_delta, RuntimeStateSnapshot};
 use crate::state::state_bootstrap::bootstrap_structured_state_from_markdown;
 use crate::state::store::{join_path, StateStore};
-use crate::state::validator::{validate_runtime_state, RuntimeStateValidationIssue, ValidationInput};
+use crate::state::validator::{
+    validate_runtime_state, RuntimeStateValidationIssue, ValidationInput,
+};
+use crate::utils::hook_arbiter::arbitrate_runtime_state_delta_hooks;
 use crate::utils::language::WritingLanguage;
 
 /// 把业务约束错误消息包装为 `EngineError::Constraint`（顶层编排的校验/reducer 失败统一走此变体）。
@@ -89,10 +92,8 @@ pub async fn build_runtime_state_artifacts(
     let snapshot = load_runtime_state_snapshot(store, book_dir).await?;
     let (resolved_delta, _decisions) =
         arbitrate_runtime_state_delta_hooks(&snapshot.hooks.hooks, delta, allow_new_hooks);
-    let next =
-        apply_runtime_state_delta(&snapshot, &resolved_delta, allow_reapply).map_err(|e| {
-            constraint(format!("reducer: {e}"))
-        })?;
+    let next = apply_runtime_state_delta(&snapshot, &resolved_delta, allow_reapply)
+        .map_err(|e| constraint(format!("reducer: {e}")))?;
 
     let resolved_chapter = resolved_delta.chapter;
     Ok(RuntimeStateArtifacts {
@@ -100,10 +101,12 @@ pub async fn build_runtime_state_artifacts(
         resolved_delta,
         current_state_markdown: render_current_state_projection(&next.current_state, language),
         hooks_markdown: render_hooks_projection(&next.hooks, language, Some(resolved_chapter)),
-        chapter_summaries_markdown: render_chapter_summaries_projection(&next.chapter_summaries, language),
+        chapter_summaries_markdown: render_chapter_summaries_projection(
+            &next.chapter_summaries,
+            language,
+        ),
     })
 }
-
 
 /// 加载章前快照（TS `loadRuntimeStateSnapshotAtChapter`）：`story/snapshots/{N}`
 /// 的 state 四 JSON 优先；markdown 重建兜底（manifest.lastAppliedChapter = N，
@@ -114,7 +117,10 @@ pub async fn load_runtime_state_snapshot_at_chapter(
     chapter: u32,
     language: WritingLanguage,
 ) -> crate::Result<RuntimeStateSnapshot> {
-    let snapshot_dir = join_path(&join_path(book_dir, "story"), &format!("snapshots/{}", chapter));
+    let snapshot_dir = join_path(
+        &join_path(book_dir, "story"),
+        &format!("snapshots/{}", chapter),
+    );
     let state_dir = join_path(&snapshot_dir, "state");
 
     let try_json = |name: &str| {
@@ -170,18 +176,23 @@ pub async fn load_runtime_state_snapshot_at_chapter(
     let current_md = current_md?.unwrap_or_default();
     let hooks_md = hooks_md?.unwrap_or_default();
     let summaries_md = summaries_md?.unwrap_or_default();
-    let lang_str = if language == WritingLanguage::En { "en" } else { "zh" };
-    let facts = crate::utils::story_markdown::parse_current_state_facts(&current_md, chapter as i64)
-        .into_iter()
-        .map(|f| CurrentStateFact {
-            subject: f.subject,
-            predicate: f.predicate,
-            object: f.object,
-            valid_from_chapter: f.valid_from_chapter.max(0) as u32,
-            valid_until_chapter: f.valid_until_chapter.map(|v| v.max(0) as u32),
-            source_chapter: f.source_chapter.max(0) as u32,
-        })
-        .collect();
+    let lang_str = if language == WritingLanguage::En {
+        "en"
+    } else {
+        "zh"
+    };
+    let facts =
+        crate::utils::story_markdown::parse_current_state_facts(&current_md, chapter as i64)
+            .into_iter()
+            .map(|f| CurrentStateFact {
+                subject: f.subject,
+                predicate: f.predicate,
+                object: f.object,
+                valid_from_chapter: f.valid_from_chapter.max(0) as u32,
+                valid_until_chapter: f.valid_until_chapter.map(|v| v.max(0) as u32),
+                source_chapter: f.source_chapter.max(0) as u32,
+            })
+            .collect();
     let rows = crate::utils::story_markdown::parse_chapter_summaries_markdown(&summaries_md)
         .into_iter()
         .map(|row| ChapterSummaryRow {
@@ -234,7 +245,10 @@ pub async fn build_runtime_state_artifacts_from_snapshot(
         resolved_delta,
         current_state_markdown: render_current_state_projection(&next.current_state, language),
         hooks_markdown: render_hooks_projection(&next.hooks, language, Some(resolved_chapter)),
-        chapter_summaries_markdown: render_chapter_summaries_projection(&next.chapter_summaries, language),
+        chapter_summaries_markdown: render_chapter_summaries_projection(
+            &next.chapter_summaries,
+            language,
+        ),
     })
 }
 
@@ -252,13 +266,20 @@ pub async fn save_runtime_state_snapshot(
     let current_state = serde_json::to_string_pretty(&snapshot.current_state)?;
     let hooks = serde_json::to_string_pretty(&snapshot.hooks)?;
     let chapter_summaries = serde_json::to_string_pretty(&snapshot.chapter_summaries)?;
-    store.write_string(&join_path(&state_dir, "manifest.json"), &manifest).await?;
+    store
+        .write_string(&join_path(&state_dir, "manifest.json"), &manifest)
+        .await?;
     store
         .write_string(&join_path(&state_dir, "current_state.json"), &current_state)
         .await?;
-    store.write_string(&join_path(&state_dir, "hooks.json"), &hooks).await?;
     store
-        .write_string(&join_path(&state_dir, "chapter_summaries.json"), &chapter_summaries)
+        .write_string(&join_path(&state_dir, "hooks.json"), &hooks)
+        .await?;
+    store
+        .write_string(
+            &join_path(&state_dir, "chapter_summaries.json"),
+            &chapter_summaries,
+        )
         .await?;
     Ok(())
 }
@@ -332,7 +353,10 @@ pub async fn load_narrative_memory_seed(
     Ok(NarrativeMemorySeed { summaries, hooks })
 }
 
-async fn read_required_json(store: &dyn StateStore, path: &str) -> crate::Result<serde_json::Value> {
+async fn read_required_json(
+    store: &dyn StateStore,
+    path: &str,
+) -> crate::Result<serde_json::Value> {
     match store.read_to_string(path).await? {
         Some(raw) => Ok(serde_json::from_str(&raw)?),
         None => Err(constraint(format!("{path} missing after bootstrap"))),
@@ -433,7 +457,9 @@ mod tests {
         // 修改快照并保存。
         let mut next = snap.clone();
         next.manifest.last_applied_chapter = 9;
-        save_runtime_state_snapshot(&store, "book", &next).await.unwrap();
+        save_runtime_state_snapshot(&store, "book", &next)
+            .await
+            .unwrap();
         // 直接读 manifest.json 验证写入（不经 bootstrap，因 bootstrap 会按 durable progress 重算）。
         let written = store
             .read_to_string("book/story/state/manifest.json")
@@ -458,23 +484,35 @@ mod tests {
         setup_min_book(&store, "book");
         let seed = load_narrative_memory_seed(&store, "book").await.unwrap();
         assert_eq!(seed.summaries.len(), 1);
-        assert_eq!(seed.summaries[0], StoredSummary {
-            chapter: 1,
-            title: "t1".into(),
-            characters: "角色".into(),
-            events: "事件".into(),
-            state_changes: "变化".into(),
-            hook_activity: "活动".into(),
-            mood: "心情".into(),
-            chapter_type: "类型".into(),
-            conflict_level: None,
-            reveal_level: None,
-        });
+        assert_eq!(
+            seed.summaries[0],
+            StoredSummary {
+                chapter: 1,
+                title: "t1".into(),
+                characters: "角色".into(),
+                events: "事件".into(),
+                state_changes: "变化".into(),
+                hook_activity: "活动".into(),
+                mood: "心情".into(),
+                chapter_type: "类型".into(),
+                conflict_level: None,
+                reveal_level: None,
+            }
+        );
         assert_eq!(seed.hooks.len(), 1);
         assert_eq!(seed.hooks[0].hook_id, "h01");
         assert_eq!(seed.hooks[0].status, "open");
         assert_eq!(seed.hooks[0].payoff_timing, "mid-arc");
-        let _ = StoredHook { hook_id: "x".into(), start_chapter: 0, r#type: "t".into(), status: "open".into(), last_advanced_chapter: 0, expected_payoff: String::new(), payoff_timing: String::new(), notes: String::new() };
+        let _ = StoredHook {
+            hook_id: "x".into(),
+            start_chapter: 0,
+            r#type: "t".into(),
+            status: "open".into(),
+            last_advanced_chapter: 0,
+            expected_payoff: String::new(),
+            payoff_timing: String::new(),
+            notes: String::new(),
+        };
         let _ = HookStatus::Open;
     }
 }

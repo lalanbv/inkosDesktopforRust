@@ -111,9 +111,7 @@ impl PluginProcess {
         // 环境变量等于把 GITHUB_TOKEN / AWS_* 等密钥交给它（绕过能力模型）。
         // 与 host_api::exec_command 共用同一白名单，防两侧策略漂移。
         super::host_api::apply_env_allowlist(&mut cmd);
-        let mut child = cmd
-            .spawn()
-            .context("Failed to spawn plugin process")?;
+        let mut child = cmd.spawn().context("Failed to spawn plugin process")?;
 
         let stdin = child.stdin.take().context("Failed to capture stdin")?;
         let stdout = child.stdout.take().context("Failed to capture stdout")?;
@@ -133,7 +131,11 @@ impl PluginProcess {
     }
 
     /// 调用插件方法
-    pub fn call(&self, method: &str, params: Option<serde_json::Value>) -> Result<serde_json::Value, PluginError> {
+    pub fn call(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, PluginError> {
         // 生成请求 ID
         let id = {
             let mut next_id = self.next_id.lock().map_err(|_| {
@@ -146,20 +148,24 @@ impl PluginProcess {
 
         // 构造请求
         let request = RpcRequest::new(id, method, params);
-        let request_line = serde_json::to_string(&request)
-            .map_err(|e| PluginError::ExecutionFailed(format!("Failed to serialize request: {}", e)))?;
+        let request_line = serde_json::to_string(&request).map_err(|e| {
+            PluginError::ExecutionFailed(format!("Failed to serialize request: {}", e))
+        })?;
 
         // 发送请求
         {
-            let mut stdin = self.stdin.lock().map_err(|_| {
-                PluginError::ExecutionFailed("Failed to lock stdin".to_string())
+            let mut stdin = self
+                .stdin
+                .lock()
+                .map_err(|_| PluginError::ExecutionFailed("Failed to lock stdin".to_string()))?;
+
+            writeln!(stdin, "{}", request_line).map_err(|e| {
+                PluginError::ExecutionFailed(format!("Failed to write request: {}", e))
             })?;
 
-            writeln!(stdin, "{}", request_line)
-                .map_err(|e| PluginError::ExecutionFailed(format!("Failed to write request: {}", e)))?;
-
-            stdin.flush()
-                .map_err(|e| PluginError::ExecutionFailed(format!("Failed to flush stdin: {}", e)))?;
+            stdin.flush().map_err(|e| {
+                PluginError::ExecutionFailed(format!("Failed to flush stdin: {}", e))
+            })?;
         }
 
         // 读取响应——带超时保护（spawn 读线程 + channel recv_timeout）。
@@ -168,24 +174,26 @@ impl PluginProcess {
             let stdout_arc = Arc::clone(&self.stdout);
             let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
             std::thread::spawn(move || {
-                let result = stdout_arc.lock().map_err(|_| "Failed to lock stdout".to_string()).and_then(|mut out| {
-                    // 限量读：read_line 无长度上限，插件可单行写数 GB 在 RPC 超时前
-                    // 撑爆内存（超时防挂死，不防 OOM——数百 MB/s 写入 5s 足以耗尽内存）。
-                    // Read::take 限制字节数，超限即判协议违规并 Err。
-                    let mut line = Vec::new();
-                    let mut limited = Read::take(&mut *out, MAX_RESPONSE_BYTES + 1);
-                    limited
-                        .read_until(b'\n', &mut line)
-                        .map_err(|e| format!("Failed to read response: {}", e))?;
-                    if line.len() as u64 > MAX_RESPONSE_BYTES {
-                        return Err(format!(
-                            "插件响应超上限 {} 字节（协议违规），拒绝",
-                            MAX_RESPONSE_BYTES
-                        ));
-                    }
-                    String::from_utf8(line)
-                        .map_err(|_| "插件响应非合法 UTF-8".to_string())
-                });
+                let result = stdout_arc
+                    .lock()
+                    .map_err(|_| "Failed to lock stdout".to_string())
+                    .and_then(|mut out| {
+                        // 限量读：read_line 无长度上限，插件可单行写数 GB 在 RPC 超时前
+                        // 撑爆内存（超时防挂死，不防 OOM——数百 MB/s 写入 5s 足以耗尽内存）。
+                        // Read::take 限制字节数，超限即判协议违规并 Err。
+                        let mut line = Vec::new();
+                        let mut limited = Read::take(&mut *out, MAX_RESPONSE_BYTES + 1);
+                        limited
+                            .read_until(b'\n', &mut line)
+                            .map_err(|e| format!("Failed to read response: {}", e))?;
+                        if line.len() as u64 > MAX_RESPONSE_BYTES {
+                            return Err(format!(
+                                "插件响应超上限 {} 字节（协议违规），拒绝",
+                                MAX_RESPONSE_BYTES
+                            ));
+                        }
+                        String::from_utf8(line).map_err(|_| "插件响应非合法 UTF-8".to_string())
+                    });
                 let _ = tx.send(result);
             });
             match rx.recv_timeout(RPC_TIMEOUT) {
@@ -210,8 +218,9 @@ impl PluginProcess {
         };
 
         // 解析响应
-        let response: RpcResponse = serde_json::from_str(&response_line)
-            .map_err(|e| PluginError::ExecutionFailed(format!("Failed to parse response: {}", e)))?;
+        let response: RpcResponse = serde_json::from_str(&response_line).map_err(|e| {
+            PluginError::ExecutionFailed(format!("Failed to parse response: {}", e))
+        })?;
 
         // 验证响应 ID
         if response.id != id {
@@ -235,19 +244,27 @@ impl PluginProcess {
     }
 
     /// 发送通知（不等待响应）
-    pub fn notify(&self, method: &str, params: Option<serde_json::Value>) -> Result<(), PluginError> {
+    pub fn notify(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<(), PluginError> {
         let request = RpcRequest::notification(method, params);
-        let request_line = serde_json::to_string(&request)
-            .map_err(|e| PluginError::ExecutionFailed(format!("Failed to serialize notification: {}", e)))?;
-
-        let mut stdin = self.stdin.lock().map_err(|_| {
-            PluginError::ExecutionFailed("Failed to lock stdin".to_string())
+        let request_line = serde_json::to_string(&request).map_err(|e| {
+            PluginError::ExecutionFailed(format!("Failed to serialize notification: {}", e))
         })?;
 
-        writeln!(stdin, "{}", request_line)
-            .map_err(|e| PluginError::ExecutionFailed(format!("Failed to write notification: {}", e)))?;
+        let mut stdin = self
+            .stdin
+            .lock()
+            .map_err(|_| PluginError::ExecutionFailed("Failed to lock stdin".to_string()))?;
 
-        stdin.flush()
+        writeln!(stdin, "{}", request_line).map_err(|e| {
+            PluginError::ExecutionFailed(format!("Failed to write notification: {}", e))
+        })?;
+
+        stdin
+            .flush()
             .map_err(|e| PluginError::ExecutionFailed(format!("Failed to flush stdin: {}", e)))?;
 
         Ok(())
@@ -307,13 +324,13 @@ impl PluginProcess {
         let mut child = self.child.lock().map_err(|_| {
             PluginError::ExecutionFailed("Failed to lock child process for kill".to_string())
         })?;
-        child.kill().map_err(|e| {
-            PluginError::ExecutionFailed(format!("Failed to kill process: {}", e))
-        })?;
+        child
+            .kill()
+            .map_err(|e| PluginError::ExecutionFailed(format!("Failed to kill process: {}", e)))?;
         Ok(())
     }
 
-        /// 检查进程是否存活
+    /// 检查进程是否存活
     pub fn is_alive(&self) -> bool {
         let mut child = match self.child.lock() {
             Ok(c) => c,
@@ -422,8 +439,11 @@ mod tests {
     fn test_stderr_drain_handles_invalid_utf8_and_exits_on_eof() {
         let mut cmd = Command::new("sh");
         // printf 输出非法 UTF-8 字节序列后立即退出
-        cmd.arg("-c").arg(r#"printf '\377\376 bad\n'>&2; printf 'ok\n' >&2"#);
-        cmd.stderr(Stdio::piped()).stdout(Stdio::null()).stdin(Stdio::null());
+        cmd.arg("-c")
+            .arg(r#"printf '\377\376 bad\n'>&2; printf 'ok\n' >&2"#);
+        cmd.stderr(Stdio::piped())
+            .stdout(Stdio::null())
+            .stdin(Stdio::null());
         let Ok(mut child) = cmd.spawn() else { return };
         let stderr = child.stderr.take().unwrap();
         spawn_stderr_drain("invalid-utf8".to_string(), stderr);
@@ -437,7 +457,7 @@ mod tests {
     #[test]
     fn test_oversized_response_rejected() {
         let oversized = (MAX_RESPONSE_BYTES / 1024) + 1; // KB 为单位给 dd
-        // dd 读 /dev/zero 输出 oversized KB，tr 把 \0 换成 x（可打印），后跟 \n
+                                                         // dd 读 /dev/zero 输出 oversized KB，tr 把 \0 换成 x（可打印），后跟 \n
         let script = format!(
             r#"read line; dd if=/dev/zero bs=1024 count={} 2>/dev/null | tr '\0' 'x'; echo"#,
             oversized

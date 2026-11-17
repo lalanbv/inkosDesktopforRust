@@ -24,9 +24,7 @@ use std::sync::OnceLock;
 
 use crate::agents::ai_tells::analyze_ai_tells;
 use crate::agents::continuity::{AuditSeverity, AuditTokenUsage, ChatOutcome};
-use crate::agents::observer_prompts::{
-    build_observer_system_prompt, build_observer_user_prompt,
-};
+use crate::agents::observer_prompts::{build_observer_system_prompt, build_observer_user_prompt};
 use crate::agents::post_write_validator::{
     detect_cross_chapter_repetition, detect_paragraph_length_drift, normalize_post_write_surface,
     validate_post_write, PostWriteViolation,
@@ -46,18 +44,14 @@ use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::models::book::BookConfig;
 use crate::models::book_rules::BookRules;
 use crate::models::genre_profile::GenreProfile;
-use crate::models::input_governance::{
-    ChapterIntent, ChapterMemo, ContextPackage, RuleStack,
-};
+use crate::models::input_governance::{ChapterIntent, ChapterMemo, ContextPackage, RuleStack};
 use crate::models::length_governance::{LengthCountingMode, LengthSpec};
 use crate::models::runtime_state::{HookOps, RuntimeStateDelta};
 use crate::prompts::prompt_pack::{
     append_prompt_pack_guidance, LoadPromptPackPromptInput, PromptPackPromptNotFoundError,
 };
 use crate::state::reducer::RuntimeStateSnapshot;
-use crate::state::runtime_state_store::{
-    build_runtime_state_artifacts, RuntimeStateArtifacts,
-};
+use crate::state::runtime_state_store::{build_runtime_state_artifacts, RuntimeStateArtifacts};
 use crate::state::store::StateStore;
 use crate::utils::atomic_file_set::{
     commit_atomic_file_set, AtomicFileSet, AtomicFileWrite, FileContent,
@@ -85,7 +79,9 @@ use crate::utils::narrative_control::{
 use crate::utils::outline_paths::{
     read_character_context, read_current_state_with_fallback, read_story_frame, read_volume_map,
 };
-use crate::utils::pov_filter::{extract_pov_from_outline, filter_hooks_by_pov, filter_matrix_by_pov};
+use crate::utils::pov_filter::{
+    extract_pov_from_outline, filter_hooks_by_pov, filter_matrix_by_pov,
+};
 use crate::utils::story_markdown::parse_pending_hooks_markdown;
 
 /// agent 名。对齐 TS `WriterAgent.name`。
@@ -350,7 +346,11 @@ pub fn build_user_prompt(params: &UserPromptInput<'_>) -> String {
         budget::CHAPTER_SUMMARIES,
     );
     let subplot_board = cap_legacy("subplot_board", params.subplot_board, budget::SUBPLOT_BOARD);
-    let emotional_arcs = cap_legacy("emotional_arcs", params.emotional_arcs, budget::EMOTIONAL_ARCS);
+    let emotional_arcs = cap_legacy(
+        "emotional_arcs",
+        params.emotional_arcs,
+        budget::EMOTIONAL_ARCS,
+    );
     let character_matrix = cap_legacy(
         "character_matrix",
         params.character_matrix,
@@ -364,7 +364,9 @@ pub fn build_user_prompt(params: &UserPromptInput<'_>) -> String {
     let context_block = params
         .external_context
         .filter(|ctx| !ctx.is_empty())
-        .map(|ctx| format!("\n## 外部指令\n以下是来自外部系统的创作指令，请在本章中融入：\n\n{ctx}\n"))
+        .map(|ctx| {
+            format!("\n## 外部指令\n以下是来自外部系统的创作指令，请在本章中融入：\n\n{ctx}\n")
+        })
         .unwrap_or_default();
 
     let ledger_block = if !ledger.is_empty() {
@@ -489,8 +491,7 @@ pub fn build_governed_user_prompt(params: &GovernedUserPromptInput<'_>) -> Strin
         .filter(|entry| !DIRECTION_SOURCES.contains(&entry.source.as_str()))
         .collect();
 
-    let context_sections =
-        render_narrative_selected_context(&to_refs(&other_entries), language);
+    let context_sections = render_narrative_selected_context(&to_refs(&other_entries), language);
     let user_direction_block = if !direction_entries.is_empty() {
         let rendered = render_narrative_selected_context(&to_refs(&direction_entries), language);
         if language == WritingLanguage::En {
@@ -515,14 +516,11 @@ pub fn build_governed_user_prompt(params: &GovernedUserPromptInput<'_>) -> Strin
         .filter(|brief| !brief.is_empty())
         .map(|brief| format!("\n{brief}\n"))
         .unwrap_or_default();
-    let selected_evidence_block = sanitize_narrative_evidence_block(
-        params.selected_evidence_block,
-        language,
-    )
-    .map(|block| format!("\n{block}\n"))
-    .unwrap_or_default();
-    let chapter_context_block =
-        build_chapter_context_block(params.external_context, language);
+    let selected_evidence_block =
+        sanitize_narrative_evidence_block(params.selected_evidence_block, language)
+            .map(|block| format!("\n{block}\n"))
+            .unwrap_or_default();
+    let chapter_context_block = build_chapter_context_block(params.external_context, language);
     let brief_narrative = render_memo_as_narrative_block(
         params.chapter_memo,
         params
@@ -644,7 +642,10 @@ pub fn build_settler_governed_control_block(
             .map(|override_rule| {
                 format!(
                     "- {} -> {}: {} ({})",
-                    override_rule.from, override_rule.to, override_rule.reason, override_rule.target
+                    override_rule.from,
+                    override_rule.to,
+                    override_rule.reason,
+                    override_rule.target
                 )
             })
             .collect::<Vec<String>>()
@@ -700,9 +701,7 @@ pub fn build_settler_governed_control_block(
 
 /// `^### ` 行首降级 `- `。对齐 TS `.replace(/^### /gm, "- ")`。
 fn demote_section_headings(content: &str) -> String {
-    heading_demote_re()
-        .replace_all(content, "- ")
-        .into_owned()
+    heading_demote_re().replace_all(content, "- ").into_owned()
 }
 
 fn heading_demote_re() -> &'static Regex {
@@ -719,16 +718,26 @@ pub fn verify_pre_write_check_aligns_with_memo(
 ) -> Option<String> {
     if pre_write_check.trim().is_empty() {
         return Some(if language == WritingLanguage::En {
-            format!("Chapter {chapter_number} PRE_WRITE_CHECK is empty; cannot verify memo alignment")
+            format!(
+                "Chapter {chapter_number} PRE_WRITE_CHECK is empty; cannot verify memo alignment"
+            )
         } else {
             format!("第{chapter_number}章 PRE_WRITE_CHECK 为空，无法对齐 chapter_memo")
         });
     }
 
     let required: [(&str, &str); 3] = if language == WritingLanguage::En {
-        [("Current task", "Current task"), ("Do not", "Do not"), ("end-of-chapter", "Required end-of-chapter change")]
+        [
+            ("Current task", "Current task"),
+            ("Do not", "Do not"),
+            ("end-of-chapter", "Required end-of-chapter change"),
+        ]
     } else {
-        [("当前任务", "当前任务"), ("不要做", "不要做"), ("章尾", "章尾必须发生的改变")]
+        [
+            ("当前任务", "当前任务"),
+            ("不要做", "不要做"),
+            ("章尾", "章尾必须发生的改变"),
+        ]
     };
     let missing: Vec<&str> = required
         .iter()
@@ -808,9 +817,8 @@ pub fn normalize_runtime_state_delta_chapter(
         .iter()
         .map(|hook| {
             let start_chapter = hook.start_chapter.min(authoritative_chapter_number);
-            let last_advanced_chapter = hook
-                .last_advanced_chapter
-                .min(authoritative_chapter_number);
+            let last_advanced_chapter =
+                hook.last_advanced_chapter.min(authoritative_chapter_number);
             if start_chapter != hook.start_chapter
                 || last_advanced_chapter != hook.last_advanced_chapter
             {
@@ -962,12 +970,10 @@ pub fn extract_dialogue_fingerprints(recent_chapters: &str) -> String {
             .unwrap_or_default();
         if let Some(speaker) = speaker {
             if !speaker.is_empty() && utf16_len(&line) > 1 {
-                let index = *character_index
-                    .entry(speaker.clone())
-                    .or_insert_with(|| {
-                        character_dialogues.push((speaker.clone(), Vec::new()));
-                        character_dialogues.len() - 1
-                    });
+                let index = *character_index.entry(speaker.clone()).or_insert_with(|| {
+                    character_dialogues.push((speaker.clone(), Vec::new()));
+                    character_dialogues.len() - 1
+                });
                 character_dialogues[index].1.push(line);
             }
         }
@@ -1125,10 +1131,10 @@ pub fn find_relevant_summaries(
         .iter()
         .copied()
         .filter(|row| {
-            outline_names
-                .iter()
-                .any(|name| row.contains(name.as_str()))
-                || hook_ids.iter().any(|hook_id| row.contains(hook_id.as_str()))
+            outline_names.iter().any(|name| row.contains(name.as_str()))
+                || hook_ids
+                    .iter()
+                    .any(|hook_id| row.contains(hook_id.as_str()))
         })
         .collect();
 
@@ -1161,7 +1167,12 @@ pub fn find_relevant_summaries(
 pub fn sanitize_filename(title: &str) -> String {
     let cleaned: String = title
         .chars()
-        .filter(|c| !matches!(c, '/' | '\\' | '?' | '%' | '*' | ':' | '|' | '"' | '<' | '>'))
+        .filter(|c| {
+            !matches!(
+                c,
+                '/' | '\\' | '?' | '%' | '*' | ':' | '|' | '"' | '<' | '>'
+            )
+        })
         .collect();
     let underscored = whitespace_run_re().replace_all(&cleaned, "_").into_owned();
     let truncated_units: Vec<u16> = underscored.encode_utf16().take(50).collect();
@@ -1223,15 +1234,17 @@ async fn settle(
     chat: &dyn WriterChat,
     params: &SettleParams<'_>,
 ) -> Result<(MergedSettlement, AuditTokenUsage), WriteChapterError> {
-    let resolved_language =
-        lang_from_str(params.book.language.as_deref().unwrap_or(&params.genre_profile.language));
+    let resolved_language = lang_from_str(
+        params
+            .book
+            .language
+            .as_deref()
+            .unwrap_or(&params.genre_profile.language),
+    );
 
     // Phase 2a: Observer — 提取本章全部事实。
-    let observer_system = build_observer_system_prompt(
-        params.book,
-        params.genre_profile,
-        Some(resolved_language),
-    );
+    let observer_system =
+        build_observer_system_prompt(params.book, params.genre_profile, Some(resolved_language));
     let observer_user = build_observer_user_prompt(
         params.chapter_number,
         params.title,
@@ -1242,7 +1255,10 @@ async fn settle(
     log_info(
         resolved_language,
         &format!("阶段 2a：提取第{}章事实", params.chapter_number),
-        &format!("Phase 2a: observing facts for chapter {}", params.chapter_number),
+        &format!(
+            "Phase 2a: observing facts for chapter {}",
+            params.chapter_number
+        ),
     );
     let observer_response = chat
         .chat(
@@ -1250,12 +1266,14 @@ async fn settle(
                 LLMMessage {
                     role: LLMRole::System,
                     content: observer_system,
-                    tool_calls: None, tool_call_id: None,
+                    tool_calls: None,
+                    tool_call_id: None,
                 },
                 LLMMessage {
                     role: LLMRole::User,
                     content: observer_user,
-                    tool_calls: None, tool_call_id: None,
+                    tool_calls: None,
+                    tool_call_id: None,
                 },
             ],
             0.5,
@@ -1276,17 +1294,14 @@ async fn settle(
         params.book_rules,
         Some(resolved_language),
     );
-    let governed_control_block = match (params.chapter_intent, params.context_package, params.rule_stack) {
-        (Some(intent), Some(package), Some(stack))
-            if !intent.trim().is_empty() =>
-        {
-            Some(build_settler_governed_control_block(
-                intent,
-                package,
-                stack,
-                resolved_language,
-            ))
-        }
+    let governed_control_block = match (
+        params.chapter_intent,
+        params.context_package,
+        params.rule_stack,
+    ) {
+        (Some(intent), Some(package), Some(stack)) if !intent.trim().is_empty() => Some(
+            build_settler_governed_control_block(intent, package, stack, resolved_language),
+        ),
         _ => None,
     };
 
@@ -1303,13 +1318,21 @@ async fn settle(
             budget::CHAPTER_SUMMARIES,
         ),
         subplot_board: &cap_legacy("subplot_board", params.subplot_board, budget::SUBPLOT_BOARD),
-        emotional_arcs: &cap_legacy("emotional_arcs", params.emotional_arcs, budget::EMOTIONAL_ARCS),
+        emotional_arcs: &cap_legacy(
+            "emotional_arcs",
+            params.emotional_arcs,
+            budget::EMOTIONAL_ARCS,
+        ),
         character_matrix: &cap_legacy(
             "character_matrix",
             params.character_matrix,
             budget::CHARACTER_MATRIX,
         ),
-        volume_outline: &cap_legacy("volume_outline", params.volume_outline, budget::VOLUME_OUTLINE),
+        volume_outline: &cap_legacy(
+            "volume_outline",
+            params.volume_outline,
+            budget::VOLUME_OUTLINE,
+        ),
         observations: Some(&observations),
         selected_evidence_block: params.selected_evidence_block,
         governed_control_block: governed_control_block.as_deref(),
@@ -1322,12 +1345,14 @@ async fn settle(
                 LLMMessage {
                     role: LLMRole::System,
                     content: settler_system,
-                    tool_calls: None, tool_call_id: None,
+                    tool_calls: None,
+                    tool_call_id: None,
                 },
                 LLMMessage {
                     role: LLMRole::User,
                     content: settler_user,
-                    tool_calls: None, tool_call_id: None,
+                    tool_calls: None,
+                    tool_call_id: None,
                 },
             ],
             0.3,
@@ -1451,13 +1476,14 @@ async fn build_runtime_state_artifacts_if_present(
     // buildRuntimeStateArtifactsIfPresent 的 baselineChapter 分支）。
     match baseline_chapter {
         Some(baseline) => {
-            let snapshot = crate::state::runtime_state_store::load_runtime_state_snapshot_at_chapter(
-                state_store,
-                book_dir,
-                baseline,
-                language,
-            )
-            .await?;
+            let snapshot =
+                crate::state::runtime_state_store::load_runtime_state_snapshot_at_chapter(
+                    state_store,
+                    book_dir,
+                    baseline,
+                    language,
+                )
+                .await?;
             crate::state::runtime_state_store::build_runtime_state_artifacts_from_snapshot(
                 &snapshot,
                 &safe_delta,
@@ -1468,11 +1494,16 @@ async fn build_runtime_state_artifacts_if_present(
             .await
             .map(Some)
         }
-        None => {
-            build_runtime_state_artifacts(state_store, book_dir, &safe_delta, language, allow_reapply, allow_new_hooks)
-                .await
-                .map(Some)
-        }
+        None => build_runtime_state_artifacts(
+            state_store,
+            book_dir,
+            &safe_delta,
+            language,
+            allow_reapply,
+            allow_new_hooks,
+        )
+        .await
+        .map(Some),
     }
 }
 
@@ -1557,9 +1588,7 @@ async fn append_chapter_summary(
     }
     // 新行的章节号集合（`split("|")[1]` 且为纯数字）。
     let first_cell = |line: &str| -> Option<String> {
-        line.split('|')
-            .nth(1)
-            .map(|cell| cell.trim().to_string())
+        line.split('|').nth(1).map(|cell| cell.trim().to_string())
     };
     let is_digits = |value: &str| !value.is_empty() && value.chars().all(|c| c.is_ascii_digit());
     let new_chapter_nums: HashSet<String> = data_rows
@@ -1583,7 +1612,11 @@ async fn append_chapter_summary(
 
     crate::utils::atomic_file_set::write_file_atomic(
         &summary_path,
-        &format!("{}\n{}\n", deduped.join("\n").trim_end(), data_rows.join("\n")),
+        &format!(
+            "{}\n{}\n",
+            deduped.join("\n").trim_end(),
+            data_rows.join("\n")
+        ),
     )
     .await
 }
@@ -1620,7 +1653,8 @@ pub async fn write_chapter(
     // 对话指纹取更长窗口（voice consistency over longer span）。
     let fingerprint_chapters = load_recent_chapters(book_dir, chapter_number, 5).await;
 
-    let parsed_genre = read_genre_profile(ctx.project_root, &book.genre, ctx.builtin_genres_dir).await?;
+    let parsed_genre =
+        read_genre_profile(ctx.project_root, &book.genre, ctx.builtin_genres_dir).await?;
     let genre_profile = &parsed_genre.profile;
     let parsed_book_rules = read_book_rules(book_dir).await;
     let book_rules = parsed_book_rules.as_ref().map(|parsed| &parsed.rules);
@@ -1636,11 +1670,8 @@ pub async fn write_chapter(
 
     let has_parent_canon = parent_canon != MISSING_FILE;
     let has_fanfic_canon = fanfic_canon_raw != MISSING_FILE;
-    let resolved_language = lang_from_str(
-        book.language
-            .as_deref()
-            .unwrap_or(&genre_profile.language),
-    );
+    let resolved_language =
+        lang_from_str(book.language.as_deref().unwrap_or(&genre_profile.language));
     let target_words = input
         .length_spec
         .as_ref()
@@ -1712,7 +1743,9 @@ pub async fn write_chapter(
             external_context: input.external_context,
             length_spec: &resolved_length_spec,
             language: Some(resolved_language),
-            variance_brief: english_variance_brief.as_ref().map(|brief| brief.text.as_str()),
+            variance_brief: english_variance_brief
+                .as_ref()
+                .map(|brief| brief.text.as_str()),
             selected_evidence_block: join_governed_evidence_blocks(governed_memory_blocks.as_ref())
                 .as_deref(),
         })
@@ -1783,12 +1816,14 @@ pub async fn write_chapter(
                 LLMMessage {
                     role: LLMRole::System,
                     content: creative_system_prompt,
-                    tool_calls: None, tool_call_id: None,
+                    tool_calls: None,
+                    tool_call_id: None,
                 },
                 LLMMessage {
                     role: LLMRole::User,
                     content: creative_user_prompt,
-                    tool_calls: None, tool_call_id: None,
+                    tool_calls: None,
+                    tool_call_id: None,
                 },
             ],
             creative_temperature,
@@ -1821,21 +1856,23 @@ pub async fn write_chapter(
     // ── Phase 2: 状态结算（temp 0.3）──
     log_info(
         resolved_language,
-        &format!("阶段 2：状态结算（第{chapter_number}章，{}字）", creative.word_count),
+        &format!(
+            "阶段 2：状态结算（第{chapter_number}章，{}字）",
+            creative.word_count
+        ),
         &format!(
             "Phase 2: state settlement for chapter {chapter_number} ({} words)",
             creative.word_count
         ),
     );
 
-    let is_governed_settlement = input.chapter_intent.is_some_and(|intent| !intent.is_empty())
+    let is_governed_settlement = input
+        .chapter_intent
+        .is_some_and(|intent| !intent.is_empty())
         && input.context_package.is_some()
         && input.rule_stack.is_some();
 
-    let filtered_hooks_for_settlement = match (
-        is_governed_settlement,
-        input.context_package,
-    ) {
+    let filtered_hooks_for_settlement = match (is_governed_settlement, input.context_package) {
         (true, Some(package)) => build_governed_hook_working_set(&GovernedHookWorkingSetInput {
             hooks_markdown: &hooks,
             context_package: package,
@@ -1942,32 +1979,32 @@ pub async fn write_chapter(
         .into_iter()
         .map(|hook| hook.hook_id)
         .collect();
-    let hook_health_issues: Vec<HookHealthIssue> = match (
-        &resolved_runtime_state_delta,
-        &resolved_snapshot,
-    ) {
-        (Some(delta), Some(snapshot)) => analyze_hook_health(&crate::utils::hook_health::HookHealthParams {
-            language: resolved_language,
-            chapter_number,
-            target_chapters: Some(book.target_chapters),
-            hooks: &snapshot.hooks.hooks,
-            delta: Some(delta),
-            existing_hook_ids: Some(&prior_hook_ids),
-            max_active_hooks: None,
-            stale_after_chapters: None,
-            no_advance_window: None,
-            new_hook_burst_threshold: None,
-        })
-        .into_iter()
-        .map(|issue| HookHealthIssue {
-            severity: issue.severity,
-            category: issue.category,
-            description: issue.description,
-            suggestion: issue.suggestion,
-        })
-        .collect(),
-        _ => Vec::new(),
-    };
+    let hook_health_issues: Vec<HookHealthIssue> =
+        match (&resolved_runtime_state_delta, &resolved_snapshot) {
+            (Some(delta), Some(snapshot)) => {
+                analyze_hook_health(&crate::utils::hook_health::HookHealthParams {
+                    language: resolved_language,
+                    chapter_number,
+                    target_chapters: Some(book.target_chapters),
+                    hooks: &snapshot.hooks.hooks,
+                    delta: Some(delta),
+                    existing_hook_ids: Some(&prior_hook_ids),
+                    max_active_hooks: None,
+                    stale_after_chapters: None,
+                    no_advance_window: None,
+                    new_hook_burst_threshold: None,
+                })
+                .into_iter()
+                .map(|issue| HookHealthIssue {
+                    severity: issue.severity,
+                    category: issue.category,
+                    description: issue.description,
+                    suggestion: issue.suggestion,
+                })
+                .collect()
+            }
+            _ => Vec::new(),
+        };
 
     // ── 后写校验（regex + 规则，零 LLM 成本）──
     let surface_normalized_content =
@@ -1976,8 +2013,12 @@ pub async fn write_chapter(
         &surface_normalized_content,
         resolved_length_spec.counting_mode,
     );
-    let mut rule_violations =
-        validate_post_write(&surface_normalized_content, genre_profile, book_rules, Some(resolved_language));
+    let mut rule_violations = validate_post_write(
+        &surface_normalized_content,
+        genre_profile,
+        book_rules,
+        Some(resolved_language),
+    );
     rule_violations.extend(detect_cross_chapter_repetition(
         &surface_normalized_content,
         &fingerprint_chapters,
@@ -2016,30 +2057,54 @@ pub async fn write_chapter(
             ),
         );
         for violation in &rule_violations {
-            tracing::warn!("[{:?}] {}: {}", violation.severity, violation.rule, violation.description);
+            tracing::warn!(
+                "[{:?}] {}: {}",
+                violation.severity,
+                violation.rule,
+                violation.description
+            );
         }
     }
     if !ai_tell_issues.is_empty() {
         log_warn(
             resolved_language,
-            &format!("AI 味检查：第{chapter_number}章发现 {} 个问题", ai_tell_issues.len()),
-            &format!("AI-tell check: {} issues in chapter {chapter_number}", ai_tell_issues.len()),
+            &format!(
+                "AI 味检查：第{chapter_number}章发现 {} 个问题",
+                ai_tell_issues.len()
+            ),
+            &format!(
+                "AI-tell check: {} issues in chapter {chapter_number}",
+                ai_tell_issues.len()
+            ),
         );
         for issue in &ai_tell_issues {
-            tracing::warn!("[{:?}] {}: {}", issue.severity, issue.category, issue.description);
+            tracing::warn!(
+                "[{:?}] {}: {}",
+                issue.severity,
+                issue.category,
+                issue.description
+            );
         }
     }
     if !hook_health_issues.is_empty() {
         log_warn(
             resolved_language,
-            &format!("伏笔健康：第{chapter_number}章发现 {} 条警告", hook_health_issues.len()),
+            &format!(
+                "伏笔健康：第{chapter_number}章发现 {} 条警告",
+                hook_health_issues.len()
+            ),
             &format!(
                 "Hook health: {} warning(s) in chapter {chapter_number}",
                 hook_health_issues.len()
             ),
         );
         for issue in &hook_health_issues {
-            tracing::warn!("[{:?}] {}: {}", issue.severity, issue.category, issue.description);
+            tracing::warn!(
+                "[{:?}] {}: {}",
+                issue.severity,
+                issue.category,
+                issue.description
+            );
         }
     }
 
@@ -2095,7 +2160,10 @@ pub async fn settle_chapter_state(
     let book = input.book;
     let book_dir = input.book_dir;
     let story_dir = match input.baseline_chapter {
-        Some(baseline) => book_dir.join("story").join("snapshots").join(baseline.to_string()),
+        Some(baseline) => book_dir
+            .join("story")
+            .join("snapshots")
+            .join(baseline.to_string()),
         None => book_dir.join("story"),
     };
 
@@ -2108,15 +2176,13 @@ pub async fn settle_chapter_state(
     let character_matrix = read_character_context(book_dir, MISSING_FILE).await;
     let volume_outline = read_volume_map(book_dir, MISSING_FILE).await;
 
-    let parsed_genre = read_genre_profile(ctx.project_root, &book.genre, ctx.builtin_genres_dir).await?;
+    let parsed_genre =
+        read_genre_profile(ctx.project_root, &book.genre, ctx.builtin_genres_dir).await?;
     let genre_profile = &parsed_genre.profile;
     let parsed_book_rules = read_book_rules(book_dir).await;
     let book_rules = parsed_book_rules.as_ref().map(|parsed| &parsed.rules);
-    let resolved_language = lang_from_str(
-        book.language
-            .as_deref()
-            .unwrap_or(&genre_profile.language),
-    );
+    let resolved_language =
+        lang_from_str(book.language.as_deref().unwrap_or(&genre_profile.language));
     let governed_memory_blocks = input
         .context_package
         .map(|package| build_governed_memory_evidence_blocks(package, Some(resolved_language)));
@@ -2257,7 +2323,8 @@ pub async fn save_chapter(
     let superseded_chapter_files: Vec<String> = existing_chapter_files
         .iter()
         .filter(|file| {
-            crate::state::manager::leading_number(file) == Some(output.chapter_number) && **file != filename
+            crate::state::manager::leading_number(file) == Some(output.chapter_number)
+                && **file != filename
         })
         .cloned()
         .collect();
@@ -2322,15 +2389,13 @@ pub async fn save_chapter(
             AtomicFileWrite {
                 relative_path: "story/state/manifest.json".to_string(),
                 content: FileContent::Text(
-                    serde_json::to_string_pretty(&snapshot.manifest)
-                        .unwrap_or_default(),
+                    serde_json::to_string_pretty(&snapshot.manifest).unwrap_or_default(),
                 ),
             },
             AtomicFileWrite {
                 relative_path: "story/state/current_state.json".to_string(),
                 content: FileContent::Text(
-                    serde_json::to_string_pretty(&snapshot.current_state)
-                        .unwrap_or_default(),
+                    serde_json::to_string_pretty(&snapshot.current_state).unwrap_or_default(),
                 ),
             },
             AtomicFileWrite {
@@ -2342,8 +2407,7 @@ pub async fn save_chapter(
             AtomicFileWrite {
                 relative_path: "story/state/chapter_summaries.json".to_string(),
                 content: FileContent::Text(
-                    serde_json::to_string_pretty(&snapshot.chapter_summaries)
-                        .unwrap_or_default(),
+                    serde_json::to_string_pretty(&snapshot.chapter_summaries).unwrap_or_default(),
                 ),
             },
         ]);
@@ -2380,7 +2444,11 @@ pub async fn save_new_truth_files(
     let no_delta = output.runtime_state_delta.is_none();
     if no_delta {
         if let Some(updated) = &output.updated_chapter_summaries {
-            crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("chapter_summaries.md"), updated).await?;
+            crate::utils::atomic_file_set::write_file_atomic(
+                &story_dir.join("chapter_summaries.md"),
+                updated,
+            )
+            .await?;
         } else if !output.chapter_summary.is_empty() {
             append_chapter_summary(
                 &story_dir,
@@ -2393,13 +2461,25 @@ pub async fn save_new_truth_files(
     }
 
     if !output.updated_subplots.is_empty() {
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("subplot_board.md"), &output.updated_subplots).await?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("subplot_board.md"),
+            &output.updated_subplots,
+        )
+        .await?;
     }
     if !output.updated_emotional_arcs.is_empty() {
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("emotional_arcs.md"), &output.updated_emotional_arcs).await?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("emotional_arcs.md"),
+            &output.updated_emotional_arcs,
+        )
+        .await?;
     }
     if !output.updated_character_matrix.is_empty() {
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("character_matrix.md"), &output.updated_character_matrix).await?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("character_matrix.md"),
+            &output.updated_character_matrix,
+        )
+        .await?;
     }
 
     Ok(())
@@ -2424,13 +2504,18 @@ mod tests {
             build_length_requirement_block(&spec, None),
             "要求：\n- 目标字数：3000字\n- 允许区间：2591-3409字"
         );
-        assert!(build_length_requirement_block(&spec, Some(WritingLanguage::En)).contains("3000 words"));
+        assert!(
+            build_length_requirement_block(&spec, Some(WritingLanguage::En)).contains("3000 words")
+        );
     }
 
     #[test]
     fn chapter_context_block_trims_and_localizes() {
         assert_eq!(build_chapter_context_block(None, WritingLanguage::Zh), "");
-        assert_eq!(build_chapter_context_block(Some("   "), WritingLanguage::Zh), "");
+        assert_eq!(
+            build_chapter_context_block(Some("   "), WritingLanguage::Zh),
+            ""
+        );
         let zh = build_chapter_context_block(Some(" 写打斗 "), WritingLanguage::Zh);
         assert!(zh.starts_with("## 本章用户指令（最高优先级）\n写打斗"));
         let en = build_chapter_context_block(Some("fight"), WritingLanguage::En);
@@ -2589,18 +2674,22 @@ mod tests {
 
     #[test]
     fn verify_pre_write_check_missing_sections() {
-        assert!(verify_pre_write_check_aligns_with_memo("", 3, WritingLanguage::Zh)
-            .unwrap()
-            .contains("PRE_WRITE_CHECK 为空"));
+        assert!(
+            verify_pre_write_check_aligns_with_memo("", 3, WritingLanguage::Zh)
+                .unwrap()
+                .contains("PRE_WRITE_CHECK 为空")
+        );
         let full = "当前任务：x\n不要做：y\n章尾：z";
         assert_eq!(
             verify_pre_write_check_aligns_with_memo(full, 3, WritingLanguage::Zh),
             None
         );
         let partial = "当前任务：x";
-        assert!(verify_pre_write_check_aligns_with_memo(partial, 3, WritingLanguage::Zh)
-            .unwrap()
-            .contains("不要做"));
+        assert!(
+            verify_pre_write_check_aligns_with_memo(partial, 3, WritingLanguage::Zh)
+                .unwrap()
+                .contains("不要做")
+        );
     }
 
     #[test]
@@ -2709,7 +2798,9 @@ mod tests {
         assert!(prompt.contains("## 已选上下文"));
         assert!(prompt.contains("## 规则栈"));
         assert!(prompt.contains("- 硬护栏：(无)"));
-        assert!(prompt.contains("只需输出 PRE_WRITE_CHECK、CHAPTER_TITLE、CHAPTER_CONTENT 三个区块"));
+        assert!(
+            prompt.contains("只需输出 PRE_WRITE_CHECK、CHAPTER_TITLE、CHAPTER_CONTENT 三个区块")
+        );
     }
 
     #[test]
@@ -2767,10 +2858,18 @@ mod tests {
         let dir = tempfile::tempdir().expect("临时目录");
         let chapters = dir.path().join("chapters");
         tokio::fs::create_dir_all(&chapters).await.expect("建目录");
-        tokio::fs::write(chapters.join("0001_a.md"), "一").await.expect("写");
-        tokio::fs::write(chapters.join("0002_b.md"), "二").await.expect("写");
-        tokio::fs::write(chapters.join("index.md"), "目录").await.expect("写");
-        tokio::fs::write(chapters.join("0003_c.txt"), "三").await.expect("写");
+        tokio::fs::write(chapters.join("0001_a.md"), "一")
+            .await
+            .expect("写");
+        tokio::fs::write(chapters.join("0002_b.md"), "二")
+            .await
+            .expect("写");
+        tokio::fs::write(chapters.join("index.md"), "目录")
+            .await
+            .expect("写");
+        tokio::fs::write(chapters.join("0003_c.txt"), "三")
+            .await
+            .expect("写");
         let recent = load_recent_chapters(dir.path(), 4, 2).await;
         assert_eq!(recent, "一\n\n---\n\n二");
         let single = load_recent_chapters(dir.path(), 4, 1).await;
@@ -2778,12 +2877,6 @@ mod tests {
         let missing = load_recent_chapters(&dir.path().join("none"), 1, 1).await;
         assert_eq!(missing, "");
     }
-
-
-
-
-
-
 
     // ---- 编排集成测试（MockChat + FsStateStore + 临时书目录） ----
 
@@ -2808,10 +2901,14 @@ mod tests {
             messages: Vec<LLMMessage>,
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((messages, temperature));
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((messages, temperature));
             let response = self
                 .responses
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .pop()
                 .ok_or_else(|| "mock 队列耗尽".to_string())?;
             Ok(ChatOutcome {
@@ -2826,7 +2923,9 @@ mod tests {
     }
 
     /// 建 writer fixture：临时 project（genres）/ builtin genres / book 目录。
-    async fn writer_fixture(book_files: &[(&str, &str)]) -> (
+    async fn writer_fixture(
+        book_files: &[(&str, &str)],
+    ) -> (
         tempfile::TempDir,
         std::path::PathBuf,
         std::path::PathBuf,
@@ -2840,7 +2939,9 @@ mod tests {
         tokio::fs::create_dir_all(project.join("genres"))
             .await
             .expect("建 project genres");
-        tokio::fs::create_dir_all(&builtin).await.expect("建 builtin");
+        tokio::fs::create_dir_all(&builtin)
+            .await
+            .expect("建 builtin");
         tokio::fs::write(builtin.join("xianxia.md"), WRITER_GENRE_ZH)
             .await
             .expect("写内置 genre");
@@ -2915,7 +3016,9 @@ mod tests {
             temperature_override: None,
         };
 
-        let output = write_chapter(&ctx, &mock, &input).await.expect("write_chapter");
+        let output = write_chapter(&ctx, &mock, &input)
+            .await
+            .expect("write_chapter");
         assert_eq!(output.title, "风起");
         assert!(output.content.contains("林动睁开双眼"));
         assert!(output.word_count > 0);
@@ -2930,7 +3033,8 @@ mod tests {
         // 三次 chat 的温度对齐 0.7 / 0.5 / 0.3（先拷出再跨 await）。
         let temperatures: Vec<f64> = mock
             .calls
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .iter()
             .map(|(_, temperature)| *temperature)
             .collect();
@@ -2955,9 +3059,10 @@ mod tests {
 
     #[tokio::test]
     async fn write_chapter_legacy_settlement_merges_tables() {
-        let (_tmp, project, builtin, book, config) = writer_fixture(&[
-            ("story/pending_hooks.md", "| hook_id | 状态 |\n| --- | --- |\n| H01 | open |\n"),
-        ])
+        let (_tmp, project, builtin, book, config) = writer_fixture(&[(
+            "story/pending_hooks.md",
+            "| hook_id | 状态 |\n| --- | --- |\n| H01 | open |\n",
+        )])
         .await;
 
         let settler_legacy = "=== POST_SETTLEMENT ===\n结算完成\n\n=== UPDATED_STATE ===\n状态卡：林动凝魂境三层\n\n=== UPDATED_LEDGER ===\n灵石：10\n\n=== UPDATED_HOOKS ===\n| hook_id | 状态 |\n| --- | --- |\n| H01 | resolved |\n\n=== CHAPTER_SUMMARY ===\n| 2 | 风起 |\n\n=== UPDATED_SUBPLOTS ===\n支线A 已推进\n";
@@ -2989,7 +3094,9 @@ mod tests {
             temperature_override: None,
         };
 
-        let output = write_chapter(&ctx, &mock, &input).await.expect("write_chapter");
+        let output = write_chapter(&ctx, &mock, &input)
+            .await
+            .expect("write_chapter");
         assert_eq!(output.runtime_state_delta, None);
         assert_eq!(output.post_settlement, "结算完成");
         assert!(output.updated_state.contains("凝魂境"));

@@ -30,8 +30,15 @@ pub enum CoverDownloadOriginMode {
     Invalid,
 }
 
-pub fn resolve_cover_download_origin_policy(env: &std::collections::BTreeMap<String, String>) -> CoverDownloadOriginPolicy {
-    let raw = env.get(ENV_COVER_DOWNLOAD_ORIGIN_POLICY).map(String::as_str).unwrap_or("").trim().to_lowercase();
+pub fn resolve_cover_download_origin_policy(
+    env: &std::collections::BTreeMap<String, String>,
+) -> CoverDownloadOriginPolicy {
+    let raw = env
+        .get(ENV_COVER_DOWNLOAD_ORIGIN_POLICY)
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     let mode = match raw.as_str() {
         "" | "default" => CoverDownloadOriginMode::Default,
         "strict" => CoverDownloadOriginMode::Strict,
@@ -138,9 +145,13 @@ async fn classify_cover_download_host(hostname: &str) -> Option<&'static str> {
     }
     let records = {
         let name = name.clone();
-        tokio::task::spawn_blocking(move || (name.as_str(), 0u16).to_socket_addrs().map(|addrs| addrs.collect::<Vec<_>>()))
-            .await
-            .ok()
+        tokio::task::spawn_blocking(move || {
+            (name.as_str(), 0u16)
+                .to_socket_addrs()
+                .map(|addrs| addrs.collect::<Vec<_>>())
+        })
+        .await
+        .ok()
     };
     let addrs = match records {
         Some(Ok(addrs)) => addrs,
@@ -164,21 +175,35 @@ pub async fn assert_cover_download_url_allowed(
     provider_url: &str,
     policy: &CoverDownloadOriginPolicy,
 ) -> Result<(), String> {
-    let parsed = url::Url::parse(url).map_err(|_| cover_download_origin_error("unparsable-url", url))?;
+    let parsed =
+        url::Url::parse(url).map_err(|_| cover_download_origin_error("unparsable-url", url))?;
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return Err(cover_download_origin_error("scheme-not-allowed", parsed.scheme()));
+        return Err(cover_download_origin_error(
+            "scheme-not-allowed",
+            parsed.scheme(),
+        ));
     }
     if policy.mode == CoverDownloadOriginMode::Invalid {
         return Err(cover_download_origin_error(
             "invalid-policy",
-            &format!("{}=\"{}\"", ENV_COVER_DOWNLOAD_ORIGIN_POLICY, policy.invalid_value.as_deref().unwrap_or("")),
+            &format!(
+                "{}=\"{}\"",
+                ENV_COVER_DOWNLOAD_ORIGIN_POLICY,
+                policy.invalid_value.as_deref().unwrap_or("")
+            ),
         ));
     }
-    let provider_origin = url::Url::parse(provider_url).ok().map(|p| p.origin().unicode_serialization());
+    let provider_origin = url::Url::parse(provider_url)
+        .ok()
+        .map(|p| p.origin().unicode_serialization());
     if provider_origin.as_deref() == Some(parsed.origin().unicode_serialization().as_str()) {
         return Ok(());
     }
-    if policy.extra_origins.iter().any(|origin| *origin == parsed.origin().unicode_serialization()) {
+    if policy
+        .extra_origins
+        .iter()
+        .any(|origin| *origin == parsed.origin().unicode_serialization())
+    {
         return Ok(());
     }
     if let Some(host) = parsed.host_str() {
@@ -187,7 +212,10 @@ pub async fn assert_cover_download_url_allowed(
         }
     }
     if policy.mode == CoverDownloadOriginMode::Strict {
-        return Err(cover_download_origin_error("strict-cross-origin", &parsed.origin().unicode_serialization()));
+        return Err(cover_download_origin_error(
+            "strict-cross-origin",
+            &parsed.origin().unicode_serialization(),
+        ));
     }
     Ok(())
 }
@@ -198,7 +226,10 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn env_with(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn default_policy() -> CoverDownloadOriginPolicy {
@@ -211,73 +242,191 @@ mod tests {
 
     #[tokio::test]
     async fn policy_resolution_defaults_strict_and_invalid() {
-        assert_eq!(resolve_cover_download_origin_policy(&env_with(&[])).mode, CoverDownloadOriginMode::Default);
-        assert_eq!(resolve_cover_download_origin_policy(&env_with(&[(ENV_COVER_DOWNLOAD_ORIGIN_POLICY, " STRICT ")])).mode, CoverDownloadOriginMode::Strict);
-        let invalid = resolve_cover_download_origin_policy(&env_with(&[(ENV_COVER_DOWNLOAD_ORIGIN_POLICY, "banana")]));
+        assert_eq!(
+            resolve_cover_download_origin_policy(&env_with(&[])).mode,
+            CoverDownloadOriginMode::Default
+        );
+        assert_eq!(
+            resolve_cover_download_origin_policy(&env_with(&[(
+                ENV_COVER_DOWNLOAD_ORIGIN_POLICY,
+                " STRICT "
+            )]))
+            .mode,
+            CoverDownloadOriginMode::Strict
+        );
+        let invalid = resolve_cover_download_origin_policy(&env_with(&[(
+            ENV_COVER_DOWNLOAD_ORIGIN_POLICY,
+            "banana",
+        )]));
         assert_eq!(invalid.mode, CoverDownloadOriginMode::Invalid);
         assert_eq!(invalid.invalid_value.as_deref(), Some("banana"));
-        let allowlist = resolve_cover_download_origin_policy(&env_with(&[(ENV_COVER_DOWNLOAD_EXTRA_ORIGINS, " http://a.example , https://b.example ")]));
-        assert_eq!(allowlist.extra_origins, vec!["http://a.example", "https://b.example"]);
+        let allowlist = resolve_cover_download_origin_policy(&env_with(&[(
+            ENV_COVER_DOWNLOAD_EXTRA_ORIGINS,
+            " http://a.example , https://b.example ",
+        )]));
+        assert_eq!(
+            allowlist.extra_origins,
+            vec!["http://a.example", "https://b.example"]
+        );
     }
 
     #[tokio::test]
     async fn scheme_and_unparsable_fail_before_any_network() {
-        for url in ["file:///etc/passwd", "data:image/png;base64,AAAA", "ftp://8.8.8.8/x"] {
-            let error = assert_cover_download_url_allowed(url, provider(), &default_policy()).await.unwrap_err();
+        for url in [
+            "file:///etc/passwd",
+            "data:image/png;base64,AAAA",
+            "ftp://8.8.8.8/x",
+        ] {
+            let error = assert_cover_download_url_allowed(url, provider(), &default_policy())
+                .await
+                .unwrap_err();
             assert!(error.contains("scheme-not-allowed"), "{url} → {error}");
         }
-        assert!(assert_cover_download_url_allowed("notaurl", provider(), &default_policy()).await.unwrap_err().contains("unparsable-url"));
+        assert!(
+            assert_cover_download_url_allowed("notaurl", provider(), &default_policy())
+                .await
+                .unwrap_err()
+                .contains("unparsable-url")
+        );
     }
 
     #[tokio::test]
     async fn provider_origin_loopback_gateway_stays_trusted() {
-        assert!(assert_cover_download_url_allowed("http://127.0.0.1:9000/img.png", provider(), &default_policy()).await.is_ok());
+        assert!(assert_cover_download_url_allowed(
+            "http://127.0.0.1:9000/img.png",
+            provider(),
+            &default_policy()
+        )
+        .await
+        .is_ok());
     }
 
     #[tokio::test]
     async fn private_and_reserved_literals_block_without_network() {
         for host in [
-            "127.0.0.1", "10.0.0.1", "192.168.1.5", "172.16.0.9", "172.31.255.254",
-            "169.254.169.254", "100.64.0.1", "0.1.2.3", "198.18.0.1", "224.0.0.1",
-            "240.0.0.1", "[::1]", "[fc00::1]", "[fe80::1]", "[::ffff:10.0.0.1]",
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.5",
+            "172.16.0.9",
+            "172.31.255.254",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.1.2.3",
+            "198.18.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "[::1]",
+            "[fc00::1]",
+            "[fe80::1]",
+            "[::ffff:10.0.0.1]",
         ] {
-            let error = assert_cover_download_url_allowed(&format!("http://{host}/img.png"), provider(), &default_policy())
-                .await
-                .unwrap_err();
-            assert!(error.contains("private-or-reserved-address"), "{host} → {error}");
+            let error = assert_cover_download_url_allowed(
+                &format!("http://{host}/img.png"),
+                provider(),
+                &default_policy(),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains("private-or-reserved-address"),
+                "{host} → {error}"
+            );
         }
     }
 
     #[tokio::test]
     async fn public_literals_pass_and_hostname_rules_apply() {
-        assert!(assert_cover_download_url_allowed("http://8.8.8.8/img.png", provider(), &default_policy()).await.is_ok());
-        let error = assert_cover_download_url_allowed("http://localhost/img.png", provider(), &default_policy()).await.unwrap_err();
+        assert!(assert_cover_download_url_allowed(
+            "http://8.8.8.8/img.png",
+            provider(),
+            &default_policy()
+        )
+        .await
+        .is_ok());
+        let error = assert_cover_download_url_allowed(
+            "http://localhost/img.png",
+            provider(),
+            &default_policy(),
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("loopback-host"));
-        let error = assert_cover_download_url_allowed("http://box.local/img.png", provider(), &default_policy()).await.unwrap_err();
+        let error = assert_cover_download_url_allowed(
+            "http://box.local/img.png",
+            provider(),
+            &default_policy(),
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("mdns-host"));
-        let error = assert_cover_download_url_allowed("http://intranet/img.png", provider(), &default_policy()).await.unwrap_err();
+        let error = assert_cover_download_url_allowed(
+            "http://intranet/img.png",
+            provider(),
+            &default_policy(),
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("single-label-host"));
     }
 
     #[tokio::test]
     async fn allowlist_and_strict_and_invalid_enforcement() {
-        let allowlisted = resolve_cover_download_origin_policy(&env_with(&[(ENV_COVER_DOWNLOAD_EXTRA_ORIGINS, "http://127.0.0.1:9999")]));
-        assert!(assert_cover_download_url_allowed("http://127.0.0.1:9999/img.png", provider(), &allowlisted).await.is_ok());
-        assert!(assert_cover_download_url_allowed("http://127.0.0.1:9998/img.png", provider(), &allowlisted).await.is_err());
+        let allowlisted = resolve_cover_download_origin_policy(&env_with(&[(
+            ENV_COVER_DOWNLOAD_EXTRA_ORIGINS,
+            "http://127.0.0.1:9999",
+        )]));
+        assert!(assert_cover_download_url_allowed(
+            "http://127.0.0.1:9999/img.png",
+            provider(),
+            &allowlisted
+        )
+        .await
+        .is_ok());
+        assert!(assert_cover_download_url_allowed(
+            "http://127.0.0.1:9998/img.png",
+            provider(),
+            &allowlisted
+        )
+        .await
+        .is_err());
 
-        let strict = resolve_cover_download_origin_policy(&env_with(&[(ENV_COVER_DOWNLOAD_ORIGIN_POLICY, "strict")]));
-        let error = assert_cover_download_url_allowed("http://8.8.8.8/img.png", provider(), &strict).await.unwrap_err();
+        let strict = resolve_cover_download_origin_policy(&env_with(&[(
+            ENV_COVER_DOWNLOAD_ORIGIN_POLICY,
+            "strict",
+        )]));
+        let error =
+            assert_cover_download_url_allowed("http://8.8.8.8/img.png", provider(), &strict)
+                .await
+                .unwrap_err();
         assert!(error.contains("strict-cross-origin"));
-        assert!(assert_cover_download_url_allowed("http://127.0.0.1:9000/img.png", provider(), &strict).await.is_ok());
+        assert!(assert_cover_download_url_allowed(
+            "http://127.0.0.1:9000/img.png",
+            provider(),
+            &strict
+        )
+        .await
+        .is_ok());
 
-        let invalid = resolve_cover_download_origin_policy(&env_with(&[(ENV_COVER_DOWNLOAD_ORIGIN_POLICY, "banana")]));
-        let error = assert_cover_download_url_allowed("http://8.8.8.8/img.png", provider(), &invalid).await.unwrap_err();
+        let invalid = resolve_cover_download_origin_policy(&env_with(&[(
+            ENV_COVER_DOWNLOAD_ORIGIN_POLICY,
+            "banana",
+        )]));
+        let error =
+            assert_cover_download_url_allowed("http://8.8.8.8/img.png", provider(), &invalid)
+                .await
+                .unwrap_err();
         assert!(error.contains("invalid-policy"));
     }
 
     #[tokio::test]
     async fn labeled_error_carries_code_tag() {
-        let error = assert_cover_download_url_allowed("http://10.0.0.9/img.png", provider(), &default_policy()).await.unwrap_err();
+        let error = assert_cover_download_url_allowed(
+            "http://10.0.0.9/img.png",
+            provider(),
+            &default_policy(),
+        )
+        .await
+        .unwrap_err();
         assert!(error.contains("COVER_DOWNLOAD_ORIGIN_BLOCKED"));
         assert!(error.contains("private-or-reserved-address"));
     }

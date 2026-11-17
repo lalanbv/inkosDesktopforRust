@@ -19,7 +19,11 @@ fn export_markdown_html_matches_shared_golden_vectors() {
             tc["expectedTitle"].as_str().unwrap(),
             "{name}: title 漂移"
         );
-        assert_eq!(html, tc["expectedHtml"].as_str().unwrap(), "{name}: html 漂移");
+        assert_eq!(
+            html,
+            tc["expectedHtml"].as_str().unwrap(),
+            "{name}: html 漂移"
+        );
     }
 }
 

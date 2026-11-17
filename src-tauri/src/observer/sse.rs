@@ -95,10 +95,7 @@ impl SseClient {
             let result = self.connect_once(&router, &shutdown).await;
             let was_error = result.is_err();
             if let Err(ref e) = result {
-                eprintln!(
-                    "[observer] SSE 连接错误 ({e:#}), {:?} 后重连",
-                    backoff
-                );
+                eprintln!("[observer] SSE 连接错误 ({e:#}), {:?} 后重连", backoff);
             }
             if shutdown.load(Ordering::Relaxed) {
                 return Ok(());
@@ -128,7 +125,12 @@ impl SseClient {
         use std::sync::atomic::Ordering;
         use tokio_stream::StreamExt;
 
-        let resp = self.client.get(&self.url).send().await?.error_for_status()?;
+        let resp = self
+            .client
+            .get(&self.url)
+            .send()
+            .await?
+            .error_for_status()?;
         let mut bytes = resp.bytes_stream();
         let mut buf = String::new();
         while let Some(chunk) = bytes.next().await {

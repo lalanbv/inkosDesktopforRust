@@ -43,7 +43,12 @@ const ARITHMETIC_SYSTEM: &str = "Before recording an arithmetic finding, use cal
 const PAIR_INSTRUCTION: &str = "Cite both the original and current target passages establishing each issue, or withdraw it. The independent reading is not source evidence.";
 
 fn message(role: LLMRole, content: impl Into<String>) -> LLMMessage {
-    LLMMessage { role, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 fn with_skills(mut messages: Vec<LLMMessage>) -> Vec<LLMMessage> {
@@ -137,10 +142,15 @@ async fn independent_readings(
             let batch_indices = batch_indices.clone();
             Box::pin(async move {
                 let object = args.as_object().ok_or_else(|| {
-                    StructuredToolError::coded("WORKER_SCHEMA_INVALID", "Invalid submit_translation_source_reading arguments: expected an object")
+                    StructuredToolError::coded(
+                        "WORKER_SCHEMA_INVALID",
+                        "Invalid submit_translation_source_reading arguments: expected an object",
+                    )
                 })?;
                 if let Some(extra) = object.keys().find(|key| {
-                    !batch_indices.iter().any(|index| **key == format!("segment_{index}_target"))
+                    !batch_indices
+                        .iter()
+                        .any(|index| **key == format!("segment_{index}_target"))
                 }) {
                     return Err(StructuredToolError::coded(
                         "WORKER_SCHEMA_INVALID",
@@ -163,7 +173,8 @@ async fn independent_readings(
                 if !empty.is_empty() {
                     return Err(StructuredToolError::coded(
                         "TRANSLATION_TARGET_EMPTY",
-                        json!({ "code": "TRANSLATION_TARGET_EMPTY", "segmentIndices": empty }).to_string(),
+                        json!({ "code": "TRANSLATION_TARGET_EMPTY", "segmentIndices": empty })
+                            .to_string(),
                     ));
                 }
                 Ok(args)
@@ -173,21 +184,32 @@ async fn independent_readings(
             router_chat_turn_fn(Arc::clone(router), REVIEW_AGENT),
             model,
             &messages,
-            StructuredDefaults { temperature: REVIEW_TEMPERATURE, max_tokens: 8192 },
+            StructuredDefaults {
+                temperature: REVIEW_TEMPERATURE,
+                max_tokens: 8192,
+            },
             WorkerToolSpec {
                 name: "submit_translation_source_reading".into(),
-                description: "Submit an independent translation of each requested original segment.".into(),
+                description:
+                    "Submit an independent translation of each requested original segment.".into(),
                 parameters_schema: schema,
                 max_turns: None,
             },
             Some(validate),
             Vec::new(),
-            StructuredRunOptions { temperature: None, max_tokens: Some(8192) },
+            StructuredRunOptions {
+                temperature: None,
+                max_tokens: Some(8192),
+            },
         )
         .await
         .map_err(|error| error.message)?;
         for index in indices {
-            let reading = outcome.result.get(format!("segment_{index}_target")).and_then(Value::as_str).unwrap_or_default();
+            let reading = outcome
+                .result
+                .get(format!("segment_{index}_target"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             readings.insert(index, reading.to_string());
         }
     }
@@ -195,18 +217,29 @@ async fn independent_readings(
 }
 
 /// 审校源表（TS `sources` Map 插入序：original-i/target-i 交错 → titles → glossary）。
-fn review_sources(input: &ReviewChapterInput<'_>) -> (BTreeMap<String, String>, Vec<(String, String)>) {
+fn review_sources(
+    input: &ReviewChapterInput<'_>,
+) -> (BTreeMap<String, String>, Vec<(String, String)>) {
     let mut ordered: Vec<(String, String)> = Vec::new();
     for segment in input.segments {
-        ordered.push((format!("original-{}", segment.index), segment.source.clone()));
-        ordered.push((format!("target-{}", segment.index), segment.target.clone().unwrap_or_default()));
+        ordered.push((
+            format!("original-{}", segment.index),
+            segment.source.clone(),
+        ));
+        ordered.push((
+            format!("target-{}", segment.index),
+            segment.target.clone().unwrap_or_default(),
+        ));
     }
     if let Some(title) = input.source_chapter_title.filter(|title| !title.is_empty()) {
         ordered.push(("original-title".into(), title.to_string()));
     }
     ordered.push(("target-title".into(), input.chapter_title.to_string()));
     if !input.glossary.is_empty() {
-        ordered.push(("glossary".into(), serde_json::to_string_pretty(input.glossary).unwrap_or_default()));
+        ordered.push((
+            "glossary".into(),
+            serde_json::to_string_pretty(input.glossary).unwrap_or_default(),
+        ));
     }
     let map = ordered.iter().cloned().collect();
     (map, ordered)
@@ -227,7 +260,11 @@ pub async fn review_translation_chapter(
         .map(|segment| {
             [
                 format!("## Segment {}", segment.index),
-                format!("### Source: original-{}\n{}", segment.index, number_source_lines(&segment.source, 1)),
+                format!(
+                    "### Source: original-{}\n{}",
+                    segment.index,
+                    number_source_lines(&segment.source, 1)
+                ),
                 format!(
                     "### Source: target-{}\n{}",
                     segment.index,
@@ -235,7 +272,10 @@ pub async fn review_translation_chapter(
                 ),
                 format!(
                     "### Independent reading (comparison aid)\n{}",
-                    readings.get(&segment.index).map(String::as_str).unwrap_or("")
+                    readings
+                        .get(&segment.index)
+                        .map(String::as_str)
+                        .unwrap_or("")
                 ),
             ]
             .join("\n\n")
@@ -267,7 +307,8 @@ pub async fn review_translation_chapter(
         message(LLMRole::System, record_instruction(final_tool)),
     ]);
 
-    let recorded: Arc<Mutex<BTreeMap<String, ReviewObservationSubmission>>> = Arc::new(Mutex::new(BTreeMap::new()));
+    let recorded: Arc<Mutex<BTreeMap<String, ReviewObservationSubmission>>> =
+        Arc::new(Mutex::new(BTreeMap::new()));
     let sources_arc = Arc::new(sources.clone());
     let recorded_for_support = Arc::clone(&recorded);
     let supporting = vec![
@@ -331,11 +372,28 @@ pub async fn review_translation_chapter(
             let codes: Vec<String> = value
                 .get("observationCodes")
                 .and_then(Value::as_array)
-                .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let unknown: Vec<String> = codes.iter().filter(|code| !recorded.contains_key(*code)).cloned().collect();
-            if !unknown.is_empty() || codes.iter().collect::<std::collections::BTreeSet<_>>().len() != codes.len() {
+            let recorded = recorded
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let unknown: Vec<String> = codes
+                .iter()
+                .filter(|code| !recorded.contains_key(*code))
+                .cloned()
+                .collect();
+            if !unknown.is_empty()
+                || codes
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != codes.len()
+            {
                 return Err(StructuredToolError::coded(
                     "REVIEW_OBSERVATIONS_UNRECORDED",
                     json!({
@@ -380,15 +438,31 @@ pub async fn review_translation_chapter(
         .result
         .get("observationCodes")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let submissions: Vec<ReviewObservationSubmission> = {
-        let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        codes.iter().filter_map(|code| recorded.get(code).cloned()).collect()
+        let recorded = recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        codes
+            .iter()
+            .filter_map(|code| recorded.get(code).cloned())
+            .collect()
     };
     let observations = resolve_and_check(&submissions, &sources).map_err(|error| error.message)?;
     Ok(ReviewChapterOutput {
-        summary: outcome.result.get("summary").and_then(Value::as_str).unwrap_or_default().to_string(),
+        summary: outcome
+            .result
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
         observations,
     })
 }
@@ -408,21 +482,41 @@ mod tests {
             scope: None,
             target_hash: None,
             target: None,
-            source_refs: Some(ids.iter().map(|id| ObservationSourceRef { source_id: (*id).into(), quote: "q".into() }).collect()),
+            source_refs: Some(
+                ids.iter()
+                    .map(|id| ObservationSourceRef {
+                        source_id: (*id).into(),
+                        quote: "q".into(),
+                    })
+                    .collect(),
+            ),
         }
     }
 
     /// 969 号：成对引证——issue 缺 original-*/target-* 任一即错；observation 级不要求。
     #[test]
     fn issue_findings_require_paired_sources() {
-        assert!(check_pairs(&[observation("a", ObservationAssessment::Issue, &["original-1", "target-1"])]).is_ok());
-        assert!(check_pairs(&[observation("b", ObservationAssessment::Observation, &["target-1"])]).is_ok());
+        assert!(check_pairs(&[observation(
+            "a",
+            ObservationAssessment::Issue,
+            &["original-1", "target-1"]
+        )])
+        .is_ok());
+        assert!(check_pairs(&[observation(
+            "b",
+            ObservationAssessment::Observation,
+            &["target-1"]
+        )])
+        .is_ok());
         let error = check_pairs(&[
             observation("c", ObservationAssessment::Issue, &["target-1"]),
             observation("d", ObservationAssessment::Issue, &["original-2"]),
         ])
         .unwrap_err();
-        assert_eq!(error.code.as_deref(), Some("TRANSLATION_REVIEW_PAIR_REQUIRED"));
+        assert_eq!(
+            error.code.as_deref(),
+            Some("TRANSLATION_REVIEW_PAIR_REQUIRED")
+        );
         let details: Value = serde_json::from_str(&error.message).unwrap();
         assert_eq!(details["observationCodes"], json!(["c", "d"]));
         assert_eq!(details["instruction"], PAIR_INSTRUCTION);
@@ -432,10 +526,24 @@ mod tests {
     #[test]
     fn review_sources_follow_ts_insertion_order() {
         let segments = vec![
-            TranslationSegment { index: 1, source: "a".into(), target: Some("甲".into()), notes: None },
-            TranslationSegment { index: 2, source: "b".into(), target: None, notes: None },
+            TranslationSegment {
+                index: 1,
+                source: "a".into(),
+                target: Some("甲".into()),
+                notes: None,
+            },
+            TranslationSegment {
+                index: 2,
+                source: "b".into(),
+                target: None,
+                notes: None,
+            },
         ];
-        let glossary = vec![TranslationGlossaryTerm { source: "Mana".into(), target: "魔力".into(), note: None }];
+        let glossary = vec![TranslationGlossaryTerm {
+            source: "Mana".into(),
+            target: "魔力".into(),
+            note: None,
+        }];
         let input = ReviewChapterInput {
             source_language: "en",
             target_language: "zh",
@@ -446,10 +554,27 @@ mod tests {
         };
         let (map, ordered) = review_sources(&input);
         let ids: Vec<&str> = ordered.iter().map(|(id, _)| id.as_str()).collect();
-        assert_eq!(ids, ["original-1", "target-1", "original-2", "target-2", "original-title", "target-title", "glossary"]);
+        assert_eq!(
+            ids,
+            [
+                "original-1",
+                "target-1",
+                "original-2",
+                "target-2",
+                "original-title",
+                "target-title",
+                "glossary"
+            ]
+        );
         assert_eq!(map["target-2"], "", "未译段 target 为空串");
-        let no_title = ReviewChapterInput { source_chapter_title: None, glossary: &[], ..input };
+        let no_title = ReviewChapterInput {
+            source_chapter_title: None,
+            glossary: &[],
+            ..input
+        };
         let (_, ordered) = review_sources(&no_title);
-        assert!(!ordered.iter().any(|(id, _)| id == "original-title" || id == "glossary"));
+        assert!(!ordered
+            .iter()
+            .any(|(id, _)| id == "original-title" || id == "glossary"));
     }
 }

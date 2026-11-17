@@ -16,7 +16,14 @@ use serde::{Deserialize, Serialize};
 const MAX_SOURCE_BYTES: usize = 18 * 1024 * 1024;
 const EXCERPT_CHARS: usize = 1600;
 
-pub const PURPOSES: &[&str] = &["reference", "worldbuilding", "script", "storyboard", "research", "general"];
+pub const PURPOSES: &[&str] = &[
+    "reference",
+    "worldbuilding",
+    "script",
+    "storyboard",
+    "research",
+    "general",
+];
 
 #[derive(Debug, Clone)]
 pub struct IngestMaterialInput<'a> {
@@ -87,7 +94,10 @@ pub async fn ingest_material(
     project_root: &Path,
     input: &IngestMaterialInput<'_>,
 ) -> Result<MaterialAsset, String> {
-    let purpose = input.purpose.filter(|p| PURPOSES.contains(p)).unwrap_or("reference");
+    let purpose = input
+        .purpose
+        .filter(|p| PURPOSES.contains(p))
+        .unwrap_or("reference");
     let source = read_material_source(project_root, input).await?;
     let title: String = input
         .title
@@ -98,7 +108,11 @@ pub async fn ingest_material(
         .or_else(|| title_from_source(input))
         .unwrap_or_else(|| "material".to_string());
     let title = truncate_utf16(&title, 120);
-    let id = format!("{}-{}", crate::utils::utc_time::utc_now_iso().replace([':', '.'], "-"), slug(&title));
+    let id = format!(
+        "{}-{}",
+        crate::utils::utc_time::utc_now_iso().replace([':', '.'], "-"),
+        slug(&title)
+    );
     let materials_dir = project_root.join(".inkos").join("materials");
     tokio::fs::create_dir_all(&materials_dir)
         .await
@@ -134,26 +148,31 @@ pub async fn ingest_material(
     let manifest = serde_json::to_string_pretty(&asset).unwrap_or_default();
     // 779 号：md 与 manifest 是一对（清单是检索入口、md 是内容），事务集
     // 提交——崩溃收敛到「对要么全缺、要么全在」，不再出现有清单无正文。
-    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
-        root_dir: &materials_dir,
-        writes: vec![
-            crate::utils::atomic_file_set::AtomicFileWrite {
-                relative_path: markdown_rel,
-                content: crate::utils::atomic_file_set::FileContent::Text(markdown),
-            },
-            crate::utils::atomic_file_set::AtomicFileWrite {
-                relative_path: manifest_rel,
-                content: crate::utils::atomic_file_set::FileContent::Text(manifest),
-            },
-        ],
-        deletes: vec![],
-    })
+    crate::utils::atomic_file_set::commit_atomic_file_set(
+        &crate::utils::atomic_file_set::AtomicFileSet {
+            root_dir: &materials_dir,
+            writes: vec![
+                crate::utils::atomic_file_set::AtomicFileWrite {
+                    relative_path: markdown_rel,
+                    content: crate::utils::atomic_file_set::FileContent::Text(markdown),
+                },
+                crate::utils::atomic_file_set::AtomicFileWrite {
+                    relative_path: manifest_rel,
+                    content: crate::utils::atomic_file_set::FileContent::Text(manifest),
+                },
+            ],
+            deletes: vec![],
+        },
+    )
     .await
     .map_err(|e| e.to_string())?;
     Ok(asset)
 }
 
-async fn read_material_source(project_root: &Path, input: &IngestMaterialInput<'_>) -> Result<MaterialSource, String> {
+async fn read_material_source(
+    project_root: &Path,
+    input: &IngestMaterialInput<'_>,
+) -> Result<MaterialSource, String> {
     if input.source_kind == "url" {
         let Some(url) = input.url.filter(|u| !u.is_empty()) else {
             return Err("ingest_material.url is required for URL sources.".to_string());
@@ -168,7 +187,10 @@ async fn read_material_source(project_root: &Path, input: &IngestMaterialInput<'
         .await
         .map_err(|e| format!("read failed: {e}"))?;
     if buffer.len() > MAX_SOURCE_BYTES {
-        return Err(format!("Material file is too large ({} bytes).", buffer.len()));
+        return Err(format!(
+            "Material file is too large ({} bytes).",
+            buffer.len()
+        ));
     }
     let filename = input
         .filename
@@ -193,7 +215,10 @@ async fn read_material_source(project_root: &Path, input: &IngestMaterialInput<'
     )
 }
 
-async fn read_url_material(url: &str, allow_private_egress: bool) -> Result<MaterialSource, String> {
+async fn read_url_material(
+    url: &str,
+    allow_private_egress: bool,
+) -> Result<MaterialSource, String> {
     let parsed = url::Url::parse(url).map_err(|_| format!("Unsupported URL protocol: {url}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
         return Err(format!("Unsupported URL protocol: {}", parsed.scheme()));
@@ -212,7 +237,10 @@ async fn read_url_material(url: &str, allow_private_egress: bool) -> Result<Mate
     let response = client
         .get(url)
         .header("User-Agent", "InkOS/1.6 material-ingestion")
-        .header("Accept", "text/html, text/plain, application/json, application/pdf, */*")
+        .header(
+            "Accept",
+            "text/html, text/plain, application/json, application/pdf, */*",
+        )
         .send()
         .await
         .map_err(|e| format!("Fetch failed: {e}"))?;
@@ -230,9 +258,15 @@ async fn read_url_material(url: &str, allow_private_egress: bool) -> Result<Mate
         .map(|v| v.split(';').next().unwrap_or("").trim().to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| mime_from_filename(parsed.path()));
-    let buffer = response.bytes().await.map_err(|e| format!("Fetch failed: {e}"))?;
+    let buffer = response
+        .bytes()
+        .await
+        .map_err(|e| format!("Fetch failed: {e}"))?;
     if buffer.len() > MAX_SOURCE_BYTES {
-        return Err(format!("Fetched material is too large ({} bytes).", buffer.len()));
+        return Err(format!(
+            "Fetched material is too large ({} bytes).",
+            buffer.len()
+        ));
     }
     let filename = parsed
         .path()
@@ -302,7 +336,11 @@ fn extract_buffer_material(
     }
     Err(format!(
         "Unsupported material type: {}",
-        if mime_type.is_empty() { filename.to_string() } else { mime_type }
+        if mime_type.is_empty() {
+            filename.to_string()
+        } else {
+            mime_type
+        }
     ))
 }
 
@@ -386,7 +424,8 @@ fn html_to_text(html: &str) -> String {
 
 fn extract_html_title(html: &str) -> Option<String> {
     static TITLE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = TITLE_RE.get_or_init(|| regex::Regex::new(r"(?is)<title[^>]*>([\s\S]*?)</title>").unwrap());
+    let re =
+        TITLE_RE.get_or_init(|| regex::Regex::new(r"(?is)<title[^>]*>([\s\S]*?)</title>").unwrap());
     re.captures(html)
         .and_then(|captures| captures.get(1).map(|m| decode_html(m.as_str())))
         .map(|title| title.trim().to_string())
@@ -536,7 +575,10 @@ pub async fn retrieve_materials(
                 id: format!("material:{}:{}", asset.id, index),
                 scope: MATERIAL_SCOPE.to_string(),
                 kind: format!("material:{}", asset.purpose),
-                source: format!("{}:{}-{}", normalized_path, segment.char_start, segment.char_end),
+                source: format!(
+                    "{}:{}-{}",
+                    normalized_path, segment.char_start, segment.char_end
+                ),
                 title: [asset.title.as_str(), segment.heading.as_str()]
                     .iter()
                     .filter(|part| !part.is_empty())
@@ -570,10 +612,9 @@ pub async fn retrieve_materials(
         .map(|purpose| vec![format!("material:{purpose}")])
         .unwrap_or_default();
     let hits = tokio::task::spawn_blocking(move || {
-        let index = crate::utils::local_search::LocalSearchIndex::new(
-            &index_path.to_string_lossy(),
-        )
-        .ok()?;
+        let index =
+            crate::utils::local_search::LocalSearchIndex::new(&index_path.to_string_lossy())
+                .ok()?;
         let _ = index.replace_scope(MATERIAL_SCOPE, &documents_for_index);
         Some(index.search(
             &query_for_index,
@@ -614,8 +655,7 @@ pub async fn retrieve_materials(
         let char_end = meta
             .get("charEnd")
             .and_then(serde_json::Value::as_u64)
-            .unwrap_or(hit.body.chars().count() as u64)
-            as usize;
+            .unwrap_or(hit.body.chars().count() as u64) as usize;
         out.push(RetrievedMaterial {
             id: asset_id,
             title: field("assetTitle"),
@@ -649,7 +689,10 @@ async fn list_material_assets(project_root: &Path) -> Vec<MaterialAsset> {
         // 损坏/过期 manifest 静默跳过：召回不允许炸掉聊天轮。
         if let Ok(raw) = tokio::fs::read_to_string(entry.path()).await {
             if let Ok(asset) = serde_json::from_str::<MaterialAsset>(&raw) {
-                if !asset.id.is_empty() && !asset.markdown_path.is_empty() && !asset.title.is_empty() {
+                if !asset.id.is_empty()
+                    && !asset.markdown_path.is_empty()
+                    && !asset.title.is_empty()
+                {
                     assets.push(asset);
                 }
             }
@@ -698,7 +741,6 @@ mod tests {
         );
     }
 
-
     fn fixture_pdf() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.pdf")
     }
@@ -726,7 +768,10 @@ mod tests {
         assert_eq!(asset.kind, "pdf");
         assert_eq!(asset.title, "sample");
         assert_eq!(asset.mime_type, "application/pdf");
-        assert!(asset.excerpt.contains("Chapter one reference material."), "excerpt: {asset:?}");
+        assert!(
+            asset.excerpt.contains("Chapter one reference material."),
+            "excerpt: {asset:?}"
+        );
         assert!(asset.char_count > 0);
         assert_eq!(asset.total_pages, Some(1));
         // 空文本（扫描件语义）：无文本流的 PDF fixture → TS 逐字错误。
@@ -775,13 +820,15 @@ mod tests {
         let text = html_to_text(html);
         assert!(text.contains("冷库 &amp; 账页"), "{text}");
         assert!(text.contains("第&nbsp;一行"), "{text}");
-        assert!(!text.contains("<p>") && !text.contains("bad()") && !text.contains("x{}"), "{text}");
+        assert!(
+            !text.contains("<p>") && !text.contains("bad()") && !text.contains("x{}"),
+            "{text}"
+        );
         let normalized = normalize_text(&text);
         assert!(normalized.contains("冷库 & 账页"), "{normalized}");
         assert!(normalized.contains("第 一行"), "{normalized}");
         assert_eq!(normalize_text("a\r\nb\n\n\n\nc  \n"), "a\nb\n\nc");
     }
-
 
     #[tokio::test]
     async fn ingest_file_then_retrieve_roundtrip() {
@@ -811,13 +858,26 @@ mod tests {
         assert_eq!(asset.kind, "text");
         assert_eq!(asset.title, "雪夜古宅资料");
         assert_eq!(asset.purpose, "worldbuilding");
-        assert!(asset.id.starts_with("20") && asset.id.contains("-雪夜古宅资料"), "{}", asset.id);
-        assert_eq!(asset.markdown_path, format!(".inkos/materials/{}.md", asset.id));
+        assert!(
+            asset.id.starts_with("20") && asset.id.contains("-雪夜古宅资料"),
+            "{}",
+            asset.id
+        );
+        assert_eq!(
+            asset.markdown_path,
+            format!(".inkos/materials/{}.md", asset.id)
+        );
         // markdown 卡：模板空行全滤（标题直连 Metadata）；正文段落 \n\n 保留。
         let markdown = std::fs::read_to_string(root.join(&asset.markdown_path)).unwrap();
-        assert!(markdown.starts_with("# 雪夜古宅资料\n## Metadata\n- kind: text"), "{markdown}");
+        assert!(
+            markdown.starts_with("# 雪夜古宅资料\n## Metadata\n- kind: text"),
+            "{markdown}"
+        );
         assert!(!markdown.contains("\n\n\n"), "{markdown}");
-        assert!(markdown.contains("## Extracted content\n# 雪夜古宅"), "{markdown}");
+        assert!(
+            markdown.contains("## Extracted content\n# 雪夜古宅"),
+            "{markdown}"
+        );
         assert!(markdown.contains("- purpose: worldbuilding"));
         assert!(markdown.contains("## Extracted content"));
         // manifest：无尾换行 + camelCase。
@@ -853,7 +913,11 @@ mod tests {
         // 无词项命中 → 空结果。
         let miss = retrieve_materials(
             root,
-            &RetrieveMaterialsInput { query: "完全不存在词组".to_string(), purpose: None, limit: None },
+            &RetrieveMaterialsInput {
+                query: "完全不存在词组".to_string(),
+                purpose: None,
+                limit: None,
+            },
         )
         .await;
         assert!(miss.is_empty());
@@ -863,7 +927,11 @@ mod tests {
     async fn ingest_html_and_error_paths() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        std::fs::write(root.join("page.html"), "<html><head><title>官网首页</title></head><body><p>第一段正文。</p></body></html>").unwrap();
+        std::fs::write(
+            root.join("page.html"),
+            "<html><head><title>官网首页</title></head><body><p>第一段正文。</p></body></html>",
+        )
+        .unwrap();
         let asset = ingest_material(
             root,
             &IngestMaterialInput {
@@ -933,7 +1001,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(no_file, "ingest_material.filePath is required for file sources.");
+        assert_eq!(
+            no_file,
+            "ingest_material.filePath is required for file sources."
+        );
         // pdf（Rust 侧暂缓）。
         std::fs::write(root.join("doc.pdf"), b"%PDF-1.4 fake").unwrap();
         let pdf = ingest_material(
@@ -982,7 +1053,11 @@ mod tests {
         std::fs::write(materials.join("broken.json"), "{not json").unwrap();
         let results = retrieve_materials(
             root,
-            &RetrieveMaterialsInput { query: "关键字".to_string(), purpose: None, limit: None },
+            &RetrieveMaterialsInput {
+                query: "关键字".to_string(),
+                purpose: None,
+                limit: None,
+            },
         )
         .await;
         assert_eq!(results.len(), 2, "损坏 manifest 不参与且不炸");

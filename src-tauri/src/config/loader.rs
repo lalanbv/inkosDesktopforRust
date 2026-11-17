@@ -35,39 +35,33 @@ impl ConfigLoader {
     /// 加载工作区配置（缺失 → 默认值）
     pub fn load_workspace_config(&self, workspace_id: &str) -> Result<AppConfig> {
         let path = self.paths.workspace_config(workspace_id);
-        AppConfig::read(&path).with_context(|| {
-            format!("加载工作区配置失败: workspace_id={}", workspace_id)
-        })
+        AppConfig::read(&path)
+            .with_context(|| format!("加载工作区配置失败: workspace_id={}", workspace_id))
     }
 
     /// 加载项目配置（缺失 → 默认值）
     pub fn load_project_config(&self, project_root: &Path) -> Result<AppConfig> {
         let path = ConfigPaths::project_config(project_root);
-        AppConfig::read(&path).with_context(|| {
-            format!("加载项目配置失败: project_root={}", project_root.display())
-        })
+        AppConfig::read(&path)
+            .with_context(|| format!("加载项目配置失败: project_root={}", project_root.display()))
     }
 
     /// 保存工作区配置
-    pub fn save_workspace_config(
-        &self,
-        workspace_id: &str,
-        config: &AppConfig,
-    ) -> Result<()> {
+    pub fn save_workspace_config(&self, workspace_id: &str, config: &AppConfig) -> Result<()> {
         self.paths.ensure_workspace_config_dir(workspace_id)?;
         let path = self.paths.workspace_config(workspace_id);
-        config.write(&path).with_context(|| {
-            format!("保存工作区配置失败: workspace_id={}", workspace_id)
-        })
+        config
+            .write(&path)
+            .with_context(|| format!("保存工作区配置失败: workspace_id={}", workspace_id))
     }
 
     /// 保存项目配置
     pub fn save_project_config(&self, project_root: &Path, config: &AppConfig) -> Result<()> {
         ConfigPaths::ensure_project_config_dir(project_root)?;
         let path = ConfigPaths::project_config(project_root);
-        config.write(&path).with_context(|| {
-            format!("保存项目配置失败: project_root={}", project_root.display())
-        })
+        config
+            .write(&path)
+            .with_context(|| format!("保存项目配置失败: project_root={}", project_root.display()))
     }
 
     /// 保存用户全局配置
@@ -238,7 +232,11 @@ mod tests {
 
         // 手工写入非法 TOML（save_user_config 路径会校验拒绝，须模拟磁盘损坏）
         std::fs::create_dir_all(temp.path().join("config")).unwrap();
-        std::fs::write(temp.path().join("config").join("user.toml"), "invalid toml [[[").unwrap();
+        std::fs::write(
+            temp.path().join("config").join("user.toml"),
+            "invalid toml [[[",
+        )
+        .unwrap();
 
         let mut mgr = loader.init_manager().unwrap();
         assert_eq!(mgr.merged().logging.level, "info"); // 回退系统默认
@@ -288,15 +286,19 @@ mod tests {
         // 保存项目配置
         let mut proj_cfg = AppConfig::default();
         proj_cfg.updates.channel = "beta".to_string();
-        loader.save_project_config(&project_root, &proj_cfg).unwrap();
+        loader
+            .save_project_config(&project_root, &proj_cfg)
+            .unwrap();
 
         // 初始化管理器并应用配置
         let mut mgr = loader.init_manager().unwrap();
         loader.apply_workspace_config(&mut mgr, "ws-123").unwrap();
-        loader.apply_project_config(&mut mgr, &project_root).unwrap();
+        loader
+            .apply_project_config(&mut mgr, &project_root)
+            .unwrap();
 
         let merged = mgr.merged();
-        assert_eq!(merged.logging.level, "debug");       // 工作区覆盖
-        assert_eq!(merged.updates.channel, "beta");      // 项目覆盖
+        assert_eq!(merged.logging.level, "debug"); // 工作区覆盖
+        assert_eq!(merged.updates.channel, "beta"); // 项目覆盖
     }
 }

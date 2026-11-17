@@ -35,9 +35,9 @@ fn golden_skill_contract_min_engine_vectors() {
             continue;
         }
         let parsed = parsed.unwrap_or_else(|| panic!("{name}: 应合法可解析"));
-        let expected = case["satisfied"].as_bool().unwrap_or_else(|| {
-            panic!("{name}: 缺 satisfied 期望（非法 case 须标 invalid:true）")
-        });
+        let expected = case["satisfied"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("{name}: 缺 satisfied 期望（非法 case 须标 invalid:true）"));
         assert_eq!(
             skill_contract_satisfied(parsed),
             expected,

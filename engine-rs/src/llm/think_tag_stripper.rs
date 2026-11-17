@@ -8,8 +8,8 @@
 //!
 //! 流式剥离器在能确定「开头不是 think 块」前缓冲，不发出任何文本——思考内容根本不会先发出再消失。
 
-use std::sync::OnceLock;
 use regex::Regex;
+use std::sync::OnceLock;
 
 const OPEN_TAG: &str = "<think>";
 const CLOSE_TAG: &str = "</think>";
@@ -39,7 +39,10 @@ fn is_js_ws(c: char) -> bool {
 
 impl LeadingThinkTagStripper {
     pub fn new() -> Self {
-        LeadingThinkTagStripper { state: StripperState::Detecting, pending: String::new() }
+        LeadingThinkTagStripper {
+            state: StripperState::Detecting,
+            pending: String::new(),
+        }
     }
 
     /// 送入增量文本，返回可安全并入正文的部分（可能为空，表示仍在缓冲判断）。
@@ -113,7 +116,10 @@ mod tests {
 
     #[test]
     fn strips_complete_leading_block() {
-        assert_eq!(strip_leading_think_block("<think>hidden</think>visible"), "visible");
+        assert_eq!(
+            strip_leading_think_block("<think>hidden</think>visible"),
+            "visible"
+        );
     }
 
     #[test]
@@ -129,7 +135,10 @@ mod tests {
     #[test]
     fn preserves_mid_content_think_literal() {
         // 正文中间的 <think> 不动
-        assert_eq!(strip_leading_think_block("正文 <think>x</think> 后续"), "正文 <think>x</think> 后续");
+        assert_eq!(
+            strip_leading_think_block("正文 <think>x</think> 后续"),
+            "正文 <think>x</think> 后续"
+        );
     }
 
     #[test]
@@ -161,6 +170,9 @@ mod tests {
 
     #[test]
     fn trims_whitespace_after_close_tag() {
-        assert_eq!(strip_leading_think_block("<think>x</think>\n\nreal"), "real");
+        assert_eq!(
+            strip_leading_think_block("<think>x</think>\n\nreal"),
+            "real"
+        );
     }
 }

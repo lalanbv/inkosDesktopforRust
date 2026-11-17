@@ -157,7 +157,11 @@ pub async fn consolidate(
         vec![existing.trim().to_string()]
     };
     for (vol, vol_rows) in &completed {
-        let vol_summary_rows = vol_rows.iter().map(|r| r.raw.clone()).collect::<Vec<_>>().join("\n");
+        let vol_summary_rows = vol_rows
+            .iter()
+            .map(|r| r.raw.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
         let response = chat
             .chat(
                 vec![
@@ -196,7 +200,11 @@ pub async fn consolidate(
     tokio::fs::create_dir_all(&archive_dir).await?;
     for (vol, vol_rows) in &completed {
         let archive_path = archive_dir.join(format!("vol_{}-{}.md", vol.start_ch, vol.end_ch));
-        let detail = vol_rows.iter().map(|r| r.raw.clone()).collect::<Vec<_>>().join("\n");
+        let detail = vol_rows
+            .iter()
+            .map(|r| r.raw.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
         crate::utils::atomic_file_set::write_file_atomic(
             &archive_path,
             &format!("# {}\n\n{}\n{}", vol.name, header, detail),
@@ -242,16 +250,23 @@ async fn rerun_advanced_count_promotion(story_dir: &Path) -> usize {
         return 0;
     }
     let contains_cjk = raw.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
-    let language = if contains_cjk { WritingLanguage::Zh } else { WritingLanguage::En };
+    let language = if contains_cjk {
+        WritingLanguage::Zh
+    } else {
+        WritingLanguage::En
+    };
     let summaries_raw = read_or_empty(&story_dir.join("chapter_summaries.md")).await;
 
     let result = rerun_promotion_pass(&hooks, &summaries_raw);
     if !result.updated {
         return 0;
     }
-    if crate::utils::atomic_file_set::write_file_atomic(&ledger_path, &render_hook_snapshot(&result.hooks, language))
-        .await
-        .is_err()
+    if crate::utils::atomic_file_set::write_file_atomic(
+        &ledger_path,
+        &render_hook_snapshot(&result.hooks, language),
+    )
+    .await
+    .is_err()
     {
         return 0;
     }
@@ -289,7 +304,11 @@ pub fn parse_volume_boundaries(outline: &str) -> Vec<VolumeBoundary> {
             .trim()
             .to_string();
         if !name.is_empty() {
-            volumes.push(VolumeBoundary { name, start_ch: start, end_ch: end });
+            volumes.push(VolumeBoundary {
+                name,
+                start_ch: start,
+                end_ch: end,
+            });
         }
     }
     volumes
@@ -317,7 +336,10 @@ pub fn parse_summary_table(raw: &str) -> (String, Vec<SummaryRow>) {
                 .captures(line)
                 .and_then(|c| c[1].parse::<u32>().ok())
                 .filter(|chapter| *chapter > 0)
-                .map(|chapter| SummaryRow { chapter, raw: (*line).to_string() })
+                .map(|chapter| SummaryRow {
+                    chapter,
+                    raw: (*line).to_string(),
+                })
         })
         .collect();
     (header, rows)

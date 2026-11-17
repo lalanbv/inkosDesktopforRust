@@ -167,8 +167,8 @@ impl TokenMeter {
                 let ratio = (anchor.usage_total as f64 / anchor.heuristic_total as f64)
                     .clamp(RATIO_CLAMP_LOW, RATIO_CLAMP_HIGH);
                 let anchored = (heuristic as f64 * ratio).round() as u64;
-                let coverage = ((anchor.heuristic_total.min(heuristic)) as f64 / heuristic as f64)
-                    .min(1.0);
+                let coverage =
+                    ((anchor.heuristic_total.min(heuristic)) as f64 / heuristic as f64).min(1.0);
                 (
                     anchored,
                     (coverage * 10_000.0).round() / 10_000.0,
@@ -220,9 +220,7 @@ pub fn estimate_prepared_surface(
         total += u64::from(estimate_text_tokens(text));
     }
     for entry in context_entries {
-        total += u64::from(
-            crate::utils::context_assembly::estimate_context_source_tokens(entry),
-        );
+        total += u64::from(crate::utils::context_assembly::estimate_context_source_tokens(entry));
     }
     total
 }
@@ -284,7 +282,10 @@ mod tests {
         // 表 append-only（每请求新建）——同 meter 内表面恒不缩，腰斩即拒绝；
         // 跨请求换面走新 meter（新锚自然成立）。
         meter.append("abcd");
-        assert!(!meter.note_usage(Some("m3"), 20, 30, 50), "后续腰斩同样拒绝");
+        assert!(
+            !meter.note_usage(Some("m3"), 20, 30, 50),
+            "后续腰斩同样拒绝"
+        );
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! 配置持久化（TOML 读写）
 
-use std::path::Path;
-use anyhow::Context;
 use crate::config::types::AppConfig;
+use anyhow::Context;
+use std::path::Path;
 
 impl AppConfig {
     /// 读取配置文件（缺失 → 默认值，损坏 → Err）
@@ -19,9 +19,7 @@ impl AppConfig {
                 // 文件不存在 → 返回默认配置
                 Ok(Self::default())
             }
-            Err(e) => {
-                Err(e).with_context(|| format!("读取配置文件失败: {}", path.display()))
-            }
+            Err(e) => Err(e).with_context(|| format!("读取配置文件失败: {}", path.display())),
         }
     }
 
@@ -30,8 +28,7 @@ impl AppConfig {
         // 写入前验证
         self.validate().context("配置验证失败")?;
 
-        let toml = toml::to_string_pretty(self)
-            .context("序列化配置失败")?;
+        let toml = toml::to_string_pretty(self).context("序列化配置失败")?;
 
         crate::util::atomic_write_0600(path, toml.as_bytes())
             .with_context(|| format!("写入配置文件失败: {}", path.display()))
@@ -40,7 +37,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::config::types::*;
     use tempfile::TempDir;
 

@@ -42,8 +42,10 @@ impl ConfigReloader {
                 let merged = manager.merged().clone();
 
                 // 保存为最后有效配置
-                *self.last_valid_config.lock().unwrap_or_else(|e| e.into_inner()) =
-                    merged.clone();
+                *self
+                    .last_valid_config
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = merged.clone();
 
                 tracing::info!("工作区配置重新加载成功");
                 Ok(merged)
@@ -77,8 +79,10 @@ impl ConfigReloader {
                 let merged = manager.merged().clone();
 
                 // 保存为最后有效配置
-                *self.last_valid_config.lock().unwrap_or_else(|e| e.into_inner()) =
-                    merged.clone();
+                *self
+                    .last_valid_config
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = merged.clone();
 
                 tracing::info!("项目配置重新加载成功");
                 Ok(merged)
@@ -104,8 +108,10 @@ impl ConfigReloader {
                 manager.set_user(new_config.clone());
                 let merged = manager.merged().clone();
 
-                *self.last_valid_config.lock().unwrap_or_else(|e| e.into_inner()) =
-                    merged.clone();
+                *self
+                    .last_valid_config
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = merged.clone();
 
                 tracing::info!("用户全局配置重新加载成功");
                 Ok(merged)

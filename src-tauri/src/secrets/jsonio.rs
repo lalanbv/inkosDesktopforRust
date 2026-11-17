@@ -95,9 +95,7 @@ pub fn read_secrets_state(path: &Path) -> Result<(HashMap<String, String>, Secre
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Ok((HashMap::new(), SecretsFileState::Absent));
         }
-        Err(e) => {
-            return Err(e).with_context(|| format!("read secrets: {}", path.display()))
-        }
+        Err(e) => return Err(e).with_context(|| format!("read secrets: {}", path.display())),
     };
     let root: Value = match serde_json::from_str(&txt) {
         Ok(v) => v,
@@ -174,8 +172,7 @@ pub fn write_secrets(path: &Path, map: &HashMap<String, String>) -> Result<()> {
         }
     }
 
-    let json = serde_json::to_string_pretty(&root)
-        .with_context(|| "serialize secrets.json")?;
+    let json = serde_json::to_string_pretty(&root).with_context(|| "serialize secrets.json")?;
     atomic_write_0600(path, json.as_bytes())
         .with_context(|| format!("atomic write secrets: {}", path.display()))?;
     Ok(())
@@ -195,10 +192,7 @@ fn ensure_services_object(root: &mut Value) {
         *root = Value::Object(Map::new());
     }
     let obj = root.as_object_mut().expect("root ensured as object");
-    let services_is_object = obj
-        .get("services")
-        .map(Value::is_object)
-        .unwrap_or(false);
+    let services_is_object = obj.get("services").map(Value::is_object).unwrap_or(false);
     if !services_is_object {
         obj.insert("services".to_string(), Value::Object(Map::new()));
     }
@@ -234,7 +228,10 @@ mod tests {
     fn read_missing_file_returns_empty_ok() {
         let p = Path::new("/nonexistent/path/secrets.json");
         let got = read_secrets(p).unwrap();
-        assert!(got.is_empty(), "missing file should yield Ok(empty), not Err");
+        assert!(
+            got.is_empty(),
+            "missing file should yield Ok(empty), not Err"
+        );
     }
 
     #[test]
@@ -352,10 +349,7 @@ mod tests {
         write_secrets(&p, &m).unwrap();
         let raw = std::fs::read_to_string(&p).unwrap();
         assert!(raw.contains("\"apiKey\""), "must use camelCase apiKey");
-        assert!(
-            !raw.contains("api_key"),
-            "must NOT use snake_case api_key"
-        );
+        assert!(!raw.contains("api_key"), "must NOT use snake_case api_key");
     }
 
     #[test]
@@ -367,11 +361,7 @@ mod tests {
         let mut m = HashMap::new();
         m.insert("openai".into(), "test-key-1".into());
         write_secrets(&p, &m).unwrap();
-        let mode = std::fs::metadata(&p)
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "secrets.json must be 0600 on Unix");
     }
 
@@ -445,7 +435,11 @@ mod tests {
         write_raw(&p, "{ broken not json }}}}");
         let (map, state) = read_secrets_state(p.as_path()).unwrap();
         assert!(map.is_empty());
-        assert_eq!(state, SecretsFileState::Corrupt, "不可解析 JSON 必须分类为 Corrupt");
+        assert_eq!(
+            state,
+            SecretsFileState::Corrupt,
+            "不可解析 JSON 必须分类为 Corrupt"
+        );
     }
 
     #[test]
@@ -457,7 +451,11 @@ mod tests {
         write_raw(&p, r#"{"services":{}}"#);
         let (map, state) = read_secrets_state(p.as_path()).unwrap();
         assert!(map.is_empty());
-        assert_eq!(state, SecretsFileState::Empty, "合法空 services 必须是 Empty，不能误判为 Corrupt");
+        assert_eq!(
+            state,
+            SecretsFileState::Empty,
+            "合法空 services 必须是 Empty，不能误判为 Corrupt"
+        );
     }
 
     #[test]

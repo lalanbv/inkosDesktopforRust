@@ -92,7 +92,11 @@ const MAX_NOTE_LENGTH: usize = 2_000;
 // ---- 路径与安全 ----
 
 fn reference_manifest_path(project_root: &Path, book_id: &str) -> PathBuf {
-    project_root.join("books").join(book_id).join("story").join(MANIFEST_FILE)
+    project_root
+        .join("books")
+        .join(book_id)
+        .join("story")
+        .join(MANIFEST_FILE)
 }
 
 fn assert_book_exists(project_root: &Path, book_id: &str) -> Result<(), String> {
@@ -128,25 +132,53 @@ pub fn assert_material_id(value: &str) -> Result<String, String> {
 /// `loadMaterialAsset`：读 `{materialsDir}/{id}.json` 并校验（id 一致 +
 /// title/markdownPath/manifestPath 为字符串 + markdownPath 必须等于
 /// `{materialsDir}/{id}.md`——经 safeChildPath 双向防穿越）。
-pub fn load_material_asset(project_root: &Path, material_id_input: &str) -> Result<MaterialAssetRef, String> {
+pub fn load_material_asset(
+    project_root: &Path,
+    material_id_input: &str,
+) -> Result<MaterialAssetRef, String> {
     let material_id = assert_material_id(material_id_input)?;
     let materials_dir = project_root.join(".inkos").join("materials");
-    let manifest_path = safe_child_path(&materials_dir.to_string_lossy(), &format!("{material_id}.json"))?;
-    let raw = std::fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("Invalid material manifest: {}: {error}", manifest_path.display()))?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("Invalid material manifest: {}: {error}", manifest_path.display()))?;
+    let manifest_path = safe_child_path(
+        &materials_dir.to_string_lossy(),
+        &format!("{material_id}.json"),
+    )?;
+    let raw = std::fs::read_to_string(&manifest_path).map_err(|error| {
+        format!(
+            "Invalid material manifest: {}: {error}",
+            manifest_path.display()
+        )
+    })?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Invalid material manifest: {}: {error}",
+            manifest_path.display()
+        )
+    })?;
     // TS Partial 校验面：id 一致 + title/markdownPath/manifestPath 为字符串。
     let valid = parsed.get("id").and_then(Value::as_str) == Some(material_id.as_str())
         && parsed.get("title").map(Value::is_string).unwrap_or(false)
-        && parsed.get("markdownPath").map(Value::is_string).unwrap_or(false)
-        && parsed.get("manifestPath").map(Value::is_string).unwrap_or(false);
+        && parsed
+            .get("markdownPath")
+            .map(Value::is_string)
+            .unwrap_or(false)
+        && parsed
+            .get("manifestPath")
+            .map(Value::is_string)
+            .unwrap_or(false);
     if !valid {
-        return Err(format!("Invalid material manifest: {}", manifest_path.display()));
+        return Err(format!(
+            "Invalid material manifest: {}",
+            manifest_path.display()
+        ));
     }
-    let markdown_path = parsed["markdownPath"].as_str().expect("checked string").to_string();
-    let expected_markdown_path =
-        safe_child_path(&materials_dir.to_string_lossy(), &format!("{material_id}.md"))?;
+    let markdown_path = parsed["markdownPath"]
+        .as_str()
+        .expect("checked string")
+        .to_string();
+    let expected_markdown_path = safe_child_path(
+        &materials_dir.to_string_lossy(),
+        &format!("{material_id}.md"),
+    )?;
     let resolved_markdown_path = safe_child_path(&project_root.to_string_lossy(), &markdown_path)?;
     if resolved_markdown_path != expected_markdown_path {
         return Err(format!(
@@ -156,9 +188,15 @@ pub fn load_material_asset(project_root: &Path, material_id_input: &str) -> Resu
     }
     Ok(MaterialAssetRef {
         id: parsed["id"].as_str().expect("checked string").to_string(),
-        title: parsed["title"].as_str().expect("checked string").to_string(),
+        title: parsed["title"]
+            .as_str()
+            .expect("checked string")
+            .to_string(),
         markdown_path,
-        manifest_path: parsed["manifestPath"].as_str().expect("checked string").to_string(),
+        manifest_path: parsed["manifestPath"]
+            .as_str()
+            .expect("checked string")
+            .to_string(),
     })
 }
 
@@ -185,7 +223,11 @@ fn normalize_uses(values: &[String]) -> Result<Vec<String>, String> {
         return Err("At least one reference use is required.".to_string());
     }
     if uses.len() > MAX_USES {
-        return Err(format!("Too many reference uses ({}/{}).", uses.len(), MAX_USES));
+        return Err(format!(
+            "Too many reference uses ({}/{}).",
+            uses.len(),
+            MAX_USES
+        ));
     }
     Ok(uses)
 }
@@ -212,37 +254,59 @@ fn normalize_note(value: Option<&str>) -> Result<Option<String>, String> {
 
 /// 读清单：缺文件 → 空 envelope；结构非法 → 逐字错误。bindings 逐条手工
 /// 校验（对齐 TS parseBinding 的错误文案面）。
-pub fn load_book_reference_manifest(project_root: &Path, book_id: &str) -> Result<BookReferenceManifest, String> {
+pub fn load_book_reference_manifest(
+    project_root: &Path,
+    book_id: &str,
+) -> Result<BookReferenceManifest, String> {
     let path = reference_manifest_path(project_root, book_id);
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(BookReferenceManifest { version: 1, book_id: book_id.to_string(), bindings: Vec::new() });
+            return Ok(BookReferenceManifest {
+                version: 1,
+                book_id: book_id.to_string(),
+                bindings: Vec::new(),
+            });
         }
         Err(error) => return Err(error.to_string()),
     };
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|error| format!("Invalid book reference manifest: {}: {error}", path.display()))?;
+    let parsed: Value = serde_json::from_str(&raw).map_err(|error| {
+        format!(
+            "Invalid book reference manifest: {}: {error}",
+            path.display()
+        )
+    })?;
     if parsed.get("version").and_then(Value::as_u64) != Some(1)
         || parsed.get("bookId").and_then(Value::as_str) != Some(book_id)
         || !parsed.get("bindings").map(Value::is_array).unwrap_or(false)
     {
-        return Err(format!("Invalid book reference manifest: {}", path.display()));
+        return Err(format!(
+            "Invalid book reference manifest: {}",
+            path.display()
+        ));
     }
     let mut bindings = Vec::new();
     for value in parsed["bindings"].as_array().expect("checked array") {
         bindings.push(parse_binding(value)?);
     }
-    Ok(BookReferenceManifest { version: 1, book_id: book_id.to_string(), bindings })
+    Ok(BookReferenceManifest {
+        version: 1,
+        book_id: book_id.to_string(),
+        bindings,
+    })
 }
 
 fn parse_binding(value: &Value) -> Result<BookReferenceBinding, String> {
     let Some(obj) = value.as_object() else {
         return Err("Invalid book reference binding.".to_string());
     };
-    let material_id = assert_material_id(obj.get("materialId").and_then(Value::as_str).unwrap_or(""))?;
+    let material_id =
+        assert_material_id(obj.get("materialId").and_then(Value::as_str).unwrap_or(""))?;
     // TS `binding.uses ?? []`：缺键 → 空数组（落入 uses 为空的错误面）。
-    let uses_value = obj.get("uses").cloned().unwrap_or_else(|| Value::Array(Vec::new()));
+    let uses_value = obj
+        .get("uses")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
     let Some(uses_raw) = uses_value.as_array() else {
         return Err("Reference uses must be an array.".to_string());
     };
@@ -254,22 +318,45 @@ fn parse_binding(value: &Value) -> Result<BookReferenceBinding, String> {
         uses.push(text.to_string());
     }
     let uses = normalize_uses(&uses)?;
-    let created_at = obj.get("createdAt").and_then(Value::as_str).unwrap_or_default();
-    let updated_at = obj.get("updatedAt").and_then(Value::as_str).unwrap_or_default();
+    let created_at = obj
+        .get("createdAt")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let updated_at = obj
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if created_at.is_empty() || updated_at.is_empty() {
-        return Err(format!("Invalid timestamps for book reference binding {material_id}."));
+        return Err(format!(
+            "Invalid timestamps for book reference binding {material_id}."
+        ));
     }
     let note = normalize_note(obj.get("note").and_then(Value::as_str))?;
-    Ok(BookReferenceBinding { material_id, uses, note, created_at: created_at.to_string(), updated_at: updated_at.to_string() })
+    Ok(BookReferenceBinding {
+        material_id,
+        uses,
+        note,
+        created_at: created_at.to_string(),
+        updated_at: updated_at.to_string(),
+    })
 }
 
-fn write_manifest_atomic(project_root: &Path, manifest: &BookReferenceManifest) -> Result<(), String> {
+fn write_manifest_atomic(
+    project_root: &Path,
+    manifest: &BookReferenceManifest,
+) -> Result<(), String> {
     let path = reference_manifest_path(project_root, &manifest.book_id);
-    let story_dir = project_root.join("books").join(&manifest.book_id).join("story");
+    let story_dir = project_root
+        .join("books")
+        .join(&manifest.book_id)
+        .join("story");
     std::fs::create_dir_all(&story_dir).map_err(|e| e.to_string())?;
     // 779 号：手搓 tmp+rename 收敛到共享助手（获得 sync_all 落盘 + EPERM/EBUSY
     // 重试 + 进程级唯一临时名，语义不变）。
-    let body = format!("{}\n", serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?);
+    let body = format!(
+        "{}\n",
+        serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?
+    );
     crate::utils::atomic_file_set::write_file_atomic_sync(&path, body.as_bytes())
         .map_err(|e| e.to_string())
 }
@@ -308,7 +395,11 @@ pub fn bind_book_reference(
         .filter(|entry| entry.material_id != binding.material_id)
         .collect();
     bindings.push(binding);
-    let next = BookReferenceManifest { version: 1, book_id: book_id.to_string(), bindings };
+    let next = BookReferenceManifest {
+        version: 1,
+        book_id: book_id.to_string(),
+        bindings,
+    };
     write_manifest_atomic(project_root, &next)?;
     Ok(next)
 }
@@ -329,7 +420,10 @@ pub fn unbind_book_reference(
         .cloned()
         .collect();
     let removed = bindings.len() != current.bindings.len();
-    let manifest = BookReferenceManifest { bindings, ..current };
+    let manifest = BookReferenceManifest {
+        bindings,
+        ..current
+    };
     if removed {
         write_manifest_atomic(project_root, &manifest)?;
     }
@@ -337,7 +431,10 @@ pub fn unbind_book_reference(
 }
 
 /// 清单 + 素材可用性解析（素材缺失 → available:false + error 文本，不抛）。
-pub fn list_book_references(project_root: &Path, book_id: &str) -> Result<BookReferenceList, String> {
+pub fn list_book_references(
+    project_root: &Path,
+    book_id: &str,
+) -> Result<BookReferenceList, String> {
     assert_book_exists(project_root, book_id)?;
     let manifest = load_book_reference_manifest(project_root, book_id)?;
     let mut references = Vec::new();
@@ -367,7 +464,10 @@ pub fn list_book_references(project_root: &Path, book_id: &str) -> Result<BookRe
             }),
         }
     }
-    Ok(BookReferenceList { manifest, references })
+    Ok(BookReferenceList {
+        manifest,
+        references,
+    })
 }
 
 // ---- 写路径选段（reference-context.ts 对应面） ----
@@ -407,14 +507,20 @@ pub struct ReferenceSectionSelectionRequest<'a> {
 /// LLM 选段器端口（返回命中候选的 source id 列表）。
 #[async_trait::async_trait]
 pub trait ReferenceSectionSelector: Send + Sync {
-    async fn select(&self, request: ReferenceSectionSelectionRequest<'_>) -> Result<Vec<String>, String>;
+    async fn select(
+        &self,
+        request: ReferenceSectionSelectionRequest<'_>,
+    ) -> Result<Vec<String>, String>;
 }
 
 /// compose 注入端口（TS `BookReferenceContextProvider` 对应面：runner 把
 /// `selectBookReferenceContext` 以闭包注入 composer 输入）。
 #[async_trait::async_trait]
 pub trait BookReferenceContextProvider: Send + Sync {
-    async fn select_context(&self, task: &ReferenceSelectionTask<'_>) -> BookReferenceContextSelection;
+    async fn select_context(
+        &self,
+        task: &ReferenceSelectionTask<'_>,
+    ) -> BookReferenceContextSelection;
 }
 
 /// 生产实现：绑定清单 + LLM 选段；清单/文件面失败落
@@ -427,8 +533,13 @@ pub struct ProductionReferenceContextProvider<'a> {
 
 #[async_trait::async_trait]
 impl BookReferenceContextProvider for ProductionReferenceContextProvider<'_> {
-    async fn select_context(&self, task: &ReferenceSelectionTask<'_>) -> BookReferenceContextSelection {
-        match select_book_reference_context(self.project_root, self.book_id, task, self.selector).await {
+    async fn select_context(
+        &self,
+        task: &ReferenceSelectionTask<'_>,
+    ) -> BookReferenceContextSelection {
+        match select_book_reference_context(self.project_root, self.book_id, task, self.selector)
+            .await
+        {
             Ok(selection) => selection,
             Err(_) => BookReferenceContextSelection {
                 entries: Vec::new(),
@@ -459,7 +570,10 @@ pub async fn select_book_reference_context(
     let mut sections: Vec<SplitSection> = Vec::new();
     for reference in &listed.references {
         let Some(asset) = reference.asset.as_ref() else {
-            notes.push(format!("book-reference-unavailable:{}", reference.material_id));
+            notes.push(format!(
+                "book-reference-unavailable:{}",
+                reference.material_id
+            ));
             continue;
         };
         let markdown_path = safe_child_path(&project_root.to_string_lossy(), &asset.markdown_path)?;
@@ -476,7 +590,10 @@ pub async fn select_book_reference_context(
         }));
     }
     if sections.is_empty() {
-        return Ok(BookReferenceContextSelection { entries: Vec::new(), notes });
+        return Ok(BookReferenceContextSelection {
+            entries: Vec::new(),
+            notes,
+        });
     }
 
     // TS：候选（去掉正文，只给标题面）交给选段器；命中后按 source 载回原文。
@@ -503,7 +620,10 @@ pub async fn select_book_reference_context(
         Ok(sources) => sources,
         Err(_) => {
             notes.push("book-reference-selection-failed".to_string());
-            return Ok(BookReferenceContextSelection { entries: Vec::new(), notes });
+            return Ok(BookReferenceContextSelection {
+                entries: Vec::new(),
+                notes,
+            });
         }
     };
 
@@ -592,7 +712,10 @@ pub fn split_reference_sections(input: &SplitSectionsInput<'_>) -> Vec<SplitSect
     if preamble.iter().any(|line| !line.trim().is_empty()) {
         parsed.insert(
             0,
-            ParsedSection { heading: input.title.to_string(), lines: preamble },
+            ParsedSection {
+                heading: input.title.to_string(),
+                lines: preamble,
+            },
         );
     }
     if parsed.is_empty() && !input.content.trim().is_empty() {
@@ -602,11 +725,16 @@ pub fn split_reference_sections(input: &SplitSectionsInput<'_>) -> Vec<SplitSect
         });
     }
 
-    let mut seen_anchors: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut seen_anchors: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut candidates = Vec::new();
     for section in &parsed {
         let content = section.lines.join("\n").trim().to_string();
-        let has_body = section.lines.iter().skip(1).any(|line| !line.trim().is_empty());
+        let has_body = section
+            .lines
+            .iter()
+            .skip(1)
+            .any(|line| !line.trim().is_empty());
         let heading_only = section_heading_only_re().is_match(&content);
         if !has_body && heading_only {
             continue;
@@ -614,7 +742,11 @@ pub fn split_reference_sections(input: &SplitSectionsInput<'_>) -> Vec<SplitSect
         let base_anchor = slugify_anchor(&section.heading);
         let count = seen_anchors.get(&base_anchor).copied().unwrap_or(0) + 1;
         seen_anchors.insert(base_anchor.clone(), count);
-        let anchor = if count == 1 { base_anchor } else { format!("{base_anchor}-{count}") };
+        let anchor = if count == 1 {
+            base_anchor
+        } else {
+            format!("{base_anchor}-{count}")
+        };
         candidates.push(SplitSection {
             source: format!("reference/{}#{}", input.material_id, anchor),
             material_id: input.material_id.to_string(),
@@ -630,11 +762,17 @@ pub fn split_reference_sections(input: &SplitSectionsInput<'_>) -> Vec<SplitSect
 
 /// `renderReason`：选段理由（创作借鉴定性，不能压过正典）。
 pub fn render_reason(title: &str, uses: &[String], note: Option<&str>) -> String {
-    let mut parts = vec![format!("User-bound reference \"{title}\" for: {}.", uses.join("; "))];
+    let mut parts = vec![format!(
+        "User-bound reference \"{title}\" for: {}.",
+        uses.join("; ")
+    )];
     if let Some(note) = note {
         parts.push(format!("Binding note: {note}"));
     }
-    parts.push("Reference guidance only; it cannot override author intent, canon, or current state.".to_string());
+    parts.push(
+        "Reference guidance only; it cannot override author intent, canon, or current state."
+            .to_string(),
+    );
     parts.join(" ")
 }
 
@@ -644,7 +782,9 @@ pub fn slugify_anchor(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = true;
     for ch in lower.chars() {
-        let keep = ch.is_ascii_lowercase() || ch.is_ascii_digit() || ('\u{4e00}'..='\u{9fff}').contains(&ch);
+        let keep = ch.is_ascii_lowercase()
+            || ch.is_ascii_digit()
+            || ('\u{4e00}'..='\u{9fff}').contains(&ch);
         if keep {
             out.push(ch);
             last_dash = false;
@@ -659,7 +799,11 @@ pub fn slugify_anchor(value: &str) -> String {
     while out.starts_with('-') {
         out.remove(0);
     }
-    if out.is_empty() { "section".to_string() } else { out }
+    if out.is_empty() {
+        "section".to_string()
+    } else {
+        out
+    }
 }
 
 fn heading_line_re() -> &'static regex::Regex {
@@ -713,7 +857,11 @@ mod tests {
         let manifest = bind_book_reference(
             root,
             "b1",
-            &BindBookReferenceInput { material_id: "mat1", uses: &uses(&["开篇机制", "人物关系"]), note: Some("慢节奏") },
+            &BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&["开篇机制", "人物关系"]),
+                note: Some("慢节奏"),
+            },
         )
         .unwrap();
         assert_eq!(manifest.version, 1);
@@ -731,7 +879,11 @@ mod tests {
         let updated = bind_book_reference(
             root,
             "b1",
-            &BindBookReferenceInput { material_id: "mat1", uses: &uses(&["调查节奏"]), note: None },
+            &BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&["调查节奏"]),
+                note: None,
+            },
         )
         .unwrap();
         assert_eq!(updated.bindings[0].created_at, first_created);
@@ -754,44 +906,80 @@ mod tests {
         };
         // 书不存在。
         assert_eq!(
-            bind_book_reference(root, "b2", &BindBookReferenceInput { material_id: "mat1", uses: &uses(&["x"]), note: None })
-                .unwrap_err(),
+            bind_book_reference(
+                root,
+                "b2",
+                &BindBookReferenceInput {
+                    material_id: "mat1",
+                    uses: &uses(&["x"]),
+                    note: None
+                }
+            )
+            .unwrap_err(),
             "Book not found: b2"
         );
         // 素材 id 非法。
         assert_eq!(
-            err(BindBookReferenceInput { material_id: "../escape", uses: &uses(&["x"]), note: None }),
+            err(BindBookReferenceInput {
+                material_id: "../escape",
+                uses: &uses(&["x"]),
+                note: None
+            }),
             "Invalid materialId: \"../escape\""
         );
         // 素材缺失。
-        assert!(err(BindBookReferenceInput { material_id: "mat9", uses: &uses(&["x"]), note: None })
-            .starts_with("Invalid material manifest:"));
+        assert!(err(BindBookReferenceInput {
+            material_id: "mat9",
+            uses: &uses(&["x"]),
+            note: None
+        })
+        .starts_with("Invalid material manifest:"));
         // uses 空 / 超限。
         assert_eq!(
-            err(BindBookReferenceInput { material_id: "mat1", uses: &uses(&[]), note: None }),
+            err(BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&[]),
+                note: None
+            }),
             "At least one reference use is required."
         );
         let too_many: Vec<String> = (1..=13).map(|i| format!("用途{i}")).collect();
         assert_eq!(
-            err(BindBookReferenceInput { material_id: "mat1", uses: &too_many, note: None }),
+            err(BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &too_many,
+                note: None
+            }),
             "Too many reference uses (13/12)."
         );
         let too_long = "长".repeat(121);
         assert_eq!(
-            err(BindBookReferenceInput { material_id: "mat1", uses: &uses(&[&too_long]), note: None }),
+            err(BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&[&too_long]),
+                note: None
+            }),
             "Reference use is too long (121/120)."
         );
         // note 超限。
         let long_note = "注".repeat(2001);
         assert_eq!(
-            err(BindBookReferenceInput { material_id: "mat1", uses: &uses(&["x"]), note: Some(&long_note) }),
+            err(BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&["x"]),
+                note: Some(&long_note)
+            }),
             "Reference note is too long (2001/2000)."
         );
         // 空 note/uses trim 规整。
         let manifest = bind_book_reference(
             root,
             "b1",
-            &BindBookReferenceInput { material_id: "mat1", uses: &uses(&[" 开篇机制 ", "开篇机制", ""]), note: Some("  ") },
+            &BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&[" 开篇机制 ", "开篇机制", ""]),
+                note: Some("  "),
+            },
         )
         .unwrap();
         assert_eq!(manifest.bindings[0].uses, uses(&["开篇机制"]));
@@ -835,11 +1023,15 @@ mod tests {
         fixture(root);
         let materials = root.join(".inkos").join("materials");
         let mut asset: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(materials.join("mat1.json")).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(materials.join("mat1.json")).unwrap())
+                .unwrap();
         asset["markdownPath"] = json!(".inkos/materials/other.md");
         std::fs::write(materials.join("mat1.json"), asset.to_string()).unwrap();
         let error = load_material_asset(root, "mat1").unwrap_err();
-        assert!(error.starts_with("Material markdown path does not match its asset id"), "{error}");
+        assert!(
+            error.starts_with("Material markdown path does not match its asset id"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -889,10 +1081,22 @@ mod tests {
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].heading, "有正文");
         // 空内容 → 无候选（不回退：TS 仅在 parsed 为空且 content.trim() 时回退）。
-        let input2 = SplitSectionsInput { material_id: "m", title: "T", uses: &uses(&["u"]), note: None, content: "  " };
+        let input2 = SplitSectionsInput {
+            material_id: "m",
+            title: "T",
+            uses: &uses(&["u"]),
+            note: None,
+            content: "  ",
+        };
         assert!(split_reference_sections(&input2).is_empty());
         // 无标题正文 → 单节回退以标题命名。
-        let input3 = SplitSectionsInput { material_id: "m", title: "T", uses: &uses(&["u"]), note: None, content: "裸正文。" };
+        let input3 = SplitSectionsInput {
+            material_id: "m",
+            title: "T",
+            uses: &uses(&["u"]),
+            note: None,
+            content: "裸正文。",
+        };
         let sections3 = split_reference_sections(&input3);
         assert_eq!(sections3.len(), 1);
         assert_eq!(sections3[0].heading, "T");
@@ -916,7 +1120,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ReferenceSectionSelector for MockSelector {
-        async fn select(&self, _request: ReferenceSectionSelectionRequest<'_>) -> Result<Vec<String>, String> {
+        async fn select(
+            &self,
+            _request: ReferenceSectionSelectionRequest<'_>,
+        ) -> Result<Vec<String>, String> {
             self.result.clone()
         }
     }
@@ -929,7 +1136,11 @@ mod tests {
         bind_book_reference(
             root,
             "b1",
-            &BindBookReferenceInput { material_id: "mat1", uses: &uses(&["布局", "人物"]), note: Some("慢节奏") },
+            &BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&["布局", "人物"]),
+                note: Some("慢节奏"),
+            },
         )
         .unwrap();
         let task = ReferenceSelectionTask {
@@ -940,20 +1151,38 @@ mod tests {
             language: "zh",
         };
         // 命中一节 → entries 带原文与理由。
-        let selector = MockSelector { result: Ok(vec!["reference/mat1#人物关系".to_string()]) };
-        let selection = select_book_reference_context(root, "b1", &task, &selector).await.unwrap();
+        let selector = MockSelector {
+            result: Ok(vec!["reference/mat1#人物关系".to_string()]),
+        };
+        let selection = select_book_reference_context(root, "b1", &task, &selector)
+            .await
+            .unwrap();
         assert!(selection.notes.is_empty());
         assert_eq!(selection.entries.len(), 1);
         assert_eq!(selection.entries[0].source, "reference/mat1#人物关系");
-        assert_eq!(selection.entries[0].excerpt.as_deref(), Some("## 人物关系\n\n正文乙。"));
-        assert!(selection.entries[0].reason.contains("User-bound reference \"开篇参考\" for: 布局; 人物."));
+        assert_eq!(
+            selection.entries[0].excerpt.as_deref(),
+            Some("## 人物关系\n\n正文乙。")
+        );
+        assert!(selection.entries[0]
+            .reason
+            .contains("User-bound reference \"开篇参考\" for: 布局; 人物."));
         assert!(selection.entries[0].reason.contains("Binding note: 慢节奏"));
-        assert!(selection.entries[0].reason.contains("Reference guidance only"));
+        assert!(selection.entries[0]
+            .reason
+            .contains("Reference guidance only"));
         // 选段失败 → 空条目 + note。
-        let failing = MockSelector { result: Err("llm down".to_string()) };
-        let selection = select_book_reference_context(root, "b1", &task, &failing).await.unwrap();
+        let failing = MockSelector {
+            result: Err("llm down".to_string()),
+        };
+        let selection = select_book_reference_context(root, "b1", &task, &failing)
+            .await
+            .unwrap();
         assert!(selection.entries.is_empty());
-        assert_eq!(selection.notes, vec!["book-reference-selection-failed".to_string()]);
+        assert_eq!(
+            selection.notes,
+            vec!["book-reference-selection-failed".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -964,7 +1193,11 @@ mod tests {
         bind_book_reference(
             root,
             "b1",
-            &BindBookReferenceInput { material_id: "mat1", uses: &uses(&["布局"]), note: None },
+            &BindBookReferenceInput {
+                material_id: "mat1",
+                uses: &uses(&["布局"]),
+                note: None,
+            },
         )
         .unwrap();
         // 素材 manifest 丢失 → available:false → note（TS loadMaterialAsset
@@ -979,8 +1212,13 @@ mod tests {
             language: "zh",
         };
         let selector = MockSelector { result: Ok(vec![]) };
-        let selection = select_book_reference_context(root, "b1", &task, &selector).await.unwrap();
-        assert_eq!(selection.notes, vec!["book-reference-unavailable:mat1".to_string()]);
+        let selection = select_book_reference_context(root, "b1", &task, &selector)
+            .await
+            .unwrap();
+        assert_eq!(
+            selection.notes,
+            vec!["book-reference-unavailable:mat1".to_string()]
+        );
         assert!(selection.entries.is_empty());
     }
 }

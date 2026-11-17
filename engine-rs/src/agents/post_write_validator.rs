@@ -132,7 +132,8 @@ fn meta_note_en_re() -> &'static Regex {
     // TS: /^\s*\[(?:polisher|writer|reviser|reviewer)-note\]\s*/i
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"(?i)^\s*\[(?:polisher|writer|reviser|reviewer)-note\]\s*").expect("meta en regex")
+        Regex::new(r"(?i)^\s*\[(?:polisher|writer|reviser|reviewer)-note\]\s*")
+            .expect("meta en regex")
     })
 }
 
@@ -233,7 +234,10 @@ fn non_alnum_re() -> &'static Regex {
 
 /// 规范化正文表面：剥 meta 备注行 + 破折号转逗号（非 en）+ trimEnd。
 /// 逐字移植 TS `normalizePostWriteSurface`。
-pub fn normalize_post_write_surface(content: &str, language_override: Option<WritingLanguage>) -> String {
+pub fn normalize_post_write_surface(
+    content: &str,
+    language_override: Option<WritingLanguage>,
+) -> String {
     let normalized = strip_post_write_meta_lines(content);
     let normalized = if language_override != Some(WritingLanguage::En) {
         dash_re().replace_all(&normalized, "，").to_string()
@@ -363,7 +367,11 @@ fn validate_post_write_zh(
     }
 
     // 6. 分析报告式术语
-    let found_terms: Vec<&str> = REPORT_TERMS.iter().copied().filter(|t| content.contains(*t)).collect();
+    let found_terms: Vec<&str> = REPORT_TERMS
+        .iter()
+        .copied()
+        .filter(|t| content.contains(*t))
+        .collect();
     if !found_terms.is_empty() {
         let detail = found_terms
             .iter()
@@ -374,7 +382,8 @@ fn validate_post_write_zh(
             rule: "报告术语".to_string(),
             severity: ViolationSeverity::Error,
             description: format!("正文中出现分析报告术语：{detail}"),
-            suggestion: "这些术语只能用于 PRE_WRITE_CHECK 内部推理，正文中用口语化表达替代".to_string(),
+            suggestion: "这些术语只能用于 PRE_WRITE_CHECK 内部推理，正文中用口语化表达替代"
+                .to_string(),
         });
     }
 
@@ -390,7 +399,11 @@ fn validate_post_write_zh(
                 unique.push(r.clone());
             }
         }
-        let detail = unique.iter().map(|r| format!("\"{r}\"")).collect::<Vec<_>>().join("、");
+        let detail = unique
+            .iter()
+            .map(|r| format!("\"{r}\""))
+            .collect::<Vec<_>>()
+            .join("、");
         violations.push(PostWriteViolation {
             rule: "章节号指称".to_string(),
             severity: ViolationSeverity::Error,
@@ -400,7 +413,11 @@ fn validate_post_write_zh(
     }
 
     // 8. 作者说教词
-    let found_sermons: Vec<&str> = SERMON_WORDS.iter().copied().filter(|w| content.contains(*w)).collect();
+    let found_sermons: Vec<&str> = SERMON_WORDS
+        .iter()
+        .copied()
+        .filter(|w| content.contains(*w))
+        .collect();
     if !found_sermons.is_empty() {
         let detail = found_sermons
             .iter()
@@ -469,7 +486,10 @@ fn validate_post_write_zh(
         });
     }
 
-    violations.extend(detect_paragraph_shape_warnings(content, WritingLanguage::Zh));
+    violations.extend(detect_paragraph_shape_warnings(
+        content,
+        WritingLanguage::Zh,
+    ));
 
     // 11. 本书禁忌（短词 2-30 字符 substring 匹配）
     if let Some(rules) = book_rules {
@@ -507,11 +527,17 @@ fn detect_narrative_person_drift(
             rule: "叙事人称".to_string(),
             severity: ViolationSeverity::Error,
             description: format!("本书设定为第一人称，但出现了第三人称内感叙述：\"{slip}\""),
-            suggestion: "把这类主观感受、意识、脑内活动改回「我」的内心视角；不要切到第三人称或全知视角。".to_string(),
+            suggestion:
+                "把这类主观感受、意识、脑内活动改回「我」的内心视角；不要切到第三人称或全知视角。"
+                    .to_string(),
         });
     }
 
-    let name = rules.protagonist.as_ref().map(|p| p.name.trim()).filter(|n| !n.is_empty())?;
+    let name = rules
+        .protagonist
+        .as_ref()
+        .map(|p| p.name.trim())
+        .filter(|n| !n.is_empty())?;
     let wo_count = count_substring(content, "我");
     let name_count = count_substring(content, name);
     if utf16_len(content) >= 800 && wo_count < 12 && name_count >= 6 && name_count > wo_count {
@@ -612,10 +638,16 @@ fn validate_post_write_english(
         });
     }
 
-    violations.extend(detect_paragraph_shape_warnings(content, WritingLanguage::En));
+    violations.extend(detect_paragraph_shape_warnings(
+        content,
+        WritingLanguage::En,
+    ));
 
     // 2.5. Multi-character scene with almost no direct exchange
-    let quoted_lines: Vec<String> = en_quoted_re().find_iter(content).map(|m| m.as_str().to_string()).collect();
+    let quoted_lines: Vec<String> = en_quoted_re()
+        .find_iter(content)
+        .map(|m| m.as_str().to_string())
+        .collect();
     let mut english_names: Vec<String> = Vec::new();
     for m in en_name_re().find_iter(content) {
         let name = m.as_str();
@@ -624,7 +656,12 @@ fn validate_post_write_english(
         }
     }
     if english_names.len() >= 2 && quoted_lines.len() < 2 && len >= 120 {
-        let names_preview = english_names.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+        let names_preview = english_names
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         violations.push(PostWriteViolation {
             rule: "Dialogue pressure".to_string(),
             severity: ViolationSeverity::Warning,
@@ -683,7 +720,8 @@ fn validate_post_write_english(
 fn word_boundary_re(word: &str) -> Regex {
     // word 来自配置/词表，假定无 regex 元字符；保险起见仍 escape 非字母数字。
     let escaped = regex_escape(word);
-    Regex::new(&format!(r"(?i)\b{escaped}\b")).unwrap_or_else(|_| Regex::new(r"(?i)\b\b").expect("fallback regex"))
+    Regex::new(&format!(r"(?i)\b{escaped}\b"))
+        .unwrap_or_else(|_| Regex::new(r"(?i)\b\b").expect("fallback regex"))
 }
 
 /// 对齐 TS `word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")`：转义 regex 元字符。
@@ -711,7 +749,10 @@ struct ParagraphShape {
     max_consecutive_short: usize,
 }
 
-pub fn detect_paragraph_shape_warnings(content: &str, language: WritingLanguage) -> Vec<PostWriteViolation> {
+pub fn detect_paragraph_shape_warnings(
+    content: &str,
+    language: WritingLanguage,
+) -> Vec<PostWriteViolation> {
     let mut violations = Vec::new();
     append_paragraph_shape_warnings(&mut violations, content, language);
     violations
@@ -773,15 +814,23 @@ fn is_dialogue_paragraph(paragraph: &str) -> bool {
     let trimmed = paragraph.trim();
     let first = trimmed.chars().next();
     match first {
-        Some('"') | Some('\u{201C}') | Some('\u{201D}') | Some('「') | Some('『') | Some('\'') | Some('《') => true,
+        Some('"') | Some('\u{201C}') | Some('\u{201D}') | Some('「') | Some('『') | Some('\'')
+        | Some('《') => true,
         _ => trimmed.starts_with("——"),
     }
 }
 
 fn analyze_paragraph_shape(content: &str, language: WritingLanguage) -> ParagraphShape {
     let paragraphs = extract_paragraphs(content);
-    let narrative_paragraphs: Vec<&String> = paragraphs.iter().filter(|p| !is_dialogue_paragraph(p)).collect();
-    let short_threshold = if language == WritingLanguage::En { 120 } else { 35 };
+    let narrative_paragraphs: Vec<&String> = paragraphs
+        .iter()
+        .filter(|p| !is_dialogue_paragraph(p))
+        .collect();
+    let short_threshold = if language == WritingLanguage::En {
+        120
+    } else {
+        35
+    };
     let short_paragraphs: Vec<String> = narrative_paragraphs
         .iter()
         .filter(|p| utf16_len(p.as_str()) < short_threshold)
@@ -850,7 +899,10 @@ pub fn detect_cross_chapter_repetition(
         // 3-word phrases
         let lower = current_content.to_lowercase();
         let cleaned = en_non_word_re().replace_all(&lower, "");
-        let words: Vec<&str> = cleaned.split_whitespace().filter(|w| w.chars().count() > 2).collect();
+        let words: Vec<&str> = cleaned
+            .split_whitespace()
+            .filter(|w| w.chars().count() > 2)
+            .collect();
         let mut phrase_counts: Vec<(String, usize)> = Vec::new();
         if words.len() >= 3 {
             for window in words.windows(3) {
@@ -870,7 +922,12 @@ pub fn detect_cross_chapter_repetition(
             }
         }
         if cross_repeats.len() >= 3 {
-            let preview = cross_repeats.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+            let preview = cross_repeats
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
             violations.push(PostWriteViolation {
                 rule: "Cross-chapter repetition".to_string(),
                 severity: ViolationSeverity::Warning,
@@ -879,7 +936,9 @@ pub fn detect_cross_chapter_repetition(
                     cross_repeats.len(),
                     preview
                 ),
-                suggestion: "Vary action verbs and descriptive phrases to avoid cross-chapter repetition".to_string(),
+                suggestion:
+                    "Vary action verbs and descriptive phrases to avoid cross-chapter repetition"
+                        .to_string(),
             });
         }
     } else {
@@ -899,7 +958,9 @@ pub fn detect_cross_chapter_repetition(
                 }
             }
         }
-        let recent_clean = whitespace_re().replace_all(recent_chapters_content, "").to_string();
+        let recent_clean = whitespace_re()
+            .replace_all(recent_chapters_content, "")
+            .to_string();
         let mut cross_repeats: Vec<String> = Vec::new();
         for (phrase, count) in &phrase_counts {
             if *count >= 2 && recent_clean.contains(phrase.as_str()) {
@@ -907,11 +968,20 @@ pub fn detect_cross_chapter_repetition(
             }
         }
         if cross_repeats.len() >= 3 {
-            let preview = cross_repeats.iter().take(5).cloned().collect::<Vec<_>>().join("、");
+            let preview = cross_repeats
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("、");
             violations.push(PostWriteViolation {
                 rule: "跨章重复".to_string(),
                 severity: ViolationSeverity::Warning,
-                description: format!("{}个重复短语在近期章节中也出现过：{}", cross_repeats.len(), preview),
+                description: format!(
+                    "{}个重复短语在近期章节中也出现过：{}",
+                    cross_repeats.len(),
+                    preview
+                ),
                 suggestion: "变换动作描写和场景用语，避免跨章节机械重复".to_string(),
             });
         }
@@ -1017,7 +1087,11 @@ impl<'a> TitleIndex<'a> {
             lower.push(norm);
             original.push(existing);
         }
-        TitleIndex { lower, strip, original }
+        TitleIndex {
+            lower,
+            strip,
+            original,
+        }
     }
 }
 
@@ -1049,7 +1123,10 @@ fn detect_duplicate_title_indexed(new_title: &str, index: &TitleIndex) -> Vec<Po
             violations.push(PostWriteViolation {
                 rule: "near-duplicate-title".to_string(),
                 severity: ViolationSeverity::Warning,
-                description: format!("章节标题\"{new_title}\"与已有标题\"{}\"高度相似", index.original[i]),
+                description: format!(
+                    "章节标题\"{new_title}\"与已有标题\"{}\"高度相似",
+                    index.original[i]
+                ),
                 suggestion: "避免使用相似的章节标题".to_string(),
             });
             break;
@@ -1058,7 +1135,10 @@ fn detect_duplicate_title_indexed(new_title: &str, index: &TitleIndex) -> Vec<Po
     violations
 }
 
-pub fn detect_duplicate_title(new_title: &str, existing_titles: &[String]) -> Vec<PostWriteViolation> {
+pub fn detect_duplicate_title(
+    new_title: &str,
+    existing_titles: &[String],
+) -> Vec<PostWriteViolation> {
     if new_title.trim().is_empty() {
         return Vec::new();
     }
@@ -1085,7 +1165,9 @@ pub fn resolve_duplicate_title(
     let index = TitleIndex::build(existing_titles);
     let duplicate_issues = detect_duplicate_title_indexed(trimmed, &index);
     if !duplicate_issues.is_empty() {
-        if let Some(regenerated) = regenerate_duplicate_title(trimmed, existing_titles, language, content) {
+        if let Some(regenerated) =
+            regenerate_duplicate_title(trimmed, existing_titles, language, content)
+        {
             if detect_duplicate_title_indexed(&regenerated, &index).is_empty() {
                 return ResolveDuplicateTitleResult {
                     title: regenerated,
@@ -1122,7 +1204,9 @@ pub fn resolve_duplicate_title(
         };
     }
 
-    if let Some(regenerated) = regenerate_collapsed_title(trimmed, existing_titles, language, content) {
+    if let Some(regenerated) =
+        regenerate_collapsed_title(trimmed, existing_titles, language, content)
+    {
         if detect_duplicate_title_indexed(&regenerated, &index).is_empty()
             && detect_title_collapse(&regenerated, existing_titles, language).is_empty()
         {
@@ -1203,7 +1287,9 @@ fn detect_title_collapse(
         PostWriteViolation {
             rule: "title-collapse".to_string(),
             severity: ViolationSeverity::Warning,
-            description: format!("章节标题\"{new_title}\"仍在沿用近期围绕\u{201c}{token}\u{201d}的命名壳。"),
+            description: format!(
+                "章节标题\"{new_title}\"仍在沿用近期围绕\u{201c}{token}\u{201d}的命名壳。"
+            ),
             suggestion: "换一个新的意象、动作、后果或人物焦点来命名。".to_string(),
         }
     }]
@@ -1271,15 +1357,18 @@ fn extract_english_title_qualifier(
         if ENGLISH_NAME_STOP_WORDS.contains(&capitalized.as_str()) {
             continue;
         }
-            if blocked.contains(&word) {
-                continue;
-            }
+        if blocked.contains(&word) {
+            continue;
+        }
         if !words.contains(&word) {
             words.push(word);
         }
     }
     let first = words.first()?.clone();
-    let second = words.iter().find(|&w| w != &first && !blocked.contains(w)).cloned();
+    let second = words
+        .iter()
+        .find(|&w| w != &first && !blocked.contains(w))
+        .cloned();
     Some(match second {
         Some(s) => format!("{} {}", capitalize(&first), capitalize(&s)),
         None => capitalize(&first),
@@ -1324,7 +1413,10 @@ fn extract_chinese_title_qualifier(
                 if CHINESE_TITLE_STOP_WORDS.contains(&candidate) {
                     continue;
                 }
-                if candidate.chars().any(|c| CHINESE_TITLE_STOP_CHARS.contains(&c)) {
+                if candidate
+                    .chars()
+                    .any(|c| CHINESE_TITLE_STOP_CHARS.contains(&c))
+                {
                     continue;
                 }
                 if blocked.contains(candidate) {
@@ -1351,7 +1443,10 @@ fn extract_english_title_terms(text: &str) -> HashSet<String> {
 
 fn extract_chinese_title_terms(text: &str) -> HashSet<String> {
     let mut terms: HashSet<String> = HashSet::new();
-    let segments: Vec<&str> = cjk_segment_re().find_iter(text).map(|m| m.as_str()).collect();
+    let segments: Vec<&str> = cjk_segment_re()
+        .find_iter(text)
+        .map(|m| m.as_str())
+        .collect();
     let mut buffer = String::new();
     for segment in &segments {
         let chars: Vec<char> = segment.chars().collect();
@@ -1366,7 +1461,10 @@ fn extract_chinese_title_terms(text: &str) -> HashSet<String> {
                 if utf16_len(candidate) < 2 {
                     continue;
                 }
-                if candidate.chars().any(|c| CHINESE_TITLE_STOP_CHARS.contains(&c)) {
+                if candidate
+                    .chars()
+                    .any(|c| CHINESE_TITLE_STOP_CHARS.contains(&c))
+                {
                     continue;
                 }
                 // contains 先判：候选大量重复时免 to_string 分配（&str 借用
@@ -1418,7 +1516,12 @@ mod tests {
         }
     }
 
-    fn rules_with(prohibitions: &[&str], fatigue_override: &[&str], person: Option<NarrativePerson>, name: &str) -> BookRules {
+    fn rules_with(
+        prohibitions: &[&str],
+        fatigue_override: &[&str],
+        person: Option<NarrativePerson>,
+        name: &str,
+    ) -> BookRules {
         BookRules {
             prohibitions: prohibitions.iter().map(|s| s.to_string()).collect(),
             fatigue_words_override: fatigue_override.iter().map(|s| s.to_string()).collect(),
@@ -1426,7 +1529,10 @@ mod tests {
             protagonist: if name.is_empty() {
                 None
             } else {
-                Some(Protagonist { name: name.into(), ..Protagonist::default() })
+                Some(Protagonist {
+                    name: name.into(),
+                    ..Protagonist::default()
+                })
             },
             ..BookRules::default()
         }
@@ -1525,7 +1631,12 @@ mod tests {
     #[test]
     fn validate_zh_first_person_inner_state_slip_is_error() {
         let rules = rules_with(&[], &[], Some(NarrativePerson::First), "陆承烬");
-        let v = validate_post_write("他觉得一阵寒意。正文内容足够长。", &gp_zh(), Some(&rules), None);
+        let v = validate_post_write(
+            "他觉得一阵寒意。正文内容足够长。",
+            &gp_zh(),
+            Some(&rules),
+            None,
+        );
         assert!(has_rule(&v, "叙事人称"));
     }
 

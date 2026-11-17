@@ -36,7 +36,7 @@ fn safe_join(root: &Path, raw: &str) -> Option<PathBuf> {
                     lexical.pop();
                 }
                 other => lexical.push(other),
-                }
+            }
         }
         return lexical.starts_with(&normalized_root).then_some(lexical);
     };
@@ -52,13 +52,15 @@ pub async fn tool_read(root: &Path, args: &Value) -> ToolResult {
         return error_result("path escapes project root");
     };
     match tokio::fs::metadata(&resolved).await {
-        Ok(meta) if meta.len() > 1024 * 1024 => {
-            return error_result("file exceeds 1MB limit")
-        }
+        Ok(meta) if meta.len() > 1024 * 1024 => return error_result("file exceeds 1MB limit"),
         _ => {}
     }
     match tokio::fs::read_to_string(&resolved).await {
-        Ok(content) => ToolResult { text: content, details: None, is_error: false },
+        Ok(content) => ToolResult {
+            text: content,
+            details: None,
+            is_error: false,
+        },
         Err(e) => error_result(format!("read failed: {e}")),
     }
 }
@@ -137,7 +139,11 @@ pub async fn tool_grep(root: &Path, args: &Value) -> ToolResult {
 }
 
 pub(crate) fn error_result(message: impl Into<String>) -> ToolResult {
-    ToolResult { text: message.into(), details: None, is_error: true }
+    ToolResult {
+        text: message.into(),
+        details: None,
+        is_error: true,
+    }
 }
 
 /// 先收集文本文件路径（同步 walk，深度 3），再逐文件搜行。
@@ -263,7 +269,11 @@ pub async fn tool_read_book(root: &Path, args: &Value) -> ToolResult {
         }
     };
     match tokio::fs::read_to_string(&resolved).await {
-        Ok(content) => ToolResult { text: content, details: None, is_error: false },
+        Ok(content) => ToolResult {
+            text: content,
+            details: None,
+            is_error: false,
+        },
         Err(e) => ToolResult {
             text: format!("Failed to read \"{path}\": {e}"),
             details: None,
@@ -275,7 +285,10 @@ pub async fn tool_read_book(root: &Path, args: &Value) -> ToolResult {
 /// `ls`（书会话）：bookId + 可选 subdir；目录项 `/` 后缀或 ` (N bytes)`。
 pub async fn tool_ls_book(root: &Path, args: &Value) -> ToolResult {
     let failed = |book_id: &str, subdir: Option<&str>, message: String| ToolResult {
-        text: format!("Failed to list \"{book_id}/{}\": {message}", subdir.unwrap_or("")),
+        text: format!(
+            "Failed to list \"{book_id}/{}\": {message}",
+            subdir.unwrap_or("")
+        ),
         details: None,
         is_error: false,
     };
@@ -295,11 +308,7 @@ pub async fn tool_ls_book(root: &Path, args: &Value) -> ToolResult {
         }
     }
     let Ok(mut entries) = tokio::fs::read_dir(&base).await else {
-        return failed(
-            book_id,
-            subdir,
-            "not a directory".to_string(),
-        );
+        return failed(book_id, subdir, "not a directory".to_string());
     };
     let mut details: Vec<String> = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
@@ -317,7 +326,11 @@ pub async fn tool_ls_book(root: &Path, args: &Value) -> ToolResult {
             is_error: false,
         };
     }
-    ToolResult { text: details.join("\n"), details: None, is_error: false }
+    ToolResult {
+        text: details.join("\n"),
+        details: None,
+        is_error: false,
+    }
 }
 
 /// `grep`（书会话）：bookId + pattern（不区分大小写正则）；只搜 story/ 与
@@ -339,12 +352,18 @@ pub async fn tool_grep_book(root: &Path, args: &Value) -> ToolResult {
     else {
         return failed("Path traversal blocked".to_string());
     };
-    let Ok(regex) = regex::RegexBuilder::new(pattern).case_insensitive(true).build() else {
+    let Ok(regex) = regex::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+    else {
         let message = format!("invalid pattern: {pattern}");
         return failed(message);
     };
     let mut results: Vec<String> = Vec::new();
-    for (dir, prefix) in [(book_dir.join("story"), "story/"), (book_dir.join("chapters"), "chapters/")] {
+    for (dir, prefix) in [
+        (book_dir.join("story"), "story/"),
+        (book_dir.join("chapters"), "chapters/"),
+    ] {
         // 迭代 worklist（LIFO）复刻 readdir 深度优先；目录不存在静默跳过。
         let mut stack = vec![(dir, prefix.to_string())];
         while let Some((dir, prefix)) = stack.pop() {
@@ -361,7 +380,8 @@ pub async fn tool_grep_book(root: &Path, args: &Value) -> ToolResult {
                 };
                 if meta.is_dir() {
                     nested.push((full, format!("{prefix}{name}/")));
-                } else if name.ends_with(".md") || name.ends_with(".txt") || name.ends_with(".json") {
+                } else if name.ends_with(".md") || name.ends_with(".txt") || name.ends_with(".json")
+                {
                     let Ok(content) = tokio::fs::read_to_string(&full).await else {
                         return failed(format!("read failed for {prefix}{name}"));
                     };
@@ -386,15 +406,24 @@ pub async fn tool_grep_book(root: &Path, args: &Value) -> ToolResult {
     if results.len() > 100 {
         let mut text = results[..100].join("\n");
         text.push_str(&format!("\n\n... [{} more matches]", results.len() - 100));
-        return ToolResult { text, details: None, is_error: false };
+        return ToolResult {
+            text,
+            details: None,
+            is_error: false,
+        };
     }
-    ToolResult { text: results.join("\n"), details: None, is_error: false }
+    ToolResult {
+        text: results.join("\n"),
+        details: None,
+        is_error: false,
+    }
 }
 
 /// 书会话文件三件 schema（TS 逐字；read 描述随系统读开关分流）——
 /// R38a 起由注册表书会话作用域层投影（单一事实源）。
 pub fn book_file_tool_schemas() -> Vec<Value> {
-    crate::interaction::registry::ToolRegistry::global().schemas(crate::interaction::registry::ToolScope::BookSession)
+    crate::interaction::registry::ToolRegistry::global()
+        .schemas(crate::interaction::registry::ToolScope::BookSession)
 }
 
 /// 文件工具的回环执行器（agent_loop 的 LoopToolExecutor 适配）。
@@ -430,12 +459,20 @@ mod tests {
         let root = dir.path();
         std::fs::write(root.join("note.md"), "# 标题\n\n正文内容。").unwrap();
         std::fs::create_dir_all(root.join("books").join("b1")).unwrap();
-        std::fs::write(root.join("books").join("b1").join("book.json"), "{\"id\":\"b1\"}").unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
+            "{\"id\":\"b1\"}",
+        )
+        .unwrap();
 
         let read = tool_read(root, &json!({ "path": "note.md" })).await;
         assert!(read.text.contains("正文内容"));
         let escaped = tool_read(root, &json!({ "path": "../../etc/passwd" })).await;
-        assert!(escaped.text.contains("escapes"), "逃逸路径被拒绝：{}", escaped.text);
+        assert!(
+            escaped.text.contains("escapes"),
+            "逃逸路径被拒绝：{}",
+            escaped.text
+        );
 
         let ls = tool_ls(root, &json!({ "path": "." })).await;
         assert!(ls.text.contains("note.md"));
@@ -469,15 +506,31 @@ mod tests {
         std::fs::create_dir_all(&spill_dir).unwrap();
         std::fs::write(spill_dir.join("abc12345-research_web.txt"), " spilled 全文").unwrap();
 
-        let read = tool_read_book(root, &json!({ "path": ".inkos/spills/session-adhoc/abc12345-research_web.txt" })).await;
+        let read = tool_read_book(
+            root,
+            &json!({ "path": ".inkos/spills/session-adhoc/abc12345-research_web.txt" }),
+        )
+        .await;
         assert!(read.text.contains("spilled 全文"), "{}", read.text);
         assert!(!read.is_error);
 
         // books/ 之外的普通路径仍拒绝；.inkos 内 spills/ 之外仍拒绝；真逃逸
         // （`..` 消解越出项目根）仍拒绝——`..` 段另有 R39 守卫前置拦截。
         let inkos_other = tool_read_book(root, &json!({ "path": ".inkos/index.json" })).await;
-        assert!(inkos_other.text.contains("escapes") || inkos_other.text.contains("Failed to read"), "{}", inkos_other.text);
-        let traversal = tool_read_book(root, &json!({ "path": ".inkos/spills/../../../../secret.txt" })).await;
-        assert!(traversal.text.contains("Path traversal blocked"), "{}", traversal.text);
+        assert!(
+            inkos_other.text.contains("escapes") || inkos_other.text.contains("Failed to read"),
+            "{}",
+            inkos_other.text
+        );
+        let traversal = tool_read_book(
+            root,
+            &json!({ "path": ".inkos/spills/../../../../secret.txt" }),
+        )
+        .await;
+        assert!(
+            traversal.text.contains("Path traversal blocked"),
+            "{}",
+            traversal.text
+        );
     }
 }

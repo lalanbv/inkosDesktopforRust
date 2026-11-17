@@ -8,8 +8,7 @@
 //! 数据源：`packages/core/src/llm/providers/endpoints/*.ts`。
 
 use super::providers::{
-    ApiProtocol, EndpointGroup, InkosEndpoint, InkosModel, ModelCapabilities,
-    ProviderCompat,
+    ApiProtocol, EndpointGroup, InkosEndpoint, InkosModel, ModelCapabilities, ProviderCompat,
 };
 
 fn m(id: &'static str, max_output: u32, ctx: u32) -> InkosModel {
@@ -43,11 +42,22 @@ pub fn builtin_endpoints() -> Vec<InkosEndpoint> {
             default_temperature: Some(1.0),
             writing_temperature: Some(1.5),
             temperature_hint: Some("创意写作推荐 1.5".into()),
-            compat: Some(ProviderCompat { supports_store: None, supports_system_role: None, supports_developer_role: None, requires_assistant_after_tool_result: Some(true) }),
+            compat: Some(ProviderCompat {
+                supports_store: None,
+                supports_system_role: None,
+                supports_developer_role: None,
+                requires_assistant_after_tool_result: Some(true),
+            }),
             transport_defaults: None,
             models: vec![
-                InkosModel { enabled: Some(true), ..m("deepseek-v4-flash", 393216, 1_000_000) },
-                InkosModel { enabled: Some(true), ..m("deepseek-v4-pro", 393216, 1_000_000) },
+                InkosModel {
+                    enabled: Some(true),
+                    ..m("deepseek-v4-flash", 393216, 1_000_000)
+                },
+                InkosModel {
+                    enabled: Some(true),
+                    ..m("deepseek-v4-pro", 393216, 1_000_000)
+                },
                 m("deepseek-chat", 393216, 1_000_000),
                 m("deepseek-reasoner", 393216, 1_000_000),
             ],
@@ -68,10 +78,22 @@ pub fn builtin_endpoints() -> Vec<InkosEndpoint> {
             compat: None,
             transport_defaults: None,
             models: vec![
-                InkosModel { enabled: Some(true), ..m("gpt-5.4", 128000, 1_050_000) },
-                InkosModel { enabled: Some(true), ..m("gpt-5.4-mini", 128000, 400_000) },
-                InkosModel { enabled: Some(true), ..m("gpt-4o", 4096, 128_000) },
-                InkosModel { enabled: Some(true), ..m("gpt-4o-mini", 16384, 128_000) },
+                InkosModel {
+                    enabled: Some(true),
+                    ..m("gpt-5.4", 128000, 1_050_000)
+                },
+                InkosModel {
+                    enabled: Some(true),
+                    ..m("gpt-5.4-mini", 128000, 400_000)
+                },
+                InkosModel {
+                    enabled: Some(true),
+                    ..m("gpt-4o", 4096, 128_000)
+                },
+                InkosModel {
+                    enabled: Some(true),
+                    ..m("gpt-4o-mini", 16384, 128_000)
+                },
             ],
         },
         // Anthropic（关键模型子集）
@@ -92,12 +114,24 @@ pub fn builtin_endpoints() -> Vec<InkosEndpoint> {
             models: vec![
                 InkosModel {
                     enabled: Some(true),
-                    capabilities: Some(ModelCapabilities { text: Some(true), tools: Some(true), image_input: Some(true), image_output: None, reasoning: Some(true) }),
+                    capabilities: Some(ModelCapabilities {
+                        text: Some(true),
+                        tools: Some(true),
+                        image_input: Some(true),
+                        image_output: None,
+                        reasoning: Some(true),
+                    }),
                     ..m("claude-opus-4-8", 32000, 200_000)
                 },
                 InkosModel {
                     enabled: Some(true),
-                    capabilities: Some(ModelCapabilities { text: Some(true), tools: Some(true), image_input: Some(true), image_output: None, reasoning: None }),
+                    capabilities: Some(ModelCapabilities {
+                        text: Some(true),
+                        tools: Some(true),
+                        image_input: Some(true),
+                        image_output: None,
+                        reasoning: None,
+                    }),
                     ..m("claude-sonnet-5", 64000, 200_000)
                 },
             ],
@@ -107,8 +141,10 @@ pub fn builtin_endpoints() -> Vec<InkosEndpoint> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::lookup::{
+        get_endpoint, is_active_text_model, list_active_text_models, lookup_model,
+    };
     use super::*;
-    use super::super::lookup::{get_endpoint, is_active_text_model, list_active_text_models, lookup_model};
 
     #[test]
     fn registry_has_three_providers() {
@@ -147,6 +183,11 @@ mod tests {
     fn deepseek_compat_requires_assistant_bridge() {
         let reg = builtin_endpoints();
         let ep = get_endpoint(&reg, "deepseek").unwrap();
-        assert_eq!(ep.compat.as_ref().and_then(|c| c.requires_assistant_after_tool_result), Some(true));
+        assert_eq!(
+            ep.compat
+                .as_ref()
+                .and_then(|c| c.requires_assistant_after_tool_result),
+            Some(true)
+        );
     }
 }

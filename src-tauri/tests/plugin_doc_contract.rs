@@ -52,21 +52,37 @@ fn plugin_doc_matches_code_facts() {
 
     // ① wit 契约交叉核验：doc 必须覆盖 wit host interface 的全部函数名。
     let wit = std::fs::read_to_string(wit_path()).expect("wit/inkos.wit 在库");
-    for func in ["read-file", "write-file", "list-dir", "http-get", "exec-command", "log"] {
+    for func in [
+        "read-file",
+        "write-file",
+        "list-dir",
+        "http-get",
+        "exec-command",
+        "log",
+    ] {
         assert!(
             wit.contains(&format!("{func}: func")),
             "wit/inkos.wit 缺少 host 函数 {func}（护栏名单与 wit 契约失同步）"
         );
-        assert!(doc.contains(func), "plugin-system.md 缺 WIT host 函数 {func}");
+        assert!(
+            doc.contains(func),
+            "plugin-system.md 缺 WIT host 函数 {func}"
+        );
     }
     for func in ["init", "invoke", "on-event"] {
-        assert!(doc.contains(func), "plugin-system.md 缺 WIT plugin 函数 {func}");
+        assert!(
+            doc.contains(func),
+            "plugin-system.md 缺 WIT plugin 函数 {func}"
+        );
     }
 
     // ② Tauri 命令名单双源锁：doc ⊇ 名单 ∧ main.rs ⊇ 名单。
     let main_rs = std::fs::read_to_string(main_rs_path()).expect("src/main.rs 在库");
     for command in TAURI_COMMANDS {
-        assert!(doc.contains(command), "plugin-system.md 缺 Tauri 命令 {command}");
+        assert!(
+            doc.contains(command),
+            "plugin-system.md 缺 Tauri 命令 {command}"
+        );
         assert!(
             main_rs.contains(command),
             "main.rs 缺命令 {command}（名单/文档/注册三处同批）"
@@ -75,12 +91,12 @@ fn plugin_doc_matches_code_facts() {
 
     // ③ 关键事实词：双路径架构与漂移史锚点。
     for fact in [
-        "wasmtime",        // WASM 路径引擎
-        "JSON-RPC",        // 进程隔离路径协议
-        "HostContext",     // 权限校验单点
+        "wasmtime",         // WASM 路径引擎
+        "JSON-RPC",         // 进程隔离路径协议
+        "HostContext",      // 权限校验单点
         "allowed_commands", // system_command 白名单（fail-closed）——旧 doc 写裸类型即漂移
-        "wit/inkos.wit",   // 契约文件锚点
-        "app_data",        // 日志路径事实（旧 doc 误写 ~/.inkos/logs）
+        "wit/inkos.wit",    // 契约文件锚点
+        "app_data",         // 日志路径事实（旧 doc 误写 ~/.inkos/logs）
     ] {
         assert!(doc.contains(fact), "plugin-system.md 缺关键事实词 {fact}");
     }

@@ -34,10 +34,41 @@ pub struct AITellResult {
     pub issues: Vec<AITellIssue>,
 }
 
-const HEDGE_WORDS_ZH: &[&str] = &["似乎", "可能", "或许", "大概", "某种程度上", "一定程度上", "在某种意义上"];
-const HEDGE_WORDS_EN: &[&str] = &["seems", "seemed", "perhaps", "maybe", "apparently", "in some ways", "to some extent"];
-const TRANSITION_WORDS_ZH: &[&str] = &["然而", "不过", "与此同时", "另一方面", "尽管如此", "话虽如此", "但值得注意的是"];
-const TRANSITION_WORDS_EN: &[&str] = &["however", "meanwhile", "on the other hand", "nevertheless", "even so", "still"];
+const HEDGE_WORDS_ZH: &[&str] = &[
+    "似乎",
+    "可能",
+    "或许",
+    "大概",
+    "某种程度上",
+    "一定程度上",
+    "在某种意义上",
+];
+const HEDGE_WORDS_EN: &[&str] = &[
+    "seems",
+    "seemed",
+    "perhaps",
+    "maybe",
+    "apparently",
+    "in some ways",
+    "to some extent",
+];
+const TRANSITION_WORDS_ZH: &[&str] = &[
+    "然而",
+    "不过",
+    "与此同时",
+    "另一方面",
+    "尽管如此",
+    "话虽如此",
+    "但值得注意的是",
+];
+const TRANSITION_WORDS_EN: &[&str] = &[
+    "however",
+    "meanwhile",
+    "on the other hand",
+    "nevertheless",
+    "even so",
+    "still",
+];
 
 fn paragraph_split_re() -> &'static Regex {
     // TS: /\n\s*\n/
@@ -62,10 +93,14 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
 
     // dim 20: 段落长度均匀（≥3 段，UTF-16 长度 CV<0.15）。
     if paragraphs.len() >= 3 {
-        let lengths: Vec<f64> = paragraphs.iter().map(|p| p.encode_utf16().count() as f64).collect();
+        let lengths: Vec<f64> = paragraphs
+            .iter()
+            .map(|p| p.encode_utf16().count() as f64)
+            .collect();
         let mean = lengths.iter().sum::<f64>() / lengths.len() as f64;
         if mean > 0.0 {
-            let variance = lengths.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / lengths.len() as f64;
+            let variance =
+                lengths.iter().map(|l| (l - mean).powi(2)).sum::<f64>() / lengths.len() as f64;
             let std_dev = variance.sqrt();
             let cv = std_dev / mean;
             if cv < 0.15 {
@@ -90,7 +125,11 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
     // dim 21: 套话词密度（>3 次/千字）。
     let total_chars = content.encode_utf16().count();
     if total_chars > 0 {
-        let hedge_words = if is_english { HEDGE_WORDS_EN } else { HEDGE_WORDS_ZH };
+        let hedge_words = if is_english {
+            HEDGE_WORDS_EN
+        } else {
+            HEDGE_WORDS_ZH
+        };
         let hedge_count: usize = hedge_words
             .iter()
             .map(|w| count_word(content, w, is_english))
@@ -115,16 +154,25 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
     }
 
     // dim 22: 公式化转折重复（同一词 ≥3 次）。
-    let transition_words = if is_english { TRANSITION_WORDS_EN } else { TRANSITION_WORDS_ZH };
+    let transition_words = if is_english {
+        TRANSITION_WORDS_EN
+    } else {
+        TRANSITION_WORDS_ZH
+    };
     let mut transition_counts: Vec<(String, usize)> = Vec::new();
     for word in transition_words {
         let count = count_word(content, word, is_english);
         if count > 0 {
-            let key = if is_english { word.to_lowercase() } else { word.to_string() };
+            let key = if is_english {
+                word.to_lowercase()
+            } else {
+                word.to_string()
+            };
             transition_counts.push((key, count));
         }
     }
-    let repeated: Vec<&(String, usize)> = transition_counts.iter().filter(|(_, c)| *c >= 3).collect();
+    let repeated: Vec<&(String, usize)> =
+        transition_counts.iter().filter(|(_, c)| *c >= 3).collect();
     if !repeated.is_empty() {
         let detail = repeated
             .iter()
@@ -148,7 +196,11 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
     }
 
     // dim 23: 列表式结构（连续 ≥3 句同前缀）。
-    let sentence_split_re = if is_english { sentence_split_en_re() } else { sentence_split_zh_re() };
+    let sentence_split_re = if is_english {
+        sentence_split_en_re()
+    } else {
+        sentence_split_zh_re()
+    };
     let sentences: Vec<String> = sentence_split_re
         .split(content)
         .map(|s| s.trim().to_string())
@@ -159,7 +211,10 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
             .iter()
             .map(|s| {
                 if is_english {
-                    s.split_whitespace().next().map(|w| w.to_lowercase()).unwrap_or_default()
+                    s.split_whitespace()
+                        .next()
+                        .map(|w| w.to_lowercase())
+                        .unwrap_or_default()
                 } else {
                     // 中文取前 2 字符（char）。
                     s.chars().take(2).collect::<String>()
@@ -295,6 +350,9 @@ mod tests {
         // 段落长度差异大、无套话、无重复转折、无连续同前缀。
         let content = "短。\n\n中中中中中中中中中中中中。\n\n长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长。";
         let r = analyze_ai_tells(content, WritingLanguage::Zh);
-        assert!(r.issues.iter().all(|i| i.category != "段落等长"), "长度差异大不应触发等长");
+        assert!(
+            r.issues.iter().all(|i| i.category != "段落等长"),
+            "长度差异大不应触发等长"
+        );
     }
 }

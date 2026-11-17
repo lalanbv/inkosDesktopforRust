@@ -135,7 +135,10 @@ impl Default for ContextPackage {
 /// 规则层作用域。对齐 TS `RuleLayerScopeSchema = z.enum(["global","book","arc","local"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"global\" | \"book\" | \"arc\" | \"local\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"global\" | \"book\" | \"arc\" | \"local\"")
+)]
 pub enum RuleLayerScope {
     #[serde(rename = "global")]
     Global,
@@ -304,7 +307,10 @@ mod tests {
         };
         let json = serde_json::to_value(&pkg).unwrap();
         assert_eq!(json["chapter"], 3);
-        assert_eq!(json["selectedContext"][0]["source"], "story/pending_hooks.md#h1");
+        assert_eq!(
+            json["selectedContext"][0]["source"],
+            "story/pending_hooks.md#h1"
+        );
         assert_eq!(json["selectedContext"][0]["excerpt"], "摘录");
         let back: ContextPackage = serde_json::from_value(json).unwrap();
         assert_eq!(back, pkg);

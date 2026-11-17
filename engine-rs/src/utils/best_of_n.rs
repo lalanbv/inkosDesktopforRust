@@ -37,11 +37,17 @@ pub struct BestOfNPlan {
 
 /// 计划解析：未启用 → 0 追加；启用 → 首版分数已知且 ≥ minScore 时 0 追加
 /// （首版够好）；分数未知（审查未评分）按需扩展（保守触发）。
-pub fn resolve_best_of_n_plan(config: Option<&BestOfNConfig>, first_score: Option<i64>) -> BestOfNPlan {
+pub fn resolve_best_of_n_plan(
+    config: Option<&BestOfNConfig>,
+    first_score: Option<i64>,
+) -> BestOfNPlan {
     let (enabled, candidates, min_score) = match config {
         Some(config) => (
             config.enabled.unwrap_or(false),
-            config.candidates.unwrap_or(BEST_OF_N_DEFAULTS.0).clamp(2, 3),
+            config
+                .candidates
+                .unwrap_or(BEST_OF_N_DEFAULTS.0)
+                .clamp(2, 3),
             config.min_score.unwrap_or(BEST_OF_N_DEFAULTS.1),
         ),
         None => (false, BEST_OF_N_DEFAULTS.0, BEST_OF_N_DEFAULTS.1),
@@ -86,10 +92,12 @@ pub fn select_best_candidate(candidates: &[serde_json::Value]) -> BestCandidateS
         value.get("score").and_then(serde_json::Value::as_i64)
     };
     let payload_of = |value: &serde_json::Value| {
-        value.get("payload").cloned().unwrap_or_else(|| value.clone())
+        value
+            .get("payload")
+            .cloned()
+            .unwrap_or_else(|| value.clone())
     };
-    let mut order: Vec<(usize, &serde_json::Value)> =
-        candidates.iter().enumerate().collect();
+    let mut order: Vec<(usize, &serde_json::Value)> = candidates.iter().enumerate().collect();
     order.sort_by(|(index_a, candidate_a), (index_b, candidate_b)| {
         let a = score_of(candidate_a);
         let b = score_of(candidate_b);

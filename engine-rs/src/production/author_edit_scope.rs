@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 
 use crate::utils::source_text::{number_source_lines, split_source_lines};
 
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceUnitLine {
@@ -70,8 +69,14 @@ pub fn source_units(content: &str) -> SourceUnits {
             },
         );
         let paragraph_id = paragraph.id.clone();
-        let previous_text = by_id.get(&paragraph_id).map(|unit| unit.text.clone()).unwrap_or_default();
-        let previous_start = by_id.get(&paragraph_id).map(|unit| unit.start_line).unwrap_or(index + 1);
+        let previous_text = by_id
+            .get(&paragraph_id)
+            .map(|unit| unit.text.clone())
+            .unwrap_or_default();
+        let previous_start = by_id
+            .get(&paragraph_id)
+            .map(|unit| unit.start_line)
+            .unwrap_or(index + 1);
         by_id.insert(
             paragraph_id,
             UnitAddress {
@@ -158,7 +163,9 @@ pub fn author_edit_permission(
     })
 }
 
-fn scoped_focus_clone(scoped: &super::text_range_edits::ScopedSelectionContract) -> Option<Vec<AuthorTextScopeFocus>> {
+fn scoped_focus_clone(
+    scoped: &super::text_range_edits::ScopedSelectionContract,
+) -> Option<Vec<AuthorTextScopeFocus>> {
     // scoped 合同自身不携带 focus（focus 由 AuthorTextEditContract 外层保存）。
     let _ = scoped;
     None
@@ -202,7 +209,11 @@ pub fn author_text_scope_contract(
         selections.push(super::text_range_edits::TextEditSelection {
             start_line: unit.start_line as u32,
             end_line: unit.end_line as u32,
-            text: if selection.text.is_empty() { unit.text.clone() } else { selection.text.clone() },
+            text: if selection.text.is_empty() {
+                unit.text.clone()
+            } else {
+                selection.text.clone()
+            },
             single_line: selection.unit_id.contains(".l") || inline_fragment,
         });
     }
@@ -286,9 +297,9 @@ pub fn merge_author_text_scopes(
             candidates.sort_by(|a, b| {
                 let a_match = a.3 == *single_line;
                 let b_match = b.3 == *single_line;
-                b_match.cmp(&a_match).then_with(|| {
-                    (a.2 - a.1).cmp(&(b.2 - b.1))
-                })
+                b_match
+                    .cmp(&a_match)
+                    .then_with(|| (a.2 - a.1).cmp(&(b.2 - b.1)))
             });
             let unit = candidates.first().ok_or_else(|| {
                 ReviewScopeError::plain("Merged span has no containing source unit")
@@ -345,11 +356,17 @@ pub struct ReviewScopeError {
 
 impl ReviewScopeError {
     pub fn plain(message: impl Into<String>) -> Self {
-        Self { code: None, message: message.into() }
+        Self {
+            code: None,
+            message: message.into(),
+        }
     }
 
     pub fn coded(code: &str, message: impl Into<String>) -> Self {
-        Self { code: Some(code.into()), message: message.into() }
+        Self {
+            code: Some(code.into()),
+            message: message.into(),
+        }
     }
 }
 
@@ -378,7 +395,10 @@ mod tests {
         let paragraph_unit = units.by_id.get("p1").unwrap();
         assert_eq!(paragraph_unit.start_line, 1);
         assert_eq!(paragraph_unit.end_line, 2);
-        assert_eq!(paragraph_unit.text, "第一段第一行\n第一段第二行\n", "段落 text=保留终止符的行连接（TS 同）");
+        assert_eq!(
+            paragraph_unit.text, "第一段第一行\n第一段第二行\n",
+            "段落 text=保留终止符的行连接（TS 同）"
+        );
         let line_unit = units.by_id.get("p2.l1").unwrap();
         assert_eq!(line_unit.start_line, 4);
         assert_eq!(line_unit.end_line, 4);
@@ -392,8 +412,8 @@ mod tests {
             reason: "整稿授权".into(),
             focus: None,
         };
-        let AuthorTextEditContract::Ranges(contract) = author_text_scope_contract(SOURCE, &scope)
-            .unwrap()
+        let AuthorTextEditContract::Ranges(contract) =
+            author_text_scope_contract(SOURCE, &scope).unwrap()
         else {
             panic!("wholeDocument → 行区间合同");
         };
@@ -404,12 +424,15 @@ mod tests {
         // 行选区：p2.l1 → scoped 合同（singleLine=true——行 ID 含 .l）。
         let scope = AuthorTextScope {
             whole_document: false,
-            selections: vec![AuthorTextScopeSelection { unit_id: "p2.l1".into(), text: String::new() }],
+            selections: vec![AuthorTextScopeSelection {
+                unit_id: "p2.l1".into(),
+                text: String::new(),
+            }],
             reason: "只改第二段".into(),
             focus: None,
         };
-        let AuthorTextEditContract::Scoped(scoped) = author_text_scope_contract(SOURCE, &scope)
-            .unwrap()
+        let AuthorTextEditContract::Scoped(scoped) =
+            author_text_scope_contract(SOURCE, &scope).unwrap()
         else {
             panic!("行选区 → scoped 合同");
         };
@@ -425,21 +448,33 @@ mod tests {
         // 变异①：幽灵 unitId → ARTIFACT_EDIT_TARGET_NOT_FOUND。
         let scope = AuthorTextScope {
             whole_document: false,
-            selections: vec![AuthorTextScopeSelection { unit_id: "p9.l9".into(), text: String::new() }],
+            selections: vec![AuthorTextScopeSelection {
+                unit_id: "p9.l9".into(),
+                text: String::new(),
+            }],
             reason: "越界".into(),
             focus: None,
         };
         let error = author_text_scope_contract(SOURCE, &scope).unwrap_err();
-        assert_eq!(error.code.as_deref(), Some("ARTIFACT_EDIT_TARGET_NOT_FOUND"));
+        assert_eq!(
+            error.code.as_deref(),
+            Some("ARTIFACT_EDIT_TARGET_NOT_FOUND")
+        );
         // 变异②：wholeDocument + selections 并存。
         let scope = AuthorTextScope {
             whole_document: true,
-            selections: vec![AuthorTextScopeSelection { unit_id: "p1.l1".into(), text: String::new() }],
+            selections: vec![AuthorTextScopeSelection {
+                unit_id: "p1.l1".into(),
+                text: String::new(),
+            }],
             reason: "矛盾授权".into(),
             focus: None,
         };
         let error = author_text_scope_contract(SOURCE, &scope).unwrap_err();
-        assert_eq!(error.message, "Whole-document scope must not also select partial text");
+        assert_eq!(
+            error.message,
+            "Whole-document scope must not also select partial text"
+        );
     }
 
     #[test]
@@ -454,8 +489,8 @@ mod tests {
             reason: "行内编辑".into(),
             focus: None,
         };
-        let AuthorTextEditContract::Scoped(scoped) = author_text_scope_contract(SOURCE, &scope)
-            .unwrap()
+        let AuthorTextEditContract::Scoped(scoped) =
+            author_text_scope_contract(SOURCE, &scope).unwrap()
         else {
             panic!("行内片段 → scoped");
         };

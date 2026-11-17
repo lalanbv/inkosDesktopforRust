@@ -6,8 +6,8 @@
 //! 契约形状。
 
 use inkos_engine::models::director::{
-    director_contract, next_director_stage, parse_direction_candidates,
-    resolve_director_run_plan, DirectorRunMode, DirectorStage,
+    director_contract, next_director_stage, parse_direction_candidates, resolve_director_run_plan,
+    DirectorRunMode, DirectorStage,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -55,7 +55,8 @@ fn candidates_match_shared_vectors() {
         let got = parse_direction_candidates(&case.content, &case.exclude_titles);
         let got_value = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_value, vector["expected"],
+            got_value,
+            vector["expected"],
             "candidates vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -127,7 +128,8 @@ fn run_plans_match_shared_vectors() {
             "stopAfterDirections": stop_after_directions,
         });
         assert_eq!(
-            got, vector["expected"],
+            got,
+            vector["expected"],
             "runPlan vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

@@ -3,8 +3,8 @@
 //! 唯一事实源 = `packages/core/src/__tests__/golden/scene-beats-vectors.json`。
 
 use inkos_engine::utils::scene_beats::{
-    build_scene_beats_prompt, build_scene_beats_writer_block, parse_scene_beat_plan,
-    SceneBeatPlan, SceneBeatsLanguage,
+    build_scene_beats_prompt, build_scene_beats_writer_block, parse_scene_beat_plan, SceneBeatPlan,
+    SceneBeatsLanguage,
 };
 use serde_json::Value;
 
@@ -22,15 +22,23 @@ fn language_of(raw: &str) -> SceneBeatsLanguage {
 fn parse_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     for vector in vectors["parse"].as_array().expect("parse array") {
-        let got = parse_scene_beat_plan(vector["input"].as_str().unwrap(), vector["chapter"].as_i64().unwrap());
+        let got = parse_scene_beat_plan(
+            vector["input"].as_str().unwrap(),
+            vector["chapter"].as_i64().unwrap(),
+        );
         let expected = &vector["expected"];
         if expected.is_null() {
-            assert!(got.is_none(), "parse vector '{}' should be none", vector["name"].as_str().unwrap());
+            assert!(
+                got.is_none(),
+                "parse vector '{}' should be none",
+                vector["name"].as_str().unwrap()
+            );
             continue;
         }
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, *expected,
+            got_json,
+            *expected,
             "parse vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -60,10 +68,16 @@ fn prompt_matches_shared_vectors() {
 #[test]
 fn writer_block_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["writerBlock"].as_array().expect("writerBlock array") {
+    for vector in vectors["writerBlock"]
+        .as_array()
+        .expect("writerBlock array")
+    {
         let plan: SceneBeatPlan =
             serde_json::from_value(vector["plan"].clone()).expect("plan shape");
-        let got = build_scene_beats_writer_block(&plan, language_of(vector["language"].as_str().unwrap()));
+        let got = build_scene_beats_writer_block(
+            &plan,
+            language_of(vector["language"].as_str().unwrap()),
+        );
         assert_eq!(
             got,
             vector["expected"].as_str().unwrap(),

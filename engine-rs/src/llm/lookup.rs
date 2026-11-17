@@ -14,16 +14,35 @@ use super::providers::{InkosEndpoint, InkosModel, ModelStatus};
 
 /// provider id 优先级（同 modelId 多 provider 命中时按此顺序取首）。白名单外视同 999。
 pub const PROVIDER_PRIORITY: &[&str] = &[
-    "anthropic", "openai", "google", "deepseek", "bailian", "moonshot", "kimicode",
-    "zhipu", "minimax", "xai", "siliconcloud", "openrouter", "aihubmix", "novita",
+    "anthropic",
+    "openai",
+    "google",
+    "deepseek",
+    "bailian",
+    "moonshot",
+    "kimicode",
+    "zhipu",
+    "minimax",
+    "xai",
+    "siliconcloud",
+    "openrouter",
+    "aihubmix",
+    "novita",
 ];
 
 fn priority_of(provider_id: &str) -> usize {
-    PROVIDER_PRIORITY.iter().position(|p| *p == provider_id).unwrap_or(999)
+    PROVIDER_PRIORITY
+        .iter()
+        .position(|p| *p == provider_id)
+        .unwrap_or(999)
 }
 
 /// 按 serviceId + modelId 查模型卡（两层 + 优先级）。
-pub fn lookup_model<'a>(registry: &'a [InkosEndpoint], service_id: &str, model_id: &str) -> Option<&'a InkosModel> {
+pub fn lookup_model<'a>(
+    registry: &'a [InkosEndpoint],
+    service_id: &str,
+    model_id: &str,
+) -> Option<&'a InkosModel> {
     let lower = model_id.to_lowercase();
     // Layer 1：已知 service 精确查
     if let Some(ep) = get_endpoint(registry, service_id) {
@@ -46,14 +65,25 @@ pub fn lookup_model<'a>(registry: &'a [InkosEndpoint], service_id: &str, model_i
 }
 
 /// 按 serviceId 查 endpoint。
-pub fn get_endpoint<'a>(registry: &'a [InkosEndpoint], service_id: &str) -> Option<&'a InkosEndpoint> {
+pub fn get_endpoint<'a>(
+    registry: &'a [InkosEndpoint],
+    service_id: &str,
+) -> Option<&'a InkosEndpoint> {
     registry.iter().find(|e| e.id == service_id)
 }
 
 /// 某 service 下可用（enabled !== false）的模型列表。
-pub fn list_enabled_models<'a>(registry: &'a [InkosEndpoint], service_id: &str) -> Vec<&'a InkosModel> {
-    let Some(ep) = get_endpoint(registry, service_id) else { return Vec::new() };
-    ep.models.iter().filter(|m| m.enabled != Some(false)).collect()
+pub fn list_enabled_models<'a>(
+    registry: &'a [InkosEndpoint],
+    service_id: &str,
+) -> Vec<&'a InkosModel> {
+    let Some(ep) = get_endpoint(registry, service_id) else {
+        return Vec::new();
+    };
+    ep.models
+        .iter()
+        .filter(|m| m.enabled != Some(false))
+        .collect()
 }
 
 /// 模型是否活跃文本模型（enabled + 状态 + text 能力）。
@@ -61,7 +91,10 @@ pub fn is_active_text_model(model: &InkosModel) -> bool {
     if model.enabled == Some(false) {
         return false;
     }
-    if matches!(model.status, Some(ModelStatus::Disabled) | Some(ModelStatus::Deprecated) | Some(ModelStatus::NonText)) {
+    if matches!(
+        model.status,
+        Some(ModelStatus::Disabled) | Some(ModelStatus::Deprecated) | Some(ModelStatus::NonText)
+    ) {
         return false;
     }
     if model.capabilities.as_ref().and_then(|c| c.text) == Some(false) {
@@ -77,9 +110,17 @@ pub fn is_active_text_model(model: &InkosModel) -> bool {
 }
 
 /// 某 service 下活跃文本模型列表。
-pub fn list_active_text_models<'a>(registry: &'a [InkosEndpoint], service_id: &str) -> Vec<&'a InkosModel> {
-    let Some(ep) = get_endpoint(registry, service_id) else { return Vec::new() };
-    ep.models.iter().filter(|m| is_active_text_model(m)).collect()
+pub fn list_active_text_models<'a>(
+    registry: &'a [InkosEndpoint],
+    service_id: &str,
+) -> Vec<&'a InkosModel> {
+    let Some(ep) = get_endpoint(registry, service_id) else {
+        return Vec::new();
+    };
+    ep.models
+        .iter()
+        .filter(|m| is_active_text_model(m))
+        .collect()
 }
 
 /// 生效模型的上下文窗口（441 号：TS `createLLMClient` 的
@@ -94,22 +135,72 @@ pub fn builtin_context_window(service_id: &str, model_id: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::providers::{
+        ApiProtocol, InkosEndpoint, InkosModel, ModelCapabilities, ModelStatus,
+    };
     use super::*;
-    use super::super::providers::{ApiProtocol, InkosEndpoint, InkosModel, ModelCapabilities, ModelStatus};
 
-    fn model(id: &str, enabled: Option<bool>, status: Option<ModelStatus>, caps: Option<ModelCapabilities>) -> InkosModel {
-        InkosModel { id: id.into(), max_output: 8192, context_window_tokens: 64000, enabled, deployment_name: None, released_at: None, temperature: None, status, replacement: None, capabilities: caps }
+    fn model(
+        id: &str,
+        enabled: Option<bool>,
+        status: Option<ModelStatus>,
+        caps: Option<ModelCapabilities>,
+    ) -> InkosModel {
+        InkosModel {
+            id: id.into(),
+            max_output: 8192,
+            context_window_tokens: 64000,
+            enabled,
+            deployment_name: None,
+            released_at: None,
+            temperature: None,
+            status,
+            replacement: None,
+            capabilities: caps,
+        }
     }
     fn ep(id: &str, models: Vec<InkosModel>) -> InkosEndpoint {
-        InkosEndpoint { id: id.into(), label: id.into(), group: None, api: ApiProtocol::OpenaiCompletions, base_url: format!("https://{id}"), models_base_url: None, check_model: None, temperature_range: None, default_temperature: None, writing_temperature: None, temperature_hint: None, compat: None, transport_defaults: None, models }
+        InkosEndpoint {
+            id: id.into(),
+            label: id.into(),
+            group: None,
+            api: ApiProtocol::OpenaiCompletions,
+            base_url: format!("https://{id}"),
+            models_base_url: None,
+            check_model: None,
+            temperature_range: None,
+            default_temperature: None,
+            writing_temperature: None,
+            temperature_hint: None,
+            compat: None,
+            transport_defaults: None,
+            models,
+        }
     }
 
     fn sample_registry() -> Vec<InkosEndpoint> {
         vec![
-            ep("deepseek", vec![model("deepseek-chat", Some(true), Some(ModelStatus::Active), None), model("deepseek-reasoner", Some(true), Some(ModelStatus::Active), None)]),
-            ep("openai", vec![model("gpt-4o", Some(true), Some(ModelStatus::Active), None)]),
+            ep(
+                "deepseek",
+                vec![
+                    model("deepseek-chat", Some(true), Some(ModelStatus::Active), None),
+                    model(
+                        "deepseek-reasoner",
+                        Some(true),
+                        Some(ModelStatus::Active),
+                        None,
+                    ),
+                ],
+            ),
+            ep(
+                "openai",
+                vec![model("gpt-4o", Some(true), Some(ModelStatus::Active), None)],
+            ),
             // 同一 modelId 在两个 provider（测优先级）
-            ep("openrouter", vec![model("gpt-4o", Some(true), Some(ModelStatus::Active), None)]),
+            ep(
+                "openrouter",
+                vec![model("gpt-4o", Some(true), Some(ModelStatus::Active), None)],
+            ),
         ]
     }
 
@@ -171,7 +262,13 @@ mod tests {
 
     #[test]
     fn list_enabled_filters_disabled() {
-        let reg = vec![ep("x", vec![model("a", Some(true), None, None), model("b", Some(false), None, None)])];
+        let reg = vec![ep(
+            "x",
+            vec![
+                model("a", Some(true), None, None),
+                model("b", Some(false), None, None),
+            ],
+        )];
         let enabled = list_enabled_models(&reg, "x");
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].id, "a");
@@ -180,10 +277,42 @@ mod tests {
     #[test]
     fn is_active_text_filters_status_and_caps() {
         assert!(!is_active_text_model(&model("a", Some(false), None, None))); // disabled
-        assert!(!is_active_text_model(&model("a", Some(true), Some(ModelStatus::Disabled), None)));
-        assert!(!is_active_text_model(&model("a", Some(true), None, Some(ModelCapabilities { text: Some(false), image_input: None, image_output: None, tools: None, reasoning: None }))));
-        assert!(is_active_text_model(&model("a", Some(true), Some(ModelStatus::Active), None)));
+        assert!(!is_active_text_model(&model(
+            "a",
+            Some(true),
+            Some(ModelStatus::Disabled),
+            None
+        )));
+        assert!(!is_active_text_model(&model(
+            "a",
+            Some(true),
+            None,
+            Some(ModelCapabilities {
+                text: Some(false),
+                image_input: None,
+                image_output: None,
+                tools: None,
+                reasoning: None
+            })
+        )));
+        assert!(is_active_text_model(&model(
+            "a",
+            Some(true),
+            Some(ModelStatus::Active),
+            None
+        )));
         // imageOutput=true 且 text 未设 → 非文本
-        assert!(!is_active_text_model(&model("a", Some(true), None, Some(ModelCapabilities { text: None, image_input: None, image_output: Some(true), tools: None, reasoning: None }))));
+        assert!(!is_active_text_model(&model(
+            "a",
+            Some(true),
+            None,
+            Some(ModelCapabilities {
+                text: None,
+                image_input: None,
+                image_output: Some(true),
+                tools: None,
+                reasoning: None
+            })
+        )));
     }
 }

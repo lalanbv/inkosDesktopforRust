@@ -54,8 +54,11 @@ crate::interaction::registry::tool_def!(
     ReviseParagraph,
     "revise_paragraph",
     MutationKind::ProductionMutation,
-    ctx, args,
-    { "Revise one translated paragraph while preserving every other paragraph and all source text. To revise the final paragraph, set paragraph to last. The host selects it from the complete chapter. Review and export after revision." },
+    ctx,
+    args,
+    {
+        "Revise one translated paragraph while preserving every other paragraph and all source text. To revise the final paragraph, set paragraph to last. The host selects it from the complete chapter. Review and export after revision."
+    },
     revision_params_schema(),
     ctx.translation_deps.is_some(),
     {
@@ -71,10 +74,16 @@ fn parse_paragraph(value: Option<&Value>) -> Result<Option<u32>, String> {
         Some(Value::String(text)) if text == "last" => Ok(None),
         Some(Value::Number(number)) => {
             let raw = number.as_u64().ok_or_else(|| {
-                coded("TRANSLATION_PARAGRAPH_REQUIRED", "Select last or a paragraph number starting at 1")
+                coded(
+                    "TRANSLATION_PARAGRAPH_REQUIRED",
+                    "Select last or a paragraph number starting at 1",
+                )
             })?;
             let paragraph = u32::try_from(raw).map_err(|_| {
-                coded("TRANSLATION_PARAGRAPH_REQUIRED", "Select last or a paragraph number starting at 1")
+                coded(
+                    "TRANSLATION_PARAGRAPH_REQUIRED",
+                    "Select last or a paragraph number starting at 1",
+                )
             })?;
             if paragraph == 0 {
                 return Err(coded(
@@ -91,13 +100,21 @@ fn parse_paragraph(value: Option<&Value>) -> Result<Option<u32>, String> {
     }
 }
 
-fn resolve_work_id_from(active_book_id: Option<&str>, explicit: Option<&str>) -> Result<String, String> {
+fn resolve_work_id_from(
+    active_book_id: Option<&str>,
+    explicit: Option<&str>,
+) -> Result<String, String> {
     explicit
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
         .or_else(|| active_book_id.map(str::to_string))
-        .ok_or_else(|| coded("WORK_ID_REQUIRED", "Translation Work ID is required when no Work is active."))
+        .ok_or_else(|| {
+            coded(
+                "WORK_ID_REQUIRED",
+                "Translation Work ID is required when no Work is active.",
+            )
+        })
 }
 
 fn coded(code: &str, message: impl std::fmt::Display) -> String {
@@ -111,20 +128,23 @@ async fn tool_revise_paragraph(
     active_book_id: Option<&str>,
     args: &Value,
 ) -> ToolResult {
-    let work_id = match resolve_work_id_from(active_book_id, args.get("workId").and_then(Value::as_str)) {
-        Ok(work_id) => work_id,
-        Err(message) => return crate::interaction::project_tools::error_result(message),
-    };
+    let work_id =
+        match resolve_work_id_from(active_book_id, args.get("workId").and_then(Value::as_str)) {
+            Ok(work_id) => work_id,
+            Err(message) => return crate::interaction::project_tools::error_result(message),
+        };
     let chapter_number = match args
         .get("chapterNumber")
         .and_then(Value::as_u64)
         .and_then(|v| u32::try_from(v).ok())
     {
         Some(number) => number,
-        None => return crate::interaction::project_tools::error_result(coded(
-            "TRANSLATION_CHAPTER_REQUIRED",
-            "chapterNumber is required",
-        )),
+        None => {
+            return crate::interaction::project_tools::error_result(coded(
+                "TRANSLATION_CHAPTER_REQUIRED",
+                "chapterNumber is required",
+            ))
+        }
     };
     let paragraph = match parse_paragraph(args.get("paragraph")) {
         Ok(paragraph) => paragraph,
@@ -137,21 +157,26 @@ async fn tool_revise_paragraph(
         .filter(|s| !s.is_empty())
     {
         Some(instruction) => instruction.to_string(),
-        None => return crate::interaction::project_tools::error_result(coded(
-            "TRANSLATION_INSTRUCTION_REQUIRED",
-            "instruction is required",
-        )),
+        None => {
+            return crate::interaction::project_tools::error_result(coded(
+                "TRANSLATION_INSTRUCTION_REQUIRED",
+                "instruction is required",
+            ))
+        }
     };
 
     let root = runtime.state.project_root();
     // 971 号同款技能装配（revise=翻译技能域）。
-    let activations = match crate::server::translation_routes::translation_skill_activations(root).await {
-        Ok(activations) => activations,
-        Err(message) => return crate::interaction::project_tools::error_result(coded(
-            "TRANSLATION_REVISION_FAILED",
-            message,
-        )),
-    };
+    let activations =
+        match crate::server::translation_routes::translation_skill_activations(root).await {
+            Ok(activations) => activations,
+            Err(message) => {
+                return crate::interaction::project_tools::error_result(coded(
+                    "TRANSLATION_REVISION_FAILED",
+                    message,
+                ))
+            }
+        };
     let model = crate::translation::llm_model::LlmTranslationModel {
         router: std::sync::Arc::clone(&runtime.effective_router().await),
         max_tokens: None,
@@ -171,7 +196,11 @@ async fn tool_revise_paragraph(
     {
         Ok(result) => result,
         Err(message) => {
-            let code = message.split(": ").next().unwrap_or("TRANSLATION_REVISION_FAILED").to_string();
+            let code = message
+                .split(": ")
+                .next()
+                .unwrap_or("TRANSLATION_REVISION_FAILED")
+                .to_string();
             return crate::interaction::project_tools::error_result(coded(&code, &message));
         }
     };
@@ -180,7 +209,11 @@ async fn tool_revise_paragraph(
     // not the last paragraph). Selected source: …`。
     let text = format!(
         "{} chapter {}, paragraph {} of {}{}. Selected source: {}",
-        if result["changed"].as_bool().unwrap_or(false) { "Revised" } else { "Kept" },
+        if result["changed"].as_bool().unwrap_or(false) {
+            "Revised"
+        } else {
+            "Kept"
+        },
         result["chapterNumber"],
         result["paragraphNumber"],
         result["paragraphCount"],
@@ -220,7 +253,10 @@ mod tests {
             .expect("revise_paragraph 入册");
         assert_eq!(def.mutation_kind(), MutationKind::ProductionMutation);
         let schema = def.parameters();
-        assert_eq!(schema["required"], serde_json::json!(["chapterNumber", "paragraph", "instruction"]));
+        assert_eq!(
+            schema["required"],
+            serde_json::json!(["chapterNumber", "paragraph", "instruction"])
+        );
         assert_eq!(schema["additionalProperties"], false);
         let any_of = &schema["properties"]["paragraph"]["anyOf"];
         assert_eq!(any_of[0], serde_json::json!({ "const": "last" }));
@@ -247,10 +283,20 @@ mod tests {
             format!(
                 "{} chapter 1, paragraph 2 of 3{}. Selected source: 样段",
                 if changed { "Revised" } else { "Kept" },
-                if last { " (last paragraph)" } else { " (not the last paragraph)" },
+                if last {
+                    " (last paragraph)"
+                } else {
+                    " (not the last paragraph)"
+                },
             )
         };
-        assert_eq!(text(true, true), "Revised chapter 1, paragraph 2 of 3 (last paragraph). Selected source: 样段");
-        assert_eq!(text(false, false), "Kept chapter 1, paragraph 2 of 3 (not the last paragraph). Selected source: 样段");
+        assert_eq!(
+            text(true, true),
+            "Revised chapter 1, paragraph 2 of 3 (last paragraph). Selected source: 样段"
+        );
+        assert_eq!(
+            text(false, false),
+            "Kept chapter 1, paragraph 2 of 3 (not the last paragraph). Selected source: 样段"
+        );
     }
 }

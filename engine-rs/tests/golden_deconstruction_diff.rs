@@ -5,8 +5,8 @@
 //! 五组差分：证据索引、四档人物档案、节奏/卖点统计、导出渲染、契约形状。
 
 use inkos_engine::utils::deconstruction::{
-    analyze_pacing_stats, build_evidence_index, deconstruction_contract,
-    derive_character_dossier, render_deconstruction_export, DeconChapter,
+    analyze_pacing_stats, build_evidence_index, deconstruction_contract, derive_character_dossier,
+    render_deconstruction_export, DeconChapter,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -97,7 +97,8 @@ fn dossiers_match_shared_vectors() {
                 continue;
             }
             assert_eq!(
-                &got_value[key], value,
+                &got_value[key],
+                value,
                 "dossier '{}' field '{key}' drifted",
                 vector["name"].as_str().unwrap()
             );

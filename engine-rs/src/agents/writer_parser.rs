@@ -74,21 +74,37 @@ pub fn parse_writer_output(
     let chapter_content = extract_tag(content, "CHAPTER_CONTENT");
     let title = {
         let t = extract_tag(content, "CHAPTER_TITLE");
-        if t.is_empty() { default_chapter_title(chapter_number, counting_mode) } else { t }
+        if t.is_empty() {
+            default_chapter_title(chapter_number, counting_mode)
+        } else {
+            t
+        }
     };
     let updated_state = {
         let s = extract_tag(content, "UPDATED_STATE");
-        if s.is_empty() { default_state_placeholder(counting_mode) } else { s }
+        if s.is_empty() {
+            default_state_placeholder(counting_mode)
+        } else {
+            s
+        }
     };
     let updated_ledger = if genre_profile.numerical_system {
         let s = extract_tag(content, "UPDATED_LEDGER");
-        if s.is_empty() { default_ledger_placeholder(counting_mode) } else { s }
+        if s.is_empty() {
+            default_ledger_placeholder(counting_mode)
+        } else {
+            s
+        }
     } else {
         String::new()
     };
     let updated_hooks = {
         let s = extract_tag(content, "UPDATED_HOOKS");
-        if s.is_empty() { default_hooks_placeholder(counting_mode) } else { s }
+        if s.is_empty() {
+            default_hooks_placeholder(counting_mode)
+        } else {
+            s
+        }
     };
 
     ParsedWriterOutput {
@@ -114,20 +130,32 @@ pub fn parse_writer_output(
 fn fallback_extract_content(raw: &str, counting_mode: LengthCountingMode) -> String {
     // # 第N章 ... 后的内容。
     if let Some(m) = zh_heading_content_re().captures(raw) {
-        return m.get(1).map(|c| c.as_str().trim().to_string()).unwrap_or_default();
+        return m
+            .get(1)
+            .map(|c| c.as_str().trim().to_string())
+            .unwrap_or_default();
     }
     if counting_mode == LengthCountingMode::EnWords {
         if let Some(m) = en_heading_content_re().captures(raw) {
-            return m.get(2).map(|c| c.as_str().trim().to_string()).unwrap_or_default();
+            return m
+                .get(2)
+                .map(|c| c.as_str().trim().to_string())
+                .unwrap_or_default();
         }
     }
     // 正文/内容/章节内容：标签。
     if let Some(m) = zh_content_label_re().captures(raw) {
-        return m.get(1).map(|c| c.as_str().trim().to_string()).unwrap_or_default();
+        return m
+            .get(1)
+            .map(|c| c.as_str().trim().to_string())
+            .unwrap_or_default();
     }
     if counting_mode == LengthCountingMode::EnWords {
         if let Some(m) = en_content_label_re().captures(raw) {
-            return m.get(1).map(|c| c.as_str().trim().to_string()).unwrap_or_default();
+            return m
+                .get(1)
+                .map(|c| c.as_str().trim().to_string())
+                .unwrap_or_default();
         }
     }
     // 最后手段：剥离 tag/key-value 行，保留其余。
@@ -155,17 +183,30 @@ fn fallback_extract_content(raw: &str, counting_mode: LengthCountingMode) -> Str
 }
 
 /// fallback 标题提取：# 第N章 标题 / Chapter N / 章节标签 / 默认。
-fn fallback_extract_title(raw: &str, chapter_number: u32, counting_mode: LengthCountingMode) -> String {
+fn fallback_extract_title(
+    raw: &str,
+    chapter_number: u32,
+    counting_mode: LengthCountingMode,
+) -> String {
     if let Some(m) = zh_heading_title_re().captures(raw) {
-        return m.get(1).map(|c| c.as_str().trim().to_string()).unwrap_or_default();
+        return m
+            .get(1)
+            .map(|c| c.as_str().trim().to_string())
+            .unwrap_or_default();
     }
     if counting_mode == LengthCountingMode::EnWords {
         if let Some(m) = en_heading_title_re().captures(raw) {
-            return m.get(1).map(|c| c.as_str().trim().to_string()).unwrap_or_default();
+            return m
+                .get(1)
+                .map(|c| c.as_str().trim().to_string())
+                .unwrap_or_default();
         }
     }
     if let Some(m) = title_label_re().captures(raw) {
-        return m.get(1).map(|c| c.as_str().trim().to_string()).unwrap_or_default();
+        return m
+            .get(1)
+            .map(|c| c.as_str().trim().to_string())
+            .unwrap_or_default();
     }
     default_chapter_title(chapter_number, counting_mode)
 }
@@ -231,7 +272,9 @@ fn tag_line_re() -> &'static Regex {
 fn metadata_kv_re() -> &'static Regex {
     // /^(PRE_WRITE_CHECK|CHAPTER_TITLE|章节标题|写作自检)[：:]/
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(PRE_WRITE_CHECK|CHAPTER_TITLE|章节标题|写作自检)[：:]").unwrap())
+    R.get_or_init(|| {
+        Regex::new(r"^(PRE_WRITE_CHECK|CHAPTER_TITLE|章节标题|写作自检)[：:]").unwrap()
+    })
 }
 fn zh_heading_title_re() -> &'static Regex {
     // /^#\s*第\d+章\s*(.+)/m
@@ -253,7 +296,10 @@ mod tests {
     use super::*;
 
     fn profile(numerical: bool) -> GenreProfile {
-        GenreProfile { numerical_system: numerical, ..GenreProfile::default() }
+        GenreProfile {
+            numerical_system: numerical,
+            ..GenreProfile::default()
+        }
     }
 
     #[test]
@@ -269,7 +315,10 @@ mod tests {
 已检查伏笔";
         let out = parse_creative_output(1, content, LengthCountingMode::ZhChars);
         assert_eq!(out.title, "序章：暗夜");
-        assert_eq!(out.content, "这是正文内容，足够长以通过任何长度检查阈值，确保 fallback 不会误触发。");
+        assert_eq!(
+            out.content,
+            "这是正文内容，足够长以通过任何长度检查阈值，确保 fallback 不会误触发。"
+        );
         assert!(out.word_count > 0);
         assert_eq!(out.pre_write_check, "已检查伏笔");
     }
@@ -308,7 +357,10 @@ h01 推进
         assert_eq!(out.chapter_number, 2);
         assert_eq!(out.title, "第2章");
         assert_eq!(out.updated_state, "森林深处");
-        assert_eq!(out.updated_ledger, "金币 +10", "numerical_system=true 时保留 ledger");
+        assert_eq!(
+            out.updated_ledger, "金币 +10",
+            "numerical_system=true 时保留 ledger"
+        );
         assert_eq!(out.updated_hooks, "h01 推进");
         assert_eq!(out.chapter_summary, "本章高潮");
     }
@@ -349,18 +401,27 @@ h01 推进
         let c = fallback_extract_content(&raw, LengthCountingMode::ZhChars);
         assert!(!c.contains("=== CHAPTER"), "tag 行应剥离: c={c:?}");
         assert!(c.contains("占位文本"), "prose 应保留: c={c:?}");
-        assert!(!c.contains("PRE_WRITE_CHECK：自检"), "metadata kv 行应剥离: c={c:?}");
+        assert!(
+            !c.contains("PRE_WRITE_CHECK：自检"),
+            "metadata kv 行应剥离: c={c:?}"
+        );
     }
 
     #[test]
     fn fallback_extract_content_returns_empty_when_too_short() {
         let raw = "短文本";
-        assert_eq!(fallback_extract_content(raw, LengthCountingMode::ZhChars), "");
+        assert_eq!(
+            fallback_extract_content(raw, LengthCountingMode::ZhChars),
+            ""
+        );
     }
 
     #[test]
     fn fallback_extract_title_label_form() {
         let raw = "章节标题：测试标题\n正文";
-        assert_eq!(fallback_extract_title(raw, 1, LengthCountingMode::ZhChars), "测试标题");
+        assert_eq!(
+            fallback_extract_title(raw, 1, LengthCountingMode::ZhChars),
+            "测试标题"
+        );
     }
 }

@@ -27,15 +27,27 @@ struct MatrixFile {
     cases: Vec<MatrixCase>,
 }
 
-fn policy_for(policy: &str, extra_origins: &[String]) -> inkos_engine::llm::cover_origin::CoverDownloadOriginPolicy {
+fn policy_for(
+    policy: &str,
+    extra_origins: &[String],
+) -> inkos_engine::llm::cover_origin::CoverDownloadOriginPolicy {
     let mut env = BTreeMap::new();
     match policy {
-        "strict" => env.insert("INKOS_COVER_DOWNLOAD_ORIGIN_POLICY".to_string(), "strict".to_string()),
-        "invalid" => env.insert("INKOS_COVER_DOWNLOAD_ORIGIN_POLICY".to_string(), "banana".to_string()),
+        "strict" => env.insert(
+            "INKOS_COVER_DOWNLOAD_ORIGIN_POLICY".to_string(),
+            "strict".to_string(),
+        ),
+        "invalid" => env.insert(
+            "INKOS_COVER_DOWNLOAD_ORIGIN_POLICY".to_string(),
+            "banana".to_string(),
+        ),
         _ => None,
     };
     if !extra_origins.is_empty() {
-        env.insert("INKOS_COVER_DOWNLOAD_EXTRA_ORIGINS".to_string(), extra_origins.join(","));
+        env.insert(
+            "INKOS_COVER_DOWNLOAD_EXTRA_ORIGINS".to_string(),
+            extra_origins.join(","),
+        );
     }
     resolve_cover_download_origin_policy(&env)
 }
@@ -47,18 +59,19 @@ async fn rust_policy_matches_shared_matrix_table() {
     let mut mismatches: Vec<String> = Vec::new();
     for (index, case) in matrix.cases.iter().enumerate() {
         let policy = policy_for(&case.policy, &case.extra_origins);
-        let got = match assert_cover_download_url_allowed(&case.url, &matrix.provider, &policy).await {
-            Ok(()) => "allow".to_string(),
-            Err(message) => {
-                let reason = message
-                    .split('(')
-                    .nth(1)
-                    .and_then(|rest| rest.split(')').next())
-                    .unwrap_or("?")
-                    .to_string();
-                format!("deny:{reason}")
-            }
-        };
+        let got =
+            match assert_cover_download_url_allowed(&case.url, &matrix.provider, &policy).await {
+                Ok(()) => "allow".to_string(),
+                Err(message) => {
+                    let reason = message
+                        .split('(')
+                        .nth(1)
+                        .and_then(|rest| rest.split(')').next())
+                        .unwrap_or("?")
+                        .to_string();
+                    format!("deny:{reason}")
+                }
+            };
         let expected = match case.verdict.as_str() {
             "allow" => "allow".to_string(),
             _ => format!("deny:{}", case.reason.as_deref().unwrap_or("?")),

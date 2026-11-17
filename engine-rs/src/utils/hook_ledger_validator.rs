@@ -169,7 +169,10 @@ fn extract_ledger_section(memo_body: &str) -> Option<String> {
             let m = caps.get(0)?;
             let start = m.end();
             let rest = &memo_body[start..];
-            let end = next_heading_re().find(rest).map(|m| m.start()).unwrap_or(rest.len());
+            let end = next_heading_re()
+                .find(rest)
+                .map(|m| m.start())
+                .unwrap_or(rest.len());
             return Some(rest[..end].to_string());
         }
     }
@@ -288,7 +291,9 @@ fn zh_heading_re() -> &'static Regex {
 }
 fn en_heading_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?im)^#{2,3}\s*Hook\s+ledger\s+for\s+this\s+chapter\s*$").expect("en heading"))
+    R.get_or_init(|| {
+        Regex::new(r"(?im)^#{2,3}\s*Hook\s+ledger\s+for\s+this\s+chapter\s*$").expect("en heading")
+    })
 }
 fn next_heading_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -297,7 +302,10 @@ fn next_heading_re() -> &'static Regex {
 fn subsection_heading_re() -> &'static Regex {
     // 命名捕获 key：open/advance/resolve/defer，后接可选 : / ：。
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)^(?P<key>open|advance|resolve|defer)\s*[:：]?\s*$").expect("subsection heading"))
+    R.get_or_init(|| {
+        Regex::new(r"(?i)^(?P<key>open|advance|resolve|defer)\s*[:：]?\s*$")
+            .expect("subsection heading")
+    })
 }
 fn new_placeholder_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -305,16 +313,24 @@ fn new_placeholder_re() -> &'static Regex {
 }
 fn placeholder_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)^(无|空|none|nil|null|暂无|n/a|na|n-a|tbd|todo|待定)$").expect("placeholder"))
+    R.get_or_init(|| {
+        Regex::new(r"(?i)^(无|空|none|nil|null|暂无|n/a|na|n-a|tbd|todo|待定)$")
+            .expect("placeholder")
+    })
 }
 fn subsection_words_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)^(open|advance|resolve|defer|new)$").expect("subsection words"))
+    R.get_or_init(|| {
+        Regex::new(r"(?i)^(open|advance|resolve|defer|new)$").expect("subsection words")
+    })
 }
 fn id_re() -> &'static Regex {
     // TS: /^([A-Za-z一-鿿][A-Za-z0-9_\-一-鿿]{0,19})/
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^([A-Za-z\x{4e00}-\x{9fff}][A-Za-z0-9_\-\x{4e00}-\x{9fff}]{0,19})").expect("id"))
+    R.get_or_init(|| {
+        Regex::new(r"^([A-Za-z\x{4e00}-\x{9fff}][A-Za-z0-9_\-\x{4e00}-\x{9fff}]{0,19})")
+            .expect("id")
+    })
 }
 fn quoted_name_re() -> &'static Regex {
     // TS: /[""]([^""\n]+)[""]/
@@ -344,9 +360,26 @@ fn ascii_stopwords() -> &'static HashSet<&'static str> {
     S.get_or_init(|| {
         let mut s = HashSet::new();
         for w in [
-            "and", "the", "for", "with", "from", "that", "into", "then", "open", "close",
-            "advance", "resolve", "defer", "new", "planted", "pressured", "near", "payoff",
-            "ready", "stale",
+            "and",
+            "the",
+            "for",
+            "with",
+            "from",
+            "that",
+            "into",
+            "then",
+            "open",
+            "close",
+            "advance",
+            "resolve",
+            "defer",
+            "new",
+            "planted",
+            "pressured",
+            "near",
+            "payoff",
+            "ready",
+            "stale",
         ] {
             s.insert(w);
         }
@@ -379,7 +412,10 @@ open:
         assert_eq!(ledger.resolve.len(), 1);
         assert_eq!(ledger.resolve[0].id, "mentor-debt");
         assert_eq!(ledger.new_open_count, 1, "[new] 行计数");
-        assert!(ledger.open.is_empty(), "id-bearing open 行为空（只有 [new]）");
+        assert!(
+            ledger.open.is_empty(),
+            "id-bearing open 行为空（只有 [new]）"
+        );
     }
 
     #[test]
@@ -422,7 +458,9 @@ open:
         // advance h007 关键词「胖虎借条」不在正文中 → warning。
         let draft = "本章什么都没推进，只是闲聊。";
         let v = validate_hook_ledger(MEMO, draft);
-        assert!(v.iter().any(|x| x.severity == ViolationSeverity::Warning && x.description.contains("h007")));
+        assert!(v
+            .iter()
+            .any(|x| x.severity == ViolationSeverity::Warning && x.description.contains("h007")));
     }
 
     #[test]
@@ -431,7 +469,10 @@ open:
         let draft = "主角拿出了胖虎借条，师徒债清偿那一刻众人震惊。";
         let v = validate_hook_ledger(MEMO, draft);
         // resolve=1, open(new)=1 → 揭1埋1 不违规；evidence 都有 → 无 warning。
-        assert!(v.iter().all(|x| x.severity != ViolationSeverity::Warning), "warnings: {v:?}");
+        assert!(
+            v.iter().all(|x| x.severity != ViolationSeverity::Warning),
+            "warnings: {v:?}"
+        );
         assert!(v.is_empty(), "应无违规: {v:?}");
     }
 
@@ -441,7 +482,11 @@ open:
         let memo = "## 本章 hook 账\n\nresolve:\n- h001 关闭线索\n";
         let draft = "正文含 关闭线索 满足 evidence";
         let v = validate_hook_ledger(memo, draft);
-        assert!(v.iter().any(|x| x.severity == ViolationSeverity::Critical && x.category.contains("揭 1 埋 1")));
+        assert!(
+            v.iter()
+                .any(|x| x.severity == ViolationSeverity::Critical
+                    && x.category.contains("揭 1 埋 1"))
+        );
     }
 
     #[test]
@@ -455,8 +500,15 @@ open:
 
     #[test]
     fn draft_echoes_bare_ascii_id_with_word_boundary() {
-        let entry = HookLedgerEntry { id: "H007".into(), descriptor: "".into(), keywords: vec![] };
+        let entry = HookLedgerEntry {
+            id: "H007".into(),
+            descriptor: "".into(),
+            keywords: vec![],
+        };
         assert!(draft_echoes_entry("see H007 here", &entry));
-        assert!(!draft_echoes_entry("see H0077 here", &entry), "词边界：H0077 不匹配 H007");
+        assert!(
+            !draft_echoes_entry("see H0077 here", &entry),
+            "词边界：H0077 不匹配 H007"
+        );
     }
 }

@@ -48,7 +48,8 @@ fn progressing_status_re() -> &'static Regex {
 fn open_status_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"(?i)(open|pending|seeded|planted|待定|未回收|已埋|已种下|已铺垫)").expect("open status regex")
+        Regex::new(r"(?i)(open|pending|seeded|planted|待定|未回收|已埋|已种下|已铺垫)")
+            .expect("open status regex")
     })
 }
 
@@ -56,7 +57,9 @@ fn open_status_re() -> &'static Regex {
 /// rust 词表须识别，否则 md 派生基线把已撤回前提复活为 open）。
 fn superseded_status_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)(superseded|withdrawn|已撤回|撤回)").expect("superseded status regex"))
+    R.get_or_init(|| {
+        Regex::new(r"(?i)(superseded|withdrawn|已撤回|撤回)").expect("superseded status regex")
+    })
 }
 
 fn digits_re() -> &'static Regex {
@@ -101,7 +104,11 @@ pub fn deduplicate_summary_rows<T: Clone>(rows: &[T], chapter_of: impl Fn(&T) ->
 /// 模糊归一 hook 状态字符串 → [`HookStatus`]，未识别时追加 warning 并回落 open。
 ///
 /// 对齐 TS `normalizeHookStatus`。匹配顺序：resolved → deferred → progressing → open（首个命中返回）。
-pub fn normalize_hook_status(value: Option<&str>, warnings: &mut Vec<String>, hook_id: &str) -> HookStatus {
+pub fn normalize_hook_status(
+    value: Option<&str>,
+    warnings: &mut Vec<String>,
+    hook_id: &str,
+) -> HookStatus {
     let normalized = value.unwrap_or("").trim().to_lowercase();
     if normalized.is_empty() {
         return HookStatus::Open;
@@ -123,14 +130,21 @@ pub fn normalize_hook_status(value: Option<&str>, warnings: &mut Vec<String>, ho
     }
     append_warning(
         warnings,
-        &format!("{hook_id}:status normalized from \"{}\" to \"open\"", value.unwrap_or("")),
+        &format!(
+            "{hook_id}:status normalized from \"{}\" to \"open\"",
+            value.unwrap_or("")
+        ),
     );
     HookStatus::Open
 }
 
 /// 归一 hook 类型：非空 trim 后保留，空 → "unspecified"（追加 warning）。
 /// 对齐 TS `normalizeHookType`。
-pub fn normalize_hook_type(value: Option<&str>, warnings: &mut Vec<String>, hook_id: &str) -> String {
+pub fn normalize_hook_type(
+    value: Option<&str>,
+    warnings: &mut Vec<String>,
+    hook_id: &str,
+) -> String {
     let normalized = value.unwrap_or("").trim();
     if !normalized.is_empty() {
         return normalized.to_string();
@@ -156,7 +170,10 @@ pub fn parse_strict_integer_with_warning(
     if let Some(parsed) = parse_strict_integer_cell(Some(v)) {
         return parsed;
     }
-    append_warning(warnings, &format!("{field_label} normalized from \"{v}\" to 0"));
+    append_warning(
+        warnings,
+        &format!("{field_label} normalized from \"{v}\" to 0"),
+    );
     0
 }
 
@@ -176,7 +193,10 @@ pub fn parse_integer_with_fallback(
     match digits_re().find(v) {
         Some(m) => m.as_str().parse::<i64>().unwrap_or(fallback),
         None => {
-            append_warning(warnings, &format!("{field_label} normalized from \"{v}\" to {fallback}"));
+            append_warning(
+                warnings,
+                &format!("{field_label} normalized from \"{v}\" to {fallback}"),
+            );
             fallback
         }
     }
@@ -252,7 +272,9 @@ async fn resolve_contiguous_artifact_chapter_progress(
     book_dir: &str,
 ) -> crate::Result<i64> {
     let chapter_numbers = load_durable_artifact_chapter_numbers(store, book_dir).await?;
-    Ok(i64::from(resolve_contiguous_chapter_prefix(&chapter_numbers)))
+    Ok(i64::from(resolve_contiguous_chapter_prefix(
+        &chapter_numbers,
+    )))
 }
 
 /// 从 `{book_dir}/chapters/index.json`（数组 number 字段）+ `chapters/` 目录文件名（`N_*`）提取章节数。
@@ -311,7 +333,11 @@ pub async fn resolve_runtime_language(
             .unwrap_or_default(),
         None => String::new(),
     };
-    Ok(if language == "zh" { WritingLanguage::Zh } else { WritingLanguage::En })
+    Ok(if language == "zh" {
+        WritingLanguage::Zh
+    } else {
+        WritingLanguage::En
+    })
 }
 
 /// 修复 hooks 状态的 `serde_json::Value`：对每个 hook，空/缺失 type → "unspecified"（追加 warning），
@@ -325,7 +351,9 @@ pub fn repair_hooks_state_value(value: &mut serde_json::Value, warnings: &mut Ve
     };
     let mut changed = false;
     for (index, hook) in hooks.iter_mut().enumerate() {
-        let Some(obj) = hook.as_object_mut() else { continue };
+        let Some(obj) = hook.as_object_mut() else {
+            continue;
+        };
         let hook_id = obj
             .get("hookId")
             .and_then(|v| v.as_str())
@@ -333,12 +361,19 @@ pub fn repair_hooks_state_value(value: &mut serde_json::Value, warnings: &mut Ve
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| format!("hooks[{index}]"));
 
-        let current_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let current_type = obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let trimmed = current_type.trim();
         if !trimmed.is_empty() {
             if trimmed != current_type {
                 changed = true;
-                obj.insert("type".to_string(), serde_json::Value::String(trimmed.to_string()));
+                obj.insert(
+                    "type".to_string(),
+                    serde_json::Value::String(trimmed.to_string()),
+                );
             }
             continue;
         }
@@ -347,7 +382,10 @@ pub fn repair_hooks_state_value(value: &mut serde_json::Value, warnings: &mut Ve
             warnings,
             &format!("{hook_id}: empty hook type normalized to \"unspecified\""),
         );
-        obj.insert("type".to_string(), serde_json::Value::String("unspecified".to_string()));
+        obj.insert(
+            "type".to_string(),
+            serde_json::Value::String("unspecified".to_string()),
+        );
     }
     changed
 }
@@ -367,7 +405,10 @@ pub async fn load_json_if_valid<T: serde::de::DeserializeOwned>(
     match serde_json::from_str::<T>(&raw) {
         Ok(v) => Ok(Some(v)),
         Err(_) => {
-            append_warning(warnings, &format!("{file_label} invalid, rebuilt from markdown"));
+            append_warning(
+                warnings,
+                &format!("{file_label} invalid, rebuilt from markdown"),
+            );
             Ok(None)
         }
     }
@@ -390,7 +431,10 @@ pub async fn load_hooks_state_if_valid(
     let mut value: serde_json::Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
         Err(_) => {
-            append_warning(warnings, &format!("{file_label} invalid, rebuilt from markdown"));
+            append_warning(
+                warnings,
+                &format!("{file_label} invalid, rebuilt from markdown"),
+            );
             return Ok(None);
         }
     };
@@ -398,7 +442,10 @@ pub async fn load_hooks_state_if_valid(
     match serde_json::from_value::<HooksState>(value) {
         Ok(state) => Ok(Some((state, repaired))),
         Err(_) => {
-            append_warning(warnings, &format!("{file_label} invalid, rebuilt from markdown"));
+            append_warning(
+                warnings,
+                &format!("{file_label} invalid, rebuilt from markdown"),
+            );
             Ok(None)
         }
     }
@@ -441,7 +488,9 @@ pub fn parse_current_state_state_markdown(
     fallback_chapter: u32,
     warnings: &mut Vec<String>,
 ) -> CurrentStateState {
-    use crate::utils::story_markdown::{infer_fact_subject, is_current_chapter_label, parse_markdown_table_rows};
+    use crate::utils::story_markdown::{
+        infer_fact_subject, is_current_chapter_label, parse_markdown_table_rows,
+    };
 
     let table_rows = parse_markdown_table_rows(markdown);
     let field_value_rows: Vec<&Vec<String>> = table_rows
@@ -455,7 +504,14 @@ pub fn parse_current_state_state_markdown(
             .iter()
             .find(|row| row.first().is_some_and(|c| is_current_chapter_label(c)))
             .and_then(|row| row.get(1).map(|s| s.as_str()))
-            .map(|v| parse_integer_with_fallback(Some(v), fallback_chapter as i64, warnings, "current_state:chapter"))
+            .map(|v| {
+                parse_integer_with_fallback(
+                    Some(v),
+                    fallback_chapter as i64,
+                    warnings,
+                    "current_state:chapter",
+                )
+            })
             .unwrap_or(fallback_chapter as i64)
             .max(0) as u32;
 
@@ -479,7 +535,10 @@ pub fn parse_current_state_state_markdown(
             })
             .collect();
 
-        return CurrentStateState { chapter: state_chapter, facts };
+        return CurrentStateState {
+            chapter: state_chapter,
+            facts,
+        };
     }
 
     // bullet fallback：predicate=note_N，subject=current_state。
@@ -487,7 +546,12 @@ pub fn parse_current_state_state_markdown(
         .lines()
         .map(|line| line.trim())
         .filter(|line| line.starts_with('-'))
-        .map(|line| line.replacen("- ", "", 1).replacen('-', "", 1).trim().to_string())
+        .map(|line| {
+            line.replacen("- ", "", 1)
+                .replacen('-', "", 1)
+                .trim()
+                .to_string()
+        })
         .filter(|line| !line.is_empty())
         .collect();
 
@@ -566,7 +630,11 @@ pub async fn load_markdown_current_state(
         .read_to_string(&join_path(story_dir, "current_state.md"))
         .await?
         .unwrap_or_default();
-    Ok(parse_current_state_state_markdown(&markdown, fallback_chapter, warnings))
+    Ok(parse_current_state_state_markdown(
+        &markdown,
+        fallback_chapter,
+        warnings,
+    ))
 }
 
 /// markdown 引导状态的聚合（summaries + hooks + currentState + durableStoryProgress）。
@@ -630,8 +698,13 @@ pub async fn load_or_bootstrap_summaries(
     warnings: &mut Vec<String>,
     bootstrap_state: Option<ChapterSummariesState>,
 ) -> crate::Result<ChapterSummariesState> {
-    if let Some(existing) =
-        load_json_if_valid::<ChapterSummariesState>(store, state_path, warnings, "chapter_summaries.json").await?
+    if let Some(existing) = load_json_if_valid::<ChapterSummariesState>(
+        store,
+        state_path,
+        warnings,
+        "chapter_summaries.json",
+    )
+    .await?
     {
         let deduped = deduplicate_summary_rows(&existing.rows, |r| r.chapter as i64);
         if deduped.len() < existing.rows.len() {
@@ -701,7 +774,8 @@ pub async fn load_or_bootstrap_current_state(
     bootstrap_state: Option<CurrentStateState>,
 ) -> crate::Result<CurrentStateState> {
     if let Some(existing) =
-        load_json_if_valid::<CurrentStateState>(store, state_path, warnings, "current_state.json").await?
+        load_json_if_valid::<CurrentStateState>(store, state_path, warnings, "current_state.json")
+            .await?
     {
         return Ok(existing);
     }
@@ -747,9 +821,10 @@ async fn structured_state_fresh_manifest(
     // manifest：缺失/损坏/结构未定型 → 慢路径（warning 收集只服务判定，丢弃安全：
     // 慢路径会重读重warn）。
     let mut probe = Vec::new();
-    let manifest = load_json_if_valid::<StateManifest>(store, manifest_path, &mut probe, "manifest.json")
-        .await
-        .ok()??;
+    let manifest =
+        load_json_if_valid::<StateManifest>(store, manifest_path, &mut probe, "manifest.json")
+            .await
+            .ok()??;
     if manifest.schema_version != 2 || (manifest.language != "zh" && manifest.language != "en") {
         return None;
     }
@@ -788,13 +863,16 @@ async fn structured_state_fresh_manifest(
     )
     .await
     .ok()??;
-    if deduplicate_summary_rows(&summaries.rows, |r| r.chapter as i64).len() != summaries.rows.len() {
+    if deduplicate_summary_rows(&summaries.rows, |r| r.chapter as i64).len() != summaries.rows.len()
+    {
         return None;
     }
 
     // 进度一致性：与主入口同参同 store 重算 expected（i64→u32 截断口径与
     // load_markdown_bootstrap_state 一致），manifest 落后/超前均回落慢路径。
-    let artifact = resolve_contiguous_artifact_chapter_progress(store, book_dir).await.ok()?;
+    let artifact = resolve_contiguous_artifact_chapter_progress(store, book_dir)
+        .await
+        .ok()?;
     let markdown_fallback = normalize_explicit_chapter(fallback_chapter.map(|v| v as i64)) as u32;
     if manifest.last_applied_chapter != markdown_fallback.max(artifact as u32) {
         return None;
@@ -858,8 +936,14 @@ pub async fn bootstrap_structured_state_from_markdown(
     };
 
     let markdown_fallback = normalize_explicit_chapter(fallback_chapter.map(|v| v as i64)) as u32;
-    let markdown_state =
-        load_markdown_bootstrap_state(store, book_dir, &story_dir, markdown_fallback, &mut warnings).await?;
+    let markdown_state = load_markdown_bootstrap_state(
+        store,
+        book_dir,
+        &story_dir,
+        markdown_fallback,
+        &mut warnings,
+    )
+    .await?;
 
     let _summaries = load_or_bootstrap_summaries(
         store,
@@ -904,7 +988,10 @@ pub async fn bootstrap_structured_state_from_markdown(
     }
 
     let migration_warnings = {
-        let existing = existing_manifest.as_ref().map(|m| m.migration_warnings.clone()).unwrap_or_default();
+        let existing = existing_manifest
+            .as_ref()
+            .map(|m| m.migration_warnings.clone())
+            .unwrap_or_default();
         unique_strings(&[existing, warnings.clone()].concat())
     };
     let manifest = StateManifest {
@@ -961,8 +1048,14 @@ pub async fn rewrite_structured_state_from_markdown(
     };
 
     let markdown_fallback = normalize_explicit_chapter(fallback_chapter.map(|v| v as i64)) as u32;
-    let markdown_state =
-        load_markdown_bootstrap_state(store, book_dir, &story_dir, markdown_fallback, &mut warnings).await?;
+    let markdown_state = load_markdown_bootstrap_state(
+        store,
+        book_dir,
+        &story_dir,
+        markdown_fallback,
+        &mut warnings,
+    )
+    .await?;
 
     let migration_warnings = {
         let existing = existing_manifest
@@ -986,7 +1079,9 @@ pub async fn rewrite_structured_state_from_markdown(
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     store.write_string(&manifest_path, &manifest_json).await?;
     let current_json = serde_json::to_string_pretty(&markdown_state.current_state)?;
-    store.write_string(&current_state_path, &current_json).await?;
+    store
+        .write_string(&current_state_path, &current_json)
+        .await?;
     let hooks_json = serde_json::to_string_pretty(&markdown_state.hooks_state)?;
     store.write_string(&hooks_path, &hooks_json).await?;
     let summaries_json = serde_json::to_string_pretty(&markdown_state.summaries_state)?;
@@ -1029,7 +1124,11 @@ mod tests {
         std::fs::create_dir_all(book_dir.join("chapters")).unwrap();
         std::fs::write(book_dir.join("chapters").join("0001_风起.md"), "x").unwrap();
         std::fs::write(book_dir.join("chapters").join("0002_云涌.md"), "x").unwrap();
-        std::fs::write(book_dir.join("chapters").join("index.json"), r#"[{"number":1},{"number":2}]"#).unwrap();
+        std::fs::write(
+            book_dir.join("chapters").join("index.json"),
+            r#"[{"number":1},{"number":2}]"#,
+        )
+        .unwrap();
 
         let book_dir_str = book_dir.display().to_string();
         let result = rewrite_structured_state_from_markdown(&store, &book_dir_str, Some(0))
@@ -1067,11 +1166,26 @@ mod tests {
     #[test]
     fn normalize_hook_status_matches_resolved_synonyms() {
         let mut w = Vec::new();
-        assert_eq!(normalize_hook_status(Some("resolved"), &mut w, "h1"), HookStatus::Resolved);
-        assert_eq!(normalize_hook_status(Some("已回收"), &mut w, "h1"), HookStatus::Resolved);
-        assert_eq!(normalize_hook_status(Some("paid off"), &mut w, "h1"), HookStatus::Resolved);
-        assert_eq!(normalize_hook_status(Some("PAID_OFF"), &mut w, "h1"), HookStatus::Resolved);
-        assert_eq!(normalize_hook_status(Some("兑现"), &mut w, "h1"), HookStatus::Resolved);
+        assert_eq!(
+            normalize_hook_status(Some("resolved"), &mut w, "h1"),
+            HookStatus::Resolved
+        );
+        assert_eq!(
+            normalize_hook_status(Some("已回收"), &mut w, "h1"),
+            HookStatus::Resolved
+        );
+        assert_eq!(
+            normalize_hook_status(Some("paid off"), &mut w, "h1"),
+            HookStatus::Resolved
+        );
+        assert_eq!(
+            normalize_hook_status(Some("PAID_OFF"), &mut w, "h1"),
+            HookStatus::Resolved
+        );
+        assert_eq!(
+            normalize_hook_status(Some("兑现"), &mut w, "h1"),
+            HookStatus::Resolved
+        );
         assert!(w.is_empty(), "命中的归一不应产 warning");
     }
 
@@ -1079,36 +1193,78 @@ mod tests {
     #[test]
     fn normalize_hook_status_keeps_superseded_without_warning() {
         let mut w = Vec::new();
-        assert_eq!(normalize_hook_status(Some("superseded"), &mut w, "h1"), HookStatus::Superseded);
-        assert_eq!(normalize_hook_status(Some("Withdrawn"), &mut w, "h1"), HookStatus::Superseded);
-        assert_eq!(normalize_hook_status(Some("已撤回"), &mut w, "h1"), HookStatus::Superseded);
+        assert_eq!(
+            normalize_hook_status(Some("superseded"), &mut w, "h1"),
+            HookStatus::Superseded
+        );
+        assert_eq!(
+            normalize_hook_status(Some("Withdrawn"), &mut w, "h1"),
+            HookStatus::Superseded
+        );
+        assert_eq!(
+            normalize_hook_status(Some("已撤回"), &mut w, "h1"),
+            HookStatus::Superseded
+        );
         assert!(w.is_empty(), "命中的归一不应产 warning");
     }
 
     #[test]
     fn normalize_hook_status_matches_deferred_synonyms() {
         let mut w = Vec::new();
-        assert_eq!(normalize_hook_status(Some("deferred"), &mut w, "h1"), HookStatus::Deferred);
-        assert_eq!(normalize_hook_status(Some("dormant"), &mut w, "h1"), HookStatus::Deferred);
-        assert_eq!(normalize_hook_status(Some("搁置"), &mut w, "h1"), HookStatus::Deferred);
-        assert_eq!(normalize_hook_status(Some("not-started"), &mut w, "h1"), HookStatus::Deferred);
+        assert_eq!(
+            normalize_hook_status(Some("deferred"), &mut w, "h1"),
+            HookStatus::Deferred
+        );
+        assert_eq!(
+            normalize_hook_status(Some("dormant"), &mut w, "h1"),
+            HookStatus::Deferred
+        );
+        assert_eq!(
+            normalize_hook_status(Some("搁置"), &mut w, "h1"),
+            HookStatus::Deferred
+        );
+        assert_eq!(
+            normalize_hook_status(Some("not-started"), &mut w, "h1"),
+            HookStatus::Deferred
+        );
     }
 
     #[test]
     fn normalize_hook_status_matches_progressing_synonyms() {
         let mut w = Vec::new();
-        assert_eq!(normalize_hook_status(Some("progressing"), &mut w, "h1"), HookStatus::Progressing);
-        assert_eq!(normalize_hook_status(Some("confirmed-hit"), &mut w, "h1"), HookStatus::Progressing);
-        assert_eq!(normalize_hook_status(Some("已推进"), &mut w, "h1"), HookStatus::Progressing);
+        assert_eq!(
+            normalize_hook_status(Some("progressing"), &mut w, "h1"),
+            HookStatus::Progressing
+        );
+        assert_eq!(
+            normalize_hook_status(Some("confirmed-hit"), &mut w, "h1"),
+            HookStatus::Progressing
+        );
+        assert_eq!(
+            normalize_hook_status(Some("已推进"), &mut w, "h1"),
+            HookStatus::Progressing
+        );
     }
 
     #[test]
     fn normalize_hook_status_matches_open_synonyms() {
         let mut w = Vec::new();
-        assert_eq!(normalize_hook_status(Some("open"), &mut w, "h1"), HookStatus::Open);
-        assert_eq!(normalize_hook_status(Some("planted"), &mut w, "h1"), HookStatus::Open);
-        assert_eq!(normalize_hook_status(Some("已种下"), &mut w, "h1"), HookStatus::Open);
-        assert_eq!(normalize_hook_status(Some(""), &mut w, "h1"), HookStatus::Open);
+        assert_eq!(
+            normalize_hook_status(Some("open"), &mut w, "h1"),
+            HookStatus::Open
+        );
+        assert_eq!(
+            normalize_hook_status(Some("planted"), &mut w, "h1"),
+            HookStatus::Open
+        );
+        assert_eq!(
+            normalize_hook_status(Some("已种下"), &mut w, "h1"),
+            HookStatus::Open
+        );
+        assert_eq!(
+            normalize_hook_status(Some(""), &mut w, "h1"),
+            HookStatus::Open
+        );
         assert_eq!(normalize_hook_status(None, &mut w, "h1"), HookStatus::Open);
     }
 
@@ -1125,14 +1281,20 @@ mod tests {
     #[test]
     fn normalize_hook_type_preserves_non_empty() {
         let mut w = Vec::new();
-        assert_eq!(normalize_hook_type(Some("  mystery  "), &mut w, "h1"), "mystery");
+        assert_eq!(
+            normalize_hook_type(Some("  mystery  "), &mut w, "h1"),
+            "mystery"
+        );
         assert!(w.is_empty());
     }
 
     #[test]
     fn normalize_hook_type_empty_falls_back_unspecified_with_warning() {
         let mut w = Vec::new();
-        assert_eq!(normalize_hook_type(Some("   "), &mut w, "h1"), "unspecified");
+        assert_eq!(
+            normalize_hook_type(Some("   "), &mut w, "h1"),
+            "unspecified"
+        );
         assert_eq!(normalize_hook_type(None, &mut w, "h1"), "unspecified");
         // 两次产生相同 warning，append_warning 去重 → 仅 1 条。
         assert_eq!(w.len(), 1);
@@ -1150,7 +1312,10 @@ mod tests {
     #[test]
     fn parse_strict_integer_with_warning_emits_warning_on_invalid() {
         let mut w = Vec::new();
-        assert_eq!(parse_strict_integer_with_warning(Some("12"), &mut w, "f"), 12);
+        assert_eq!(
+            parse_strict_integer_with_warning(Some("12"), &mut w, "f"),
+            12
+        );
         assert!(w.is_empty());
         assert_eq!(parse_strict_integer_with_warning(Some("x"), &mut w, "f"), 0);
         assert_eq!(w.len(), 1);
@@ -1162,7 +1327,11 @@ mod tests {
         assert_eq!(parse_integer_with_fallback(Some("42"), 9, &mut w, "f"), 42);
         assert_eq!(parse_integer_with_fallback(Some("abc"), 9, &mut w, "f"), 9);
         assert_eq!(w.len(), 1);
-        assert_eq!(parse_integer_with_fallback(None, -5, &mut w, "f"), 0, "负 fallback → max(0,..)=0");
+        assert_eq!(
+            parse_integer_with_fallback(None, -5, &mut w, "f"),
+            0,
+            "负 fallback → max(0,..)=0"
+        );
     }
 
     #[test]
@@ -1184,13 +1353,27 @@ mod tests {
 
     #[test]
     fn unique_strings_drops_empty_and_dedups_preserving_order() {
-        let v: Vec<String> = vec!["a".into(), "".into(), "b".into(), "a".into(), "  ".into(), "c".into()];
-        assert_eq!(unique_strings(&v), vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        let v: Vec<String> = vec![
+            "a".into(),
+            "".into(),
+            "b".into(),
+            "a".into(),
+            "  ".into(),
+            "c".into(),
+        ];
+        assert_eq!(
+            unique_strings(&v),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     // --- async fs 编排（durable progress）----------------------------------------
 
-    fn setup_book_with_chapters(store: &InMemoryStateStore, book_dir: &str, files: &[(&str, &str)]) {
+    fn setup_book_with_chapters(
+        store: &InMemoryStateStore,
+        book_dir: &str,
+        files: &[(&str, &str)],
+    ) {
         for (name, content) in files {
             store.set(&format!("{book_dir}/chapters/{name}"), content);
         }
@@ -1199,15 +1382,21 @@ mod tests {
     #[tokio::test]
     async fn resolve_durable_progress_from_chapter_filename_prefix() {
         let store = InMemoryStateStore::new();
-        setup_book_with_chapters(&store, "book", &[
-            ("1_intro.md", "x"),
-            ("2_rise.md", "x"),
-            ("3_climax.md", "x"),
-            ("notes.md", "x"), // 无 N_ 前缀，忽略
-        ]);
+        setup_book_with_chapters(
+            &store,
+            "book",
+            &[
+                ("1_intro.md", "x"),
+                ("2_rise.md", "x"),
+                ("3_climax.md", "x"),
+                ("notes.md", "x"), // 无 N_ 前缀，忽略
+            ],
+        );
         // 1/2/3 连续 → 前缀 3。
         assert_eq!(
-            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            resolve_durable_story_progress(&store, "book", None)
+                .await
+                .unwrap(),
             3
         );
     }
@@ -1218,12 +1407,16 @@ mod tests {
         setup_book_with_chapters(&store, "book", &[("1_a.md", "x"), ("2_b.md", "x")]);
         // 连续前缀 2，fallback 5 → max = 5。
         assert_eq!(
-            resolve_durable_story_progress(&store, "book", Some(5)).await.unwrap(),
+            resolve_durable_story_progress(&store, "book", Some(5))
+                .await
+                .unwrap(),
             5
         );
         // 连续前缀 2，fallback 1 → max = 2。
         assert_eq!(
-            resolve_durable_story_progress(&store, "book", Some(1)).await.unwrap(),
+            resolve_durable_story_progress(&store, "book", Some(1))
+                .await
+                .unwrap(),
             2
         );
     }
@@ -1233,8 +1426,18 @@ mod tests {
         let store = InMemoryStateStore::new();
         setup_book_with_chapters(&store, "book", &[("1_a.md", "x")]);
         // fallback=0 / 负数 → 视为 0，取连续前缀 1。
-        assert_eq!(resolve_durable_story_progress(&store, "book", Some(0)).await.unwrap(), 1);
-        assert_eq!(resolve_durable_story_progress(&store, "book", Some(-3)).await.unwrap(), 1);
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", Some(0))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", Some(-3))
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1247,7 +1450,9 @@ mod tests {
         );
         setup_book_with_chapters(&store, "book", &[("3_c.md", "x"), ("4_d.md", "x")]);
         assert_eq!(
-            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            resolve_durable_story_progress(&store, "book", None)
+                .await
+                .unwrap(),
             4
         );
     }
@@ -1261,7 +1466,9 @@ mod tests {
             r#"[{"number":1},{"number":"x"},{"number":0},{"number":-5},{"title":"no-num"},{"number":2}]"#,
         );
         assert_eq!(
-            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            resolve_durable_story_progress(&store, "book", None)
+                .await
+                .unwrap(),
             2
         );
     }
@@ -1270,20 +1477,36 @@ mod tests {
     async fn resolve_durable_progress_empty_book_returns_fallback() {
         let store = InMemoryStateStore::new();
         // 无任何章节产物 → 前缀 0，取 fallback。
-        assert_eq!(resolve_durable_story_progress(&store, "book", Some(7)).await.unwrap(), 7);
-        assert_eq!(resolve_durable_story_progress(&store, "book", None).await.unwrap(), 0);
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", Some(7))
+                .await
+                .unwrap(),
+            7
+        );
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", None)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
     async fn resolve_durable_progress_gap_caps_at_contiguous_prefix() {
         let store = InMemoryStateStore::new();
-        setup_book_with_chapters(&store, "book", &[
-            ("1_a.md", "x"),
-            ("2_b.md", "x"),
-            ("4_d.md", "x"), // 缺 3，连续前缀只到 2
-        ]);
+        setup_book_with_chapters(
+            &store,
+            "book",
+            &[
+                ("1_a.md", "x"),
+                ("2_b.md", "x"),
+                ("4_d.md", "x"), // 缺 3，连续前缀只到 2
+            ],
+        );
         assert_eq!(
-            resolve_durable_story_progress(&store, "book", None).await.unwrap(),
+            resolve_durable_story_progress(&store, "book", None)
+                .await
+                .unwrap(),
             2
         );
     }
@@ -1303,13 +1526,25 @@ mod tests {
     #[tokio::test]
     async fn resolve_runtime_language_en_when_missing_or_invalid() {
         let store = InMemoryStateStore::new();
-        assert_eq!(resolve_runtime_language(&store, "book").await.unwrap(), WritingLanguage::En);
+        assert_eq!(
+            resolve_runtime_language(&store, "book").await.unwrap(),
+            WritingLanguage::En
+        );
         store.set("book/book.json", r#"{"language":"en"}"#);
-        assert_eq!(resolve_runtime_language(&store, "book").await.unwrap(), WritingLanguage::En);
+        assert_eq!(
+            resolve_runtime_language(&store, "book").await.unwrap(),
+            WritingLanguage::En
+        );
         store.set("book/book.json", r#"{"language":"fr"}"#);
-        assert_eq!(resolve_runtime_language(&store, "book").await.unwrap(), WritingLanguage::En);
+        assert_eq!(
+            resolve_runtime_language(&store, "book").await.unwrap(),
+            WritingLanguage::En
+        );
         store.set("book/book.json", "not json");
-        assert_eq!(resolve_runtime_language(&store, "book").await.unwrap(), WritingLanguage::En);
+        assert_eq!(
+            resolve_runtime_language(&store, "book").await.unwrap(),
+            WritingLanguage::En
+        );
     }
 
     #[test]
@@ -1386,7 +1621,9 @@ mod tests {
         );
         let mut warnings = Vec::new();
         let manifest: Option<StateManifest> =
-            load_json_if_valid(&store, "m.json", &mut warnings, "manifest.json").await.unwrap();
+            load_json_if_valid(&store, "m.json", &mut warnings, "manifest.json")
+                .await
+                .unwrap();
         let manifest = manifest.expect("合法 JSON 应解析");
         assert_eq!(manifest.schema_version, 2);
         assert_eq!(manifest.last_applied_chapter, 3);
@@ -1395,7 +1632,9 @@ mod tests {
         // 非法 JSON → None + warning。
         store.set("bad.json", "{not json");
         let bad: Option<StateManifest> =
-            load_json_if_valid(&store, "bad.json", &mut warnings, "bad.json").await.unwrap();
+            load_json_if_valid(&store, "bad.json", &mut warnings, "bad.json")
+                .await
+                .unwrap();
         assert!(bad.is_none());
         assert_eq!(warnings.len(), 1);
     }
@@ -1409,10 +1648,11 @@ mod tests {
             r#"{"hooks":[{"hookId":"h1","startChapter":1,"type":"  ","status":"open","lastAdvancedChapter":1,"expectedPayoff":"x","notes":"n"}]}"#,
         );
         let mut warnings = Vec::new();
-        let (state, repaired) = load_hooks_state_if_valid(&store, "hooks.json", &mut warnings, "hooks.json")
-            .await
-            .unwrap()
-            .expect("应解析");
+        let (state, repaired) =
+            load_hooks_state_if_valid(&store, "hooks.json", &mut warnings, "hooks.json")
+                .await
+                .unwrap()
+                .expect("应解析");
         assert!(repaired, "空 type 被 repair → changed=true");
         assert_eq!(state.hooks[0].hook_type, "unspecified");
         assert!(!warnings.is_empty());
@@ -1451,13 +1691,17 @@ mod tests {
         let state = parse_pending_hooks_state_markdown(md, &mut warnings);
         assert_eq!(state.hooks.len(), 2);
         assert_eq!(state.hooks[0].hook_id, "hook-1");
-        assert_eq!(state.hooks[0].hook_type, "unspecified", "bullet fallback type 已是 unspecified，不再 warning");
+        assert_eq!(
+            state.hooks[0].hook_type, "unspecified",
+            "bullet fallback type 已是 unspecified，不再 warning"
+        );
         assert!(warnings.is_empty());
     }
 
     #[test]
     fn parse_current_state_state_markdown_table_extracts_facts_and_chapter() {
-        let md = "| 字段 | 值 |\n|---|---|\n| 当前章节 | 7 |\n| 当前位置 | 森林 |\n| 当前目标 | 圣杯 |";
+        let md =
+            "| 字段 | 值 |\n|---|---|\n| 当前章节 | 7 |\n| 当前位置 | 森林 |\n| 当前目标 | 圣杯 |";
         let mut warnings = Vec::new();
         let state = parse_current_state_state_markdown(md, 99, &mut warnings);
         assert_eq!(state.chapter, 7);
@@ -1497,7 +1741,9 @@ mod tests {
             "story/chapter_summaries.md",
             "| 2 | t2 |\n| 1 | t1-old |\n| 1 | t1-new |\n| note | x |",
         );
-        let state = load_markdown_summaries_state(&store, "story").await.unwrap();
+        let state = load_markdown_summaries_state(&store, "story")
+            .await
+            .unwrap();
         let chapters: Vec<u32> = state.rows.iter().map(|r| r.chapter).collect();
         assert_eq!(chapters, vec![1, 2], "去重（后覆盖）+ 升序；非数字首列过滤");
         assert_eq!(state.rows[0].title, "t1-new");
@@ -1507,7 +1753,9 @@ mod tests {
     #[tokio::test]
     async fn load_markdown_summaries_state_absent_returns_empty() {
         let store = InMemoryStateStore::new();
-        let state = load_markdown_summaries_state(&store, "story").await.unwrap();
+        let state = load_markdown_summaries_state(&store, "story")
+            .await
+            .unwrap();
         assert!(state.rows.is_empty());
     }
 
@@ -1517,8 +1765,14 @@ mod tests {
         store.set("book/chapters/1_a.md", "x");
         store.set("book/chapters/2_b.md", "x");
         store.set("story/chapter_summaries.md", "| 1 | t1 |");
-        store.set("story/pending_hooks.md", "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |");
-        store.set("story/current_state.md", "| 字段 | 值 |\n|---|---|\n| 当前章节 | 5 |\n| 当前位置 | 森林 |");
+        store.set(
+            "story/pending_hooks.md",
+            "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |",
+        );
+        store.set(
+            "story/current_state.md",
+            "| 字段 | 值 |\n|---|---|\n| 当前章节 | 5 |\n| 当前位置 | 森林 |",
+        );
 
         let mut warnings = Vec::new();
         let bs = load_markdown_bootstrap_state(&store, "book", "story", 3, &mut warnings)
@@ -1559,7 +1813,10 @@ mod tests {
             "book/story/pending_hooks.md",
             "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |",
         );
-        store.set("book/story/current_state.md", "| 字段 | 值 |\n|---|---|\n| 当前章节 | 2 |\n| 当前位置 | 森林 |");
+        store.set(
+            "book/story/current_state.md",
+            "| 字段 | 值 |\n|---|---|\n| 当前章节 | 2 |\n| 当前位置 | 森林 |",
+        );
 
         let result = bootstrap_structured_state_from_markdown(&store, "book", None)
             .await
@@ -1567,16 +1824,28 @@ mod tests {
         // 4 个文件全部新建。
         assert_eq!(result.created_files.len(), 4);
         assert!(result.created_files.contains(&"manifest.json".to_string()));
-        assert!(result.created_files.contains(&"current_state.json".to_string()));
+        assert!(result
+            .created_files
+            .contains(&"current_state.json".to_string()));
         assert!(result.created_files.contains(&"hooks.json".to_string()));
-        assert!(result.created_files.contains(&"chapter_summaries.json".to_string()));
+        assert!(result
+            .created_files
+            .contains(&"chapter_summaries.json".to_string()));
         // manifest 用 durable progress（2）+ zh。
         assert_eq!(result.manifest.language, "zh");
         assert_eq!(result.manifest.last_applied_chapter, 2);
         assert_eq!(result.manifest.schema_version, 2);
         // 文件确实写入 store。
-        assert!(store.read_to_string("book/story/state/manifest.json").await.unwrap().is_some());
-        assert!(store.read_to_string("book/story/state/hooks.json").await.unwrap().is_some());
+        assert!(store
+            .read_to_string("book/story/state/manifest.json")
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store
+            .read_to_string("book/story/state/hooks.json")
+            .await
+            .unwrap()
+            .is_some());
     }
 
     #[tokio::test]
@@ -1601,11 +1870,16 @@ mod tests {
         assert!(!result.created_files.contains(&"manifest.json".to_string()));
         // lastAppliedChapter=99 > derived(1) → 规范化到 1 + warning。
         assert_eq!(result.manifest.last_applied_chapter, 1);
-        assert!(result.warnings.iter().any(|w| w.contains("normalized from 99 to 1")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("normalized from 99 to 1")));
         // projection_version 保留。
         assert_eq!(result.manifest.projection_version, 3);
         // 已存在的 summaries.json 不新建（load_or_bootstrap 命中 existing 分支）。
-        assert!(!result.created_files.contains(&"chapter_summaries.json".to_string()));
+        assert!(!result
+            .created_files
+            .contains(&"chapter_summaries.json".to_string()));
     }
 
     #[tokio::test]
@@ -1627,8 +1901,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(written.contains("\"unspecified\""), "修复后 type 应为 unspecified");
-        assert!(result.warnings.iter().any(|w| w.contains("empty hook type")));
+        assert!(
+            written.contains("\"unspecified\""),
+            "修复后 type 应为 unspecified"
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("empty hook type")));
     }
 
     #[tokio::test]
@@ -1644,7 +1924,10 @@ mod tests {
             .await
             .unwrap();
         // 损坏 → warning + 从 markdown 重建（因 state 文件已存在，不计入 createdFiles）。
-        assert!(result.warnings.iter().any(|w| w.contains("chapter_summaries.json invalid")));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("chapter_summaries.json invalid")));
         let written = store
             .read_to_string("book/story/state/chapter_summaries.json")
             .await
@@ -1704,11 +1987,17 @@ mod tests {
             self.inner.read_to_string(path).await
         }
         async fn write_string(&self, path: &str, content: &str) -> crate::Result<()> {
-            *self.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+            *self
+                .writes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             self.inner.write_string(path, content).await
         }
         async fn mkdir_p(&self, path: &str) -> crate::Result<()> {
-            *self.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
+            *self
+                .mkdirs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) += 1;
             self.inner.mkdir_p(path).await
         }
         async fn list_dir(&self, path: &str) -> crate::Result<Vec<String>> {
@@ -1734,7 +2023,9 @@ mod tests {
         store.inner.set("book/book.json", r#"{"language":"zh"}"#);
         store.inner.set("book/chapters/1_a.md", "x");
         store.inner.set("book/chapters/2_b.md", "x");
-        store.inner.set("book/story/chapter_summaries.md", "| 1 | t1 |");
+        store
+            .inner
+            .set("book/story/chapter_summaries.md", "| 1 | t1 |");
         store.inner.set(
             "book/story/pending_hooks.md",
             "| h01 | 1 | mystery | open | 1 | x | mid-arc | n |",
@@ -1750,9 +2041,18 @@ mod tests {
             .unwrap();
         assert_eq!(first.created_files.len(), 4);
         assert_eq!(first.manifest.last_applied_chapter, 2);
-        let writes_after_first = *store.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mkdirs_after_first = *store.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        assert!(writes_after_first > 0, "首次 ensure 必须有写（四件 + manifest）");
+        let writes_after_first = *store
+            .writes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mkdirs_after_first = *store
+            .mkdirs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            writes_after_first > 0,
+            "首次 ensure 必须有写（四件 + manifest）"
+        );
         let manifest_before = store
             .inner
             .read_to_string("book/story/state/manifest.json")
@@ -1767,11 +2067,21 @@ mod tests {
         assert!(second.created_files.is_empty());
         assert!(second.warnings.is_empty());
         assert_eq!(
-            *store.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+            *store
+                .writes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
             writes_after_first,
             "快路径不得有任何写（含内容相同的 manifest 重写）"
         );
-        assert_eq!(*store.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), mkdirs_after_first, "快路径不得 mkdir_p");
+        assert_eq!(
+            *store
+                .mkdirs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            mkdirs_after_first,
+            "快路径不得 mkdir_p"
+        );
         let manifest_after = store
             .inner
             .read_to_string("book/story/state/manifest.json")
@@ -1780,7 +2090,10 @@ mod tests {
             .unwrap();
         assert_eq!(manifest_before, manifest_after);
         assert_eq!(second.manifest.last_applied_chapter, 2);
-        assert_eq!(second.manifest.projection_version, first.manifest.projection_version);
+        assert_eq!(
+            second.manifest.projection_version,
+            first.manifest.projection_version
+        );
     }
 
     /// 进度不一致（manifest 落后 durable 链）→ 回落慢路径重算写回（快路径的
@@ -1795,20 +2108,29 @@ mod tests {
             "book/story/state/manifest.json",
             r#"{"schemaVersion":2,"language":"en","lastAppliedChapter":1,"projectionVersion":1,"migrationWarnings":[]}"#,
         );
-        store.set("book/story/state/current_state.json", r#"{"chapter":2,"facts":[]}"#);
+        store.set(
+            "book/story/state/current_state.json",
+            r#"{"chapter":2,"facts":[]}"#,
+        );
         store.set("book/story/state/hooks.json", r#"{"hooks":[]}"#);
         store.set("book/story/state/chapter_summaries.json", r#"{"rows":[]}"#);
 
         let result = bootstrap_structured_state_from_markdown(&store, "book", None)
             .await
             .unwrap();
-        assert_eq!(result.manifest.last_applied_chapter, 2, "落后于产物前缀 → 慢路径重算");
+        assert_eq!(
+            result.manifest.last_applied_chapter, 2,
+            "落后于产物前缀 → 慢路径重算"
+        );
         let written = store
             .read_to_string("book/story/state/manifest.json")
             .await
             .unwrap()
             .unwrap();
-        assert!(written.contains("\"lastAppliedChapter\": 2"), "manifest 已重写");
+        assert!(
+            written.contains("\"lastAppliedChapter\": 2"),
+            "manifest 已重写"
+        );
     }
 
     /// 四件缺一（legacy 半态书）→ ensure 补齐语义不变（784 号台账行为面风险探针：
@@ -1830,7 +2152,9 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            result.created_files.contains(&"current_state.json".to_string()),
+            result
+                .created_files
+                .contains(&"current_state.json".to_string()),
             "缺失件必须从 markdown 补齐"
         );
         let written = store
@@ -1855,16 +2179,36 @@ mod tests {
             "book/story/state/manifest.json",
             r#"{"schemaVersion":2,"language":"en","lastAppliedChapter":5,"projectionVersion":1,"migrationWarnings":[]}"#,
         );
-        store.inner.set("book/story/state/current_state.json", r#"{"chapter":5,"facts":[]}"#);
-        store.inner.set("book/story/state/hooks.json", r#"{"hooks":[]}"#);
-        store.inner.set("book/story/state/chapter_summaries.json", r#"{"rows":[]}"#);
+        store.inner.set(
+            "book/story/state/current_state.json",
+            r#"{"chapter":5,"facts":[]}"#,
+        );
+        store
+            .inner
+            .set("book/story/state/hooks.json", r#"{"hooks":[]}"#);
+        store
+            .inner
+            .set("book/story/state/chapter_summaries.json", r#"{"rows":[]}"#);
 
         // 首次带 Some(5)：manifest 已在目标态（5 == max(fallback=5, 产物 0)）→ 快路径。
         let result = bootstrap_structured_state_from_markdown(&store, "book", Some(5))
             .await
             .unwrap();
         assert_eq!(result.manifest.last_applied_chapter, 5);
-        assert_eq!(*store.writes.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 0, "目标态即达 → 零写");
-        assert_eq!(*store.mkdirs.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), 0);
+        assert_eq!(
+            *store
+                .writes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            0,
+            "目标态即达 → 零写"
+        );
+        assert_eq!(
+            *store
+                .mkdirs
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            0
+        );
     }
 }

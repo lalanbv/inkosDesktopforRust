@@ -14,8 +14,8 @@ use super::structured_agent::{
     WorkerToolSpec,
 };
 use crate::llm::provider::LLMMessage;
-use crate::utils::language::WritingLanguage;
 use crate::production::author_edit_scope::source_units;
+use crate::utils::language::WritingLanguage;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceIdentity<'a> {
@@ -51,10 +51,8 @@ pub async fn select(
         .filter(|paragraph| {
             !paragraph.lines.iter().all(|line| {
                 let text = line.text.trim_start();
-                let heading = text.starts_with('#')
-                    && text
-                        .trim_start_matches('#')
-                        .starts_with(' ');
+                let heading =
+                    text.starts_with('#') && text.trim_start_matches('#').starts_with(' ');
                 let rule = {
                     let trimmed_end = text.trim_end();
                     let stars = trimmed_end.chars().filter(|ch| *ch == '*').count();
@@ -96,10 +94,20 @@ pub async fn select(
         let author_request = author_request_owned.clone();
         let paragraph_count = paragraph_count_for_validate;
         Box::pin(async move {
-            let kind = value.get("kind").and_then(Value::as_str).unwrap_or_default();
-            let boundary = value.get("boundary").and_then(Value::as_str).unwrap_or_default();
+            let kind = value
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let boundary = value
+                .get("boundary")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let count = value.get("count").and_then(Value::as_u64).unwrap_or(0);
-            let targets = value.get("targets").and_then(Value::as_array).cloned().unwrap_or_default();
+            let targets = value
+                .get("targets")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             let valid = if kind == "paragraphs" {
                 boundary != "none"
                     && count >= 1
@@ -115,7 +123,10 @@ pub async fn select(
                     }
             };
             for target in &targets {
-                let quote = target.get("quote").and_then(Value::as_str).unwrap_or_default();
+                let quote = target
+                    .get("quote")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if !author_request.contains(quote) {
                     return Err(super::structured_agent::StructuredToolError::coded(
                         "EDIT_TARGET_AUTHORITY_MISSING",
@@ -162,95 +173,114 @@ pub async fn select(
         agents.defaults.clone(),
         WorkerToolSpec {
             name: "submit_edit_location".into(),
-            description: "Resolve the author location without reading or rewriting the prose.".into(),
+            description: "Resolve the author location without reading or rewriting the prose."
+                .into(),
             parameters_schema: schema,
             max_turns: None,
         },
         Some(validate),
         Vec::new(),
-        StructuredRunOptions { temperature: None, max_tokens: None },
+        StructuredRunOptions {
+            temperature: None,
+            max_tokens: None,
+        },
     )
     .await?;
     let result = &outcome.result;
-    let kind = result.get("kind").and_then(Value::as_str).unwrap_or_default();
-    let boundary = result.get("boundary").and_then(Value::as_str).unwrap_or_default();
+    let kind = result
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let boundary = result
+        .get("boundary")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let count = result.get("count").and_then(Value::as_u64).unwrap_or(0) as usize;
     let scope = match kind {
-            "none" => AuthorTextScope {
+        "none" => AuthorTextScope {
+            whole_document: false,
+            selections: Vec::new(),
+            reason: format!("location=none boundary={boundary}"),
+            focus: None,
+        },
+        "document" => AuthorTextScope {
+            whole_document: true,
+            selections: Vec::new(),
+            reason: format!("location=document boundary={boundary}"),
+            focus: None,
+        },
+        "paragraphs" => {
+            // TS：first/last 有界计数 → 逐段展开选择（p1..pN 或 p(N-count+1)..pN）。
+            let selections: Vec<AuthorTextScopeSelection> = paragraphs
+                .iter()
+                .take(if boundary == "first" { count } else { 0 })
+                .map(|paragraph| AuthorTextScopeSelection {
+                    unit_id: paragraph.id.clone(),
+                    text: String::new(),
+                })
+                .chain(
+                    paragraphs
+                        .iter()
+                        .rev()
+                        .take(if boundary == "last" { count } else { 0 })
+                        .map(|paragraph| AuthorTextScopeSelection {
+                            unit_id: paragraph.id.clone(),
+                            text: String::new(),
+                        }),
+                )
+                .collect();
+            AuthorTextScope {
                 whole_document: false,
-                selections: Vec::new(),
-                reason: format!("location=none boundary={boundary}"),
+                selections,
+                reason: format!("location=paragraphs boundary={boundary} count={count}"),
                 focus: None,
-            },
-            "document" => AuthorTextScope {
-                whole_document: true,
-                selections: Vec::new(),
-                reason: format!("location=document boundary={boundary}"),
-                focus: None,
-            },
-            "paragraphs" => {
-                // TS：first/last 有界计数 → 逐段展开选择（p1..pN 或 p(N-count+1)..pN）。
-                let selections: Vec<AuthorTextScopeSelection> = paragraphs
-                    .iter()
-                    .take(if boundary == "first" { count } else { 0 })
-                    .map(|paragraph| AuthorTextScopeSelection {
-                        unit_id: paragraph.id.clone(),
-                        text: String::new(),
-                    })
-                    .chain(
-                        paragraphs
-                            .iter()
-                            .rev()
-                            .take(if boundary == "last" { count } else { 0 })
-                            .map(|paragraph| AuthorTextScopeSelection {
-                                unit_id: paragraph.id.clone(),
-                                text: String::new(),
-                            }),
-                    )
-                    .collect();
-                AuthorTextScope {
-                    whole_document: false,
-                    selections,
-                    reason: format!("location=paragraphs boundary={boundary} count={count}"),
-                    focus: None,
-                }
-            }
-            // reference：targets 逐个成为 selections 占位（unitId 空——由
-            // author-permission 的 scope 面按文本定位；TS 同为占位结构）。
-            _ => {
-                let selections: Vec<AuthorTextScopeSelection> = result
-                    .get("targets")
-                    .and_then(Value::as_array)
-                    .map(|items| {
-                        items
-                            .iter()
-                            .map(|target| AuthorTextScopeSelection {
-                                unit_id: String::new(),
-                                text: target
-                                    .get("target")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or_default()
-                                    .to_string(),
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                AuthorTextScope {
-                    whole_document: false,
-                    selections,
-                    reason: "location=reference".into(),
-                    focus: None,
-                }
             }
         }
-    ;
+        // reference：targets 逐个成为 selections 占位（unitId 空——由
+        // author-permission 的 scope 面按文本定位；TS 同为占位结构）。
+        _ => {
+            let selections: Vec<AuthorTextScopeSelection> = result
+                .get("targets")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|target| AuthorTextScopeSelection {
+                            unit_id: String::new(),
+                            text: target
+                                .get("target")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            AuthorTextScope {
+                whole_document: false,
+                selections,
+                reason: "location=reference".into(),
+                focus: None,
+            }
+        }
+    };
     Ok(scope)
 }
 
 fn llm_system(content: &str) -> LLMMessage {
-    LLMMessage { role: crate::llm::provider::LLMRole::System, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: crate::llm::provider::LLMRole::System,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 fn llm_user(content: &str) -> LLMMessage {
-    LLMMessage { role: crate::llm::provider::LLMRole::User, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: crate::llm::provider::LLMRole::User,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }

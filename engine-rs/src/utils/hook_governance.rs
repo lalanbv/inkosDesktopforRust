@@ -53,7 +53,12 @@ pub fn collect_stale_hook_debt(
 ) -> Vec<HookRecord> {
     let mut filtered: Vec<HookRecord> = hooks
         .iter()
-        .filter(|h| !matches!(h.status, HookStatus_::Resolved | HookStatus_::Deferred | HookStatus_::Superseded))
+        .filter(|h| {
+            !matches!(
+                h.status,
+                HookStatus_::Resolved | HookStatus_::Deferred | HookStatus_::Superseded
+            )
+        })
         .filter(|h| h.start_chapter <= chapter_number)
         .filter(|h| {
             if let Some(stale) = stale_after_chapters {
@@ -90,11 +95,21 @@ pub fn evaluate_hook_admission(
 ) -> HookAdmissionDecision {
     let candidate_type = normalize_text(&candidate.hook_type);
     if candidate_type.is_empty() {
-        return HookAdmissionDecision { admit: false, reason: HookAdmissionReason::MissingType, matched_hook_id: None };
+        return HookAdmissionDecision {
+            admit: false,
+            reason: HookAdmissionReason::MissingType,
+            matched_hook_id: None,
+        };
     }
 
     let mut parts: Vec<&str> = Vec::new();
-    for v in [candidate.expected_payoff.as_deref(), candidate.notes.as_deref()].into_iter().flatten() {
+    for v in [
+        candidate.expected_payoff.as_deref(),
+        candidate.notes.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
         if !v.trim().is_empty() {
             parts.push(v);
         }
@@ -102,25 +117,35 @@ pub fn evaluate_hook_admission(
     let payoff_signal = parts.join(" ");
     let payoff_signal = payoff_signal.trim();
     if payoff_signal.is_empty() {
-        return HookAdmissionDecision { admit: false, reason: HookAdmissionReason::MissingPayoffSignal, matched_hook_id: None };
+        return HookAdmissionDecision {
+            admit: false,
+            reason: HookAdmissionReason::MissingPayoffSignal,
+            matched_hook_id: None,
+        };
     }
 
-    let candidate_blob = normalize_text(&[
-        candidate.hook_type.as_str(),
-        candidate.expected_payoff.as_deref().unwrap_or(""),
-        candidate.payoff_timing.as_deref().unwrap_or(""),
-        candidate.notes.as_deref().unwrap_or(""),
-    ].join(" "));
+    let candidate_blob = normalize_text(
+        &[
+            candidate.hook_type.as_str(),
+            candidate.expected_payoff.as_deref().unwrap_or(""),
+            candidate.payoff_timing.as_deref().unwrap_or(""),
+            candidate.notes.as_deref().unwrap_or(""),
+        ]
+        .join(" "),
+    );
     let candidate_terms = extract_terms(&candidate_blob);
     let candidate_bigrams = extract_chinese_bigrams(&candidate_blob);
 
     for hook in active_hooks {
-        let active_blob = normalize_text(&[
-            hook.hook_type.as_str(),
-            hook.expected_payoff.as_str(),
-            hook_payoff_timing_str(hook.payoff_timing).unwrap_or(""),
-            hook.notes.as_str(),
-        ].join(" "));
+        let active_blob = normalize_text(
+            &[
+                hook.hook_type.as_str(),
+                hook.expected_payoff.as_str(),
+                hook_payoff_timing_str(hook.payoff_timing).unwrap_or(""),
+                hook.notes.as_str(),
+            ]
+            .join(" "),
+        );
 
         if candidate_blob == active_blob {
             return HookAdmissionDecision {
@@ -135,9 +160,15 @@ pub fn evaluate_hook_admission(
         }
 
         let active_terms = extract_terms(&active_blob);
-        let overlap = candidate_terms.iter().filter(|t| active_terms.contains(*t)).count();
+        let overlap = candidate_terms
+            .iter()
+            .filter(|t| active_terms.contains(*t))
+            .count();
         let active_bigrams = extract_chinese_bigrams(&active_blob);
-        let chinese_overlap = candidate_bigrams.iter().filter(|t| active_bigrams.contains(*t)).count();
+        let chinese_overlap = candidate_bigrams
+            .iter()
+            .filter(|t| active_bigrams.contains(*t))
+            .count();
         if overlap >= 2 || chinese_overlap >= 3 {
             return HookAdmissionDecision {
                 admit: false,
@@ -147,7 +178,11 @@ pub fn evaluate_hook_admission(
         }
     }
 
-    HookAdmissionDecision { admit: true, reason: HookAdmissionReason::Admit, matched_hook_id: None }
+    HookAdmissionDecision {
+        admit: true,
+        reason: HookAdmissionReason::Admit,
+        matched_hook_id: None,
+    }
 }
 
 /// 按 delta.hookOps 分类伏笔处置（defer > resolve > advance > mention > none）。
@@ -224,7 +259,10 @@ fn extract_chinese_bigrams(value: &str) -> std::collections::BTreeSet<String> {
 }
 
 fn is_stop_word(t: &str) -> bool {
-    matches!(t, "that" | "this" | "with" | "from" | "into" | "still" | "just" | "have" | "will" | "reveal")
+    matches!(
+        t,
+        "that" | "this" | "with" | "from" | "into" | "still" | "just" | "have" | "will" | "reveal"
+    )
 }
 
 fn hook_status_str(s: HookStatus_) -> String {
@@ -299,7 +337,12 @@ mod tests {
 
     #[test]
     fn admission_rejects_missing_type() {
-        let cand = HookAdmissionCandidate { hook_type: "  ".into(), expected_payoff: Some("soon".into()), notes: None, payoff_timing: None };
+        let cand = HookAdmissionCandidate {
+            hook_type: "  ".into(),
+            expected_payoff: Some("soon".into()),
+            notes: None,
+            payoff_timing: None,
+        };
         let d = evaluate_hook_admission(&cand, &[]);
         assert!(!d.admit);
         assert_eq!(d.reason, HookAdmissionReason::MissingType);
@@ -307,14 +350,24 @@ mod tests {
 
     #[test]
     fn admission_rejects_missing_payoff_signal() {
-        let cand = HookAdmissionCandidate { hook_type: "plot".into(), expected_payoff: None, notes: Some("   ".into()), payoff_timing: None };
+        let cand = HookAdmissionCandidate {
+            hook_type: "plot".into(),
+            expected_payoff: None,
+            notes: Some("   ".into()),
+            payoff_timing: None,
+        };
         let d = evaluate_hook_admission(&cand, &[]);
         assert_eq!(d.reason, HookAdmissionReason::MissingPayoffSignal);
     }
 
     #[test]
     fn admission_admits_when_no_active() {
-        let cand = HookAdmissionCandidate { hook_type: "plot".into(), expected_payoff: Some("终局摊牌".into()), notes: None, payoff_timing: None };
+        let cand = HookAdmissionCandidate {
+            hook_type: "plot".into(),
+            expected_payoff: Some("终局摊牌".into()),
+            notes: None,
+            payoff_timing: None,
+        };
         let d = evaluate_hook_admission(&cand, &[]);
         assert!(d.admit);
         assert_eq!(d.reason, HookAdmissionReason::Admit);
@@ -327,7 +380,12 @@ mod tests {
             expected_payoff: "终局摊牌".into(),
             ..hook("h1", 1, 1, HookStatus::Open)
         }];
-        let cand = HookAdmissionCandidate { hook_type: "plot".into(), expected_payoff: Some("终局摊牌".into()), notes: None, payoff_timing: None };
+        let cand = HookAdmissionCandidate {
+            hook_type: "plot".into(),
+            expected_payoff: Some("终局摊牌".into()),
+            notes: None,
+            payoff_timing: None,
+        };
         let d = evaluate_hook_admission(&cand, &active);
         assert!(!d.admit);
         assert_eq!(d.reason, HookAdmissionReason::DuplicateFamily);
@@ -338,32 +396,60 @@ mod tests {
     fn classify_disposition_priority() {
         let mut delta = RuntimeStateDelta {
             chapter: 5,
-            hook_ops: HookOps { defer: vec!["h".into()], ..Default::default() },
+            hook_ops: HookOps {
+                defer: vec!["h".into()],
+                ..Default::default()
+            },
             ..Default::default()
         };
-        assert_eq!(classify_hook_disposition("h", &delta), HookDisposition::Defer);
+        assert_eq!(
+            classify_hook_disposition("h", &delta),
+            HookDisposition::Defer
+        );
 
         delta.hook_ops.defer.clear();
         delta.hook_ops.resolve.push("h".into());
-        assert_eq!(classify_hook_disposition("h", &delta), HookDisposition::Resolve);
+        assert_eq!(
+            classify_hook_disposition("h", &delta),
+            HookDisposition::Resolve
+        );
 
         delta.hook_ops.resolve.clear();
         delta.hook_ops.mention.push("h".into());
-        assert_eq!(classify_hook_disposition("h", &delta), HookDisposition::Mention);
+        assert_eq!(
+            classify_hook_disposition("h", &delta),
+            HookDisposition::Mention
+        );
 
         delta.hook_ops.mention.clear();
-        assert_eq!(classify_hook_disposition("h", &delta), HookDisposition::None);
+        assert_eq!(
+            classify_hook_disposition("h", &delta),
+            HookDisposition::None
+        );
     }
 
     #[test]
     fn classify_advance_requires_chapter_match() {
-        let mut delta = RuntimeStateDelta { chapter: 5, ..Default::default() };
-        let advancing = HookRecord { hook_id: "h".into(), last_advanced_chapter: 5, ..hook("h", 1, 5, HookStatus::Open) };
+        let mut delta = RuntimeStateDelta {
+            chapter: 5,
+            ..Default::default()
+        };
+        let advancing = HookRecord {
+            hook_id: "h".into(),
+            last_advanced_chapter: 5,
+            ..hook("h", 1, 5, HookStatus::Open)
+        };
         delta.hook_ops.upsert.push(advancing);
-        assert_eq!(classify_hook_disposition("h", &delta), HookDisposition::Advance);
+        assert_eq!(
+            classify_hook_disposition("h", &delta),
+            HookDisposition::Advance
+        );
         // lastAdvancedChapter !== chapter → none
         delta.hook_ops.upsert[0].last_advanced_chapter = 3;
-        assert_eq!(classify_hook_disposition("h", &delta), HookDisposition::None);
+        assert_eq!(
+            classify_hook_disposition("h", &delta),
+            HookDisposition::None
+        );
     }
 
     #[test]

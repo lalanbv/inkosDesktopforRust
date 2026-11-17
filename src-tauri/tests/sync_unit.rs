@@ -132,10 +132,7 @@ fn keychain_nonempty_multiple_keys_all_written() {
 fn keychain_empty_migrates_from_existing_secrets_json() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secrets.json");
-    put_raw(
-        &path,
-        r#"{"services": {"deepseek": { "apiKey": "dk-x" }}}"#,
-    );
+    put_raw(&path, r#"{"services": {"deepseek": { "apiKey": "dk-x" }}}"#);
 
     let store = MockStore::new();
     let syncing = AtomicBool::new(false);
@@ -252,10 +249,7 @@ fn syncing_flag_not_touched_in_first_migration_path() {
     // path 2 不操作 syncing（无文件写入，watcher 不会触发）
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secrets.json");
-    put_raw(
-        &path,
-        r#"{"services": {"deepseek": { "apiKey": "dk-x" }}}"#,
-    );
+    put_raw(&path, r#"{"services": {"deepseek": { "apiKey": "dk-x" }}}"#);
 
     let store = MockStore::new();
     let syncing = AtomicBool::new(true); // 初始故意设 true
@@ -343,7 +337,10 @@ fn diff_changed_value_is_included() {
     let json = singleton("openai", "sk-new");
     let store = singleton("openai", "sk-old");
     let diff = compute_writeback_diff(&json, &store);
-    assert_eq!(diff.upserts, vec![("openai".to_string(), "sk-new".to_string())]);
+    assert_eq!(
+        diff.upserts,
+        vec![("openai".to_string(), "sk-new".to_string())]
+    );
     assert!(diff.deletes.is_empty());
 }
 
@@ -472,11 +469,7 @@ fn process_writeback_skips_when_syncing_true_anti_loop() {
     // 防回环核心：syncing=true 时即便 secrets.json 含新 key 也不写 store
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secrets.json");
-    fs::write(
-        &path,
-        r#"{"services":{"openai":{"apiKey":"sk-x"}}}"#,
-    )
-    .unwrap();
+    fs::write(&path, r#"{"services":{"openai":{"apiKey":"sk-x"}}}"#).unwrap();
 
     let store = MockStore::new();
     let syncing = AtomicBool::new(true); // programmatic write 中
@@ -494,11 +487,7 @@ fn process_writeback_diffs_upserts_when_syncing_false() {
     // SPA 改：syncing=false → json 中新 key 回写 store
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secrets.json");
-    fs::write(
-        &path,
-        r#"{"services":{"openai":{"apiKey":"sk-new"}}}"#,
-    )
-    .unwrap();
+    fs::write(&path, r#"{"services":{"openai":{"apiKey":"sk-new"}}}"#).unwrap();
 
     let store = MockStore::new();
     let syncing = AtomicBool::new(false); // SPA 改
@@ -574,11 +563,7 @@ fn process_writeback_propagates_spa_delete_to_store() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("secrets.json");
     // SPA 删除后 secrets.json 只剩 deepseek（openai 被删）
-    fs::write(
-        &path,
-        r#"{"services":{"deepseek":{"apiKey":"dk-keep"}}}"#,
-    )
-    .unwrap();
+    fs::write(&path, r#"{"services":{"deepseek":{"apiKey":"dk-keep"}}}"#).unwrap();
 
     let store = MockStore::new();
     store.upsert("openai", "sk-stale").unwrap(); // SPA 已删，watcher 应删
@@ -618,17 +603,16 @@ fn process_writeback_does_not_revive_deleted_key_after_restart() {
     assert_eq!(store.read_all().unwrap().len(), 2);
 
     // stage 2：SPA 删除 openai（写回只含 deepseek 的 secrets.json）
-    fs::write(
-        &path,
-        r#"{"services":{"deepseek":{"apiKey":"dk-x"}}}"#,
-    )
-    .unwrap();
+    fs::write(&path, r#"{"services":{"deepseek":{"apiKey":"dk-x"}}}"#).unwrap();
 
     // stage 3：watcher 触发 process_writeback → 删除 keychain.openai
     process_writeback(&store, &path, &AtomicBool::new(false)).unwrap();
 
     let after_delete = store.read_all().unwrap();
-    assert!(!after_delete.contains_key("openai"), "watcher 应删除 openai");
+    assert!(
+        !after_delete.contains_key("openai"),
+        "watcher 应删除 openai"
+    );
     assert_eq!(after_delete.len(), 1);
 
     // stage 4：模拟重启——sync_on_startup 再次执行。
@@ -685,11 +669,7 @@ fn process_writeback_propagates_delete_when_user_clears_all_services() {
     let path = dir.path().join("secrets.json");
 
     // stage 0：初始 secrets.json 含唯一 service openai
-    fs::write(
-        &path,
-        r#"{"services":{"openai":{"apiKey":"sk-x"}}}"#,
-    )
-    .unwrap();
+    fs::write(&path, r#"{"services":{"openai":{"apiKey":"sk-x"}}}"#).unwrap();
 
     // stage 1：首迁到 keychain（keychain 空 + secrets.json 非空 → path2）
     let store = MockStore::new();
@@ -758,7 +738,10 @@ fn process_writeback_restores_0600_after_spa_write() {
 
     // 核心断言：process_writeback 后权限恢复为 0600
     let mode_after = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode_after, 0o600, "SPA 写后桌面壳必须恢复 secrets.json 到 0600");
+    assert_eq!(
+        mode_after, 0o600,
+        "SPA 写后桌面壳必须恢复 secrets.json 到 0600"
+    );
 }
 
 #[test]

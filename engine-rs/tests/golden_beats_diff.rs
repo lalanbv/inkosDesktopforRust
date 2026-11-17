@@ -25,7 +25,10 @@ fn beats_parse_matches_shared_golden_vectors() {
         let result = inkos_engine::agents::timeline_settler::parse_beats_json(text, &valid_ids);
         if let Some(err_contains) = tc["errorContains"].as_str() {
             let err = result.expect_err(&format!("{name}: 应报错"));
-            assert!(err.contains(err_contains), "{name}: 错误「{err}」应含「{err_contains}」");
+            assert!(
+                err.contains(err_contains),
+                "{name}: 错误「{err}」应含「{err_contains}」"
+            );
             continue;
         }
         let beats = result.unwrap_or_else(|e| panic!("{name}: 不应报错：{e}"));
@@ -42,7 +45,11 @@ fn beats_parse_matches_shared_golden_vectors() {
             .collect();
         // None（Rust）/undefined（TS）统一归一为缺席键后比对。
         let expected = normalize_nulls(&tc["expected"]);
-        assert_eq!(normalize_nulls(&serde_json::json!(got)), expected, "{name}: parse 结果漂移");
+        assert_eq!(
+            normalize_nulls(&serde_json::json!(got)),
+            expected,
+            "{name}: parse 结果漂移"
+        );
     }
 }
 
@@ -68,15 +75,21 @@ fn beats_merge_matches_shared_golden_vectors() {
         let applied =
             inkos_engine::models::timeline::merge_chapter_beats(&mut timeline, chapter, &beats);
         assert_eq!(
-            applied, 
+            applied,
             tc["expectedApplied"].as_u64().unwrap() as usize,
             "{name}: applied 计数漂移"
         );
         // updatedAt 非确定：断言刷新语义。
         if let Some(expected_at) = tc["expectedUpdatedAt"].as_str() {
-            assert_eq!(timeline.updated_at, expected_at, "{name}: 未落格不应刷新 updatedAt");
+            assert_eq!(
+                timeline.updated_at, expected_at,
+                "{name}: 未落格不应刷新 updatedAt"
+            );
         } else if applied > 0 {
-            assert_ne!(timeline.updated_at, old_updated_at, "{name}: 落格后应刷新 updatedAt");
+            assert_ne!(
+                timeline.updated_at, old_updated_at,
+                "{name}: 落格后应刷新 updatedAt"
+            );
         }
         let plotlines_json = serde_json::to_value(&timeline.plotlines).unwrap();
         assert_eq!(

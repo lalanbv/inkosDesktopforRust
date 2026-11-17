@@ -123,7 +123,11 @@ pub struct ReviewObservationSubmission {
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<ObservationTarget>,
-    #[serde(rename = "sourceRefs", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "sourceRefs",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub source_refs: Option<Vec<ReviewSourceSelection>>,
 }
 
@@ -161,9 +165,7 @@ pub fn resolve_observation_sources(
     let mut resolved: Vec<Observation> = Vec::with_capacity(submissions.len());
     for (index, submission) in submissions.iter().enumerate() {
         let mut source_refs: Vec<ObservationSourceRef> = Vec::new();
-        for (reference_index, reference) in
-            submission.source_refs.iter().flatten().enumerate()
-        {
+        for (reference_index, reference) in submission.source_refs.iter().flatten().enumerate() {
             let quote = match &reference.quote {
                 Some(quote) => quote.clone(),
                 None => {
@@ -172,13 +174,11 @@ pub fn resolve_observation_sources(
                         .map(|source| crate::utils::source_text::source_line_bodies(source));
                     let start = reference.start_line;
                     let end = reference.end_line;
-                    let valid = lines.as_ref().map(|lines| {
-                        match (start, end) {
-                            (Some(start), Some(end)) => {
-                                start >= 1 && end >= start && (end as usize) <= lines.len()
-                            }
-                            _ => false,
+                    let valid = lines.as_ref().map(|lines| match (start, end) {
+                        (Some(start), Some(end)) => {
+                            start >= 1 && end >= start && (end as usize) <= lines.len()
                         }
+                        _ => false,
                     });
                     let Some(true) = valid else {
                         let details = serde_json::json!({
@@ -201,9 +201,12 @@ pub fn resolve_observation_sources(
                         // TS nearbyLines：候选邻行（去重、非空白、截 400 字）。
                         let mut nearby: std::collections::BTreeSet<usize> =
                             std::collections::BTreeSet::new();
-                        for candidate in
-                            [start as isize - 2, start as isize - 1, end as isize, end as isize + 1]
-                        {
+                        for candidate in [
+                            start as isize - 2,
+                            start as isize - 1,
+                            end as isize,
+                            end as isize + 1,
+                        ] {
                             if candidate >= 0
                                 && (candidate as usize) < lines.len()
                                 && !lines[candidate as usize].trim().is_empty()
@@ -267,7 +270,8 @@ pub fn validate_observation_sources(
     let mut issues: Vec<Value> = Vec::new();
     for (index, observation) in observations.iter().enumerate() {
         let source_refs = observation.source_refs.as_deref().unwrap_or(&[]);
-        if source_refs.is_empty() && observation.assessment != Some(ObservationAssessment::Unavailable)
+        if source_refs.is_empty()
+            && observation.assessment != Some(ObservationAssessment::Unavailable)
         {
             issues.push(serde_json::json!({
                 "code": "REVIEW_SOURCE_REQUIRED",
@@ -292,7 +296,10 @@ pub fn validate_observation_sources(
         }
     }
     if !issues.is_empty() {
-        let code = issues[0]["code"].as_str().unwrap_or("REVIEW_SOURCE_REQUIRED").to_string();
+        let code = issues[0]["code"]
+            .as_str()
+            .unwrap_or("REVIEW_SOURCE_REQUIRED")
+            .to_string();
         let issue_count = issues.len();
         let details = serde_json::json!({
             "code": code,

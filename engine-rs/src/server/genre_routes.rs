@@ -35,7 +35,9 @@ fn genre_id_is_unsafe(id: &str) -> bool {
 fn invalid_genre_id(id: &str) -> (StatusCode, Json<Value>) {
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({ "error": { "code": "INVALID_GENRE_ID", "message": format!("Invalid genre ID: \"{id}\"") } })),
+        Json(
+            json!({ "error": { "code": "INVALID_GENRE_ID", "message": format!("Invalid genre ID: \"{id}\"") } }),
+        ),
     )
 }
 
@@ -72,12 +74,21 @@ fn build_genre_frontmatter(p: &Value, name: &Value, id: &Value, body: &str) -> S
         format!("language: {}", yaml_scalar(Some(language))),
         format!("chapterTypes: {}", json_stringify(p.get("chapterTypes"))),
         format!("fatigueWords: {}", json_stringify(p.get("fatigueWords"))),
-        format!("numericalSystem: {}", bool_literal(p.get("numericalSystem"))),
+        format!(
+            "numericalSystem: {}",
+            bool_literal(p.get("numericalSystem"))
+        ),
         format!("powerScaling: {}", bool_literal(p.get("powerScaling"))),
         format!("eraResearch: {}", bool_literal(p.get("eraResearch"))),
         format!("pacingRule: {}", yaml_scalar(p.get("pacingRule"))),
-        format!("satisfactionTypes: {}", json_stringify(p.get("satisfactionTypes"))),
-        format!("auditDimensions: {}", json_stringify(p.get("auditDimensions"))),
+        format!(
+            "satisfactionTypes: {}",
+            json_stringify(p.get("satisfactionTypes"))
+        ),
+        format!(
+            "auditDimensions: {}",
+            json_stringify(p.get("auditDimensions"))
+        ),
         "---".to_string(),
         String::new(),
         body.to_string(),
@@ -88,7 +99,8 @@ fn build_genre_frontmatter(p: &Value, name: &Value, id: &Value, body: &str) -> S
 // ── GET /api/v1/genres ───────────────────────────────────────────
 
 pub async fn list_genres(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
-    let infos = list_available_genres(runtime.state.project_root(), &runtime.builtin_genres_dir).await;
+    let infos =
+        list_available_genres(runtime.state.project_root(), &runtime.builtin_genres_dir).await;
     let mut genres: Vec<Value> = Vec::with_capacity(infos.len());
     for info in &infos {
         // TS：readGenreProfile 失败（catch）→ language "zh"；
@@ -123,7 +135,13 @@ pub async fn genre_detail(
     if genre_id_is_unsafe(&genre_id) {
         return invalid_genre_id(&genre_id).into_response();
     }
-    match read_genre_profile(runtime.state.project_root(), &genre_id, &runtime.builtin_genres_dir).await {
+    match read_genre_profile(
+        runtime.state.project_root(),
+        &genre_id,
+        &runtime.builtin_genres_dir,
+    )
+    .await
+    {
         Ok(parsed) => (
             StatusCode::OK,
             Json(json!({ "profile": parsed.profile, "body": parsed.body })),
@@ -139,14 +157,13 @@ pub async fn genre_detail(
 
 // ── POST /api/v1/genres/create ───────────────────────────────────
 
-pub async fn create_genre(
-    State(runtime): State<BooksRuntime>,
-    body: Bytes,
-) -> impl IntoResponse {
+pub async fn create_genre(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     let internal_error = || {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } })),
+            Json(
+                json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } }),
+            ),
         )
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
@@ -155,7 +172,10 @@ pub async fn create_genre(
     let id = parsed.get("id").and_then(Value::as_str).unwrap_or("");
     let name = parsed.get("name").and_then(Value::as_str).unwrap_or("");
     if id.is_empty() || name.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "id and name are required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "id and name are required" })),
+        );
     }
     if genre_id_is_unsafe(id) {
         return invalid_genre_id(id);
@@ -171,7 +191,12 @@ pub async fn create_genre(
     if tokio::fs::create_dir_all(&genres_dir).await.is_err() {
         return internal_error();
     }
-    match crate::utils::atomic_file_set::write_file_atomic(&genres_dir.join(format!("{id}.md")), &frontmatter).await {
+    match crate::utils::atomic_file_set::write_file_atomic(
+        &genres_dir.join(format!("{id}.md")),
+        &frontmatter,
+    )
+    .await
+    {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "id": id }))),
         Err(_) => internal_error(),
     }
@@ -187,7 +212,9 @@ pub async fn update_genre(
     let internal_error = || {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } })),
+            Json(
+                json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } }),
+            ),
         )
     };
     if genre_id_is_unsafe(&genre_id) {
@@ -211,7 +238,12 @@ pub async fn update_genre(
     if tokio::fs::create_dir_all(&genres_dir).await.is_err() {
         return internal_error();
     }
-    match crate::utils::atomic_file_set::write_file_atomic(&genres_dir.join(format!("{genre_id}.md")), &frontmatter).await {
+    match crate::utils::atomic_file_set::write_file_atomic(
+        &genres_dir.join(format!("{genre_id}.md")),
+        &frontmatter,
+    )
+    .await
+    {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "id": genre_id }))),
         Err(_) => internal_error(),
     }
@@ -226,7 +258,11 @@ pub async fn delete_genre(
     if genre_id_is_unsafe(&genre_id) {
         return invalid_genre_id(&genre_id);
     }
-    let file_path = runtime.state.project_root().join("genres").join(format!("{genre_id}.md"));
+    let file_path = runtime
+        .state
+        .project_root()
+        .join("genres")
+        .join(format!("{genre_id}.md"));
     match tokio::fs::remove_file(&file_path).await {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "id": genre_id }))),
         Err(_) => (
@@ -253,8 +289,14 @@ pub async fn copy_genre(
         std::io::Result::Ok(())
     };
     match copy.await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "path": format!("genres/{genre_id}.md") }))),
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() }))),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "path": format!("genres/{genre_id}.md") })),
+        ),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        ),
     }
 }
 

@@ -56,11 +56,15 @@ pub fn compute_hook_diagnostics(
                 }
                 Some(upstream) => {
                     let upstream_resolved = is_resolved(upstream);
-                    let upstream_planted = upstream.start_chapter > 0
-                        && upstream.start_chapter <= current_chapter;
+                    let upstream_planted =
+                        upstream.start_chapter > 0 && upstream.start_chapter <= current_chapter;
                     if !upstream_planted || !upstream_resolved {
                         missing_upstream.push(upstream_id);
-                        let reference = if upstream_planted { upstream.start_chapter } else { planted_chapter };
+                        let reference = if upstream_planted {
+                            upstream.start_chapter
+                        } else {
+                            planted_chapter
+                        };
                         upstream_reference_chapters.push(reference);
                     }
                 }
@@ -75,14 +79,17 @@ pub fn compute_hook_diagnostics(
             blocked_distance = current_chapter.saturating_sub(earliest);
         }
 
-        result.insert(hook.hook_id.clone(), HookDiagnostics {
-            stale,
-            blocked,
-            missing_upstream,
-            distance,
-            half_life,
-            blocked_distance,
-        });
+        result.insert(
+            hook.hook_id.clone(),
+            HookDiagnostics {
+                stale,
+                blocked,
+                missing_upstream,
+                distance,
+                half_life,
+                blocked_distance,
+            },
+        );
     }
 
     result
@@ -97,8 +104,14 @@ pub fn render_hook_diagnostic_marker(
     let mut tokens: Vec<String> = Vec::new();
     if diagnostics.stale {
         tokens.push(match language {
-            WritingLanguage::En => format!("stale (d={}/half={})", diagnostics.distance, diagnostics.half_life),
-            WritingLanguage::Zh => format!("过期 (距={}/半衰={})", diagnostics.distance, diagnostics.half_life),
+            WritingLanguage::En => format!(
+                "stale (d={}/half={})",
+                diagnostics.distance, diagnostics.half_life
+            ),
+            WritingLanguage::Zh => format!(
+                "过期 (距={}/半衰={})",
+                diagnostics.distance, diagnostics.half_life
+            ),
         });
     }
     if diagnostics.blocked {
@@ -106,7 +119,9 @@ pub fn render_hook_diagnostic_marker(
         // blockedDistance 嵌入 marker（reviewer 5/6 章阈值判定读取此 token，格式 load-bearing）
         let distance_token = if diagnostics.blocked_distance > 0 {
             match language {
-                WritingLanguage::En => format!(" (blocked {} chapters)", diagnostics.blocked_distance),
+                WritingLanguage::En => {
+                    format!(" (blocked {} chapters)", diagnostics.blocked_distance)
+                }
                 WritingLanguage::Zh => format!(" (已阻 {} 章)", diagnostics.blocked_distance),
             }
         } else {
@@ -234,6 +249,9 @@ mod tests {
             half_life: 30,
             blocked_distance: 0,
         };
-        assert_eq!(render_hook_diagnostic_marker(&diag, WritingLanguage::Zh), "");
+        assert_eq!(
+            render_hook_diagnostic_marker(&diag, WritingLanguage::Zh),
+            ""
+        );
     }
 }

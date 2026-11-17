@@ -7,7 +7,7 @@
 
 use inkos_engine::utils::semantic_retrieval::{
     build_task_driven_query, chunk_fingerprint, cosine_similarity, reciprocal_rank_fusion,
-    resolve_retrieval_mode, semantic_retrieval_contract, select_stale_chunks, top_k_by_similarity,
+    resolve_retrieval_mode, select_stale_chunks, semantic_retrieval_contract, top_k_by_similarity,
     ChunkVector, EmbeddingChunk, RankedHit, TaskQueryInput,
 };
 use serde::Deserialize;
@@ -76,7 +76,12 @@ fn topk_matches_shared_vectors() {
             vector["name"].as_str().unwrap()
         );
         for (i, (hit, exp)) in got.iter().zip(expected.iter()).enumerate() {
-            assert_eq!(hit.id, exp["id"].as_str().unwrap(), "topK '{}'#{i} id", vector["name"].as_str().unwrap());
+            assert_eq!(
+                hit.id,
+                exp["id"].as_str().unwrap(),
+                "topK '{}'#{i} id",
+                vector["name"].as_str().unwrap()
+            );
             let exp_sim = exp["similarity"].as_f64().unwrap();
             assert!(
                 (hit.similarity - exp_sim).abs() < 1e-9,
@@ -153,7 +158,10 @@ struct StaleCase {
 #[test]
 fn fingerprints_match_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["fingerprint"].as_array().expect("fingerprint array") {
+    for vector in vectors["fingerprint"]
+        .as_array()
+        .expect("fingerprint array")
+    {
         assert_eq!(
             chunk_fingerprint(vector["input"].as_str().unwrap()),
             vector["expected"].as_str().unwrap(),
@@ -171,7 +179,8 @@ fn stale_selection_matches_shared_vectors() {
         let got = select_stale_chunks(&case.chunks, &case.cached);
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            expected, vector["expected"],
+            expected,
+            vector["expected"],
             "stale vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

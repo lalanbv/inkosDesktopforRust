@@ -35,13 +35,19 @@ impl SidecarState {
 
     /// 存入新 child；覆盖此前未清理的 child（调用方应确保已先 `take` 并清理）。
     pub fn insert(&self, child: Child) {
-        let mut guard = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *guard = Some(child);
     }
 
     /// 取出当前 child（若存在）；此后 state 为空。
     pub fn take(&self) -> Option<Child> {
-        let mut guard = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut guard = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         guard.take()
     }
 }
@@ -318,9 +324,14 @@ fn build_menu(app: &AppHandle, badge: u32) -> anyhow::Result<tauri::menu::Menu<t
     // badge 项 disabled=true 表示灰显不可点（纯展示）；show/quit enabled。
     let badge_item = tauri::menu::MenuItem::new(app, &badge_label, false, None::<&str>)
         .context("badge MenuItem 构建失败")?;
-    let show_item =
-        tauri::menu::MenuItem::with_id(app, "show", pick("显示窗口", "Show Window"), true, None::<&str>)
-            .context("show MenuItem 构建失败")?;
+    let show_item = tauri::menu::MenuItem::with_id(
+        app,
+        "show",
+        pick("显示窗口", "Show Window"),
+        true,
+        None::<&str>,
+    )
+    .context("show MenuItem 构建失败")?;
     let plugins_item = tauri::menu::MenuItem::with_id(
         app,
         "plugins",
@@ -329,8 +340,9 @@ fn build_menu(app: &AppHandle, badge: u32) -> anyhow::Result<tauri::menu::Menu<t
         None::<&str>,
     )
     .context("plugins MenuItem 构建失败")?;
-    let quit_item = tauri::menu::MenuItem::with_id(app, "quit", pick("退出", "Quit"), true, None::<&str>)
-        .context("quit MenuItem 构建失败")?;
+    let quit_item =
+        tauri::menu::MenuItem::with_id(app, "quit", pick("退出", "Quit"), true, None::<&str>)
+            .context("quit MenuItem 构建失败")?;
     tauri::menu::MenuBuilder::new(app)
         .items(&[&badge_item, &show_item, &plugins_item, &quit_item])
         .build()
@@ -770,10 +782,7 @@ mod tests {
         // 必须用 supervisor::spawn 让它成新进程组 leader，否则 SIGKILL 整组
         // 会误伤测试进程。
         let mut spec = build_launch(&paths, 0, "bash");
-        spec.args = vec![
-            "-c".to_string(),
-            "trap '' TERM; sleep 30".to_string(),
-        ];
+        spec.args = vec!["-c".to_string(), "trap '' TERM; sleep 30".to_string()];
         let mut child = spawn(&spec).expect("spawn trap+sleep 失败");
         let pid = child.id();
 
@@ -793,10 +802,7 @@ mod tests {
         // 给 OS 一点时间回收，验证进程组已彻底退出：
         std::thread::sleep(Duration::from_millis(50));
         let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        assert_eq!(
-            rc, -1,
-            "kill -0 应失败（rc=-1）说明进程已退出；rc={rc}"
-        );
+        assert_eq!(rc, -1, "kill -0 应失败（rc=-1）说明进程已退出；rc={rc}");
     }
 
     /// C4 验证常量：CLEANUP_GRACE = 3s，与文档一致。

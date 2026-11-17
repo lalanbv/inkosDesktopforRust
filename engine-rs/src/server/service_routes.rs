@@ -76,9 +76,16 @@ impl ServiceConfigEntry {
     }
 
     fn from_json(entry: &Value) -> Self {
-        let str_field = |key: &str| entry.get(key).and_then(Value::as_str).map(|s| s.to_string());
+        let str_field = |key: &str| {
+            entry
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|s| s.to_string())
+        };
         ServiceConfigEntry {
-            service: str_field("service").filter(|s| !s.is_empty()).unwrap_or_else(|| "custom".into()),
+            service: str_field("service")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "custom".into()),
             name: str_field("name").filter(|s| !s.is_empty()),
             base_url: str_field("baseUrl").filter(|s| !s.is_empty()),
             temperature: entry.get("temperature").and_then(Value::as_f64),
@@ -106,7 +113,12 @@ pub(crate) fn service_config_key(entry: &ServiceConfigEntry) -> String {
 /// 对象形态键归一（`custom:Name` → name 解码；`custom` → name 字段）。
 /// 对齐 TS `normalizeServiceEntry`。
 fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntry {
-    let str_field = |key: &str| value.get(key).and_then(Value::as_str).map(|s| s.to_string());
+    let str_field = |key: &str| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(|s| s.to_string())
+    };
     let optional_base = || str_field("baseUrl").filter(|s| !s.is_empty());
     let temperature = value.get("temperature").and_then(Value::as_f64);
     let max_tokens = value.get("maxTokens").and_then(Value::as_f64);
@@ -148,7 +160,9 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
 }
 
 fn percent_decode(value: &str) -> Option<String> {
-    let decoded = percent_encoding::percent_decode_str(value).decode_utf8().ok()?;
+    let decoded = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .ok()?;
     Some(decoded.into_owned())
 }
 
@@ -197,7 +211,11 @@ fn normalize_config_source(value: Option<&Value>) -> &'static str {
 /// `syncTopLevelLlmMirror`：选中服务的 family/baseUrl/model 等镜像到 llm 顶层
 /// （54 号备案的功能性缺口，本轮补齐）。
 pub fn sync_top_level_llm_mirror(llm: &mut Map<String, Value>) {
-    let Some(selected_service) = llm.get("service").and_then(Value::as_str).map(|s| s.to_string()) else {
+    let Some(selected_service) = llm
+        .get("service")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string())
+    else {
         return;
     };
     let services = normalize_service_config(llm.get("services"));
@@ -324,20 +342,26 @@ fn service_list_priority(service: &str) -> i32 {
 
 /// `/^[\x21-\x7E]+$/`：可放进 Authorization header 的非空白 ASCII。
 fn is_header_safe_api_key(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|b| (0x21..=0x7E).contains(&b))
+    !value.is_empty() && value.bytes().all(|b| (0x21..=0x7E).contains(&b))
 }
 
 const NON_TEXT_MODEL_ID_PARTS: [&str; 8] = [
-    "image", "embedding", "embed", "rerank", "tts", "speech", "audio", "moderation",
+    "image",
+    "embedding",
+    "embed",
+    "rerank",
+    "tts",
+    "speech",
+    "audio",
+    "moderation",
 ];
 
 fn is_text_chat_model_id(model_id: &str) -> bool {
     let normalized = model_id.trim().to_lowercase();
     !normalized.is_empty()
-        && !NON_TEXT_MODEL_ID_PARTS.iter().any(|part| normalized.contains(part))
+        && !NON_TEXT_MODEL_ID_PARTS
+            .iter()
+            .any(|part| normalized.contains(part))
 }
 
 /// 模型列表缓存（10 分钟；`?refresh=1` 绕过）。对齐 server.ts `modelListCache`。
@@ -352,7 +376,11 @@ fn model_list_cache() -> &'static ModelListCache {
 /// 语言取值：默认 zh（对齐 currentProjectLanguage 的 normalize 语义——缺省/非法回 zh）。
 async fn project_language(root: &Path) -> &'static str {
     let raw = load_raw_config(root).await;
-    match raw.as_ref().and_then(|c| c.get("language")).and_then(Value::as_str) {
+    match raw
+        .as_ref()
+        .and_then(|c| c.get("language"))
+        .and_then(Value::as_str)
+    {
         Some("en") => "en",
         _ => "zh",
     }
@@ -410,7 +438,11 @@ pub async fn list_services(State(runtime): State<BooksRuntime>) -> impl IntoResp
             ProviderFamily::Anthropic => "anthropic",
         };
         let api_key_optional = is_api_key_optional_for_endpoint(family_str, Some(&preset_base));
-        let connected = secrets.services.get(&ep.id).map(|s| !s.api_key.is_empty()).unwrap_or(false)
+        let connected = secrets
+            .services
+            .get(&ep.id)
+            .map(|s| !s.api_key.is_empty())
+            .unwrap_or(false)
             || (api_key_optional && configured_bank.contains(&ep.id));
         services.push((
             service_list_priority(&ep.id),
@@ -428,10 +460,8 @@ pub async fn list_services(State(runtime): State<BooksRuntime>) -> impl IntoResp
     for svc in &configured {
         if svc.service == "custom" {
             let secret_key = service_config_key(svc);
-            let api_key_optional = is_api_key_optional_for_endpoint(
-                "openai",
-                svc.base_url.as_deref(),
-            );
+            let api_key_optional =
+                is_api_key_optional_for_endpoint("openai", svc.base_url.as_deref());
             let connected = secrets
                 .services
                 .get(&secret_key)
@@ -553,12 +583,13 @@ pub async fn import_env_config(State(runtime): State<BooksRuntime>) -> impl Into
     if let Some(llm) = config.get("llm") {
         existing = normalize_service_config(llm.get("services"));
     }
-    let explicit_service = env.service.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let explicit_service = env
+        .service
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let guessed = env.base_url.as_deref().map(guess_service_from_base_url);
-    let service = explicit_service
-        .or(guessed)
-        .unwrap_or("custom")
-        .to_string();
+    let service = explicit_service.or(guessed).unwrap_or("custom").to_string();
 
     let entry = if service == "custom" {
         ServiceConfigEntry {
@@ -589,7 +620,10 @@ pub async fn import_env_config(State(runtime): State<BooksRuntime>) -> impl Into
     sync_top_level_llm_mirror(llm);
 
     let mut secrets = load_secrets(root).unwrap_or_default();
-    secrets.services.insert(service_key.clone(), crate::llm::secrets::ServiceSecret { api_key });
+    secrets.services.insert(
+        service_key.clone(),
+        crate::llm::secrets::ServiceSecret { api_key },
+    );
     let _ = save_secrets(root, &secrets);
     if !save_raw_config(root, &config).await {
         return (
@@ -650,7 +684,10 @@ pub async fn put_services_config(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
     }
     if let Some(config_source) = payload.get("configSource") {
-        llm.insert("configSource".into(), json!(normalize_config_source(Some(config_source))));
+        llm.insert(
+            "configSource".into(),
+            json!(normalize_config_source(Some(config_source))),
+        );
     }
     if let Some(service) = payload.get("service") {
         llm.insert("service".into(), service.clone());
@@ -692,8 +729,14 @@ pub async fn delete_service(
     let mut secrets = load_secrets(root).unwrap_or_default();
     secrets.services.remove(&service);
     let _ = save_secrets(root, &secrets);
-    model_list_cache().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
-    (StatusCode::OK, Json(json!({ "ok": true, "service": service })))
+    model_list_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "service": service })),
+    )
 }
 
 // ── POST /api/v1/services/:service/test ────────────────────────
@@ -719,7 +762,10 @@ pub async fn test_service(
             "chat" => Some(crate::llm::providers::TransportApiFormat::Chat),
             _ => None,
         });
-    let preferred_stream = payload.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let preferred_stream = payload
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let language = project_language(root).await;
 
     let Some(resolved_base_url) =
@@ -735,14 +781,17 @@ pub async fn test_service(
         );
     };
 
-    let base_service = if is_custom_service_id(&service) { "custom" } else { service.as_str() };
+    let base_service = if is_custom_service_id(&service) {
+        "custom"
+    } else {
+        service.as_str()
+    };
     let family = resolve_service_provider_family(base_service).unwrap_or(ProviderFamily::Openai);
     let family_str = match family {
         ProviderFamily::Openai => "openai",
         ProviderFamily::Anthropic => "anthropic",
     };
-    let api_key_optional =
-        is_api_key_optional_for_endpoint(family_str, Some(&resolved_base_url));
+    let api_key_optional = is_api_key_optional_for_endpoint(family_str, Some(&resolved_base_url));
     if api_key.trim().is_empty() && !api_key_optional {
         let message = match language {
             "en" => "API Key must not be empty",
@@ -826,7 +875,11 @@ pub async fn test_service(
         let selected = endpoint
             .and_then(|ep| ep.check_model.clone())
             .filter(|check| models.iter().any(|m| m["id"] == json!(check)))
-            .or_else(|| models.first().and_then(|m| m["id"].as_str().map(|s| s.to_string())));
+            .or_else(|| {
+                models
+                    .first()
+                    .and_then(|m| m["id"].as_str().map(|s| s.to_string()))
+            });
         if let Some(selected_model) = selected {
             let probe = json!({ "ok": true, "models": models.len() });
             return (
@@ -929,7 +982,15 @@ pub async fn test_service(
     let mut last_error = String::new();
     for model in &candidates {
         for (plan_api_format, stream) in &plans {
-            match minimal_chat_probe(&resolved_base_url, api_key.trim(), model, *stream, *plan_api_format).await {
+            match minimal_chat_probe(
+                &resolved_base_url,
+                api_key.trim(),
+                model,
+                *stream,
+                *plan_api_format,
+            )
+            .await
+            {
                 Ok(_content) => {
                     // TS：live 清单空 → 静态回退清单（endpoint.models/knownModels）。
                     let (models, models_source): (Vec<Value>, &str) = if discovered.is_empty() {
@@ -1007,7 +1068,13 @@ fn fallback_text_models(service_id: &str) -> Vec<String> {
         return endpoint_models;
     }
     resolve_service_preset(service_id)
-        .map(|preset| preset.known_models.iter().map(|id| id.to_string()).collect())
+        .map(|preset| {
+            preset
+                .known_models
+                .iter()
+                .map(|id| id.to_string())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -1028,14 +1095,22 @@ pub(crate) fn build_probe_plans(
     use crate::llm::providers::TransportApiFormat;
     let mut plans: Vec<(TransportApiFormat, bool)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let push = |api_format: TransportApiFormat, stream: bool, plans: &mut Vec<_>, seen: &mut std::collections::HashSet<(TransportApiFormat, bool)>| {
+    let push = |api_format: TransportApiFormat,
+                stream: bool,
+                plans: &mut Vec<_>,
+                seen: &mut std::collections::HashSet<(TransportApiFormat, bool)>| {
         if seen.insert((api_format, stream)) {
             plans.push((api_format, stream));
         }
     };
     match preferred_api_format {
         Some(api_format) => {
-            push(api_format, preferred_stream.unwrap_or(false), &mut plans, &mut seen);
+            push(
+                api_format,
+                preferred_stream.unwrap_or(false),
+                &mut plans,
+                &mut seen,
+            );
             if preferred_stream == Some(true) {
                 push(api_format, false, &mut plans, &mut seen);
             }
@@ -1048,9 +1123,16 @@ pub(crate) fn build_probe_plans(
     plans
 }
 
-pub(crate) async fn minimal_chat_probe(base_url: &str, api_key: &str, model: &str, stream: bool, api_format: crate::llm::providers::TransportApiFormat) -> Result<String, String> {
+pub(crate) async fn minimal_chat_probe(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    stream: bool,
+    api_format: crate::llm::providers::TransportApiFormat,
+) -> Result<String, String> {
     use crate::llm::streaming_client::{ChatCompletionParams, StreamingChatClient};
-    let client = StreamingChatClient::new(base_url.to_string(), api_key.to_string(), HashMap::new());
+    let client =
+        StreamingChatClient::new(base_url.to_string(), api_key.to_string(), HashMap::new());
     let message = crate::llm::provider::LLMMessage {
         role: crate::llm::provider::LLMRole::User,
         content: "Reply with OK only.".to_string(),
@@ -1098,21 +1180,39 @@ struct FormatProbeErrorArgs<'a> {
 /// 上游详情前缀（剥 baseUrl 尾注）。
 fn format_service_probe_error(args: &FormatProbeErrorArgs<'_>) -> String {
     let en = args.language == "en";
-    let pick = |zh: &str, en_text: &str| if en { en_text.to_string() } else { zh.to_string() };
+    let pick = |zh: &str, en_text: &str| {
+        if en {
+            en_text.to_string()
+        } else {
+            zh.to_string()
+        }
+    };
     static BASEURL_TAIL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let tail_re = BASEURL_TAIL_RE
-        .get_or_init(|| regex::Regex::new(r"(?m)
-\s*\(baseUrl:[\s\S]*?\)$").unwrap());
-    let raw_detail = tail_re.replace_all(args.error.trim(), "").trim().to_string();
+    let tail_re = BASEURL_TAIL_RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?m)
+\s*\(baseUrl:[\s\S]*?\)$",
+        )
+        .unwrap()
+    });
+    let raw_detail = tail_re
+        .replace_all(args.error.trim(), "")
+        .trim()
+        .to_string();
     // 1006 号：provider.ts 诊断块 EN 基准化后解析标记转「Upstream details: 」，
     // 保留 zh 旧标记识别（旧快照/旧日志数据兼容）。
-    let upstream_detail = if raw_detail.contains("Upstream details: ") || raw_detail.contains("上游详情：") {
-        raw_detail.clone()
-    } else {
-        String::new()
-    };
+    let upstream_detail =
+        if raw_detail.contains("Upstream details: ") || raw_detail.contains("上游详情：") {
+            raw_detail.clone()
+        } else {
+            String::new()
+        };
 
-    let protocol = if args.api_format == "responses" { "Responses" } else { "Chat / Completions" };
+    let protocol = if args.api_format == "responses" {
+        "Responses"
+    } else {
+        "Chat / Completions"
+    };
     let stream_suffix = match args.stream {
         Some(stream) => pick(
             &format!("，{}", if stream { "流式" } else { "非流式" }),
@@ -1122,15 +1222,39 @@ fn format_service_probe_error(args: &FormatProbeErrorArgs<'_>) -> String {
     };
     let display_label = args.label.unwrap_or(args.service);
     let context = [
-        pick(&format!("服务商：{display_label}"), &format!("Service: {display_label}")),
-        pick(&format!("测试模型：{}", args.model), &format!("Test model: {}", args.model)),
-        pick(&format!("协议：{protocol}{stream_suffix}"), &format!("Protocol: {protocol}{stream_suffix}")),
-        pick(&format!("Base URL：{}", args.base_url), &format!("Base URL: {}", args.base_url)),
-    ].join("
-");
-    let upstream_prefix = |detail: &str| pick(&format!("
-上游返回：{detail}"), &format!("
-Upstream response: {detail}"));
+        pick(
+            &format!("服务商：{display_label}"),
+            &format!("Service: {display_label}"),
+        ),
+        pick(
+            &format!("测试模型：{}", args.model),
+            &format!("Test model: {}", args.model),
+        ),
+        pick(
+            &format!("协议：{protocol}{stream_suffix}"),
+            &format!("Protocol: {protocol}{stream_suffix}"),
+        ),
+        pick(
+            &format!("Base URL：{}", args.base_url),
+            &format!("Base URL: {}", args.base_url),
+        ),
+    ]
+    .join(
+        "
+",
+    );
+    let upstream_prefix = |detail: &str| {
+        pick(
+            &format!(
+                "
+上游返回：{detail}"
+            ),
+            &format!(
+                "
+Upstream response: {detail}"
+            ),
+        )
+    };
 
     if args.service == "google" {
         let mut lines = vec![
@@ -1158,11 +1282,14 @@ Upstream response: {detail}"));
         if !upstream_detail.is_empty() {
             lines.push(upstream_prefix(&upstream_detail));
         }
-        return lines.join("
-");
+        return lines.join(
+            "
+",
+        );
     }
 
-    if args.service == "moonshot" || args.service == "kimiCodingPlan" || args.service == "kimicode" {
+    if args.service == "moonshot" || args.service == "kimiCodingPlan" || args.service == "kimicode"
+    {
         let mut lines = vec![
             pick(&format!("{display_label} 测试连接失败。"), &format!("{display_label} connection test failed.")),
             context,
@@ -1175,8 +1302,10 @@ Upstream response: {detail}"));
         if !upstream_detail.is_empty() {
             lines.push(upstream_prefix(&upstream_detail));
         }
-        return lines.join("
-");
+        return lines.join(
+            "
+",
+        );
     }
 
     let mut lines = vec![
@@ -1191,8 +1320,10 @@ Upstream response: {detail}"));
     if !upstream_detail.is_empty() {
         lines.push(upstream_prefix(&upstream_detail));
     }
-    lines.join("
-")
+    lines.join(
+        "
+",
+    )
 }
 
 // ── PUT / GET /api/v1/services/:service/secret ─────────────────
@@ -1220,7 +1351,12 @@ pub async fn put_service_secret(
                 Json(json!({ "ok": false, "error": message })),
             );
         }
-        secrets.services.insert(service, crate::llm::secrets::ServiceSecret { api_key: trimmed.to_string() });
+        secrets.services.insert(
+            service,
+            crate::llm::secrets::ServiceSecret {
+                api_key: trimmed.to_string(),
+            },
+        );
     } else {
         secrets.services.remove(&service);
     }
@@ -1255,7 +1391,13 @@ pub async fn list_services_models(State(runtime): State<BooksRuntime>) -> impl I
     let groups: Vec<Value> = get_all_endpoints()
         .iter()
         .filter(|ep| ep.id != "custom")
-        .filter(|ep| secrets.services.get(&ep.id).map(|s| !s.api_key.is_empty()).unwrap_or(false))
+        .filter(|ep| {
+            secrets
+                .services
+                .get(&ep.id)
+                .map(|s| !s.api_key.is_empty())
+                .unwrap_or(false)
+        })
         .map(|ep| {
             let models: Vec<Value> = ep
                 .models
@@ -1280,9 +1422,7 @@ pub async fn list_services_models(State(runtime): State<BooksRuntime>) -> impl I
 
 // ── GET /api/v1/services/models/custom ─────────────────────────
 
-pub async fn list_custom_services_models(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn list_custom_services_models(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root();
     let secrets = load_secrets(root).unwrap_or_default();
     let config = load_raw_config(root).await;
@@ -1296,20 +1436,31 @@ pub async fn list_custom_services_models(
     .filter(|s| s.service == "custom")
     .map(|s| {
         (
-            format!("custom:{}", s.name.clone().unwrap_or_else(|| "Custom".into())),
+            format!(
+                "custom:{}",
+                s.name.clone().unwrap_or_else(|| "Custom".into())
+            ),
             s.base_url.clone().unwrap_or_default(),
             s.name.clone().unwrap_or_else(|| "Custom".into()),
         )
     })
     .filter(|(id, base_url, _)| {
         !base_url.is_empty()
-            && secrets.services.get(id).map(|s| !s.api_key.is_empty()).unwrap_or(false)
+            && secrets
+                .services
+                .get(id)
+                .map(|s| !s.api_key.is_empty())
+                .unwrap_or(false)
     })
     .collect();
 
     let mut groups = Vec::with_capacity(customs.len());
     for (id, base_url, label) in customs {
-        let api_key = secrets.services.get(&id).map(|s| s.api_key.clone()).unwrap_or_default();
+        let api_key = secrets
+            .services
+            .get(&id)
+            .map(|s| s.api_key.clone())
+            .unwrap_or_default();
         let probed = probe_models_from_upstream(&base_url, &api_key, 10_000).await;
         let models: Vec<Value> = probed
             .iter()
@@ -1341,9 +1492,12 @@ pub async fn list_service_models(
         .or_else(|| secrets.services.get(&service).map(|s| s.api_key.clone()))
         .unwrap_or_default();
 
-    let resolved_base_url =
-        resolve_configured_service_base_url(root, &service, None).await;
-    let base_service = if is_custom_service_id(&service) { "custom" } else { service.as_str() };
+    let resolved_base_url = resolve_configured_service_base_url(root, &service, None).await;
+    let base_service = if is_custom_service_id(&service) {
+        "custom"
+    } else {
+        service.as_str()
+    };
     let family = resolve_service_provider_family(base_service).unwrap_or(ProviderFamily::Openai);
     let family_str = match family {
         ProviderFamily::Openai => "openai",
@@ -1362,7 +1516,11 @@ pub async fn list_service_models(
     let cache_key = format!(
         "{service}::{}::{}",
         resolved_base_url.as_deref().unwrap_or(""),
-        if api_key.len() >= 8 { &api_key[api_key.len() - 8..] } else { "" }
+        if api_key.len() >= 8 {
+            &api_key[api_key.len() - 8..]
+        } else {
+            ""
+        }
     );
     if !refresh {
         if let Ok(cache) = model_list_cache().lock() {
@@ -1379,8 +1537,7 @@ pub async fn list_service_models(
     } else {
         None
     };
-    let enriched =
-        list_models_for_service(base_service, Some(&api_key), live_base_url).await;
+    let enriched = list_models_for_service(base_service, Some(&api_key), live_base_url).await;
     let models: Vec<Value> = enriched
         .iter()
         .filter(|m| is_text_chat_model_id(&m.id))
@@ -1422,11 +1579,13 @@ pub async fn get_cover_config(State(runtime): State<BooksRuntime>) -> impl IntoR
                 .map(|s| !s.api_key.is_empty())
                 .unwrap_or(false)
     };
-    let env_base = std::env::var("INKOS_COVER_BASE_URL").ok()
+    let env_base = std::env::var("INKOS_COVER_BASE_URL")
+        .ok()
         .or_else(|| std::env::var("INKOS_COVER_ENDPOINT").ok());
-    let env_key = std::env::var("INKOS_COVER_API_KEY").ok().filter(|k| !k.is_empty());
-    let env_configured =
-        env_base.is_some() && (env_key.is_some() || key_for("kkaiapi"));
+    let env_key = std::env::var("INKOS_COVER_API_KEY")
+        .ok()
+        .filter(|k| !k.is_empty());
+    let env_configured = env_base.is_some() && (env_key.is_some() || key_for("kkaiapi"));
     let configured = cover
         .as_ref()
         .and_then(|c| c.get("service"))
@@ -1476,9 +1635,7 @@ fn normalize_cover_config_value(raw: Option<&Value>) -> Option<Map<String, Value
     } else {
         preset.default_model.to_string()
     };
-    let base_url = normalize_cover_base_url(
-        record.get("baseUrl").and_then(Value::as_str),
-    );
+    let base_url = normalize_cover_base_url(record.get("baseUrl").and_then(Value::as_str));
     let mut out = Map::new();
     out.insert("service".into(), json!(preset.service));
     out.insert("model".into(), json!(model));
@@ -1595,9 +1752,12 @@ pub async fn put_cover_secret(
     let mut secrets = load_secrets(root).unwrap_or_default();
     let key = cover_secret_key(&service);
     if !trimmed.is_empty() {
-        secrets
-            .services
-            .insert(key, crate::llm::secrets::ServiceSecret { api_key: trimmed.to_string() });
+        secrets.services.insert(
+            key,
+            crate::llm::secrets::ServiceSecret {
+                api_key: trimmed.to_string(),
+            },
+        );
     } else {
         secrets.services.remove(&key);
     }
@@ -1607,7 +1767,10 @@ pub async fn put_cover_secret(
             Json(json!({ "error": "failed to save secrets" })),
         );
     }
-    (StatusCode::OK, Json(json!({ "ok": true, "service": service })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "service": service })),
+    )
 }
 
 // ── resolveEffectiveLLMConfig（studio-project 主路径，63 号补齐 56 号偏差） ──
@@ -1615,7 +1778,13 @@ pub async fn put_cover_secret(
 /// 动态模型清单服务（静态 bank 必然滞后，用户配置的模型 id 直接透传；
 /// effective-llm-config.ts `SERVICES_WITH_DYNAMIC_MODELS`）。
 const SERVICES_WITH_DYNAMIC_MODELS: [&str; 7] = [
-    "ollama", "lmstudio", "openrouter", "newapi", "kkaiapi", "ppio", "siliconcloud",
+    "ollama",
+    "lmstudio",
+    "openrouter",
+    "newapi",
+    "kkaiapi",
+    "ppio",
+    "siliconcloud",
 ];
 
 fn service_allows_unlisted_models(service: &str) -> bool {
@@ -1644,10 +1813,16 @@ fn resolve_service_model(
 ) -> String {
     let noop = || "noop-model".to_string();
     let Some(entry) = entry else {
-        return default_model.or(current_model).map(str::to_string).unwrap_or_else(noop);
+        return default_model
+            .or(current_model)
+            .map(str::to_string)
+            .unwrap_or_else(noop);
     };
     if entry.service == "custom" {
-        return default_model.or(current_model).map(str::to_string).unwrap_or_else(noop);
+        return default_model
+            .or(current_model)
+            .map(str::to_string)
+            .unwrap_or_else(noop);
     }
     let endpoint = get_endpoint(&entry.service);
     for candidate in [default_model, current_model].into_iter().flatten() {
@@ -1708,7 +1883,11 @@ fn apply_service_entry(llm: &mut Map<String, Value>, entry: &ServiceConfigEntry)
                 let api = resolve_service_preset(&entry.service)
                     .map(|p| p.api)
                     .unwrap_or_default();
-                if api.starts_with("openai-responses") { "responses".into() } else { "chat".into() }
+                if api.starts_with("openai-responses") {
+                    "responses".into()
+                } else {
+                    "chat".into()
+                }
             });
         llm.insert("apiFormat".into(), json!(api_format));
     }
@@ -1731,12 +1910,18 @@ pub async fn resolve_effective_llm_studio(
     llm.insert("configSource".into(), json!("studio"));
 
     // selectServiceEntry：configuredService ?? synthesize ?? services[0]
-    let configured = llm.get("service").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let configured = llm
+        .get("service")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
     let selected: Option<ServiceConfigEntry> = configured
         .and_then(|configured_service| {
             services
                 .iter()
-                .find(|entry| entry.service == configured_service || service_config_key(entry) == configured_service)
+                .find(|entry| {
+                    entry.service == configured_service
+                        || service_config_key(entry) == configured_service
+                })
                 .cloned()
                 .or_else(|| synthesize_service_entry(configured_service))
         })
@@ -1751,7 +1936,11 @@ pub async fn resolve_effective_llm_studio(
     let default_model = llm.get("defaultModel").and_then(Value::as_str);
     let model = resolve_service_model(
         selected.as_ref(),
-        if ignore_top_level_model { None } else { current_model },
+        if ignore_top_level_model {
+            None
+        } else {
+            current_model
+        },
         default_model,
     );
     llm.insert("model".into(), json!(model));
@@ -1767,10 +1956,11 @@ pub async fn resolve_effective_llm_studio(
     let context_window = crate::llm::lookup::builtin_context_window(service_for_card, &model);
     llm.insert("contextWindowTokens".into(), json!(context_window));
 
-    let service_key = selected
-        .as_ref()
-        .map(service_config_key)
-        .or_else(|| llm.get("service").and_then(Value::as_str).map(str::to_string));
+    let service_key = selected.as_ref().map(service_config_key).or_else(|| {
+        llm.get("service")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
     let secrets = load_secrets(root).unwrap_or_default();
     let api_key = service_key
         .and_then(|key| secrets.services.get(&key).map(|s| s.api_key.clone()))
@@ -1778,13 +1968,28 @@ pub async fn resolve_effective_llm_studio(
     llm.insert("apiKey".into(), json!(api_key));
 
     // requireApiKey=false → noop 默认填充（fillNoopLLMDefaults）
-    if llm.get("provider").and_then(Value::as_str).map(str::is_empty).unwrap_or(true) {
+    if llm
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
         llm.insert("provider".into(), json!("openai"));
     }
-    if llm.get("baseUrl").and_then(Value::as_str).map(str::is_empty).unwrap_or(true) {
+    if llm
+        .get("baseUrl")
+        .and_then(Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
         llm.insert("baseUrl".into(), json!("https://example.invalid/v1"));
     }
-    if llm.get("model").and_then(Value::as_str).map(str::is_empty).unwrap_or(true) {
+    if llm
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
         llm.insert("model".into(), json!("noop-model"));
     }
     llm
@@ -1797,12 +2002,22 @@ fn synthesize_service_entry(service: &str) -> Option<ServiceConfigEntry> {
     if let Some(name) = service.strip_prefix("custom:") {
         return Some(ServiceConfigEntry {
             service: "custom".into(),
-            name: Some(if name.is_empty() { "Custom".into() } else { name.to_string() }),
+            name: Some(if name.is_empty() {
+                "Custom".into()
+            } else {
+                name.to_string()
+            }),
             ..Default::default()
         });
     }
-    if service == "custom" || get_endpoint(service).is_some() || resolve_service_preset(service).is_some() {
-        return Some(ServiceConfigEntry { service: service.to_string(), ..Default::default() });
+    if service == "custom"
+        || get_endpoint(service).is_some()
+        || resolve_service_preset(service).is_some()
+    {
+        return Some(ServiceConfigEntry {
+            service: service.to_string(),
+            ..Default::default()
+        });
     }
     None
 }
@@ -1823,16 +2038,34 @@ mod probe_error_tests {
             error: "HTTP 400\n上游详情：invalid key\n  (baseUrl:https://x)",
             language: "zh",
         });
-        assert!(message.starts_with("Google Gemini 测试连接失败。"), "{message}");
+        assert!(
+            message.starts_with("Google Gemini 测试连接失败。"),
+            "{message}"
+        );
         assert!(message.contains("服务商：Google Gemini"), "{message}");
         assert!(message.contains("测试模型：gemini-2.5-flash"), "{message}");
-        assert!(message.contains("协议：Chat / Completions，流式"), "{message}");
-        assert!(message.contains("Base URL：https://generativelanguage.googleapis.com"), "{message}");
-        assert!(message.contains("1. API Key 是否来自 Google AI Studio 的 Gemini API key"), "{message}");
-        assert!(message.contains("4. 如果 key 曾经泄露，请在 AI Studio 重新生成后再保存。"), "{message}");
+        assert!(
+            message.contains("协议：Chat / Completions，流式"),
+            "{message}"
+        );
+        assert!(
+            message.contains("Base URL：https://generativelanguage.googleapis.com"),
+            "{message}"
+        );
+        assert!(
+            message.contains("1. API Key 是否来自 Google AI Studio 的 Gemini API key"),
+            "{message}"
+        );
+        assert!(
+            message.contains("4. 如果 key 曾经泄露，请在 AI Studio 重新生成后再保存。"),
+            "{message}"
+        );
         // baseUrl 尾注被剥 + 上游详情前缀保留。
         assert!(!message.contains("(baseUrl:https://x)"), "{message}");
-        assert!(message.contains("\n上游返回：HTTP 400\n上游详情：invalid key"), "{message}");
+        assert!(
+            message.contains("\n上游返回：HTTP 400\n上游详情：invalid key"),
+            "{message}"
+        );
     }
 
     #[test]
@@ -1861,7 +2094,10 @@ mod probe_error_tests {
             error: "HTTP 400\n上游详情：invalid key\n  (baseUrl:https://x)",
             language: "zh",
         });
-        assert!(legacy_message.contains("\n上游返回：HTTP 400\n上游详情：invalid key"), "{legacy_message}");
+        assert!(
+            legacy_message.contains("\n上游返回：HTTP 400\n上游详情：invalid key"),
+            "{legacy_message}"
+        );
     }
 
     #[test]
@@ -1878,7 +2114,12 @@ mod probe_error_tests {
         });
         assert!(message.contains("Moonshot 测试连接失败。"), "{message}");
         assert!(message.contains("协议：Responses，非流式"), "{message}");
-        assert!(message.contains("请优先检查模型是否可用，以及 kimi-k2.x 这类模型是否需要 temperature=1。"), "{message}");
+        assert!(
+            message.contains(
+                "请优先检查模型是否可用，以及 kimi-k2.x 这类模型是否需要 temperature=1。"
+            ),
+            "{message}"
+        );
         assert!(!message.contains("上游返回"), "{message}");
 
         let message = format_service_probe_error(&FormatProbeErrorArgs {
@@ -1892,9 +2133,15 @@ mod probe_error_tests {
             language: "en",
         });
         // label 缺省回落 service id；en 通用四项。
-        assert!(message.contains("deepseek connection test failed."), "{message}");
+        assert!(
+            message.contains("deepseek connection test failed."),
+            "{message}"
+        );
         assert!(message.contains("Service: deepseek"), "{message}");
-        assert!(message.contains("Protocol: Chat / Completions"), "{message}");
+        assert!(
+            message.contains("Protocol: Chat / Completions"),
+            "{message}"
+        );
         assert!(message.contains("Check the API Key, model availability, account quota, and whether the protocol type matches this service."), "{message}");
     }
 }
@@ -1910,7 +2157,10 @@ mod tests {
         // preferred responses + stream → [responses×true, responses×false]。
         assert_eq!(
             build_probe_plans(Some(TransportApiFormat::Responses), Some(true)),
-            vec![(TransportApiFormat::Responses, true), (TransportApiFormat::Responses, false)]
+            vec![
+                (TransportApiFormat::Responses, true),
+                (TransportApiFormat::Responses, false)
+            ]
         );
         // preferred chat 无 stream 偏好 → 单计划 [chat×false]。
         assert_eq!(
@@ -1929,12 +2179,18 @@ mod tests {
         use crate::llm::providers::TransportApiFormat;
         assert_eq!(
             build_probe_plans(None, None),
-            vec![(TransportApiFormat::Chat, false), (TransportApiFormat::Responses, false)]
+            vec![
+                (TransportApiFormat::Chat, false),
+                (TransportApiFormat::Responses, false)
+            ]
         );
         // stream 偏好在无 apiFormat 偏好时不参与（TS 同：None 分支忽略 stream）。
         assert_eq!(
             build_probe_plans(None, Some(true)),
-            vec![(TransportApiFormat::Chat, false), (TransportApiFormat::Responses, false)]
+            vec![
+                (TransportApiFormat::Chat, false),
+                (TransportApiFormat::Responses, false)
+            ]
         );
     }
 
@@ -1959,7 +2215,11 @@ mod tests {
 
     #[test]
     fn service_config_key_and_custom_detection() {
-        let entry = ServiceConfigEntry { service: "custom".into(), name: Some("Env LLM".into()), ..Default::default() };
+        let entry = ServiceConfigEntry {
+            service: "custom".into(),
+            name: Some("Env LLM".into()),
+            ..Default::default()
+        };
         assert_eq!(service_config_key(&entry), "custom:Env LLM");
         assert!(is_custom_service_id("custom"));
         assert!(is_custom_service_id("custom:Env LLM"));
@@ -1977,7 +2237,10 @@ mod tests {
         let object_form = json!({ "custom:My LLM": { "baseUrl": "https://x/v1" }, "deepseek": { "stream": true } });
         let entries = normalize_service_config(Some(&object_form));
         assert_eq!(entries.len(), 2);
-        let my = entries.iter().find(|e| e.name.as_deref() == Some("My LLM")).unwrap();
+        let my = entries
+            .iter()
+            .find(|e| e.name.as_deref() == Some("My LLM"))
+            .unwrap();
         assert_eq!(my.service, "custom");
         assert_eq!(my.base_url.as_deref(), Some("https://x/v1"));
     }
@@ -1985,17 +2248,36 @@ mod tests {
     #[test]
     fn merge_updates_by_key_keeps_order() {
         let existing = vec![
-            ServiceConfigEntry { service: "deepseek".into(), ..Default::default() },
-            ServiceConfigEntry { service: "custom".into(), name: Some("A".into()), ..Default::default() },
+            ServiceConfigEntry {
+                service: "deepseek".into(),
+                ..Default::default()
+            },
+            ServiceConfigEntry {
+                service: "custom".into(),
+                name: Some("A".into()),
+                ..Default::default()
+            },
         ];
         let updates = vec![
-            ServiceConfigEntry { service: "custom".into(), name: Some("B".into()), base_url: Some("https://b/v1".into()), ..Default::default() },
-            ServiceConfigEntry { service: "moonshot".into(), ..Default::default() },
+            ServiceConfigEntry {
+                service: "custom".into(),
+                name: Some("B".into()),
+                base_url: Some("https://b/v1".into()),
+                ..Default::default()
+            },
+            ServiceConfigEntry {
+                service: "moonshot".into(),
+                ..Default::default()
+            },
         ];
         let merged = merge_service_config(existing, updates);
         // 键按 custom:{name}——不同名 custom 是不同条目（TS 同款）
         assert_eq!(merged.len(), 4);
-        assert_eq!(merged[1].name.as_deref(), Some("A"), "custom:A 键不同于 custom:B，共存");
+        assert_eq!(
+            merged[1].name.as_deref(),
+            Some("A"),
+            "custom:A 键不同于 custom:B，共存"
+        );
         assert_eq!(merged[2].name.as_deref(), Some("B"));
         assert_eq!(merged[3].service, "moonshot", "新条目追加尾部");
 
@@ -2057,7 +2339,9 @@ mod tests {
         const FIXTURE_KEY: &str = "test-key-123";
         std::fs::write(
             root.join(".inkos").join("secrets.json"),
-            format!(r#"{{ "services": {{ "custom:My LLM": {{ "{KEY_NAME}": "{FIXTURE_KEY}" }} }} }}"#),
+            format!(
+                r#"{{ "services": {{ "custom:My LLM": {{ "{KEY_NAME}": "{FIXTURE_KEY}" }} }} }}"#
+            ),
         )
         .unwrap();
 
@@ -2081,7 +2365,10 @@ mod tests {
         )
         .await;
         assert_eq!(effective.get("provider").unwrap(), "openai");
-        assert_eq!(effective.get("baseUrl").unwrap(), "https://example.invalid/v1");
+        assert_eq!(
+            effective.get("baseUrl").unwrap(),
+            "https://example.invalid/v1"
+        );
         assert_eq!(effective.get("model").unwrap(), "noop-model");
     }
 

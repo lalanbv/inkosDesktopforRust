@@ -138,7 +138,10 @@ mod tests {
 
     #[test]
     fn test_rpc_response_error() {
-        let resp = RpcResponse::error(1, RpcError::new(RpcError::METHOD_NOT_FOUND, "Method not found"));
+        let resp = RpcResponse::error(
+            1,
+            RpcError::new(RpcError::METHOD_NOT_FOUND, "Method not found"),
+        );
         let json = serde_json::to_string(&resp).unwrap();
 
         assert!(json.contains("\"id\":1"));

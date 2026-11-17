@@ -2,10 +2,10 @@
 //!
 //! 检测 projects.json（旧格式），迁移为默认工作区。
 
-use std::path::Path;
+use super::WorkspaceList;
 use anyhow::Context;
 use serde::Deserialize;
-use super::{WorkspaceList};
+use std::path::Path;
 
 /// Phase 2 projects.json schema
 #[derive(Debug, Deserialize)]
@@ -39,10 +39,9 @@ pub fn migrate_from_phase2(app_data_dir: &Path) -> anyhow::Result<bool> {
     }
 
     // 读取旧格式
-    let old_json = std::fs::read(&old_path)
-        .context("读取 projects.json 失败")?;
-    let old_list: Phase2ProjectList = serde_json::from_slice(&old_json)
-        .context("解析 projects.json 失败")?;
+    let old_json = std::fs::read(&old_path).context("读取 projects.json 失败")?;
+    let old_list: Phase2ProjectList =
+        serde_json::from_slice(&old_json).context("解析 projects.json 失败")?;
 
     // 创建默认工作区
     let mut ws_list = WorkspaceList::default();
@@ -57,12 +56,13 @@ pub fn migrate_from_phase2(app_data_dir: &Path) -> anyhow::Result<bool> {
     ws_list.switch(&id).expect("切换默认工作区失败");
 
     // 写入新格式
-    ws_list.write(&ws_path).context("写入 workspaces.json 失败")?;
+    ws_list
+        .write(&ws_path)
+        .context("写入 workspaces.json 失败")?;
 
     // 备份旧文件（保留，允许用户回退）
     let backup_path = app_data_dir.join("projects.json.phase2-backup");
-    std::fs::rename(&old_path, &backup_path)
-        .context("备份 projects.json 失败")?;
+    std::fs::rename(&old_path, &backup_path).context("备份 projects.json 失败")?;
 
     Ok(true)
 }

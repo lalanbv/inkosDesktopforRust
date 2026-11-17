@@ -151,7 +151,9 @@ impl RequestedIntent {
 }
 
 /// `normalizeStudioRequestedIntent`：空 → None；非法 → 400 INVALID_REQUESTED_INTENT。
-pub fn normalize_requested_intent(value: Option<&Value>) -> Result<Option<RequestedIntent>, String> {
+pub fn normalize_requested_intent(
+    value: Option<&Value>,
+) -> Result<Option<RequestedIntent>, String> {
     let Some(text) = value.and_then(Value::as_str) else {
         return Ok(None);
     };
@@ -232,7 +234,10 @@ pub fn is_write_next_production_request(
 }
 
 /// `isConfirmedProductionAction`：button/slash 来源的 11 个确认 intent。
-pub fn is_confirmed_production_action(action_source: ActionSource, intent: RequestedIntent) -> bool {
+pub fn is_confirmed_production_action(
+    action_source: ActionSource,
+    intent: RequestedIntent,
+) -> bool {
     if !matches!(action_source, ActionSource::Button | ActionSource::Slash) {
         return false;
     }
@@ -286,32 +291,52 @@ pub async fn resolve_agent_model_override(
 
     let resolve_key = |service: &str| -> Option<String> {
         let secrets = crate::llm::secrets::load_secrets(root).unwrap_or_default();
-        crate::llm::secrets::resolve_service_api_key(&secrets, service, |name| std::env::var(name).ok())
-            .filter(|key| !key.trim().is_empty())
+        crate::llm::secrets::resolve_service_api_key(&secrets, service, |name| {
+            std::env::var(name).ok()
+        })
+        .filter(|key| !key.trim().is_empty())
     };
 
     // ── 层 1：前端显式 service+model。 ──
-    if let (Some(service), Some(model)) = (service.map(str::trim).filter(|s| !s.is_empty()), model.map(str::trim).filter(|s| !s.is_empty())) {
+    if let (Some(service), Some(model)) = (
+        service.map(str::trim).filter(|s| !s.is_empty()),
+        model.map(str::trim).filter(|s| !s.is_empty()),
+    ) {
         let Some(base_url) =
-            crate::server::service_routes::resolve_configured_service_base_url(root, service, None).await
+            crate::server::service_routes::resolve_configured_service_base_url(root, service, None)
+                .await
         else {
             // TS：resolveServiceModel 无 baseUrl 抛错（非 key 错 → 500）。
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(json!({ "error": format!("Cannot resolve model \"{model}\" for service \"{service}\": no baseUrl available.") })),
+                axum::Json(
+                    json!({ "error": format!("Cannot resolve model \"{model}\" for service \"{service}\": no baseUrl available.") }),
+                ),
             ));
         };
         let api_key = resolve_key(service);
-        let api_format = crate::server::service_routes::resolve_configured_service_api_format(root, service)
-            .await
-            .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
+        let api_format =
+            crate::server::service_routes::resolve_configured_service_api_format(root, service)
+                .await
+                .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
         // 服务项 stream（108 号；预设服务经 resolve_effective_llm_studio 同口径——
         // 显式请求只看 entry 直填）。
-        let stream = crate::server::service_routes::resolve_configured_service_stream(root, service).await;
-        let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint("openai", Some(&base_url));
+        let stream =
+            crate::server::service_routes::resolve_configured_service_stream(root, service).await;
+        let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
+            "openai",
+            Some(&base_url),
+        );
         match (api_key, key_optional) {
             (Some(api_key), _) => {
-                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key, base_url, api_format, stream }));
+                return Ok(Some(AgentModelOverride {
+                    service: service.to_string(),
+                    model: model.to_string(),
+                    api_key,
+                    base_url,
+                    api_format,
+                    stream,
+                }));
             }
             (None, false) => {
                 let lang = current_project_language(root).await;
@@ -325,11 +350,21 @@ pub async fn resolve_agent_model_override(
                         format!("请先在模型配置中为 {service} 填写 API Key，然后再试。"),
                     ),
                 };
-                return Err((StatusCode::BAD_REQUEST, axum::Json(json!({ "error": error, "response": response }))));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    axum::Json(json!({ "error": error, "response": response })),
+                ));
             }
             (None, true) => {
                 // 本地端点（Ollama 等）无 key 可用。
-                return Ok(Some(AgentModelOverride { service: service.to_string(), model: model.to_string(), api_key: String::new(), base_url, api_format, stream }));
+                return Ok(Some(AgentModelOverride {
+                    service: service.to_string(),
+                    model: model.to_string(),
+                    api_key: String::new(),
+                    base_url,
+                    api_format,
+                    stream,
+                }));
             }
         }
     }
@@ -342,12 +377,16 @@ pub async fn resolve_agent_model_override(
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|m| !m.is_empty());
-            let services = crate::server::service_routes::normalize_service_config(llm.get("services"));
+            let services =
+                crate::server::service_routes::normalize_service_config(llm.get("services"));
             if let (Some(first), Some(default_model)) = (services.first(), default_model) {
                 if is_text_chat_model_id(default_model) {
                     let service = crate::server::service_routes::service_config_key(first);
                     if let (Some(base_url), Some(api_key)) = (
-                        crate::server::service_routes::resolve_configured_service_base_url(root, &service, None).await,
+                        crate::server::service_routes::resolve_configured_service_base_url(
+                            root, &service, None,
+                        )
+                        .await,
                         resolve_key(&service),
                     ) {
                         if !base_url.is_empty() && !api_key.is_empty() {
@@ -356,12 +395,21 @@ pub async fn resolve_agent_model_override(
                                 .api_format
                                 .as_deref()
                                 .and_then(|value| match value {
-                                    "responses" => Some(crate::llm::providers::TransportApiFormat::Responses),
+                                    "responses" => {
+                                        Some(crate::llm::providers::TransportApiFormat::Responses)
+                                    }
                                     "chat" => Some(crate::llm::providers::TransportApiFormat::Chat),
                                     _ => None,
                                 })
                                 .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
-                            return Ok(Some(AgentModelOverride { service, model: default_model.to_string(), api_key, base_url, api_format, stream: first.stream }));
+                            return Ok(Some(AgentModelOverride {
+                                service,
+                                model: default_model.to_string(),
+                                api_key,
+                                base_url,
+                                api_format,
+                                stream: first.stream,
+                            }));
                         }
                     }
                 }
@@ -394,9 +442,11 @@ pub async fn resolve_agent_model_override(
             // baseUrl 感知）——custom:* 服务（无 bank 卡）此前因空返回而整体
             // 下落，secrets 兜底对其失效（595 号边界实锤）。
             let configured_base_url =
-                crate::server::service_routes::resolve_configured_service_base_url(root, &service, None)
-                    .await
-                    .filter(|url: &String| !url.is_empty());
+                crate::server::service_routes::resolve_configured_service_base_url(
+                    root, &service, None,
+                )
+                .await
+                .filter(|url: &String| !url.is_empty());
             let models = crate::llm::probe::list_models_for_service(
                 &service,
                 Some(&secret.api_key),
@@ -408,13 +458,16 @@ pub async fn resolve_agent_model_override(
                     // 605 号：协议/流式从服务配置解析（对齐层 1 与 Node 第 3 层）
                     // ——此前硬编码 Chat 会使用户配置的 Responses 协议在层 3
                     // 兜底路径上失效。
-                    let api_format = crate::server::service_routes::resolve_configured_service_api_format(
-                        root,
-                        &service,
+                    let api_format =
+                        crate::server::service_routes::resolve_configured_service_api_format(
+                            root, &service,
+                        )
+                        .await
+                        .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
+                    let stream = crate::server::service_routes::resolve_configured_service_stream(
+                        root, &service,
                     )
-                    .await
-                    .unwrap_or(crate::llm::providers::TransportApiFormat::Chat);
-                    let stream = crate::server::service_routes::resolve_configured_service_stream(root, &service).await;
+                    .await;
                     return Ok(Some(AgentModelOverride {
                         service: service.clone(),
                         model: text_model.id.clone(),
@@ -450,7 +503,9 @@ pub fn is_text_chat_model_id(model_id: &str) -> bool {
     if normalized.is_empty() {
         return false;
     }
-    !NON_TEXT_MODEL_ID_PARTS.iter().any(|part| normalized.contains(part))
+    !NON_TEXT_MODEL_ID_PARTS
+        .iter()
+        .any(|part| normalized.contains(part))
 }
 
 /// `nonTextModelMessage`：双语逐字。
@@ -512,9 +567,17 @@ const TOOL_LABELS: &[(&str, &str, &str)] = &[
     ("play_start", "启动互动世界", "Start interactive world"),
     ("play_revise", "重做互动回合", "Redo interactive turn"),
     ("play_step", "推进互动世界", "Advance interactive world"),
-    ("create_narrative_forecast", "剧情多线推演", "Narrative forecast"),
+    (
+        "create_narrative_forecast",
+        "剧情多线推演",
+        "Narrative forecast",
+    ),
     ("get_narrative_forecast", "核验剧情推演", "Recheck forecast"),
-    ("select_narrative_branch", "采用候选分支", "Select candidate branch"),
+    (
+        "select_narrative_branch",
+        "采用候选分支",
+        "Select candidate branch",
+    ),
     ("fanfic_init", "同人创建", "Fanfic creation"),
     ("continuation_import", "续写导入", "Continuation import"),
     ("spinoff_create", "番外创建", "Side-story creation"),
@@ -826,16 +889,28 @@ pub fn format_agent_failure(message: &str, lang: &str) -> (StatusCode, &'static 
     let text = message.trim();
     match classify_agent_failure(text) {
         "busy" => (StatusCode::CONFLICT, "BOOK_BUSY", message.to_string()),
-        "llm" => (StatusCode::BAD_GATEWAY, "AGENT_LLM_ERROR", message.to_string()),
+        "llm" => (
+            StatusCode::BAD_GATEWAY,
+            "AGENT_LLM_ERROR",
+            message.to_string(),
+        ),
         "internal" => {
             let rewritten = if lang == "en" {
                 format!("InkOS internal pipeline error: {text}")
             } else {
                 format!("InkOS 内部流程错误：{text}")
             };
-            (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_INTERNAL_ERROR", rewritten)
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AGENT_INTERNAL_ERROR",
+                rewritten,
+            )
         }
-        _ => (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_ERROR", message.to_string()),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "AGENT_ERROR",
+            message.to_string(),
+        ),
     }
 }
 
@@ -843,11 +918,7 @@ pub fn format_agent_failure(message: &str, lang: &str) -> (StatusCode, &'static 
 /// AGENT_ACTION_FAILED（消息原文，internal 类的改写文案不用于 action 面）。
 pub fn format_agent_action_failure(message: &str) -> (StatusCode, &'static str, String) {
     if agent_failure_busy_re().is_match(message.trim()) {
-        return (
-            StatusCode::CONFLICT,
-            "BOOK_BUSY",
-            message.to_string(),
-        );
+        return (StatusCode::CONFLICT, "BOOK_BUSY", message.to_string());
     }
     (
         StatusCode::BAD_GATEWAY,
@@ -886,7 +957,8 @@ pub async fn load_reconciled_task_snapshot(
         StudioTaskExecutionStatus::Running | StudioTaskExecutionStatus::Processing
     );
     let locally_running = active_confirmed_tasks()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains_key(&task.execution.id);
     if !running || locally_running {
         return Some(task);
@@ -908,22 +980,25 @@ pub async fn load_reconciled_task_snapshot(
 /// `findRunningTaskController`（TS L2872）：内存优先（预留表 sessionId →
 /// taskId → 句柄——controller 注册与首次快照落盘之间有多个 await 间隙，
 /// 磁盘快照会漏掉刚启动的任务），磁盘快照只作回退。
-pub async fn find_running_task_controller(
-    root: &Path,
-    session_id: &str,
-) -> Option<AbortHandle> {
+pub async fn find_running_task_controller(root: &Path, session_id: &str) -> Option<AbortHandle> {
     let reserved_task_id = reserved_production_sessions()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(session_id)
         .cloned();
     if let Some(task_id) = reserved_task_id {
-        if let Some(handle) = active_confirmed_tasks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&task_id) {
+        if let Some(handle) = active_confirmed_tasks()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&task_id)
+        {
             return Some(handle.clone());
         }
     }
     let task = load_reconciled_task_snapshot(root, session_id).await?;
     active_confirmed_tasks()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&task.execution.id)
         .cloned()
 }
@@ -937,7 +1012,8 @@ pub async fn find_active_running_task(root: &Path, session_id: &str) -> Option<S
     );
     if running
         && active_confirmed_tasks()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key(&task.execution.id)
     {
         Some(task)
@@ -1016,7 +1092,8 @@ async fn append_production_assistant_message(
     session_kind: SessionKind,
 ) {
     if crate::server::session_routes::deleted_session_ids()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains(session_id)
     {
         return;
@@ -1112,7 +1189,10 @@ async fn execute_continuation_import(
     };
     let source_path = field("sourcePath");
     let text = read_project_source(runtime, &source_path).await?;
-    let split_pattern = args.get("splitPattern").and_then(Value::as_str).map(String::from);
+    let split_pattern = args
+        .get("splitPattern")
+        .and_then(Value::as_str)
+        .map(String::from);
     let chapters = crate::utils::chapter_splitter::split_chapters(&text, split_pattern.as_deref());
     if chapters.is_empty() {
         return Err(pick(
@@ -1121,12 +1201,25 @@ async fn execute_continuation_import(
             "No chapters were recognized in the source file.",
         ));
     }
-    let existing_book_id = args.get("bookId").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty());
+    let existing_book_id = args
+        .get("bookId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let (book_id, start_from) = match existing_book_id {
         Some(existing) => {
             // TS：已有章节且未显式给 resumeFrom → 拒绝（防静默追加破坏时间线）。
-            let count = runtime.state.load_chapter_index(existing).await.map(|index| index.len()).unwrap_or(0);
-            let resume = match args.get("resumeFrom").and_then(Value::as_f64).map(|v| v as u32) {
+            let count = runtime
+                .state
+                .load_chapter_index(existing)
+                .await
+                .map(|index| index.len())
+                .unwrap_or(0);
+            let resume = match args
+                .get("resumeFrom")
+                .and_then(Value::as_f64)
+                .map(|v| v as u32)
+            {
                 Some(v) => v,
                 None if count > 0 => {
                     return Err(format!(
@@ -1149,10 +1242,22 @@ async fn execute_continuation_import(
                     .and_then(Value::as_str)
                     .map(crate::models::book::normalize_platform_or_other)
                     .unwrap_or(crate::models::book::Platform::Other),
-                genre: args.get("genre").and_then(Value::as_str).unwrap_or("other").to_string(),
+                genre: args
+                    .get("genre")
+                    .and_then(Value::as_str)
+                    .unwrap_or("other")
+                    .to_string(),
                 status: crate::models::book::BookStatus::Outlining,
-                target_chapters: args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(100),
-                chapter_word_count: args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(3000),
+                target_chapters: args
+                    .get("targetChapters")
+                    .and_then(Value::as_f64)
+                    .map(|v| v as u32)
+                    .unwrap_or(100),
+                chapter_word_count: args
+                    .get("chapterWordCount")
+                    .and_then(Value::as_f64)
+                    .map(|v| v as u32)
+                    .unwrap_or(3000),
                 language: payload_language(args, lang),
                 created_at: now.clone(),
                 updated_at: now,
@@ -1163,21 +1268,33 @@ async fn execute_continuation_import(
                 writing: None,
                 governance: None,
             };
-            if crate::server::book_create_routes::complete_book_exists(&runtime.state.book_dir(&book.id)).await {
+            if crate::server::book_create_routes::complete_book_exists(
+                &runtime.state.book_dir(&book.id),
+            )
+            .await
+            {
                 return Err(pick(
                     lang,
                     &format!("书籍「{t}」已存在", t = book.id),
                     &format!("Book \"{t}\" already exists", t = book.id),
                 ));
             }
-            runtime.state.save_book_config(&book.id, &book).await.map_err(|e| e.to_string())?;
+            runtime
+                .state
+                .save_book_config(&book.id, &book)
+                .await
+                .map_err(|e| e.to_string())?;
             (book.id, 1)
         }
     };
     on_progress(pick(
         lang,
         &format!("开始导入 {} 章（自第 {} 章）", chapters.len(), start_from),
-        &format!("Importing {} chapters from chapter {}", chapters.len(), start_from),
+        &format!(
+            "Importing {} chapters from chapter {}",
+            chapters.len(),
+            start_from
+        ),
     ));
     let result = crate::server::book_create_routes::import_chapters_chain_with_resume(
         runtime,
@@ -1193,8 +1310,16 @@ async fn execute_continuation_import(
         is_error: false,
         text: pick(
             lang,
-            &format!("续写导入完成：已导入 {n} 章到《{t}》", n = result["importedCount"].as_u64().unwrap_or(0), t = book_id),
-            &format!("Continuation import finished: {n} chapters into {t}", n = result["importedCount"].as_u64().unwrap_or(0), t = book_id),
+            &format!(
+                "续写导入完成：已导入 {n} 章到《{t}》",
+                n = result["importedCount"].as_u64().unwrap_or(0),
+                t = book_id
+            ),
+            &format!(
+                "Continuation import finished: {n} chapters into {t}",
+                n = result["importedCount"].as_u64().unwrap_or(0),
+                t = book_id
+            ),
         ),
         details: json!({ "kind": "continuation_imported", "bookId": book_id, "result": result }),
     })
@@ -1223,42 +1348,83 @@ async fn execute_spinoff_create(
     } else {
         parent_book_id
     };
-    let parent = runtime.state.load_book_config(&parent_book_id).await.map_err(|_| {
-        pick(
-            lang,
-            &format!("正传书籍「{parent_book_id}」不存在"),
-            &format!("Parent book \"{parent_book_id}\" not found"),
-        )
-    })?;
-    let language = args.get("language").and_then(Value::as_str).map(String::from).or(parent.language.clone());
+    let parent = runtime
+        .state
+        .load_book_config(&parent_book_id)
+        .await
+        .map_err(|_| {
+            pick(
+                lang,
+                &format!("正传书籍「{parent_book_id}」不存在"),
+                &format!("Parent book \"{parent_book_id}\" not found"),
+            )
+        })?;
+    let language = args
+        .get("language")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .or(parent.language.clone());
     let now = crate::utils::utc_time::utc_now_iso();
     let mut book = crate::server::book_create_routes::build_studio_book_config_pub(
         &title,
-        args.get("genre").and_then(Value::as_str).unwrap_or(parent.genre.as_str()),
+        args.get("genre")
+            .and_then(Value::as_str)
+            .unwrap_or(parent.genre.as_str()),
         language.as_deref(),
-        args.get("platform").and_then(Value::as_str).or(Some(parent.platform.as_str())),
-        args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32).or(Some(parent.target_chapters)),
-        args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).or(Some(parent.chapter_word_count)),
+        args.get("platform")
+            .and_then(Value::as_str)
+            .or(Some(parent.platform.as_str())),
+        args.get("targetChapters")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32)
+            .or(Some(parent.target_chapters)),
+        args.get("chapterWordCount")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32)
+            .or(Some(parent.chapter_word_count)),
         &now,
     );
     // 对齐 TS createSpinoffBookTool→buildAgentBookConfig：工具路径的番外书
     // 持久化 parentBookId（HTTP 端点 /spinoff/init 的 buildStudioBookConfig
     // 不落——TS 双路本就分叉，此处逐路径对齐）。
     book.parent_book_id = Some(parent_book_id.clone());
-    if crate::server::book_create_routes::complete_book_exists(&runtime.state.book_dir(&book.id)).await {
+    if crate::server::book_create_routes::complete_book_exists(&runtime.state.book_dir(&book.id))
+        .await
+    {
         return Err(pick(
             lang,
             &format!("书籍「{title}」已存在"),
             &format!("Book \"{title}\" already exists"),
         ));
     }
-    let direction = args.get("direction").and_then(Value::as_str).map(String::from);
-    on_progress(pick(lang, "导入正典并生成番外地基……", "Importing canon and generating foundation..."));
-    crate::server::fanfic_routes::init_spinoff_book(runtime, &book, &parent_book_id, direction.as_deref()).await?;
-    on_progress(pick(lang, "番外地基已落盘", "Side-story foundation written"));
+    let direction = args
+        .get("direction")
+        .and_then(Value::as_str)
+        .map(String::from);
+    on_progress(pick(
+        lang,
+        "导入正典并生成番外地基……",
+        "Importing canon and generating foundation...",
+    ));
+    crate::server::fanfic_routes::init_spinoff_book(
+        runtime,
+        &book,
+        &parent_book_id,
+        direction.as_deref(),
+    )
+    .await?;
+    on_progress(pick(
+        lang,
+        "番外地基已落盘",
+        "Side-story foundation written",
+    ));
     Ok(ToolOutcome {
         is_error: false,
-        text: pick(lang, &format!("番外创建完成：《{title}》"), &format!("Side story created: {title}")),
+        text: pick(
+            lang,
+            &format!("番外创建完成：《{title}》"),
+            &format!("Side story created: {title}"),
+        ),
         details: json!({ "kind": "spinoff_book_created", "bookId": book.id, "parentBookId": parent_book_id }),
     })
 }
@@ -1294,13 +1460,22 @@ async fn execute_style_imitation(
         args.get("genre").and_then(Value::as_str).unwrap_or("other"),
         payload_language(args, lang).as_deref(),
         args.get("platform").and_then(Value::as_str),
-        args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32),
-        args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32),
+        args.get("targetChapters")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32),
+        args.get("chapterWordCount")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32),
         &now,
     );
     let book_id = book.id.clone();
-    on_progress(pick(lang, "创建仿写书籍与风格指南……", "Creating imitation book and style guide..."));
-    crate::server::book_create_routes::init_book(runtime, &book, Some(&story_idea), None, None).await?;
+    on_progress(pick(
+        lang,
+        "创建仿写书籍与风格指南……",
+        "Creating imitation book and style guide...",
+    ));
+    crate::server::book_create_routes::init_book(runtime, &book, Some(&story_idea), None, None)
+        .await?;
     crate::server::style_routes::generate_style_guide_for_book(
         &runtime.state,
         &*runtime.effective_router().await,
@@ -1314,7 +1489,11 @@ async fn execute_style_imitation(
     on_progress(pick(lang, "风格指南已生成", "Style guide generated"));
     Ok(ToolOutcome {
         is_error: false,
-        text: pick(lang, &format!("仿写项目完成：《{t}》", t = title), &format!("Imitation project created: {title}")),
+        text: pick(
+            lang,
+            &format!("仿写项目完成：《{t}》", t = title),
+            &format!("Imitation project created: {title}"),
+        ),
         details: json!({ "kind": "imitation_book_created", "bookId": book_id }),
     })
 }
@@ -1333,10 +1512,7 @@ fn payload_language(args: &serde_json::Map<String, Value>, lang: StudioLang) -> 
     }
 }
 
-async fn read_project_source(
-    runtime: &BooksRuntime,
-    relative: &str,
-) -> Result<String, String> {
+async fn read_project_source(runtime: &BooksRuntime, relative: &str) -> Result<String, String> {
     tokio::fs::read_to_string(runtime.state.project_root().join(relative.trim()))
         .await
         .map_err(|e| format!("读取源文件失败：{relative}（{e}）"))
@@ -1349,7 +1525,11 @@ async fn execute_fanfic_init(
     args: &serde_json::Map<String, Value>,
     mut on_progress: impl FnMut(String),
 ) -> Result<ToolOutcome, String> {
-    on_progress(pick(lang, "导入同人正典并生成地基……", "Importing canon and generating foundation..."));
+    on_progress(pick(
+        lang,
+        "导入同人正典并生成地基……",
+        "Importing canon and generating foundation...",
+    ));
     let field = |name: &str| {
         args.get(name)
             .and_then(Value::as_str)
@@ -1368,7 +1548,8 @@ async fn execute_fanfic_init(
         false => field("sourceName"),
     };
     let language = payload_language(args, lang);
-    let fanfic_mode = crate::server::fanfic_routes::parse_fanfic_mode(args.get("mode").and_then(Value::as_str));
+    let fanfic_mode =
+        crate::server::fanfic_routes::parse_fanfic_mode(args.get("mode").and_then(Value::as_str));
     let now = crate::utils::utc_time::utc_now_iso();
     let book = crate::models::book::BookConfig {
         id: crate::server::book_create_routes::derive_book_id_from_title_pub(&title),
@@ -1378,10 +1559,22 @@ async fn execute_fanfic_init(
             .and_then(Value::as_str)
             .map(crate::models::book::normalize_platform_or_other)
             .unwrap_or(crate::models::book::Platform::Other),
-        genre: args.get("genre").and_then(Value::as_str).unwrap_or("other").to_string(),
+        genre: args
+            .get("genre")
+            .and_then(Value::as_str)
+            .unwrap_or("other")
+            .to_string(),
         status: crate::models::book::BookStatus::Outlining,
-        target_chapters: args.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(100),
-        chapter_word_count: args.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(3000),
+        target_chapters: args
+            .get("targetChapters")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32)
+            .unwrap_or(100),
+        chapter_word_count: args
+            .get("chapterWordCount")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32)
+            .unwrap_or(3000),
         language,
         created_at: now.clone(),
         updated_at: now,
@@ -1392,12 +1585,26 @@ async fn execute_fanfic_init(
         writing: None,
         governance: None,
     };
-    crate::server::fanfic_routes::init_fanfic_book(runtime, &book, &source_text, &source_name, fanfic_mode)
-        .await?;
-    on_progress(pick(lang, "同人地基与正典已落盘", "Fanfic canon and foundation written"));
+    crate::server::fanfic_routes::init_fanfic_book(
+        runtime,
+        &book,
+        &source_text,
+        &source_name,
+        fanfic_mode,
+    )
+    .await?;
+    on_progress(pick(
+        lang,
+        "同人地基与正典已落盘",
+        "Fanfic canon and foundation written",
+    ));
     Ok(ToolOutcome {
         is_error: false,
-        text: pick(lang, &format!("同人创作完成：《{title}》"), &format!("Fanfiction created: {title}")),
+        text: pick(
+            lang,
+            &format!("同人创作完成：《{title}》"),
+            &format!("Fanfiction created: {title}"),
+        ),
         details: json!({ "kind": "fanfic_book_created", "bookId": book.id }),
     })
 }
@@ -1527,7 +1734,10 @@ async fn execute_write_next(
         ));
         let mut results: Vec<ChapterPipelineResult> = Vec::new();
         for _ in 0..chapter_count {
-            if *abort.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
+            if *abort
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            {
                 let text = abort_text_with_partial(&results, lang);
                 crate::utils::log_file::append_log_event(
                     runtime.state.project_root(),
@@ -1681,7 +1891,7 @@ async fn execute_write_next(
             );
             text
         })?;
-            let write_needs_review = write_result.status != "ready-for-review";
+        let write_needs_review = write_result.status != "ready-for-review";
         let title_part = if write_result.title.is_empty() {
             String::new()
         } else {
@@ -1758,7 +1968,13 @@ pub(crate) async fn execute_create_book(
     // id 派生：确认卡 title 优先；派生失败回退 book-{毫秒 base36}（TS 语义）。
     let now = crate::utils::utc_time::utc_now_iso();
     let mut book = crate::server::book_create_routes::build_studio_book_config_pub(
-        title, genre, language, platform, target_chapters, chapter_word_count, &now,
+        title,
+        genre,
+        language,
+        platform,
+        target_chapters,
+        chapter_word_count,
+        &now,
     );
     if book.id.is_empty() {
         book.id = format!("book-{}", to_base36(utc_now_ms()));
@@ -1818,25 +2034,31 @@ async fn execute_short_run(
         draft_review: short_production_agents(&router, "short-draft-review"),
         package: short_production_agents(&router, "short-package"),
     };
-    let builtin_registry = crate::harness::profile_registry::create_built_in_work_profile_registry(root)
-        .map_err(|error| error.to_string())?;
+    let builtin_registry =
+        crate::harness::profile_registry::create_built_in_work_profile_registry(root)
+            .map_err(|error| error.to_string())?;
     let builtin_profile = builtin_registry
         .require("short-fiction")
         .map_err(|error| error.to_string())?;
     let mut options = ShortFictionRunOptions::new(root, direction, &runtimes);
     options.title = title;
-    options.reference = reference.map(|text| crate::production::short_fiction_runner::ShortFictionReference {
-        text: text.to_string(),
-        ..Default::default()
-    });
+    options.reference =
+        reference.map(
+            |text| crate::production::short_fiction_runner::ShortFictionReference {
+                text: text.to_string(),
+                ..Default::default()
+            },
+        );
     options.story_id = story_id;
     options.chapter_count = chapter_count;
     options.chars_per_chapter = chars_per_chapter;
     options.min_chapter_length = min_chapter_length;
     options.max_chapter_length = max_chapter_length;
     options.opening_hook_chars = opening_hook_chars;
-    options.min_chapter_length_ratio = min_chapter_length_ratio.or(builtin_profile.production.min_chapter_length_ratio);
-    options.max_chapters_per_call = max_chapters_per_call.or(builtin_profile.production.max_chapters_per_call);
+    options.min_chapter_length_ratio =
+        min_chapter_length_ratio.or(builtin_profile.production.min_chapter_length_ratio);
+    options.max_chapters_per_call =
+        max_chapters_per_call.or(builtin_profile.production.max_chapters_per_call);
     options.retry_stages = retry_stages;
     options.language = Some(language);
     options.cover = Some(cover);
@@ -1854,7 +2076,9 @@ async fn execute_short_run(
     if let Some(delivery) = delivery {
         let status = match delivery.status {
             crate::production::short_fiction::ShortDeliveryStatus::ChecksPassed => "checks_passed",
-            crate::production::short_fiction::ShortDeliveryStatus::NeedsRevision => "needs_revision",
+            crate::production::short_fiction::ShortDeliveryStatus::NeedsRevision => {
+                "needs_revision"
+            }
             crate::production::short_fiction::ShortDeliveryStatus::Unverified => "unverified",
         };
         lines.push(format!("Delivery checks: {status}"));
@@ -1909,7 +2133,11 @@ async fn execute_short_run(
         // 激活技能（备案：M4 工具面接线）。
         map.insert("skillIds".to_string(), json!([]));
     }
-    Ok(ToolOutcome { is_error: false, text, details })
+    Ok(ToolOutcome {
+        is_error: false,
+        text,
+        details,
+    })
 }
 
 /// 四上下文路由装配：router_chat_turn_fn 生产适配器（889 基座）+ resolve 模型
@@ -1990,10 +2218,16 @@ async fn execute_script_create(
     out_dir: &str,
     mut on_progress: impl FnMut(String) + Send,
 ) -> Result<ToolOutcome, String> {
-    use crate::pipeline::script_storyboard_runner::{run_script_creation, ScriptCreationRunOptions};
+    use crate::pipeline::script_storyboard_runner::{
+        run_script_creation, ScriptCreationRunOptions,
+    };
     let root = runtime.state.project_root();
     fn optional(value: &str) -> Option<&str> {
-        if value.is_empty() { None } else { Some(value) }
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
     }
     let result = run_script_creation(ScriptCreationRunOptions {
         project_root: root,
@@ -2054,7 +2288,11 @@ async fn execute_storyboard_create(
     };
     let root = runtime.state.project_root();
     fn optional(value: &str) -> Option<&str> {
-        if value.is_empty() { None } else { Some(value) }
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
     }
     let result = run_storyboard_creation(StoryboardCreationRunOptions {
         project_root: root,
@@ -2119,7 +2357,11 @@ async fn execute_interactive_film_create(
     };
     let root = runtime.state.project_root();
     fn optional(value: &str) -> Option<&str> {
-        if value.is_empty() { None } else { Some(value) }
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
     }
     let result = run_interactive_film_creation(InteractiveFilmCreationRunOptions {
         project_root: root,
@@ -2189,7 +2431,11 @@ pub(crate) async fn execute_generate_cover(
     on_progress("Generating cover image...".to_string());
     let root = runtime.state.project_root();
     fn optional(value: &str) -> Option<&str> {
-        if value.is_empty() { None } else { Some(value) }
+        if value.is_empty() {
+            None
+        } else {
+            Some(value)
+        }
     }
     let result = generate_short_fiction_cover(
         root,
@@ -2240,7 +2486,9 @@ async fn execute_translation_create(
     let resolved = crate::agent::creation_source::load_creation_source(
         root,
         None,
-        sources.and_then(Value::as_array).map(|list| list.as_slice()),
+        sources
+            .and_then(Value::as_array)
+            .map(|list| list.as_slice()),
         source_text,
         file_path,
         None,
@@ -2275,8 +2523,8 @@ async fn execute_translation_create(
         title: if title.is_empty() { None } else { Some(title) },
         segment_max_chars,
     };
-    let result = crate::translation::project::create_translation_project_from_file(root, &input)
-        .await?;
+    let result =
+        crate::translation::project::create_translation_project_from_file(root, &input).await?;
     let manifest = &result.manifest;
     let text = [
         format!("Translation project \"{}\" created.", manifest.title),
@@ -2327,7 +2575,9 @@ async fn execute_connect_choice(
         endings: None,
         notes: Vec::new(),
     };
-    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, None).await?;
+    let (_, rev) =
+        crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, None)
+            .await?;
     Ok(ToolOutcome {
         is_error: false,
         text: format!("Choices updated on node {} (rev {rev}).", node.id),
@@ -2356,7 +2606,9 @@ async fn execute_remove_node(
         endings: None,
         notes: Vec::new(),
     };
-    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, None).await?;
+    let (_, rev) =
+        crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, None)
+            .await?;
     Ok(ToolOutcome {
         is_error: false,
         text: format!("Node {node_id} removed (rev {rev})."),
@@ -2422,7 +2674,11 @@ async fn execute_draft_structure(
     // extractJson：fence 剥离 + 首 { 到末 }。
     let parsed = extract_json_object(&outcome.content)
         .ok_or_else(|| "draft_structure: LLM returned no JSON".to_string())?;
-    let raw_nodes = parsed.get("nodes").and_then(Value::as_array).cloned().unwrap_or_default();
+    let raw_nodes = parsed
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     if raw_nodes.is_empty() {
         return Err("draft_structure: LLM returned no nodes".to_string());
     }
@@ -2446,7 +2702,13 @@ async fn execute_draft_structure(
         notes: Vec::new(),
     };
     // TS createDraftStructureTool：applyGraphDelta phase "structure"（256 号补）。
-    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(root, project_id, &delta, Some("structure")).await?;
+    let (_, rev) = crate::server::interactive_film_routes::apply_graph_delta(
+        root,
+        project_id,
+        &delta,
+        Some("structure"),
+    )
+    .await?;
     Ok(ToolOutcome {
         is_error: false,
         text: format!("Structure drafted: {node_count} nodes (rev {rev})."),
@@ -2474,12 +2736,20 @@ fn summarize_story_graph_for_authoring(graph: &crate::interactive_film::StoryGra
     use crate::interactive_film as film;
     let mut lines = vec![format!(
         "# 互动影游：{}",
-        if graph.title.is_empty() { &graph.project_id } else { &graph.title }
+        if graph.title.is_empty() {
+            &graph.project_id
+        } else {
+            &graph.title
+        }
     )];
     if let Some(anchor) = &graph.world_anchor {
         lines.push(format!(
             "核心：{} / 主题：{} / 题材：{} / 规则：{} / 时长：{}分",
-            anchor.story_core, anchor.theme, anchor.genre, anchor.world_rules, anchor.duration_minutes as i64
+            anchor.story_core,
+            anchor.theme,
+            anchor.genre,
+            anchor.world_rules,
+            anchor.duration_minutes as i64
         ));
     }
     if !graph.variables.is_empty() {
@@ -2498,7 +2768,11 @@ fn summarize_story_graph_for_authoring(graph: &crate::interactive_film::StoryGra
             node.id,
             film::node_type_str(node.node_type),
             node.title,
-            if edges.is_empty() { String::new() } else { format!(" -> {}", edges.join(", ")) }
+            if edges.is_empty() {
+                String::new()
+            } else {
+                format!(" -> {}", edges.join(", "))
+            }
         ));
     }
     let mut blocks = vec![lines.join("\n")];
@@ -2522,7 +2796,9 @@ fn summarize_story_graph_for_authoring(graph: &crate::interactive_film::StoryGra
                 character.name,
                 film::character_role_str(character.role),
                 character.motivation,
-                voice.map(|voice| format!(" 口吻：{voice}")).unwrap_or_default()
+                voice
+                    .map(|voice| format!(" 口吻：{voice}"))
+                    .unwrap_or_default()
             ));
         }
         blocks.push(char_lines.join("\n"));
@@ -2571,13 +2847,21 @@ async fn execute_play_start(
     };
     // TS 逐字：inferLanguage([title, premise, worldContract, visualContract,
     // initialScene].filter(Boolean).join("\n"))——空段剔除后按内容判 zh/en。
-    let language_source = [title, premise, world_contract, visual_contract, initial_scene]
-        .iter()
-        .filter(|segment| !segment.is_empty())
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let language = if crate::utils::infer_language(Some(&language_source)) == crate::utils::WritingLanguage::En {
+    let language_source = [
+        title,
+        premise,
+        world_contract,
+        visual_contract,
+        initial_scene,
+    ]
+    .iter()
+    .filter(|segment| !segment.is_empty())
+    .copied()
+    .collect::<Vec<_>>()
+    .join("\n");
+    let language = if crate::utils::infer_language(Some(&language_source))
+        == crate::utils::WritingLanguage::En
+    {
         "en"
     } else {
         "zh"
@@ -2617,7 +2901,14 @@ async fn execute_play_start(
         initial_scene.trim().to_string()
     };
     if existing_transcript.is_empty() {
-        crate::play::write_projection(root, &world_id, run_id, "projections/scene.md", &format!("{scene_text}\n")).await?;
+        crate::play::write_projection(
+            root,
+            &world_id,
+            run_id,
+            "projections/scene.md",
+            &format!("{scene_text}\n"),
+        )
+        .await?;
         crate::play::save_current_state(
             root,
             &world_id,
@@ -2633,14 +2924,18 @@ async fn execute_play_start(
             }),
         )
         .await?;
-        crate::play::append_transcript_turn(root, &world_id, run_id, "assistant", &scene_text).await?;
+        crate::play::append_transcript_turn(root, &world_id, run_id, "assistant", &scene_text)
+            .await?;
     }
 
     // 开场图谱播种（fail-open：模型漂移不阻断启动）。
     let mut graph = None;
     let mut seed_mutation = None;
     if existing_transcript.is_empty() {
-        let agents = crate::play_runner::PlayAgents { router: &*runtime.effective_router().await, root };
+        let agents = crate::play_runner::PlayAgents {
+            router: &*runtime.effective_router().await,
+            root,
+        };
         let runner = crate::play_runner::PlayRunner {
             project_root: root,
             world_id: world_id.clone(),
@@ -2745,7 +3040,9 @@ pub async fn run_confirmed_production(
 
     // ── 单任务闸门：任何 await 之前同步预留 ──
     {
-        let mut reserved = reserved_production_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut reserved = reserved_production_sessions()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if reserved.contains_key(request.session_id) {
             return Err(busy_error(request.language));
         }
@@ -2755,14 +3052,19 @@ pub async fn run_confirmed_production(
 
     let abort: AbortHandle = Arc::new(Mutex::new(false));
     active_confirmed_tasks()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(task_id.clone(), abort.clone());
 
     let result = run_confirmed_production_locked(runtime, &request, &task_id, &abort).await;
 
-    active_confirmed_tasks().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&task_id);
+    active_confirmed_tasks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&task_id);
     reserved_production_sessions()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(&reserved_session_id);
     result
 }
@@ -2821,9 +3123,10 @@ async fn run_confirmed_production_locked(
             },
         )
         .await;
-        runtime
-            .hub
-            .broadcast("book:creating", &json!({ "bookId": derived, "sessionId": session_id }));
+        runtime.hub.broadcast(
+            "book:creating",
+            &json!({ "bookId": derived, "sessionId": session_id }),
+        );
     }
 
     // 任务开始前先把用户指令写进 transcript（刷新恢复用户气泡）。
@@ -2887,7 +3190,10 @@ async fn run_confirmed_production_locked(
                 params.insert("minChapterLengthRatio".into(), json!(value));
             }
             // cover：显式 false 也展开（TS `cover !== undefined` 判定）。
-            if let Some(cover) = payload.and_then(|p| p.get("cover")).and_then(Value::as_bool) {
+            if let Some(cover) = payload
+                .and_then(|p| p.get("cover"))
+                .and_then(Value::as_bool)
+            {
                 params.insert("cover".into(), json!(cover));
             }
             agent = None;
@@ -2909,18 +3215,32 @@ async fn run_confirmed_production_locked(
             })?.to_string();
             params.insert("title".into(), json!(title));
             params.insert("instruction".into(), json!(request.instruction));
-            for name in ["sourceKind", "targetFormat", "sourceText", "sourcePath", "requirements", "episodeDuration", "projectId", "outDir"] {
+            for name in [
+                "sourceKind",
+                "targetFormat",
+                "sourceText",
+                "sourcePath",
+                "requirements",
+                "episodeDuration",
+                "projectId",
+                "outDir",
+            ] {
                 if let Some(value) = field(name) {
                     params.insert(name.into(), json!(value));
                 }
             }
-            if let Some(count) = payload.and_then(|p| p.get("episodeCount")).and_then(Value::as_u64) {
+            if let Some(count) = payload
+                .and_then(|p| p.get("episodeCount"))
+                .and_then(Value::as_u64)
+            {
                 params.insert("episodeCount".into(), json!(count));
             }
             agent = None;
         }
         RequestedIntent::StoryboardCreate => {
-            let payload = request.action_payload.and_then(|p| p.get("storyboardCreate"));
+            let payload = request
+                .action_payload
+                .and_then(|p| p.get("storyboardCreate"));
             let field = |name: &str| {
                 payload
                     .and_then(|p| p.get(name))
@@ -2936,18 +3256,33 @@ async fn run_confirmed_production_locked(
             })?.to_string();
             params.insert("title".into(), json!(title));
             params.insert("instruction".into(), json!(request.instruction));
-            for name in ["sourceKind", "sourceText", "sourcePath", "requirements", "visualStyle", "aspectRatio", "granularity", "projectId", "outDir"] {
+            for name in [
+                "sourceKind",
+                "sourceText",
+                "sourcePath",
+                "requirements",
+                "visualStyle",
+                "aspectRatio",
+                "granularity",
+                "projectId",
+                "outDir",
+            ] {
                 if let Some(value) = field(name) {
                     params.insert(name.into(), json!(value));
                 }
             }
-            if let Some(shots) = payload.and_then(|p| p.get("maxShots")).and_then(Value::as_u64) {
+            if let Some(shots) = payload
+                .and_then(|p| p.get("maxShots"))
+                .and_then(Value::as_u64)
+            {
                 params.insert("maxShots".into(), json!(shots));
             }
             agent = None;
         }
         RequestedIntent::InteractiveFilmCreate => {
-            let payload = request.action_payload.and_then(|p| p.get("interactiveFilmCreate"));
+            let payload = request
+                .action_payload
+                .and_then(|p| p.get("interactiveFilmCreate"));
             let field = |name: &str| {
                 payload
                     .and_then(|p| p.get(name))
@@ -2963,12 +3298,26 @@ async fn run_confirmed_production_locked(
             })?.to_string();
             params.insert("title".into(), json!(title));
             params.insert("instruction".into(), json!(request.instruction));
-            for name in ["sourceKind", "sourceText", "sourcePath", "requirements", "targetAudience", "episodeDuration", "budget", "referenceMode", "projectId", "outDir"] {
+            for name in [
+                "sourceKind",
+                "sourceText",
+                "sourcePath",
+                "requirements",
+                "targetAudience",
+                "episodeDuration",
+                "budget",
+                "referenceMode",
+                "projectId",
+                "outDir",
+            ] {
                 if let Some(value) = field(name) {
                     params.insert(name.into(), json!(value));
                 }
             }
-            if let Some(count) = payload.and_then(|p| p.get("episodeCount")).and_then(Value::as_u64) {
+            if let Some(count) = payload
+                .and_then(|p| p.get("episodeCount"))
+                .and_then(Value::as_u64)
+            {
                 params.insert("episodeCount".into(), json!(count));
             }
             agent = None;
@@ -2997,7 +3346,9 @@ async fn run_confirmed_production_locked(
             agent = None;
         }
         RequestedIntent::TranslationCreate => {
-            let payload = request.action_payload.and_then(|p| p.get("translationCreate"));
+            let payload = request
+                .action_payload
+                .and_then(|p| p.get("translationCreate"));
             let field = |name: &str| {
                 payload
                     .and_then(|p| p.get(name))
@@ -3047,7 +3398,13 @@ async fn run_confirmed_production_locked(
                 params.insert("sourceText".into(), json!(text));
             }
             if sources_present {
-                params.insert("sources".into(), json!(payload.and_then(|p| p.get("sources")).cloned().unwrap_or(Value::Null)));
+                params.insert(
+                    "sources".into(),
+                    json!(payload
+                        .and_then(|p| p.get("sources"))
+                        .cloned()
+                        .unwrap_or(Value::Null)),
+                );
             }
             if let Some(terms) = payload.and_then(|p| p.get("glossary")) {
                 params.insert("glossary".into(), terms.clone());
@@ -3074,20 +3431,38 @@ async fn run_confirmed_production_locked(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
             };
-            let title = field("title").ok_or_else(|| {
-                production_exec_error(
-                    lang,
-                    pick(lang, "确认创建同人缺少书名。", "The fanfiction confirmation is missing a title."),
-                )
-            })?.to_string();
+            let title = field("title")
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "确认创建同人缺少书名。",
+                            "The fanfiction confirmation is missing a title.",
+                        ),
+                    )
+                })?
+                .to_string();
             if field("sourceText").is_none() && field("sourcePath").is_none() {
                 return Err(production_exec_error(
                     lang,
-                    pick(lang, "创建同人需要原作资料或上传文件。", "Fanfiction creation requires source material or an uploaded file."),
+                    pick(
+                        lang,
+                        "创建同人需要原作资料或上传文件。",
+                        "Fanfiction creation requires source material or an uploaded file.",
+                    ),
                 ));
             }
             params.insert("title".into(), json!(title));
-            for name in ["sourceText", "sourcePath", "sourceName", "mode", "genre", "platform", "language"] {
+            for name in [
+                "sourceText",
+                "sourcePath",
+                "sourceName",
+                "mode",
+                "genre",
+                "platform",
+                "language",
+            ] {
                 if let Some(value) = field(name) {
                     params.insert(name.into(), json!(value));
                 }
@@ -3100,7 +3475,9 @@ async fn run_confirmed_production_locked(
             agent = None;
         }
         RequestedIntent::ContinuationImport => {
-            let payload = request.action_payload.and_then(|p| p.get("continuationImport"));
+            let payload = request
+                .action_payload
+                .and_then(|p| p.get("continuationImport"));
             let field = |name: &str| {
                 payload
                     .and_then(|p| p.get(name))
@@ -3108,18 +3485,28 @@ async fn run_confirmed_production_locked(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
             };
-            let source_path = field("sourcePath").ok_or_else(|| {
-                production_exec_error(
-                    lang,
-                    pick(lang, "导入续写需要上传文件或章节目录。", "Continuation import requires an uploaded file or chapter directory."),
-                )
-            })?.to_string();
+            let source_path = field("sourcePath")
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "导入续写需要上传文件或章节目录。",
+                            "Continuation import requires an uploaded file or chapter directory.",
+                        ),
+                    )
+                })?
+                .to_string();
             let book_id = field("bookId").unwrap_or_default().to_string();
             let title = field("title").unwrap_or_default();
             if book_id.is_empty() && title.is_empty() {
                 return Err(production_exec_error(
                     lang,
-                    pick(lang, "导入续写需要选择已有书籍或填写新书名。", "Continuation import requires an existing book or a new title."),
+                    pick(
+                        lang,
+                        "导入续写需要选择已有书籍或填写新书名。",
+                        "Continuation import requires an existing book or a new title.",
+                    ),
                 ));
             }
             params.insert("sourcePath".into(), json!(source_path));
@@ -3134,7 +3521,10 @@ async fn run_confirmed_production_locked(
                     params.insert(name.into(), json!(value));
                 }
             }
-            if let Some(resume) = payload.and_then(|p| p.get("resumeFrom")).and_then(Value::as_u64) {
+            if let Some(resume) = payload
+                .and_then(|p| p.get("resumeFrom"))
+                .and_then(Value::as_u64)
+            {
                 params.insert("resumeFrom".into(), json!(resume));
             }
             for name in ["targetChapters", "chapterWordCount"] {
@@ -3153,19 +3543,29 @@ async fn run_confirmed_production_locked(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
             };
-            let title = field("title").ok_or_else(|| {
-                production_exec_error(
-                    lang,
-                    pick(lang, "确认创建番外缺少书名。", "The side-story confirmation is missing a title."),
-                )
-            })?.to_string();
+            let title = field("title")
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "确认创建番外缺少书名。",
+                            "The side-story confirmation is missing a title.",
+                        ),
+                    )
+                })?
+                .to_string();
             let parent_book_id = field("parentBookId")
                 .map(String::from)
                 .or_else(|| request.book_id.map(String::from))
                 .ok_or_else(|| {
                     production_exec_error(
                         lang,
-                        pick(lang, "创建番外需要指定正传书籍。", "Side-story creation requires a parent book."),
+                        pick(
+                            lang,
+                            "创建番外需要指定正传书籍。",
+                            "Side-story creation requires a parent book.",
+                        ),
                     )
                 })?;
             params.insert("title".into(), json!(title));
@@ -3183,7 +3583,9 @@ async fn run_confirmed_production_locked(
             agent = None;
         }
         RequestedIntent::StyleImitation => {
-            let payload = request.action_payload.and_then(|p| p.get("imitationCreate"));
+            let payload = request
+                .action_payload
+                .and_then(|p| p.get("imitationCreate"));
             let field = |name: &str| {
                 payload
                     .and_then(|p| p.get(name))
@@ -3191,27 +3593,50 @@ async fn run_confirmed_production_locked(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
             };
-            let title = field("title").ok_or_else(|| {
-                production_exec_error(
-                    lang,
-                    pick(lang, "确认创建仿写缺少书名。", "The imitation confirmation is missing a title."),
-                )
-            })?.to_string();
-            let story_idea = field("storyIdea").ok_or_else(|| {
-                production_exec_error(
-                    lang,
-                    pick(lang, "仿写需要一个原创故事方向。", "Style imitation requires an original story idea."),
-                )
-            })?.to_string();
+            let title = field("title")
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "确认创建仿写缺少书名。",
+                            "The imitation confirmation is missing a title.",
+                        ),
+                    )
+                })?
+                .to_string();
+            let story_idea = field("storyIdea")
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        pick(
+                            lang,
+                            "仿写需要一个原创故事方向。",
+                            "Style imitation requires an original story idea.",
+                        ),
+                    )
+                })?
+                .to_string();
             if field("referenceText").is_none() && field("referencePath").is_none() {
                 return Err(production_exec_error(
                     lang,
-                    pick(lang, "仿写需要参考文本或上传文件。", "Style imitation requires reference text or an uploaded file."),
+                    pick(
+                        lang,
+                        "仿写需要参考文本或上传文件。",
+                        "Style imitation requires reference text or an uploaded file.",
+                    ),
                 ));
             }
             params.insert("title".into(), json!(title));
             params.insert("storyIdea".into(), json!(story_idea));
-            for name in ["referenceText", "referencePath", "sourceName", "genre", "platform", "language"] {
+            for name in [
+                "referenceText",
+                "referencePath",
+                "sourceName",
+                "genre",
+                "platform",
+                "language",
+            ] {
                 if let Some(value) = field(name) {
                     params.insert(name.into(), json!(value));
                 }
@@ -3245,7 +3670,12 @@ async fn run_confirmed_production_locked(
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or_else(|| request.book_id.map(String::from))
-                .ok_or_else(|| production_exec_error(lang, "interactive-film action requires a project id (bookId)".to_string()))?;
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        "interactive-film action requires a project id (bookId)".to_string(),
+                    )
+                })?;
             params.insert("node".into(), node_value);
             params.insert("projectId".into(), json!(project_id));
             agent = None;
@@ -3273,7 +3703,12 @@ async fn run_confirmed_production_locked(
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or_else(|| request.book_id.map(String::from))
-                .ok_or_else(|| production_exec_error(lang, "interactive-film action requires a project id (bookId)".to_string()))?;
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        "interactive-film action requires a project id (bookId)".to_string(),
+                    )
+                })?;
             params.insert("nodeId".into(), json!(node_id));
             params.insert("projectId".into(), json!(project_id));
             agent = None;
@@ -3285,7 +3720,12 @@ async fn run_confirmed_production_locked(
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .or_else(|| request.book_id.map(String::from))
-                .ok_or_else(|| production_exec_error(lang, "interactive-film action requires a project id (bookId)".to_string()))?;
+                .ok_or_else(|| {
+                    production_exec_error(
+                        lang,
+                        "interactive-film action requires a project id (bookId)".to_string(),
+                    )
+                })?;
             let instruction = payload
                 .and_then(|p| p.get("instruction"))
                 .and_then(Value::as_str)
@@ -3364,9 +3804,7 @@ async fn run_confirmed_production_locked(
                         "The book creation confirmation is missing a title. Regenerate the confirmation card.",
                     ))
                 })?;
-            let payload = request
-                .action_payload
-                .and_then(|p| p.get("createBook"));
+            let payload = request.action_payload.and_then(|p| p.get("createBook"));
             let optional_str = |name: &str| {
                 payload
                     .and_then(|p| p.get(name))
@@ -3474,8 +3912,14 @@ async fn run_confirmed_production_locked(
         completed_at: None,
     };
 
-    persist_confirmed_task(root, session_id, request.intent, &exec, request.source_request_id)
-        .await;
+    persist_confirmed_task(
+        root,
+        session_id,
+        request.intent,
+        &exec,
+        request.source_request_id,
+    )
+    .await;
 
     // background: true 标明后台生产任务的工具启动（前端把聊天轮重分类为任务轮）。
     {
@@ -3487,8 +3931,7 @@ async fn run_confirmed_production_locked(
             "background": true,
         });
         if let Some(stages) = &exec.stages {
-            payload["stages"] =
-                json!(stages.iter().map(|s| s.label.clone()).collect::<Vec<_>>());
+            payload["stages"] = json!(stages.iter().map(|s| s.label.clone()).collect::<Vec<_>>());
         }
         if let Some(source_request_id) = request.source_request_id {
             payload["sourceRequestId"] = json!(source_request_id);
@@ -3531,7 +3974,10 @@ async fn run_confirmed_production_locked(
                     .await;
                 })
             };
-            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).1.push(handle);
+            sink.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .1
+                .push(handle);
         }
     };
     let outcome = match request.intent {
@@ -3569,16 +4015,16 @@ async fn run_confirmed_production_locked(
             } else {
                 let optional = |name: &str| {
                     let value = field(name);
-                    if value.is_empty() { None } else { Some(value) }
+                    if value.is_empty() {
+                        None
+                    } else {
+                        Some(value)
+                    }
                 };
-                let optional_u32 = |name: &str| {
-                    args.get(name).and_then(Value::as_u64).map(|v| v as u32)
-                };
+                let optional_u32 =
+                    |name: &str| args.get(name).and_then(Value::as_u64).map(|v| v as u32);
                 // cover 缺省 = true（TS `options.cover === false` 才禁用）。
-                let cover = args
-                    .get("cover")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true);
+                let cover = args.get("cover").and_then(Value::as_bool).unwrap_or(true);
                 let retry_stages: Vec<crate::production::short_fiction_runner::ShortRetryStage> =
                     args.get("retryStages")
                         .and_then(Value::as_array)
@@ -3604,7 +4050,9 @@ async fn run_confirmed_production_locked(
                     &field("direction"),
                     optional("reference").as_deref(),
                     optional("storyId").as_deref(),
-                    args.get("chapters").and_then(Value::as_u64).map(|v| v as u32),
+                    args.get("chapters")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as u32),
                     chars_per_chapter,
                     optional_u32("minChapterLength"),
                     optional_u32("maxChapterLength"),
@@ -3637,7 +4085,9 @@ async fn run_confirmed_production_locked(
                 &field("sourceText"),
                 &field("sourcePath"),
                 &field("requirements"),
-                args.get("episodeCount").and_then(Value::as_u64).map(|v| v as u32),
+                args.get("episodeCount")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32),
                 &field("episodeDuration"),
                 &field("projectId"),
                 &field("outDir"),
@@ -3665,7 +4115,9 @@ async fn run_confirmed_production_locked(
                 &field("visualStyle"),
                 &field("aspectRatio"),
                 &field("granularity"),
-                args.get("maxShots").and_then(Value::as_u64).map(|v| v as u32),
+                args.get("maxShots")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32),
                 &field("projectId"),
                 &field("outDir"),
                 &mut on_progress,
@@ -3690,7 +4142,9 @@ async fn run_confirmed_production_locked(
                 &field("sourcePath"),
                 &field("requirements"),
                 &field("targetAudience"),
-                args.get("episodeCount").and_then(Value::as_u64).map(|v| v as u32),
+                args.get("episodeCount")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as u32),
                 &field("episodeDuration"),
                 &field("budget"),
                 &field("referenceMode"),
@@ -3709,7 +4163,8 @@ async fn run_confirmed_production_locked(
                     .map(str::to_string)
                     .unwrap_or_default()
             };
-            let selling_points = crate::llm::cover::normalize_selling_points(Some(&field("sellingPoints")));
+            let selling_points =
+                crate::llm::cover::normalize_selling_points(Some(&field("sellingPoints")));
             execute_generate_cover(
                 runtime,
                 &field("title"),
@@ -3732,18 +4187,29 @@ async fn run_confirmed_production_locked(
             };
             let file_path_owned = field("filePath");
             let source_text_owned = field("sourceText");
-            let file_path = if file_path_owned.is_empty() { None } else { Some(file_path_owned.as_str()) };
-            let source_text = if source_text_owned.is_empty() { None } else { Some(source_text_owned.as_str()) };
+            let file_path = if file_path_owned.is_empty() {
+                None
+            } else {
+                Some(file_path_owned.as_str())
+            };
+            let source_text = if source_text_owned.is_empty() {
+                None
+            } else {
+                Some(source_text_owned.as_str())
+            };
             execute_translation_create(
                 runtime,
                 file_path,
                 source_text,
-                args.get("sources").filter(|s| !s.as_array().map(|list| list.is_empty()).unwrap_or(true)),
+                args.get("sources")
+                    .filter(|s| !s.as_array().map(|list| list.is_empty()).unwrap_or(true)),
                 args.get("glossary"),
                 &field("sourceLanguage"),
                 &field("targetLanguage"),
                 &field("title"),
-                args.get("segmentMaxChars").and_then(Value::as_u64).map(|v| v as usize),
+                args.get("segmentMaxChars")
+                    .and_then(Value::as_u64)
+                    .map(|v| v as usize),
                 &mut on_progress,
             )
             .await
@@ -3772,22 +4238,42 @@ async fn run_confirmed_production_locked(
         RequestedIntent::ConnectChoice => {
             let mut on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();
-            let project_id = args.get("projectId").and_then(Value::as_str).unwrap_or_default().to_string();
+            let project_id = args
+                .get("projectId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             let node_value = args.get("node").cloned().unwrap_or(Value::Null);
             execute_connect_choice(runtime, &project_id, &node_value, &mut on_progress).await
         }
         RequestedIntent::RemoveNode => {
             let mut on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();
-            let project_id = args.get("projectId").and_then(Value::as_str).unwrap_or_default().to_string();
-            let node_id = args.get("nodeId").and_then(Value::as_str).unwrap_or_default().to_string();
+            let project_id = args
+                .get("projectId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let node_id = args
+                .get("nodeId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             execute_remove_node(runtime, &project_id, &node_id, &mut on_progress).await
         }
         RequestedIntent::DraftStructure => {
             let mut on_progress = make_on_progress;
             let args = exec.args.clone().unwrap_or_default();
-            let project_id = args.get("projectId").and_then(Value::as_str).unwrap_or_default().to_string();
-            let instruction = args.get("instruction").and_then(Value::as_str).unwrap_or_default().to_string();
+            let project_id = args
+                .get("projectId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let instruction = args
+                .get("instruction")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             execute_draft_structure(runtime, &project_id, &instruction, &mut on_progress).await
         }
         RequestedIntent::PlayStart => {
@@ -3872,11 +4358,20 @@ async fn run_confirmed_production_locked(
 
     // 终态持久化前 drain 进度写入（保证快照终态不被滞后的进度快照覆盖）。
     {
-        let handles: Vec<_> = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).1.drain(..).collect();
+        let handles: Vec<_> = sink
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .1
+            .drain(..)
+            .collect();
         for handle in handles {
             let _ = handle.await;
         }
-        let mut logs = sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).0.clone();
+        let mut logs = sink
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .0
+            .clone();
         logs.truncate(80);
         if !logs.is_empty() {
             exec.logs = Some(logs);
@@ -3898,8 +4393,14 @@ async fn run_confirmed_production_locked(
                     stage.status = StudioTaskStageStatus::Completed;
                 }
             }
-            persist_confirmed_task(root, session_id, request.intent, &exec, request.source_request_id)
-                .await;
+            persist_confirmed_task(
+                root,
+                session_id,
+                request.intent,
+                &exec,
+                request.source_request_id,
+            )
+            .await;
             runtime.hub.broadcast(
                 "tool:end",
                 &json!({
@@ -3928,13 +4429,12 @@ async fn run_confirmed_production_locked(
                     .map(String::from);
                 if let Some(book_id) = resolved {
                     // 迁移失败（已绑定）静默跳过（TS catch SessionAlreadyMigratedError）。
-                    let migrated =
-                        crate::interaction::book_session_store::migrate_book_session(
-                            root, session_id, &book_id,
-                        )
-                        .await
-                        .ok()
-                        .flatten();
+                    let migrated = crate::interaction::book_session_store::migrate_book_session(
+                        root, session_id, &book_id,
+                    )
+                    .await
+                    .ok()
+                    .flatten();
                     let _ = migrated;
                     active_book_id = Some(book_id.clone());
                     let book_summary = runtime
@@ -3979,8 +4479,14 @@ async fn run_confirmed_production_locked(
             exec.status = "error";
             exec.completed_at = Some(utc_now_ms() as f64);
             exec.error = Some(message.clone());
-            persist_confirmed_task(root, session_id, request.intent, &exec, request.source_request_id)
-                .await;
+            persist_confirmed_task(
+                root,
+                session_id,
+                request.intent,
+                &exec,
+                request.source_request_id,
+            )
+            .await;
             runtime.hub.broadcast(
                 "tool:end",
                 &json!({
@@ -4048,7 +4554,8 @@ async fn persist_confirmed_task(
     source_request_id: Option<&str>,
 ) {
     if crate::server::session_routes::deleted_session_ids()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .contains(session_id)
     {
         return;
@@ -4073,7 +4580,8 @@ mod model_resolver_tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         // deepseek preset base_url 非本地端点；无 secrets → 层 1 无 key 400。
-        let result = resolve_agent_model_override(&root, Some("deepseek"), Some("deepseek-chat")).await;
+        let result =
+            resolve_agent_model_override(&root, Some("deepseek"), Some("deepseek-chat")).await;
         let (status, body) = result.unwrap_err();
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body.0["error"], "请先为 deepseek 配置 API Key");
@@ -4083,9 +4591,10 @@ mod model_resolver_tests {
         );
         // en 项目语言。
         std::fs::write(root.join("inkos.json"), r#"{"language":"en"}"#).unwrap();
-        let (_, body) = resolve_agent_model_override(&root, Some("deepseek"), Some("deepseek-chat"))
-            .await
-            .unwrap_err();
+        let (_, body) =
+            resolve_agent_model_override(&root, Some("deepseek"), Some("deepseek-chat"))
+                .await
+                .unwrap_err();
         assert_eq!(body.0["error"], "Configure an API Key for deepseek first");
         assert_eq!(
             body.0["response"],
@@ -4114,7 +4623,10 @@ mod model_resolver_tests {
             format!(r#"{{"services":{{"custom:my":{{"{KEY_NAME}":"{FIXTURE_KEY}"}}}}}}"#),
         )
         .unwrap();
-        let resolved = resolve_agent_model_override(&root, Some("custom:my"), Some("m1")).await.unwrap().unwrap();
+        let resolved = resolve_agent_model_override(&root, Some("custom:my"), Some("m1"))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(resolved.service, "custom:my");
         assert_eq!(resolved.model, "m1");
         assert_eq!(resolved.api_key, "test-key-x");
@@ -4122,7 +4634,9 @@ mod model_resolver_tests {
 
         // 层 4：无显式 service/model 且无 defaultModel/有 key 服务（custom:my
         // 的 models 探测不可达 127.0.0.1:9 → 静默下落）→ None。
-        let resolved = resolve_agent_model_override(&root, None, None).await.unwrap();
+        let resolved = resolve_agent_model_override(&root, None, None)
+            .await
+            .unwrap();
         // 层 3 可能命中 custom:my（bank 无 custom 条目 → listModels 空 → 下落）。
         assert!(resolved.is_none());
     }
@@ -4186,9 +4700,18 @@ mod tests {
         };
         let results = vec![mk(2), mk(3), mk(4)];
         let aborted = abort_text_with_partial(&results, StudioLang::Zh);
-        assert!(aborted.contains("已完成 3 章") && aborted.contains("第 2 章至第 4 章"), "{aborted}");
-        let failed = chapter_error_text_with_partial(&results, 5, "HTTP 429".to_string(), StudioLang::En);
-        assert!(failed.contains("3/5") && failed.contains("chapters 2-4") && failed.contains("HTTP 429"), "{failed}");
+        assert!(
+            aborted.contains("已完成 3 章") && aborted.contains("第 2 章至第 4 章"),
+            "{aborted}"
+        );
+        let failed =
+            chapter_error_text_with_partial(&results, 5, "HTTP 429".to_string(), StudioLang::En);
+        assert!(
+            failed.contains("3/5")
+                && failed.contains("chapters 2-4")
+                && failed.contains("HTTP 429"),
+            "{failed}"
+        );
     }
 
     use super::*;
@@ -4228,20 +4751,26 @@ mod tests {
             .await
             .unwrap();
         active_confirmed_tasks()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
                 "write-next-deadbook".into(),
                 crate::interaction::agent_loop::AbortHandle::default(),
             );
-        let live = load_reconciled_task_snapshot(root, "sess-live").await.unwrap();
+        let live = load_reconciled_task_snapshot(root, "sess-live")
+            .await
+            .unwrap();
         assert_eq!(live.execution.status, StudioTaskExecutionStatus::Running);
         assert_eq!(live.updated_at, 1_000.0);
 
         // 死亡：同一执行 id 从注册表移除 → 改写中断终态落盘（默认 zh 文案）。
         active_confirmed_tasks()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove("write-next-deadbook");
-        let dead = load_reconciled_task_snapshot(root, "sess-live").await.unwrap();
+        let dead = load_reconciled_task_snapshot(root, "sess-live")
+            .await
+            .unwrap();
         assert_eq!(dead.execution.status, StudioTaskExecutionStatus::Error);
         assert_eq!(
             dead.execution.error.as_deref(),
@@ -4257,20 +4786,43 @@ mod tests {
     #[test]
     fn write_chapter_heuristics_match_ts_regexes() {
         // isExplicitWriteChapterCommand（zh 正反例逐字）。
-        for hit in ["写下一章", "帮我写第一章！", "请写第一章", "续写一章，突出冲突。", "接着写正文", "直接写章节"] {
+        for hit in [
+            "写下一章",
+            "帮我写第一章！",
+            "请写第一章",
+            "续写一章，突出冲突。",
+            "接着写正文",
+            "直接写章节",
+        ] {
             assert!(is_explicit_write_chapter_command(hit), "应命中：{hit}");
         }
         // TS 前缀组仅单个可选词：双前缀（请帮我）不命中——逐字固化。
-        for miss in ["写个大纲", "帮我看看第一章", "请帮我写第一章！", "现在开始写正文", "你好", "write a summary"] {
+        for miss in [
+            "写个大纲",
+            "帮我看看第一章",
+            "请帮我写第一章！",
+            "现在开始写正文",
+            "你好",
+            "write a summary",
+        ] {
             assert!(!is_explicit_write_chapter_command(miss), "不应命中：{miss}");
         }
         // en 分支（词边界 + 可选 the）。
         assert!(is_explicit_write_chapter_command("write the next chapter"));
-        assert!(is_explicit_write_chapter_command("Please continue chapter one"));
+        assert!(is_explicit_write_chapter_command(
+            "Please continue chapter one"
+        ));
         assert!(!is_explicit_write_chapter_command("writing chapters"));
 
         // isWriteNextInstruction（全词匹配；不含 /write）。
-        for hit in ["继续", "继续写", "写下一章", "continue", "WRITE NEXT", "再来一章"] {
+        for hit in [
+            "继续",
+            "继续写",
+            "写下一章",
+            "continue",
+            "WRITE NEXT",
+            "再来一章",
+        ] {
             assert!(is_write_next_instruction(hit), "应命中：{hit}");
         }
         for miss in ["/write", "继续写两章", "  ", "continue!"] {
@@ -4288,14 +4840,8 @@ mod tests {
             RequestedIntent::SpinoffCreate,
             RequestedIntent::StyleImitation,
         ] {
-            assert!(is_confirmed_production_action(
-                ActionSource::Button,
-                intent
-            ));
-            assert!(is_confirmed_production_action(
-                ActionSource::Slash,
-                intent
-            ));
+            assert!(is_confirmed_production_action(ActionSource::Button, intent));
+            assert!(is_confirmed_production_action(ActionSource::Slash, intent));
             assert!(!is_confirmed_production_action(
                 ActionSource::FreeText,
                 intent
@@ -4388,8 +4934,12 @@ mod tests {
             format_agent_action_failure("BookWriteLockError: locked by an active InkOS write");
         assert_eq!((status, code), (StatusCode::CONFLICT, "BOOK_BUSY"));
 
-        let (status, code, message) = format_agent_action_failure("确认建书缺少书名，请重新生成确认卡。");
-        assert_eq!((status, code), (StatusCode::BAD_GATEWAY, "AGENT_ACTION_FAILED"));
+        let (status, code, message) =
+            format_agent_action_failure("确认建书缺少书名，请重新生成确认卡。");
+        assert_eq!(
+            (status, code),
+            (StatusCode::BAD_GATEWAY, "AGENT_ACTION_FAILED")
+        );
         assert_eq!(message, "确认建书缺少书名，请重新生成确认卡。");
     }
 
@@ -4400,22 +4950,43 @@ mod tests {
         assert_eq!(classify_agent_failure("   "), "unknown");
         // busy。
         assert_eq!(classify_agent_failure("BookWriteLockError: locked"), "busy");
-        assert_eq!(classify_agent_failure("书籍被锁定 by an active InkOS write"), "unknown");
+        assert_eq!(
+            classify_agent_failure("书籍被锁定 by an active InkOS write"),
+            "unknown"
+        );
         assert_eq!(classify_agent_failure("当前书籍 BOOK_BUSY"), "busy");
         // llm（含中文短语与大小写不敏感）。
         assert_eq!(classify_agent_failure("上游 API 返回 502"), "llm");
         assert_eq!(classify_agent_failure("LLM returned empty response"), "llm");
-        assert_eq!(classify_agent_failure("request failed: ECONNREFUSED"), "llm");
+        assert_eq!(
+            classify_agent_failure("request failed: ECONNREFUSED"),
+            "llm"
+        );
         assert_eq!(classify_agent_failure("无法连接到 API：连接超时"), "llm");
         assert_eq!(classify_agent_failure("provider quota exceeded"), "llm");
         // Rust 传输层词汇（reqwest）——205 号词表补录。
-        assert_eq!(classify_agent_failure("error sending request for url"), "llm");
+        assert_eq!(
+            classify_agent_failure("error sending request for url"),
+            "llm"
+        );
         assert_eq!(classify_agent_failure("operation timed out"), "llm");
-        assert_eq!(classify_agent_failure("missing reasoning_content block"), "llm");
+        assert_eq!(
+            classify_agent_failure("missing reasoning_content block"),
+            "llm"
+        );
         // internal。
-        assert_eq!(classify_agent_failure("PlannerParseError: bad yaml"), "internal");
-        assert_eq!(classify_agent_failure("RUNTIME_STATE_DELTA 解析失败"), "internal");
-        assert_eq!(classify_agent_failure("sub_agent: writer failed"), "internal");
+        assert_eq!(
+            classify_agent_failure("PlannerParseError: bad yaml"),
+            "internal"
+        );
+        assert_eq!(
+            classify_agent_failure("RUNTIME_STATE_DELTA 解析失败"),
+            "internal"
+        );
+        assert_eq!(
+            classify_agent_failure("sub_agent: writer failed"),
+            "internal"
+        );
         assert_eq!(classify_agent_failure("工具执行失败：超长"), "internal");
         // unknown。
         assert_eq!(classify_agent_failure("something exploded"), "unknown");
@@ -4427,44 +4998,80 @@ mod tests {
     fn format_agent_failure_maps_status_and_code() {
         // busy → 409 BOOK_BUSY。
         let (status, code, message) = format_agent_failure("BookWriteLockError", "zh");
-        assert_eq!((status, code, message.as_str()), (StatusCode::CONFLICT, "BOOK_BUSY", "BookWriteLockError"));
+        assert_eq!(
+            (status, code, message.as_str()),
+            (StatusCode::CONFLICT, "BOOK_BUSY", "BookWriteLockError")
+        );
         // llm → 502 AGENT_LLM_ERROR（消息原文）。
         let (status, code, message) = format_agent_failure("无法连接到 API", "zh");
         assert_eq!((status, code), (StatusCode::BAD_GATEWAY, "AGENT_LLM_ERROR"));
         assert_eq!(message, "无法连接到 API");
         // internal → 500 AGENT_INTERNAL_ERROR + 双语改写。
         let (status, code, message) = format_agent_failure("RUNTIME_STATE_DELTA 解析失败", "zh");
-        assert_eq!((status, code), (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_INTERNAL_ERROR"));
+        assert_eq!(
+            (status, code),
+            (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_INTERNAL_ERROR")
+        );
         assert_eq!(message, "InkOS 内部流程错误：RUNTIME_STATE_DELTA 解析失败");
         let (status, code, message) = format_agent_failure("RUNTIME_STATE_DELTA 解析失败", "en");
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(code, "AGENT_INTERNAL_ERROR");
-        assert_eq!(message, "InkOS internal pipeline error: RUNTIME_STATE_DELTA 解析失败");
+        assert_eq!(
+            message,
+            "InkOS internal pipeline error: RUNTIME_STATE_DELTA 解析失败"
+        );
         // unknown → 500 AGENT_ERROR。
         let (status, code, message) = format_agent_failure("something exploded", "en");
-        assert_eq!((status, code, message.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, "AGENT_ERROR", "something exploded"));
+        assert_eq!(
+            (status, code, message.as_str()),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "AGENT_ERROR",
+                "something exploded"
+            )
+        );
     }
 
     #[test]
     fn enum_parsing_rejects_unknown_values() {
-        assert_eq!(ActionSource::parse("quick-action"), Some(ActionSource::QuickAction));
+        assert_eq!(
+            ActionSource::parse("quick-action"),
+            Some(ActionSource::QuickAction)
+        );
         assert_eq!(ActionSource::parse("free text"), None);
-        assert_eq!(RequestedIntent::parse("create_book"), Some(RequestedIntent::CreateBook));
+        assert_eq!(
+            RequestedIntent::parse("create_book"),
+            Some(RequestedIntent::CreateBook)
+        );
         assert_eq!(RequestedIntent::parse("create-book"), None);
         assert!(normalize_action_source(Some(&json!("button"))).is_ok());
         assert!(normalize_action_source(Some(&json!("weird"))).is_err());
-        assert!(normalize_requested_intent(Some(&json!(""))).unwrap().is_none());
+        assert!(normalize_requested_intent(Some(&json!("")))
+            .unwrap()
+            .is_none());
         assert!(normalize_requested_intent(Some(&json!("nope"))).is_err());
     }
 
     #[test]
     fn tool_label_and_stage_tables_align_ts() {
-        assert_eq!(resolve_tool_label("sub_agent", Some("writer"), StudioLang::Zh), "写作");
-        assert_eq!(resolve_tool_label("sub_agent", Some("architect"), StudioLang::Zh), "建书");
+        assert_eq!(
+            resolve_tool_label("sub_agent", Some("writer"), StudioLang::Zh),
+            "写作"
+        );
+        assert_eq!(
+            resolve_tool_label("sub_agent", Some("architect"), StudioLang::Zh),
+            "建书"
+        );
         assert_eq!(resolve_tool_label("read", None, StudioLang::Zh), "读取文件");
-        assert_eq!(resolve_tool_label("sub_agent", Some("unknown-agent"), StudioLang::Zh), "unknown-agent");
+        assert_eq!(
+            resolve_tool_label("sub_agent", Some("unknown-agent"), StudioLang::Zh),
+            "unknown-agent"
+        );
         assert_eq!(pipeline_stages("writer", StudioLang::Zh).unwrap().len(), 7);
-        assert_eq!(pipeline_stages("architect", StudioLang::Zh).unwrap().len(), 5);
+        assert_eq!(
+            pipeline_stages("architect", StudioLang::Zh).unwrap().len(),
+            5
+        );
         assert_eq!(pipeline_stages("exporter", StudioLang::Zh), None);
     }
 
@@ -4528,7 +5135,9 @@ mod layer3_custom_probe_tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}/v1")
     }
 
@@ -4580,7 +5189,10 @@ mod layer3_custom_probe_tests {
         .unwrap();
 
         let _runtime = runtime(&root);
-        let resolved = resolve_agent_model_override(&root, None, None).await.unwrap().unwrap();
+        let resolved = resolve_agent_model_override(&root, None, None)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(resolved.service, "custom:probe");
         assert_eq!(resolved.base_url, base);
         assert_eq!(resolved.api_key, "test-key-p");
@@ -4615,7 +5227,10 @@ mod layer3_custom_probe_tests {
         .unwrap();
 
         let _runtime = runtime(&root);
-        let resolved = resolve_agent_model_override(&root, None, None).await.unwrap().unwrap();
+        let resolved = resolve_agent_model_override(&root, None, None)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(matches!(
             resolved.api_format,
             crate::llm::providers::TransportApiFormat::Responses

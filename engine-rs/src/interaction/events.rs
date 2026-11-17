@@ -11,25 +11,42 @@ use ts_rs::TS;
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"idle\" | \"planning\" | \"composing\" | \"writing\" | \"assessing\" | \"repairing\" | \"persisting\" | \"waiting_human\" | \"blocked\" | \"completed\" | \"failed\"")
+    ts(
+        export,
+        type = "\"idle\" | \"planning\" | \"composing\" | \"writing\" | \"assessing\" | \"repairing\" | \"persisting\" | \"waiting_human\" | \"blocked\" | \"completed\" | \"failed\""
+    )
 )]
 pub enum ExecutionStatus {
-    #[serde(rename = "idle")] Idle,
-    #[serde(rename = "planning")] Planning,
-    #[serde(rename = "composing")] Composing,
-    #[serde(rename = "writing")] Writing,
-    #[serde(rename = "assessing")] Assessing,
-    #[serde(rename = "repairing")] Repairing,
-    #[serde(rename = "persisting")] Persisting,
-    #[serde(rename = "waiting_human")] WaitingHuman,
-    #[serde(rename = "blocked")] Blocked,
-    #[serde(rename = "completed")] Completed,
-    #[serde(rename = "failed")] Failed,
+    #[serde(rename = "idle")]
+    Idle,
+    #[serde(rename = "planning")]
+    Planning,
+    #[serde(rename = "composing")]
+    Composing,
+    #[serde(rename = "writing")]
+    Writing,
+    #[serde(rename = "assessing")]
+    Assessing,
+    #[serde(rename = "repairing")]
+    Repairing,
+    #[serde(rename = "persisting")]
+    Persisting,
+    #[serde(rename = "waiting_human")]
+    WaitingHuman,
+    #[serde(rename = "blocked")]
+    Blocked,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
 }
 
 /// 是否终态（completed/failed/blocked）。
 pub fn is_terminal_execution_status(status: ExecutionStatus) -> bool {
-    matches!(status, ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Blocked)
+    matches!(
+        status,
+        ExecutionStatus::Completed | ExecutionStatus::Failed | ExecutionStatus::Blocked
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,6 +94,9 @@ mod tests {
 
     #[test]
     fn status_serializes() {
-        assert_eq!(serde_json::to_string(&ExecutionStatus::WaitingHuman).unwrap(), "\"waiting_human\"");
+        assert_eq!(
+            serde_json::to_string(&ExecutionStatus::WaitingHuman).unwrap(),
+            "\"waiting_human\""
+        );
     }
 }

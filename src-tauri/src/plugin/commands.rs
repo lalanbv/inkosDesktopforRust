@@ -17,8 +17,10 @@ pub struct PluginState {
 pub fn open_manager_window(app: &tauri::AppHandle) -> Result<(), String> {
     const LABEL: &str = "plugin-manager";
     if let Some(win) = app.get_webview_window(LABEL) {
-        win.show().map_err(|e| format!("显示插件管理窗口失败: {e}"))?;
-        win.set_focus().map_err(|e| format!("聚焦插件管理窗口失败: {e}"))?;
+        win.show()
+            .map_err(|e| format!("显示插件管理窗口失败: {e}"))?;
+        win.set_focus()
+            .map_err(|e| format!("聚焦插件管理窗口失败: {e}"))?;
         return Ok(());
     }
 

@@ -19,9 +19,7 @@ use async_trait::async_trait;
 
 use crate::agents::continuity::{AuditIssue, AuditResult, AuditSeverity, AuditTokenUsage};
 use crate::agents::reviser::{ReviseMode, ReviseOutput};
-use crate::models::input_governance::{
-    ChapterIntent, ChapterMemo, ContextPackage, RuleStack,
-};
+use crate::models::input_governance::{ChapterIntent, ChapterMemo, ContextPackage, RuleStack};
 use crate::models::length_governance::LengthSpec;
 use crate::utils::length_metrics::{count_chapter_length, is_outside_hard_range};
 
@@ -276,7 +274,11 @@ pub async fn run_chapter_review_cycle(
         };
 
         let score = llm_audit.overall_score.unwrap_or(0);
-        Ok(Assessment { audit_result, score, length_in_range })
+        Ok(Assessment {
+            audit_result,
+            score,
+            length_in_range,
+        })
     }
 
     (params.callbacks.log_stage)("审计草稿", "auditing draft");
@@ -300,11 +302,7 @@ pub async fn run_chapter_review_cycle(
     let mut current_audit = initial;
     let mut post_revise_count: u32 = 0;
 
-    if current_audit
-        .audit_result
-        .parse_failed
-        .unwrap_or(false)
-    {
+    if current_audit.audit_result.parse_failed.unwrap_or(false) {
         (params.callbacks.log_warn)(
             "审稿输出解析失败，跳过自动修稿以避免误改正文",
             "Audit output parsing failed; skipping automatic repair to avoid rewriting valid prose from an unreliable audit.",
@@ -367,13 +365,14 @@ pub async fn run_chapter_review_cycle(
                 break;
             }
 
-            (params
-                .callbacks
-                .assert_chapter_content_not_empty)(&revise_output.revised_content, "repair")
-                .map_err(|message| ReviewCycleError::EmptyContent {
-                    stage: format!("repair iteration {}", iteration + 1),
-                    message,
-                })?;
+            (params.callbacks.assert_chapter_content_not_empty)(
+                &revise_output.revised_content,
+                "repair",
+            )
+            .map_err(|message| ReviewCycleError::EmptyContent {
+                stage: format!("repair iteration {}", iteration + 1),
+                message,
+            })?;
             let revised_content = match &params.callbacks.normalize_post_write_surface {
                 Some(surface) => surface(&revise_output.revised_content),
                 None => revise_output.revised_content.clone(),
@@ -441,19 +440,16 @@ pub async fn run_chapter_review_cycle(
     }
 
     // 快照择优：区间内优先；同区间分数 ε 净提升才换。
-    let best_snapshot = snapshots
-        .iter()
-        .skip(1)
-        .fold(&snapshots[0], |best, snap| {
-            if snap.length_in_range != best.length_in_range {
-                return if snap.length_in_range { snap } else { best };
-            }
-            if snap.score >= best.score + NET_IMPROVEMENT_EPSILON {
-                snap
-            } else {
-                best
-            }
-        });
+    let best_snapshot = snapshots.iter().skip(1).fold(&snapshots[0], |best, snap| {
+        if snap.length_in_range != best.length_in_range {
+            return if snap.length_in_range { snap } else { best };
+        }
+        if snap.score >= best.score + NET_IMPROVEMENT_EPSILON {
+            snap
+        } else {
+            best
+        }
+    });
 
     // 最优快照与当前不同（修复变差但旧版更好）→ 回退。
     let should_restore = best_snapshot.content != final_content
@@ -505,9 +501,7 @@ fn _revise_mode_default() -> ReviseMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::length_governance::{
-        LengthCountingMode, LengthSpec,
-    };
+    use crate::models::length_governance::{LengthCountingMode, LengthSpec};
     use std::sync::Mutex;
 
     fn spec() -> LengthSpec {
@@ -556,7 +550,11 @@ mod tests {
             _control: Option<&ChapterReviewCycleControlInput<'_>>,
             _temperature: Option<f64>,
         ) -> Result<AuditResult, String> {
-            Ok(self.results.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0))
+            Ok(self
+                .results
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(0))
         }
     }
 
@@ -575,7 +573,10 @@ mod tests {
             _control: Option<&ChapterReviewCycleControlInput<'_>>,
             _spec: &LengthSpec,
         ) -> Result<ReviseOutput, String> {
-            self.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(issues.len());
+            self.seen_issue_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(issues.len());
             Ok(ReviseOutput {
                 revised_content: self.revised.clone(),
                 ..Default::default()
@@ -620,7 +621,11 @@ mod tests {
             initial_post_write_errors: post_write,
             reduced_control_input: None,
             length_spec: spec,
-            initial_usage: AuditTokenUsage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+            initial_usage: AuditTokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
             reviser,
             auditor,
             callbacks: callbacks(),
@@ -628,7 +633,8 @@ mod tests {
         }
     }
 
-    const PASS_CONTENT: &str = "他推门而入，烛火摇曳。真相在案上的账册里静静躺着，等待被翻开的那一刻。";
+    const PASS_CONTENT: &str =
+        "他推门而入，烛火摇曳。真相在案上的账册里静静躺着，等待被翻开的那一刻。";
 
     #[tokio::test]
     async fn passes_immediately_when_score_meets_threshold() {
@@ -639,21 +645,19 @@ mod tests {
             revised: "不该被用到".into(),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-                let sp = spec();
-        let result = run_chapter_review_cycle(params(
-            PASS_CONTENT,
-            &[],
-            &auditor,
-            &reviser,
-            &sp,
-            None,
-        ))
-        .await
-        .unwrap();
+        let sp = spec();
+        let result =
+            run_chapter_review_cycle(params(PASS_CONTENT, &[], &auditor, &reviser, &sp, None))
+                .await
+                .unwrap();
         assert!(!result.revised);
         assert_eq!(result.final_content, PASS_CONTENT);
         assert_eq!(result.post_revise_count, 0);
-        assert!(reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
+        assert!(reviser
+            .seen_issue_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
     }
 
     #[tokio::test]
@@ -667,21 +671,19 @@ mod tests {
             revised: "x".into(),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-                let sp = spec();
-        let result = run_chapter_review_cycle(params(
-            PASS_CONTENT,
-            &[],
-            &auditor,
-            &reviser,
-            &sp,
-            Some(3),
-        ))
-        .await
-        .unwrap();
+        let sp = spec();
+        let result =
+            run_chapter_review_cycle(params(PASS_CONTENT, &[], &auditor, &reviser, &sp, Some(3)))
+                .await
+                .unwrap();
         assert!(!result.revised);
         assert_eq!(result.final_content, PASS_CONTENT);
         assert!(result.audit_result.parse_failed.unwrap_or(false));
-        assert!(reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
+        assert!(reviser
+            .seen_issue_count
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
     }
 
     #[tokio::test]
@@ -694,7 +696,7 @@ mod tests {
             revised: format!("{PASS_CONTENT}修复后追加的一句收尾。"),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-                let sp = spec();
+        let sp = spec();
         let result = run_chapter_review_cycle(params(
             PASS_CONTENT,
             &[violation("chapter-ref")],
@@ -706,7 +708,13 @@ mod tests {
         .await
         .unwrap();
         // 修订器收到 postWriteErrors 转来的 critical issue。
-        assert_eq!(*reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), vec![1]);
+        assert_eq!(
+            *reviser
+                .seen_issue_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![1]
+        );
         assert!(result.revised);
         assert!(result.final_content.contains("修复后追加"));
         // 环结果汇总里包含该 critical。
@@ -726,17 +734,11 @@ mod tests {
             revised: format!("{PASS_CONTENT}第二轮修复了主线偏移，并补上钩子兑现。"),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-                let sp = spec();
-        let result = run_chapter_review_cycle(params(
-            PASS_CONTENT,
-            &[],
-            &auditor,
-            &reviser,
-            &sp,
-            None,
-        ))
-        .await
-        .unwrap();
+        let sp = spec();
+        let result =
+            run_chapter_review_cycle(params(PASS_CONTENT, &[], &auditor, &reviser, &sp, None))
+                .await
+                .unwrap();
         assert!(result.revised);
         assert!(result.audit_result.passed);
         assert!(result.audit_result.overall_score.unwrap() >= PASS_SCORE_THRESHOLD);
@@ -756,20 +758,20 @@ mod tests {
             revised: format!("{PASS_CONTENT}小幅改动但分数没怎么动。"),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-                let sp = spec();
-        let result = run_chapter_review_cycle(params(
-            PASS_CONTENT,
-            &[],
-            &auditor,
-            &reviser,
-            &sp,
-            Some(5),
-        ))
-        .await
-        .unwrap();
+        let sp = spec();
+        let result =
+            run_chapter_review_cycle(params(PASS_CONTENT, &[], &auditor, &reviser, &sp, Some(5)))
+                .await
+                .unwrap();
         // 61 < 60 + 3 → 无净提升退出；修订稿因 >= 当前被保留为 final（同区间无 ε 提升
         // 不触发快照回退——快照择优仅当 best >= current + ε）。
-        assert_eq!(*reviser.seen_issue_count.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), vec![0]);
+        assert_eq!(
+            *reviser
+                .seen_issue_count
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![0]
+        );
         // 无净提升退出：final 保持当前版（60），61 的快照不足 ε 不置换。
         assert_eq!(result.audit_result.overall_score, Some(60));
     }
@@ -783,17 +785,11 @@ mod tests {
             revised: PASS_CONTENT.to_string(), // 与原文相同 → 无新内容
             seen_issue_count: Mutex::new(Vec::new()),
         };
-                let sp = spec();
-        let result = run_chapter_review_cycle(params(
-            PASS_CONTENT,
-            &[],
-            &auditor,
-            &reviser,
-            &sp,
-            Some(5),
-        ))
-        .await
-        .unwrap();
+        let sp = spec();
+        let result =
+            run_chapter_review_cycle(params(PASS_CONTENT, &[], &auditor, &reviser, &sp, Some(5)))
+                .await
+                .unwrap();
         assert!(!result.revised);
         assert_eq!(result.final_content, PASS_CONTENT);
     }
@@ -808,16 +804,10 @@ mod tests {
             revised: "   \n  ".to_string(),
             seen_issue_count: Mutex::new(Vec::new()),
         };
-                let sp = spec();
-        let result = run_chapter_review_cycle(params(
-            PASS_CONTENT,
-            &[],
-            &auditor,
-            &reviser,
-            &sp,
-            None,
-        ))
-        .await;
+        let sp = spec();
+        let result =
+            run_chapter_review_cycle(params(PASS_CONTENT, &[], &auditor, &reviser, &sp, None))
+                .await;
         assert!(matches!(
             result,
             Err(ReviewCycleError::EmptyContent { stage, .. }) if stage == "repair iteration 1"
@@ -842,7 +832,11 @@ mod tests {
             initial_post_write_errors: &[],
             reduced_control_input: None,
             length_spec: &sp,
-            initial_usage: AuditTokenUsage { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+            initial_usage: AuditTokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0,
+            },
             reviser: &reviser,
             auditor: &auditor,
             callbacks: ReviewCycleCallbacks {

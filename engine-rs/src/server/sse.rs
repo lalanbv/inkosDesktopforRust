@@ -168,18 +168,23 @@ mod tests {
         let hub = Arc::new(BroadcastHub::new());
         let app = axum::Router::new()
             .route("/api/v1/events", axum::routing::get(events_handler))
-            .with_state(EventsState { hub: hub.clone(), project_root: std::env::temp_dir() });
+            .with_state(EventsState {
+                hub: hub.clone(),
+                project_root: std::env::temp_dir(),
+            });
 
         // 先建立连接（流消费前广播一条）。
         let response = app
             .clone()
-            .oneshot(axum::http::Request::builder().uri("/api/v1/events").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/events")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        hub.broadcast(
-            "write:start",
-            &serde_json::json!({ "bookId": "b1" }),
-        );
+        hub.broadcast("write:start", &serde_json::json!({ "bookId": "b1" }));
 
         // SSE 是无限流——有界帧消费（不做 to_bytes 的 EOF 等待）。
         let mut stream = futures_util::StreamExt::boxed(response.into_body().into_data_stream());
@@ -211,15 +216,26 @@ mod tests {
         let hub = Arc::new(BroadcastHub::new());
         let app = axum::Router::new()
             .route("/api/v1/events", axum::routing::get(events_handler))
-            .with_state(EventsState { hub: hub.clone(), project_root: std::env::temp_dir() });
+            .with_state(EventsState {
+                hub: hub.clone(),
+                project_root: std::env::temp_dir(),
+            });
 
         let response = app
-            .oneshot(axum::http::Request::builder().uri("/api/v1/events").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/events")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         // 停机序列（bin 停机路径同序）：先广播业务事件，再关流。
-        hub.broadcast("engine:shutdown", &serde_json::json!({ "reason": "signal" }));
+        hub.broadcast(
+            "engine:shutdown",
+            &serde_json::json!({ "reason": "signal" }),
+        );
         hub.shutdown();
 
         let mut stream = futures_util::StreamExt::boxed(response.into_body().into_data_stream());
@@ -242,10 +258,18 @@ mod tests {
         let hub = Arc::new(BroadcastHub::new());
         let app = axum::Router::new()
             .route("/api/v1/events", axum::routing::get(events_handler))
-            .with_state(EventsState { hub: hub.clone(), project_root: std::env::temp_dir() });
+            .with_state(EventsState {
+                hub: hub.clone(),
+                project_root: std::env::temp_dir(),
+            });
 
         let response = app
-            .oneshot(axum::http::Request::builder().uri("/api/v1/events").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/events")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -293,10 +317,18 @@ mod tests {
         let hub = Arc::new(BroadcastHub::new());
         let app = axum::Router::new()
             .route("/api/v1/events", axum::routing::get(events_handler))
-            .with_state(EventsState { hub: hub.clone(), project_root: dir.path().to_path_buf() });
+            .with_state(EventsState {
+                hub: hub.clone(),
+                project_root: dir.path().to_path_buf(),
+            });
         // 生产形态：EventSource 只带 sessionId——项目根由装配点注入。
         let response = app
-            .oneshot(axum::http::Request::builder().uri("/api/v1/events?sessionId=sess-dead").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/events?sessionId=sess-dead")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
@@ -311,13 +343,20 @@ mod tests {
                 Err(_) => continue,
             }
         }
-        assert!(text.contains("event: task:snapshot"), "未收到快照事件: {text}");
-        assert!(text.contains("\"status\":\"error\""), "应是对账后的中断终态: {text}");
+        assert!(
+            text.contains("event: task:snapshot"),
+            "未收到快照事件: {text}"
+        );
+        assert!(
+            text.contains("\"status\":\"error\""),
+            "应是对账后的中断终态: {text}"
+        );
         assert!(text.contains("任务已中断"));
         // 改写已持久化。
-        let persisted = crate::server::task_store::load_studio_task_snapshot(dir.path(), "sess-dead")
-            .await
-            .unwrap();
+        let persisted =
+            crate::server::task_store::load_studio_task_snapshot(dir.path(), "sess-dead")
+                .await
+                .unwrap();
         assert_eq!(
             persisted.execution.status,
             crate::server::task_store::StudioTaskExecutionStatus::Error

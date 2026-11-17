@@ -6,15 +6,18 @@
 //! 防措辞漂移（漂移=双端同输入下给 LLM 的指令分叉，522 号工件差分的上游根源之一）。
 //! 529 号：writer 面 6 案例扩展（对齐 c56586ec 后的 TS 形态）。
 
+use inkos_engine::agents::append_activated_skill_guidance;
 use inkos_engine::agents::planner_prompts::{
     build_planner_user_message, get_planner_memo_system_prompt, get_planner_memo_user_template,
     PlannerLengthBudget, PlannerUserMessageInput,
 };
-use inkos_engine::agents::settler_prompts::{build_settler_system_prompt, build_settler_user_prompt, SettlerUserPromptInput};
-use inkos_engine::agents::writer_prompts::{
-    build_writer_system_prompt, FanficContext, InputProfile, WriterPromptMode, WriterSystemPromptInput,
+use inkos_engine::agents::settler_prompts::{
+    build_settler_system_prompt, build_settler_user_prompt, SettlerUserPromptInput,
 };
-use inkos_engine::agents::append_activated_skill_guidance;
+use inkos_engine::agents::writer_prompts::{
+    build_writer_system_prompt, FanficContext, InputProfile, WriterPromptMode,
+    WriterSystemPromptInput,
+};
 use inkos_engine::llm::provider::{LLMMessage, LLMRole};
 use inkos_engine::models::book::{BookConfig, BookStatus, FanficMode, Platform};
 use inkos_engine::models::book_rules::{BookRules, GenreLock, NarrativePerson, Protagonist};
@@ -88,10 +91,26 @@ fn writing_prompts_match_ts_snapshot() {
     let golden = golden();
 
     // planner：system / user 模板直出。
-    assert_match("planner.system.zh", get_planner_memo_system_prompt(zh()).to_string(), &golden);
-    assert_match("planner.system.en", get_planner_memo_system_prompt(en()).to_string(), &golden);
-    assert_match("planner.template.zh", get_planner_memo_user_template(zh()).to_string(), &golden);
-    assert_match("planner.template.en", get_planner_memo_user_template(en()).to_string(), &golden);
+    assert_match(
+        "planner.system.zh",
+        get_planner_memo_system_prompt(zh()).to_string(),
+        &golden,
+    );
+    assert_match(
+        "planner.system.en",
+        get_planner_memo_system_prompt(en()).to_string(),
+        &golden,
+    );
+    assert_match(
+        "planner.template.zh",
+        get_planner_memo_user_template(zh()).to_string(),
+        &golden,
+    );
+    assert_match(
+        "planner.template.en",
+        get_planner_memo_user_template(en()).to_string(),
+        &golden,
+    );
 
     // planner user：黄金三章案例（ch2 + brief + 本章指令）。
     let user_golden = PlannerUserMessageInput {
@@ -118,7 +137,11 @@ fn writing_prompts_match_ts_snapshot() {
         chapter_context: Some("本章要出现第一次系统提示。"),
         language: zh(),
     };
-    assert_match("planner.user.zh.golden", build_planner_user_message(&user_golden), &golden);
+    assert_match(
+        "planner.user.zh.golden",
+        build_planner_user_message(&user_golden),
+        &golden,
+    );
 
     // planner user：普通章节案例（ch5，无 brief/指令，英文书）。
     let user_plain = PlannerUserMessageInput {
@@ -145,7 +168,11 @@ fn writing_prompts_match_ts_snapshot() {
         chapter_context: None,
         language: en(),
     };
-    assert_match("planner.user.en.plain", build_planner_user_message(&user_plain), &golden);
+    assert_match(
+        "planner.user.en.plain",
+        build_planner_user_message(&user_plain),
+        &golden,
+    );
 
     // settler system：无数值体系基线 + 数值/全员分支。
     let book = settler_book();
@@ -195,7 +222,11 @@ fn writing_prompts_match_ts_snapshot() {
         governed_control_block: Some("【GOVERNED CONTROL】按治理方案压缩支线。"),
         validation_feedback: Some("上一轮 H003 状态与正文矛盾，请修正。"),
     };
-    assert_match("settler.user.zh.full", build_settler_user_prompt(&user_full), &golden);
+    assert_match(
+        "settler.user.zh.full",
+        build_settler_user_prompt(&user_full),
+        &golden,
+    );
 
     // settler user：最小案例（truth 文件未创建 + 卷纲块兜底）。
     let user_min = SettlerUserPromptInput {
@@ -215,7 +246,11 @@ fn writing_prompts_match_ts_snapshot() {
         governed_control_block: None,
         validation_feedback: None,
     };
-    assert_match("settler.user.zh.min", build_settler_user_prompt(&user_min), &golden);
+    assert_match(
+        "settler.user.zh.min",
+        build_settler_user_prompt(&user_min),
+        &golden,
+    );
 
     // ---------------------------------------------------------------------------
     // writer system：6 案例面（529 号扩展）。生产唯一调用形态 = creative + governed；
@@ -414,10 +449,12 @@ fn writing_prompts_match_ts_snapshot() {
     }];
     append_activated_skill_guidance(
         &mut plain,
-        &[inkos_engine::skills::production_bindings::ActivatedSkillGuidance {
-            skill: craft_skill.clone(),
-            resources: vec![],
-        }],
+        &[
+            inkos_engine::skills::production_bindings::ActivatedSkillGuidance {
+                skill: craft_skill.clone(),
+                resources: vec![],
+            },
+        ],
     );
     assert_match("skill.guidance.plain", plain[0].content.clone(), &golden);
 
@@ -429,8 +466,18 @@ fn writing_prompts_match_ts_snapshot() {
         ..craft_skill.clone()
     };
     let mut full = vec![
-        LLMMessage { role: LLMRole::System, content: "你是写手。".into(), tool_calls: None, tool_call_id: None },
-        LLMMessage { role: LLMRole::User, content: "继续。".into(), tool_calls: None, tool_call_id: None },
+        LLMMessage {
+            role: LLMRole::System,
+            content: "你是写手。".into(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        LLMMessage {
+            role: LLMRole::User,
+            content: "继续。".into(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
     ];
     append_activated_skill_guidance(
         &mut full,

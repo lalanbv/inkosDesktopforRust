@@ -16,15 +16,13 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::short_fiction::{
-    ShortFictionBatchDraft, ShortFictionChapter, ShortFictionSalesPackage,
-};
+use super::short_fiction::{ShortFictionBatchDraft, ShortFictionChapter, ShortFictionSalesPackage};
 use super::short_fiction_prompts::{
     self, DraftPromptInput, DraftReviewPromptInput, OutlinePromptInput, PackagePromptInput,
 };
 use super::structured_agent::{
-    run_structured_tool, SupportingToolSpec, StructuredAgentError, StructuredDefaults,
-    StructuredRunOptions, ValidateFn, WorkerToolSpec,
+    run_structured_tool, StructuredAgentError, StructuredDefaults, StructuredRunOptions,
+    SupportingToolSpec, ValidateFn, WorkerToolSpec,
 };
 use crate::llm::provider::LLMMessage;
 use crate::models::observation::{
@@ -51,7 +49,12 @@ impl ShortAgents {
         model: impl Into<String>,
         defaults: StructuredDefaults,
     ) -> Self {
-        Self { chat, model: model.into(), defaults, author_request: None }
+        Self {
+            chat,
+            model: model.into(),
+            defaults,
+            author_request: None,
+        }
     }
 
     /// TS `prepareWorkerMessages` 的 authorRequest 前置（无技能/上下文编译面——
@@ -270,8 +273,7 @@ pub async fn outline_create_outline(
         },
         language,
     );
-    let messages =
-        agents.messages_with_prelude(vec![llm_system(&system), llm_user(&user)], true);
+    let messages = agents.messages_with_prelude(vec![llm_system(&system), llm_user(&user)], true);
     // TS maxTokens = min(8192, defaults.maxTokens)。
     let max_tokens = std::cmp::min(8192, agents.defaults.max_tokens);
     let schema = short_outline_tool_schema(input.chapter_count, input.title);
@@ -288,7 +290,10 @@ pub async fn outline_create_outline(
         },
         None,
         Vec::new(),
-        StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+        StructuredRunOptions {
+            temperature: None,
+            max_tokens: Some(max_tokens),
+        },
     )
     .await?;
     let result = &outcome.result;
@@ -350,18 +355,15 @@ pub async fn packaging_generate(
     agents: &ShortAgents,
     input: &PackageInput<'_>,
 ) -> Result<ShortFictionSalesPackage, StructuredAgentError> {
-    let system =
-        short_fiction_prompts::build_short_fiction_package_system_prompt(input.language);
-    let draft_markdown = super::short_fiction::render_short_fiction_draft_markdown(
-        input.draft,
-        input.language,
-    )
-    .map_err(|error| StructuredAgentError {
-        code: "WORKER_DOMAIN_INVALID".into(),
-        message: error.to_string(),
-        attempts: None,
-        result_tool: Some("submit_short_package".into()),
-    })?;
+    let system = short_fiction_prompts::build_short_fiction_package_system_prompt(input.language);
+    let draft_markdown =
+        super::short_fiction::render_short_fiction_draft_markdown(input.draft, input.language)
+            .map_err(|error| StructuredAgentError {
+                code: "WORKER_DOMAIN_INVALID".into(),
+                message: error.to_string(),
+                attempts: None,
+                result_tool: Some("submit_short_package".into()),
+            })?;
     let user = short_fiction_prompts::build_short_fiction_package_user_prompt(
         &PackagePromptInput {
             direction: input.direction,
@@ -403,16 +405,34 @@ pub async fn packaging_generate(
         },
         None,
         Vec::new(),
-        StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+        StructuredRunOptions {
+            temperature: None,
+            max_tokens: Some(max_tokens),
+        },
     )
     .await?;
     let result = &outcome.result;
-    let title = result.get("title").and_then(Value::as_str).map(str::trim).unwrap_or_default();
-    let intro = result.get("intro").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+    let title = result
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let intro = result
+        .get("intro")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
     let selling_points: Vec<String> = result
         .get("sellingPoints")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).map(str::trim).map(str::to_string).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let cover_prompt = result
         .get("coverPrompt")
@@ -433,7 +453,11 @@ pub async fn packaging_generate(
         format!("## Intro\n{intro}"),
         format!(
             "## Selling Points\n{}",
-            selling_points.iter().map(|point| format!("- {point}")).collect::<Vec<_>>().join("\n")
+            selling_points
+                .iter()
+                .map(|point| format!("- {point}"))
+                .collect::<Vec<_>>()
+                .join("\n")
         ),
         format!("## Cover Prompt\n{cover_prompt}"),
     ]
@@ -482,27 +506,57 @@ fn as_short_draft_batch(
                     .iter()
                     .map(|chapter| ShortFictionChapter {
                         number: chapter.get("number").and_then(Value::as_u64).unwrap_or(0) as u32,
-                        title: chapter.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
-                        content: chapter.get("content").and_then(Value::as_str).unwrap_or_default().to_string(),
+                        title: chapter
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        content: chapter
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                         char_count: 0,
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         return Ok((
-            result.get("storyTitle").and_then(Value::as_str).unwrap_or_default().to_string(),
-            result.get("openingHook").and_then(Value::as_str).map(str::to_string),
+            result
+                .get("storyTitle")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            result
+                .get("openingHook")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             chapters,
         ));
     }
     if result.get("number").is_some() {
         return Ok((
-            result.get("storyTitle").and_then(Value::as_str).unwrap_or_default().to_string(),
-            result.get("openingHook").and_then(Value::as_str).map(str::to_string),
+            result
+                .get("storyTitle")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            result
+                .get("openingHook")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             vec![ShortFictionChapter {
                 number: result.get("number").and_then(Value::as_u64).unwrap_or(0) as u32,
-                title: result.get("title").and_then(Value::as_str).unwrap_or_default().to_string(),
-                content: result.get("content").and_then(Value::as_str).unwrap_or_default().to_string(),
+                title: result
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                content: result
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
                 char_count: 0,
             }],
         ));
@@ -528,8 +582,15 @@ fn as_short_draft_batch(
         })
         .collect();
     Ok((
-        result.get("storyTitle").and_then(Value::as_str).unwrap_or_default().to_string(),
-        result.get("openingHook").and_then(Value::as_str).map(str::to_string),
+        result
+            .get("storyTitle")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        result
+            .get("openingHook")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         chapters,
     ))
 }
@@ -549,7 +610,11 @@ pub(crate) fn validate_requested_short_chapter(
         result_tool: Some("short-fiction writer".into()),
     };
     if let Some(title) = input.title {
-        let submitted = result.get("storyTitle").and_then(Value::as_str).unwrap_or_default().trim();
+        let submitted = result
+            .get("storyTitle")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim();
         if submitted != title.trim() {
             return Err(fail(
                 "SHORT_TITLE_MISMATCH",
@@ -557,16 +622,29 @@ pub(crate) fn validate_requested_short_chapter(
             ));
         }
     }
-    let (story_title, opening_hook, chapters) =
-        as_short_draft_batch(result, Some(numbers)).map_err(|message| fail("SHORT_BATCH_INVALID", message))?;
+    let (story_title, opening_hook, chapters) = as_short_draft_batch(result, Some(numbers))
+        .map_err(|message| fail("SHORT_BATCH_INVALID", message))?;
     if chapters.len() != numbers.len()
-        || chapters.iter().any(|chapter| !numbers.contains(&chapter.number))
-        || chapters.iter().map(|chapter| chapter.number).collect::<std::collections::BTreeSet<_>>().len()
+        || chapters
+            .iter()
+            .any(|chapter| !numbers.contains(&chapter.number))
+        || chapters
+            .iter()
+            .map(|chapter| chapter.number)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
             != chapters.len()
     {
         return Err(fail(
             "SHORT_REVISION_OUT_OF_SCOPE",
-            format!("Submit only chapters {}", numbers.iter().map(|number| number.to_string()).collect::<Vec<_>>().join(", ")),
+            format!(
+                "Submit only chapters {}",
+                numbers
+                    .iter()
+                    .map(|number| number.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         ));
     }
     if enforce_length {
@@ -618,7 +696,12 @@ pub(crate) fn validate_requested_short_chapter(
 pub async fn writer_write_draft(
     agents: &ShortAgents,
     input: &WriteDraftInput<'_>,
-    mut on_batch_complete: impl FnMut(&ShortFictionBatchDraft, &[u32]) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send>>,
+    mut on_batch_complete: impl FnMut(
+        &ShortFictionBatchDraft,
+        &[u32],
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), String>> + Send>,
+    >,
 ) -> Result<WriteDraftOutcome, StructuredAgentError> {
     let chapter_numbers: Vec<u32> = input
         .chapter_numbers
@@ -653,13 +736,17 @@ pub async fn writer_write_draft(
             input.language,
         );
         let messages =
-        agents.messages_with_prelude(vec![llm_system(&system), llm_user(&user)], true);
+            agents.messages_with_prelude(vec![llm_system(&system), llm_user(&user)], true);
         let schema = if chapter_batch.len() == 1 {
             short_draft_chapter_tool_schema()
         } else {
             short_flat_batch_tool_schema(chapter_batch, input.title, input.opening_hook_chars)
         };
-        let tool_name = if chapter_batch.len() == 1 { "submit_short_chapter" } else { "submit_short_draft_batch" };
+        let tool_name = if chapter_batch.len() == 1 {
+            "submit_short_chapter"
+        } else {
+            "submit_short_draft_batch"
+        };
         // validate 闭包捕获取字段所有权快照（WriteDraftInput 含引用不可整体克隆）。
         let batch_numbers = chapter_batch.clone();
         let title_owned = input.title.map(str::to_string);
@@ -684,16 +771,12 @@ pub async fn writer_write_draft(
                     chapter_numbers: None,
                     language,
                 };
-                let (story_title, opening_hook, chapters) = validate_requested_short_chapter(
-                    &value,
-                    &batch_numbers,
-                    &input_view,
-                    false,
-                )
-                .map_err(|error| super::structured_agent::StructuredToolError {
-                    code: Some(error.code),
-                    message: error.message,
-                })?;
+                let (story_title, opening_hook, chapters) =
+                    validate_requested_short_chapter(&value, &batch_numbers, &input_view, false)
+                        .map_err(|error| super::structured_agent::StructuredToolError {
+                            code: Some(error.code),
+                            message: error.message,
+                        })?;
                 let payload = serde_json::json!({
                     "storyTitle": story_title,
                     "openingHook": opening_hook,
@@ -725,7 +808,10 @@ pub async fn writer_write_draft(
             },
             Some(validate),
             Vec::new(),
-            StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+            StructuredRunOptions {
+                temperature: None,
+                max_tokens: Some(max_tokens),
+            },
         )
         .await?;
         usage_total.prompt_tokens += outcome.usage.prompt_tokens;
@@ -746,11 +832,13 @@ pub async fn writer_write_draft(
             opening_hook.as_deref(),
             &chapters
                 .into_iter()
-                .map(|chapter| super::short_fiction::ShortDraftChapterSubmission {
-                    number: chapter.number,
-                    title: chapter.title,
-                    content: chapter.content,
-                })
+                .map(
+                    |chapter| super::short_fiction::ShortDraftChapterSubmission {
+                        number: chapter.number,
+                        title: chapter.title,
+                        content: chapter.content,
+                    },
+                )
                 .collect::<Vec<_>>(),
             input.chapter_count,
             input.language,
@@ -806,7 +894,10 @@ pub async fn writer_write_draft(
             result_tool: Some("short-fiction writer".into()),
         });
     };
-    Ok(WriteDraftOutcome { draft, usage: usage_total })
+    Ok(WriteDraftOutcome {
+        draft,
+        usage: usage_total,
+    })
 }
 
 // ── ReviewerAgent：submitSourcedReview 等价 ──────────────────────────
@@ -966,17 +1057,26 @@ pub async fn reviewer_review_draft(
                 .get("observationCodes")
                 .and_then(Value::as_array)
                 .map(|items| {
-                    items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
                 })
                 .unwrap_or_default();
-            let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let recorded = recorded
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let unknown: Vec<String> = codes
                 .iter()
                 .filter(|code| !recorded.contains_key(*code))
                 .cloned()
                 .collect();
             if !unknown.is_empty()
-                || codes.iter().collect::<std::collections::BTreeSet<_>>().len() != codes.len()
+                || codes
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != codes.len()
             {
                 return Err(super::structured_agent::StructuredToolError::coded(
                     "REVIEW_OBSERVATIONS_UNRECORDED",
@@ -1009,23 +1109,35 @@ pub async fn reviewer_review_draft(
         agents.defaults.clone(),
         WorkerToolSpec {
             name: "submit_short_fiction_review".into(),
-            description: "Submit evidence-backed observations for the persisted short-fiction draft.".into(),
+            description:
+                "Submit evidence-backed observations for the persisted short-fiction draft.".into(),
             parameters_schema: index_schema,
             max_turns: Some(16),
         },
         Some(validate),
         supporting,
-        StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+        StructuredRunOptions {
+            temperature: None,
+            max_tokens: Some(max_tokens),
+        },
     )
     .await?;
 
     // 依最终 codes 顺序 resolve recorded 条目。
-    let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let recorded = recorded
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let codes: Vec<String> = outcome
         .result
         .get("observationCodes")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let submissions: Vec<ReviewObservationSubmission> = codes
         .iter()
@@ -1054,11 +1166,21 @@ pub async fn reviewer_review_draft(
 // ── helpers ──────────────────────────────────────────────────────────
 
 fn llm_system(content: &str) -> LLMMessage {
-    LLMMessage { role: crate::llm::provider::LLMRole::System, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: crate::llm::provider::LLMRole::System,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 fn llm_user(content: &str) -> LLMMessage {
-    LLMMessage { role: crate::llm::provider::LLMRole::User, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: crate::llm::provider::LLMRole::User,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 use std::sync::Mutex;
@@ -1119,16 +1241,15 @@ pub async fn reviewer_review_package(
 ) -> Result<ReviewOutcome, StructuredAgentError> {
     let package_markdown =
         super::short_fiction::render_short_fiction_sales_package(input.sales, language);
-    let manuscript_markdown = super::short_fiction::render_short_fiction_draft_markdown(
-        input.draft,
-        language,
-    )
-    .map_err(|error| StructuredAgentError {
-        code: "WORKER_DOMAIN_INVALID".into(),
-        message: error.message,
-        attempts: None,
-        result_tool: Some("submit_short_package_review".into()),
-    })?;
+    let manuscript_markdown =
+        super::short_fiction::render_short_fiction_draft_markdown(input.draft, language).map_err(
+            |error| StructuredAgentError {
+                code: "WORKER_DOMAIN_INVALID".into(),
+                message: error.message,
+                attempts: None,
+                result_tool: Some("submit_short_package_review".into()),
+            },
+        )?;
     // TS Map 插入序：package → manuscript。
     let sources_vec: Vec<(String, String)> = vec![
         ("package".into(), package_markdown),
@@ -1151,10 +1272,8 @@ pub async fn reviewer_review_package(
         .collect::<Vec<_>>()
         .join("\n\n");
     // professionalGuidance=false：authorRequest 前置不注入（TS 同参语义）。
-    let mut messages = agents.messages_with_prelude(
-        vec![llm_system(system), llm_user(&user)],
-        false,
-    );
+    let mut messages =
+        agents.messages_with_prelude(vec![llm_system(system), llm_user(&user)], false);
     messages.extend([
         llm_system(
             "The original author request and confirmed constraints define the acceptance requirements. Prior critiques and delegated revision suggestions are claims to recheck, not evidence that a defect exists or additional author requirements. Assess the current text independently. Explain why an issue conflicts with the author goals or the supplied text; classify a compatible interpretation or stylistic alternative as an observation. Baseline text establishes what changed, not what is still present in the current draft.",
@@ -1245,17 +1364,26 @@ pub async fn reviewer_review_package(
                 .get("observationCodes")
                 .and_then(Value::as_array)
                 .map(|items| {
-                    items.iter().filter_map(|item| item.as_str().map(str::to_string)).collect()
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(str::to_string))
+                        .collect()
                 })
                 .unwrap_or_default();
-            let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let recorded = recorded
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let unknown: Vec<String> = codes
                 .iter()
                 .filter(|code| !recorded.contains_key(*code))
                 .cloned()
                 .collect();
             if !unknown.is_empty()
-                || codes.iter().collect::<std::collections::BTreeSet<_>>().len() != codes.len()
+                || codes
+                    .iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    != codes.len()
             {
                 return Err(super::structured_agent::StructuredToolError::coded(
                     "REVIEW_OBSERVATIONS_UNRECORDED",
@@ -1289,22 +1417,34 @@ pub async fn reviewer_review_package(
         agents.defaults.clone(),
         WorkerToolSpec {
             name: "submit_short_package_review".into(),
-            description: "Submit source-grounded findings about the package factual promises.".into(),
+            description: "Submit source-grounded findings about the package factual promises."
+                .into(),
             parameters_schema: index_schema,
             max_turns: Some(16),
         },
         Some(validate),
         supporting,
-        StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+        StructuredRunOptions {
+            temperature: None,
+            max_tokens: Some(max_tokens),
+        },
     )
     .await?;
 
-    let recorded = recorded.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let recorded = recorded
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let codes: Vec<String> = outcome
         .result
         .get("observationCodes")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
     let submissions: Vec<ReviewObservationSubmission> = codes
         .iter()
@@ -1319,7 +1459,9 @@ pub async fn reviewer_review_package(
         })
         .and_then(|observations| {
             validate_package_review_pairs(&observations).map_err(|error| StructuredAgentError {
-                code: error.code.unwrap_or_else(|| "SHORT_PACKAGE_REVIEW_PAIR_REQUIRED".into()),
+                code: error
+                    .code
+                    .unwrap_or_else(|| "SHORT_PACKAGE_REVIEW_PAIR_REQUIRED".into()),
                 message: error.message,
                 attempts: Some(outcome.turns),
                 result_tool: Some("submit_short_package_review".into()),
@@ -1343,12 +1485,12 @@ pub async fn reviewer_review_package(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::production::structured_agent::{
-        ChatTurnError, ChatTurnResponse, ChatTurnToolCall,
-    };
+    use crate::production::structured_agent::{ChatTurnError, ChatTurnResponse, ChatTurnToolCall};
     use std::collections::VecDeque;
 
-    fn scripted(script: Vec<ChatTurnResponse>) -> (ShortAgents, Arc<Mutex<Vec<CapturedAgentCall>>>) {
+    fn scripted(
+        script: Vec<ChatTurnResponse>,
+    ) -> (ShortAgents, Arc<Mutex<Vec<CapturedAgentCall>>>) {
         let captured: Arc<Mutex<Vec<CapturedAgentCall>>> = Arc::new(Mutex::new(Vec::new()));
         let captured_for_fn = Arc::clone(&captured);
         let script = Arc::new(Mutex::new(VecDeque::from(script)));
@@ -1368,13 +1510,18 @@ mod tests {
             let tools = request.tools.clone();
             let tool_choice = request.tool_choice.map(str::to_string);
             Box::pin(async move {
-                captured_for_fn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(CapturedAgentCall {
-                    system,
-                    user,
-                    tools,
-                    tool_choice,
-                });
-                let mut queue = script.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                captured_for_fn
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(CapturedAgentCall {
+                        system,
+                        user,
+                        tools,
+                        tool_choice,
+                    });
+                let mut queue = script
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 queue.pop_front().ok_or_else(|| ChatTurnError {
                     message: "script exhausted".into(),
                     output_limit: false,
@@ -1384,7 +1531,10 @@ mod tests {
         let agents = ShortAgents {
             chat,
             model: "test-model".into(),
-            defaults: StructuredDefaults { temperature: 0.7, max_tokens: 8192 },
+            defaults: StructuredDefaults {
+                temperature: 0.7,
+                max_tokens: 8192,
+            },
             author_request: None,
         };
         (agents, captured)
@@ -1416,17 +1566,21 @@ mod tests {
         }
     }
 
-    const GOLDEN_OUTLINE_RAW: &str = "## 总纲\n\n雨夜碎镜，以镜换名。\n\n## 第1章\n\n换名之夜。\n\n## 第2章\n\n窥影初现。";
+    const GOLDEN_OUTLINE_RAW: &str =
+        "## 总纲\n\n雨夜碎镜，以镜换名。\n\n## 第1章\n\n换名之夜。\n\n## 第2章\n\n窥影初现。";
 
     #[tokio::test]
     async fn outline_golden_mock_response_to_raw_content_bytes() {
         // 同 mock 响应 → 同 rawContent 拼接字节（planMarkdown + 逐章标题段）。
-        let (agents, captured) = scripted(vec![tool_response("submit_short_outline", serde_json::json!({
-            "storyTitle": "雨夜碎镜",
-            "planMarkdown": "## 总纲\n\n雨夜碎镜，以镜换名。",
-            "chapter_1_plan": "换名之夜。",
-            "chapter_2_plan": "窥影初现。",
-        }))]);
+        let (agents, captured) = scripted(vec![tool_response(
+            "submit_short_outline",
+            serde_json::json!({
+                "storyTitle": "雨夜碎镜",
+                "planMarkdown": "## 总纲\n\n雨夜碎镜，以镜换名。",
+                "chapter_1_plan": "换名之夜。",
+                "chapter_2_plan": "窥影初现。",
+            }),
+        )]);
         let outcome = outline_create_outline(
             &agents,
             &OutlineInput {
@@ -1443,7 +1597,9 @@ mod tests {
         assert_eq!(outcome.story_title, "雨夜碎镜");
         assert_eq!(outcome.raw_content, GOLDEN_OUTLINE_RAW);
         // 形态面：schema 的 chapter_N_plan 动态键 + tool_choice required。
-        let call = &captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0];
+        let call = &captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())[0];
         assert_eq!(call.tools[0]["function"]["name"], "submit_short_outline");
         assert!(call.tools[0]["function"]["parameters"]["properties"]
             .get("chapter_2_plan")
@@ -1466,15 +1622,23 @@ mod tests {
             }],
             raw_content: String::new(),
         };
-        let (agents, _captured) = scripted(vec![tool_response("submit_short_package", serde_json::json!({
-            "title": "雨夜碎镜",
-            "intro": "一个以镜换名的故事。",
-            "sellingPoints": ["短", "冷"],
-            "coverPrompt": "碎镜中的雨夜。",
-        }))]);
+        let (agents, _captured) = scripted(vec![tool_response(
+            "submit_short_package",
+            serde_json::json!({
+                "title": "雨夜碎镜",
+                "intro": "一个以镜换名的故事。",
+                "sellingPoints": ["短", "冷"],
+                "coverPrompt": "碎镜中的雨夜。",
+            }),
+        )]);
         let sales = packaging_generate(
             &agents,
-            &PackageInput { direction: "雨夜来客的故事", draft: &draft, language: WritingLanguage::Zh, revision: None },
+            &PackageInput {
+                direction: "雨夜来客的故事",
+                draft: &draft,
+                language: WritingLanguage::Zh,
+                revision: None,
+            },
         )
         .await
         .unwrap();
@@ -1487,14 +1651,17 @@ mod tests {
     #[tokio::test]
     async fn writer_write_draft_flat_batch_merges_in_order() {
         // 批次（≤预算 → 单批全章）：flat schema 响应 → merge → rawContent 渲染。
-        let (agents, captured) = scripted(vec![tool_response("submit_short_draft_batch", serde_json::json!({
-            "storyTitle": "雨夜碎镜",
-            "openingHook": "雨夜来客叩门。",
-            "chapter_1_title": "换名",
-            "chapter_1_content": "斋主以镜换名，来客留下一个再未使用的名字。",
-            "chapter_2_title": "窥影",
-            "chapter_2_content": "镜中人影与来客同貌，交易自此刻开始。",
-        }))]);
+        let (agents, captured) = scripted(vec![tool_response(
+            "submit_short_draft_batch",
+            serde_json::json!({
+                "storyTitle": "雨夜碎镜",
+                "openingHook": "雨夜来客叩门。",
+                "chapter_1_title": "换名",
+                "chapter_1_content": "斋主以镜换名，来客留下一个再未使用的名字。",
+                "chapter_2_title": "窥影",
+                "chapter_2_content": "镜中人影与来客同貌，交易自此刻开始。",
+            }),
+        )]);
         let outcome = writer_write_draft(
             &agents,
             &WriteDraftInput {
@@ -1522,8 +1689,13 @@ mod tests {
             "# 雨夜碎镜\n\n## 开篇钩子\n\n雨夜来客叩门。\n\n## 第1章 换名\n\n斋主以镜换名，来客留下一个再未使用的名字。\n\n## 第2章 窥影\n\n镜中人影与来客同貌，交易自此刻开始。"
         );
         // flat schema 的动态键面（chapter_N_title/content）+ openingHook 描述注入。
-        let call = &captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0];
-        assert_eq!(call.tools[0]["function"]["name"], "submit_short_draft_batch");
+        let call = &captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())[0];
+        assert_eq!(
+            call.tools[0]["function"]["name"],
+            "submit_short_draft_batch"
+        );
         assert!(call.tools[0]["function"]["parameters"]["properties"]
             .get("chapter_2_content")
             .is_some());
@@ -1535,18 +1707,24 @@ mod tests {
         let outline = "## 总纲\n\n雨夜碎镜，以镜换名。";
         let (agents, _captured) = scripted(vec![
             // 轮 1：record 一条观察（行区间引用）。
-            tool_response("record_review_observation", serde_json::json!({
-                "code": "PLOT-1",
-                "summary": "大纲与正文冲突。",
-                "category": "quality",
-                "assessment": "issue",
-                "sourceRefs": [{ "sourceId": "outline", "startLine": 1, "endLine": 1 }],
-            })),
+            tool_response(
+                "record_review_observation",
+                serde_json::json!({
+                    "code": "PLOT-1",
+                    "summary": "大纲与正文冲突。",
+                    "category": "quality",
+                    "assessment": "issue",
+                    "sourceRefs": [{ "sourceId": "outline", "startLine": 1, "endLine": 1 }],
+                }),
+            ),
             // 轮 2：终审 summary + codes。
-            tool_response("submit_short_fiction_review", serde_json::json!({
-                "summary": "一处大纲差异。",
-                "observationCodes": ["PLOT-1"],
-            })),
+            tool_response(
+                "submit_short_fiction_review",
+                serde_json::json!({
+                    "summary": "一处大纲差异。",
+                    "observationCodes": ["PLOT-1"],
+                }),
+            ),
         ]);
         let draft = ShortFictionBatchDraft {
             story_title: "雨夜碎镜".into(),
@@ -1581,7 +1759,10 @@ mod tests {
         assert_eq!(observation.code, "PLOT-1");
         let source_refs = observation.source_refs.as_ref().unwrap();
         assert_eq!(source_refs[0].source_id, "outline");
-        assert_eq!(source_refs[0].quote, "## 总纲", "行区间宿主截取（1 基含尾）");
+        assert_eq!(
+            source_refs[0].quote, "## 总纲",
+            "行区间宿主截取（1 基含尾）"
+        );
     }
 
     #[tokio::test]
@@ -1594,10 +1775,13 @@ mod tests {
                     // json! 数组元素用预构造标识符（内联 format! 表达式会触发
                     // json_internal 数组臂的 delimiter 解析问题）。
                     let code = Value::String(format!("GHOST-{index}"));
-                    tool_response("submit_short_fiction_review", serde_json::json!({
-                        "summary": "占位",
-                        "observationCodes": [code],
-                    }))
+                    tool_response(
+                        "submit_short_fiction_review",
+                        serde_json::json!({
+                            "summary": "占位",
+                            "observationCodes": [code],
+                        }),
+                    )
                 })
                 .collect(),
         );

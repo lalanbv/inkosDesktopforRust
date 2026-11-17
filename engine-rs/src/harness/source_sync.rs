@@ -17,8 +17,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::contracts::{
-    validate_work_resource_id, ArtifactManifest, ArtifactRevision, WorkManifest, WorkStatus,
-    ArtifactRevisionStatus,
+    validate_work_resource_id, ArtifactManifest, ArtifactRevision, ArtifactRevisionStatus,
+    WorkManifest, WorkStatus,
 };
 use super::work_store::{load_work_manifest, manifest_to_json, work_directory, WorkStoreError};
 use crate::utils::atomic_file_set::{
@@ -102,7 +102,10 @@ pub async fn sync_work_source_artifacts(
     // 是同一写集合的两处引用，Rust 侧以字节快照解耦所有权）。
     let mut pending: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for write in &input.writes {
-        let path = relative_to_source(&format!("works/{}/source", input.work_id), &write.relative_path)?;
+        let path = relative_to_source(
+            &format!("works/{}/source", input.work_id),
+            &write.relative_path,
+        )?;
         pending.insert(path, file_content_bytes(&write.content));
     }
     // TS acceptPaths 逐个 toPosixPath 归一后再比对。
@@ -118,25 +121,33 @@ pub async fn sync_work_source_artifacts(
 
     let present_work_paths: BTreeSet<String> =
         files.iter().map(|file| format!("source/{file}")).collect();
-    let updated_at =
-        input.updated_at.clone().unwrap_or_else(crate::utils::utc_time::utc_now_iso);
+    let updated_at = input
+        .updated_at
+        .clone()
+        .unwrap_or_else(crate::utils::utc_time::utc_now_iso);
 
     let mut artifacts: Vec<ArtifactManifest> = manifest.artifacts.clone();
     let mut snapshot_writes: Vec<AtomicFileWrite> = Vec::new();
 
     for file in &files {
         let work_path = format!("source/{file}");
-        let accept_item =
-            input.accept && accept_paths.as_ref().map(|paths| paths.iter().any(|p| p == &work_path)).unwrap_or(true);
+        let accept_item = input.accept
+            && accept_paths
+                .as_ref()
+                .map(|paths| paths.iter().any(|p| p == &work_path))
+                .unwrap_or(true);
         let bytes: Vec<u8> = match pending.get(file) {
             Some(bytes) => bytes.clone(),
             None => read_artifact_bytes(&source_root.join(file)).await?,
         };
         let checksum = format!("sha256:{}", hex_sha256(&bytes));
         let revision_id = revision_id_for(&checksum);
-        let existing_index = artifacts
-            .iter()
-            .position(|artifact| artifact.revisions.iter().any(|revision| revision.path == work_path));
+        let existing_index = artifacts.iter().position(|artifact| {
+            artifact
+                .revisions
+                .iter()
+                .any(|revision| revision.path == work_path)
+        });
         let artifact_id = match existing_index {
             Some(index) => artifacts[index].id.clone(),
             None => artifact_id_for(file),
@@ -164,11 +175,18 @@ pub async fn sync_work_source_artifacts(
                 "sourcePath".into(),
                 Value::String(format!("works/{}/{}", input.work_id, work_path)),
             );
-            metadata.insert("kindSource".into(), Value::String(SOURCE_KIND_VERSION.into()));
+            metadata.insert(
+                "kindSource".into(),
+                Value::String(SOURCE_KIND_VERSION.into()),
+            );
             artifacts.push(ArtifactManifest {
                 id: artifact_id.clone(),
                 kind: artifact_kind_for(&work_path),
-                current_revision_id: if accept_item { Some(revision.id.clone()) } else { None },
+                current_revision_id: if accept_item {
+                    Some(revision.id.clone())
+                } else {
+                    None
+                },
                 revisions: vec![revision],
                 metadata,
             });
@@ -193,9 +211,10 @@ pub async fn sync_work_source_artifacts(
             || (kind_source.is_none() && native_source && legacy_default_kind)
         {
             existing.kind = artifact_kind_for(&work_path);
-            existing
-                .metadata
-                .insert("kindSource".into(), Value::String(SOURCE_KIND_VERSION.into()));
+            existing.metadata.insert(
+                "kindSource".into(),
+                Value::String(SOURCE_KIND_VERSION.into()),
+            );
             artifacts[index] = existing.clone();
         }
         let mut current = existing
@@ -234,9 +253,13 @@ pub async fn sync_work_source_artifacts(
                         "Source changed before revision commit".into(),
                     ));
                 }
-                let previous_snapshot = revision_snapshot_path(&artifact_id, &current_revision.id, file);
-                snapshot_writes
-                    .push(snapshot_write(input.work_id, &previous_snapshot, previous_bytes));
+                let previous_snapshot =
+                    revision_snapshot_path(&artifact_id, &current_revision.id, file);
+                snapshot_writes.push(snapshot_write(
+                    input.work_id,
+                    &previous_snapshot,
+                    previous_bytes,
+                ));
                 existing.revisions = existing
                     .revisions
                     .iter()
@@ -329,7 +352,11 @@ pub async fn sync_work_source_artifacts(
         existing.revisions = next_revisions;
         artifacts[index] = existing;
         // TS `if (!prior?.snapshotPath)`：新修订或复用修订缺快照时补写。
-        if prior.as_ref().map(|item| item.snapshot_path.is_none()).unwrap_or(true) {
+        if prior
+            .as_ref()
+            .map(|item| item.snapshot_path.is_none())
+            .unwrap_or(true)
+        {
             snapshot_writes.push(snapshot_write(input.work_id, &snapshot_path, bytes));
         }
     }
@@ -370,12 +397,19 @@ pub async fn sync_work_source_artifacts(
                 }
             })
             .collect();
-        artifact.metadata.insert("removedAt".into(), Value::String(updated_at.clone()));
-        artifact.metadata.insert("removedPath".into(), Value::String(current.path.clone()));
+        artifact
+            .metadata
+            .insert("removedAt".into(), Value::String(updated_at.clone()));
+        artifact
+            .metadata
+            .insert("removedPath".into(), Value::String(current.path.clone()));
     }
 
     let next = WorkManifest {
-        title: input.title.map(str::to_string).unwrap_or(manifest.title.clone()),
+        title: input
+            .title
+            .map(str::to_string)
+            .unwrap_or(manifest.title.clone()),
         status: input.status.unwrap_or(match manifest.status {
             WorkStatus::Archived => WorkStatus::Archived,
             _ if input.accept => WorkStatus::Active,
@@ -414,11 +448,17 @@ pub async fn sync_work_source_artifacts(
             .map(|artifact| SyncEvidenceArtifact {
                 artifact_id: artifact.id.clone(),
                 current_revision_id: artifact.current_revision_id.clone(),
-                latest_revision_id: artifact.revisions.last().map(|revision| revision.id.clone()),
+                latest_revision_id: artifact
+                    .revisions
+                    .last()
+                    .map(|revision| revision.id.clone()),
             })
             .collect(),
     };
-    Ok(SyncWorkSourceOutput { manifest: next, evidence })
+    Ok(SyncWorkSourceOutput {
+        manifest: next,
+        evidence,
+    })
 }
 
 /// TS `captureWorkSourceState`：源目录全量字节指纹（键 = `source/` 相对 posix
@@ -459,7 +499,10 @@ pub async fn capture_work_source_state(
         let digest = hasher.finalize();
         state.insert(
             to_posix_path(&format!("source/{file}")),
-            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
         );
     }
     Ok(state)
@@ -493,11 +536,16 @@ pub async fn changed_work_source_paths(
 /// 后的 `..` 段检查（TS path.relative 归一化输出再判 "../" 前缀的等价实现）。
 fn relative_to_source(prefix: &str, relative_path: &str) -> Result<String, SyncError> {
     let source_prefix = format!("{prefix}/");
-    let path = relative_path
-        .strip_prefix(&source_prefix)
-        .ok_or_else(|| SyncError::Invalid("Artifact write must remain inside Work source".to_string()))?;
-    if to_posix_path(path).split('/').any(|segment| segment == "..") {
-        return Err(SyncError::Invalid("Artifact write must remain inside Work source".to_string()));
+    let path = relative_path.strip_prefix(&source_prefix).ok_or_else(|| {
+        SyncError::Invalid("Artifact write must remain inside Work source".to_string())
+    })?;
+    if to_posix_path(path)
+        .split('/')
+        .any(|segment| segment == "..")
+    {
+        return Err(SyncError::Invalid(
+            "Artifact write must remain inside Work source".to_string(),
+        ));
     }
     Ok(to_posix_path(path))
 }
@@ -692,7 +740,10 @@ fn list_files(root: &Path) -> Result<Vec<String>, SyncError> {
             .map_err(|error| SyncError::Io(error.to_string()))?
             .filter_map(|entry| entry.ok().map(|entry| entry.path()))
             .collect();
-        paths.sort_by_key(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()));
+        paths.sort_by_key(|path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
         for path in paths {
             let name = path
                 .file_name()
@@ -760,7 +811,8 @@ async fn read_artifact_bytes(path: &Path) -> Result<Vec<u8>, SyncError> {
         }
         drop(source);
         drop(destination);
-        let bytes = std::fs::read(&snapshot_path).map_err(|error| SyncError::Io(error.to_string()))?;
+        let bytes =
+            std::fs::read(&snapshot_path).map_err(|error| SyncError::Io(error.to_string()))?;
         drop(guard);
         Ok(bytes)
     })

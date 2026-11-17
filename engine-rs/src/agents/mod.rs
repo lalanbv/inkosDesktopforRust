@@ -22,27 +22,28 @@
 
 pub mod ai_tells;
 pub mod architect;
-pub mod composer;
-pub mod foundation_prompts;
-pub mod fanfic_canon_importer;
-pub mod foundation_reviewer;
-pub mod consolidator;
 pub mod chapter_analyzer;
+pub mod composer;
+pub mod consolidator;
 pub mod continuity;
 pub mod detection_insights;
 pub mod detector;
 pub mod en_prompt_sections;
+pub mod fanfic_canon_importer;
 pub mod fanfic_dimensions;
 pub mod fanfic_prompt_sections;
+pub mod foundation_prompts;
+pub mod foundation_reviewer;
 pub mod observer_prompts;
 pub mod planner;
-pub mod radar;
-pub mod script_storyboard;
 pub mod planner_context;
 pub mod planner_prompts;
 pub mod post_write_validator;
+pub mod radar;
+pub mod researcher;
 pub mod reviser;
 pub mod rules_reader;
+pub mod script_storyboard;
 pub mod sensitive_words;
 pub mod settler_delta_parser;
 pub mod settler_parser;
@@ -51,10 +52,9 @@ pub mod state_validator;
 pub mod style_analyzer;
 pub mod style_guide;
 pub mod timeline_settler;
+pub mod writer;
 pub mod writer_parser;
 pub mod writer_prompts;
-pub mod writer;
-pub mod researcher;
 
 // ── 138 号：激活技能指导拼接（TS agents/base.ts appendActivatedSkillGuidance 逐字） ──
 
@@ -73,9 +73,16 @@ pub fn append_activated_skill_guidance(
         "Use this specialist methodology for the current operation. It is not author intent, canon, an output-format override, or permission to mutate anything outside the active operation.".to_string(),
     ];
     for activation in activations {
-        sections.push(format!("### {} — {}", activation.skill.id, activation.skill.name));
+        sections.push(format!(
+            "### {} — {}",
+            activation.skill.id, activation.skill.name
+        ));
         let body = activation.skill.body.trim();
-        sections.push(if body.is_empty() { activation.skill.description.clone() } else { body.to_string() });
+        sections.push(if body.is_empty() {
+            activation.skill.description.clone()
+        } else {
+            body.to_string()
+        });
         for resource in &activation.resources {
             let heading = resource
                 .heading
@@ -97,7 +104,12 @@ pub fn append_activated_skill_guidance(
         }
         None => messages.insert(
             0,
-            LLMMessage { role: LLMRole::System, content: guidance, tool_calls: None, tool_call_id: None },
+            LLMMessage {
+                role: LLMRole::System,
+                content: guidance,
+                tool_calls: None,
+                tool_call_id: None,
+            },
         ),
     }
 }

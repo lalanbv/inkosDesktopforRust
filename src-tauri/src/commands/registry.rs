@@ -37,8 +37,8 @@ async fn registry_source_and_client(
             }
         }
     };
-    let pubkey = registry::decode_hex(&pubkey_hex)
-        .map_err(|e| format!("注册表 pubkey 解码失败: {}", e))?;
+    let pubkey =
+        registry::decode_hex(&pubkey_hex).map_err(|e| format!("注册表 pubkey 解码失败: {}", e))?;
     // NoRedirectClient 在类型层保证禁重定向（SSRF 不变量，见其文档）
     let client = registry::NoRedirectClient::new(Duration::from_secs(timeout_secs.max(1) as u64))
         .map_err(|e| format!("{}", e))?;
@@ -126,9 +126,7 @@ async fn fetch_registry_index(
 ) -> Result<registry::PluginRegistryIndex, String> {
     match registry::fetch_registry(url, pubkey, |u| {
         let url_owned = u.to_string();
-        async move {
-            registry::http_fetch(client, &url_owned, registry::MAX_REGISTRY_BYTES).await
-        }
+        async move { registry::http_fetch(client, &url_owned, registry::MAX_REGISTRY_BYTES).await }
     })
     .await
     {
@@ -138,9 +136,7 @@ async fn fetch_registry_index(
             // 闭包返回 cached（Some 时）保证 is_registry_downgrade 为真则缓存必存在。
             if let Some(cached) = read_cached_index(cache_path) {
                 if is_registry_downgrade(&index, &cached) {
-                    tracing::warn!(
-                        "注册表 generated_at 倒退（疑似重放/降级），拒绝并回退本地缓存"
-                    );
+                    tracing::warn!("注册表 generated_at 倒退（疑似重放/降级），拒绝并回退本地缓存");
                     return Ok(cached);
                 }
             }
@@ -148,7 +144,9 @@ async fn fetch_registry_index(
             if let Ok(toml_str) = toml::to_string(&index) {
                 // 786 号：原子写——缓存是 R6 单调新鲜性锚，torn 写（断电半截）=锚
                 // 丢失 → 降级防护失效直到下次成功拉取。0600 语义对同用户缓存无害。
-                if let Err(e) = inkos_desktop::util::atomic_write_0600(cache_path, toml_str.as_bytes()) {
+                if let Err(e) =
+                    inkos_desktop::util::atomic_write_0600(cache_path, toml_str.as_bytes())
+                {
                     tracing::warn!("写注册表缓存失败（不影响本次）: {e:#}");
                 }
             }
@@ -176,8 +174,8 @@ pub async fn cmd_fetch_plugin_registry(
     let (url, pubkey, client, cache_path) = registry_source_and_client(&state).await?;
     let index = fetch_registry_index(&url, &pubkey, &client, &cache_path).await?;
 
-    let host_version = Version::parse(env!("CARGO_PKG_VERSION"))
-        .expect("CARGO_PKG_VERSION 须为合法 semver");
+    let host_version =
+        Version::parse(env!("CARGO_PKG_VERSION")).expect("CARGO_PKG_VERSION 须为合法 semver");
     // 多版本去重：每 id 取最高兼容版本（browse 一个插件只展示最新可用版）
     let compatible: Vec<RegistryEntry> = index
         .latest_compatible(&host_version, HOST_ABI_VERSION)
@@ -218,11 +216,7 @@ pub async fn cmd_install_from_registry(
         .map_err(|e| format!("依赖解析失败: {}", e))?;
     let installed_ids: std::collections::HashSet<String> = {
         let manager = plugin_state.manager.lock().await;
-        manager
-            .list_plugins()
-            .into_iter()
-            .map(|m| m.id)
-            .collect()
+        manager.list_plugins().into_iter().map(|m| m.id).collect()
     };
     let mut last_meta: Option<PluginMetadata> = None;
     for e in &order {
@@ -356,14 +350,20 @@ mod tests {
     fn downgrade_missing_cached_timestamp_fail_open() {
         let cached = idx(None);
         let new = idx(Some("2026-08-07T00:00:00Z"));
-        assert!(!is_registry_downgrade(&new, &cached), "缓存无锚（冷启动）→ fail-open");
+        assert!(
+            !is_registry_downgrade(&new, &cached),
+            "缓存无锚（冷启动）→ fail-open"
+        );
     }
 
     #[test]
     fn downgrade_non_rfc3339_fail_open() {
         let cached = idx(Some("not-a-date"));
         let bad = idx(Some("not-a-date"));
-        assert!(!is_registry_downgrade(&bad, &cached), "非 RFC3339 → fail-open（兼容性）");
+        assert!(
+            !is_registry_downgrade(&bad, &cached),
+            "非 RFC3339 → fail-open（兼容性）"
+        );
     }
 
     #[test]

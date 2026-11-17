@@ -12,38 +12,66 @@ use ts_rs::TS;
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]
 pub enum InteractionIntentType {
-    #[serde(rename = "develop_book")] DevelopBook,
-    #[serde(rename = "show_book_draft")] ShowBookDraft,
-    #[serde(rename = "create_book")] CreateBook,
-    #[serde(rename = "discard_book_draft")] DiscardBookDraft,
-    #[serde(rename = "list_books")] ListBooks,
-    #[serde(rename = "select_book")] SelectBook,
-    #[serde(rename = "continue_book")] ContinueBook,
-    #[serde(rename = "write_next")] WriteNext,
-    #[serde(rename = "pause_book")] PauseBook,
-    #[serde(rename = "resume_book")] ResumeBook,
-    #[serde(rename = "revise_chapter")] ReviseChapter,
-    #[serde(rename = "rewrite_chapter")] RewriteChapter,
-    #[serde(rename = "patch_chapter_text")] PatchChapterText,
-    #[serde(rename = "replace_chapter_text")] ReplaceChapterText,
-    #[serde(rename = "edit_truth")] EditTruth,
-    #[serde(rename = "rename_entity")] RenameEntity,
-    #[serde(rename = "update_focus")] UpdateFocus,
-    #[serde(rename = "update_author_intent")] UpdateAuthorIntent,
-    #[serde(rename = "chat")] Chat,
-    #[serde(rename = "explain_status")] ExplainStatus,
-    #[serde(rename = "explain_failure")] ExplainFailure,
-    #[serde(rename = "export_book")] ExportBook,
+    #[serde(rename = "develop_book")]
+    DevelopBook,
+    #[serde(rename = "show_book_draft")]
+    ShowBookDraft,
+    #[serde(rename = "create_book")]
+    CreateBook,
+    #[serde(rename = "discard_book_draft")]
+    DiscardBookDraft,
+    #[serde(rename = "list_books")]
+    ListBooks,
+    #[serde(rename = "select_book")]
+    SelectBook,
+    #[serde(rename = "continue_book")]
+    ContinueBook,
+    #[serde(rename = "write_next")]
+    WriteNext,
+    #[serde(rename = "pause_book")]
+    PauseBook,
+    #[serde(rename = "resume_book")]
+    ResumeBook,
+    #[serde(rename = "revise_chapter")]
+    ReviseChapter,
+    #[serde(rename = "rewrite_chapter")]
+    RewriteChapter,
+    #[serde(rename = "patch_chapter_text")]
+    PatchChapterText,
+    #[serde(rename = "replace_chapter_text")]
+    ReplaceChapterText,
+    #[serde(rename = "edit_truth")]
+    EditTruth,
+    #[serde(rename = "rename_entity")]
+    RenameEntity,
+    #[serde(rename = "update_focus")]
+    UpdateFocus,
+    #[serde(rename = "update_author_intent")]
+    UpdateAuthorIntent,
+    #[serde(rename = "chat")]
+    Chat,
+    #[serde(rename = "explain_status")]
+    ExplainStatus,
+    #[serde(rename = "explain_failure")]
+    ExplainFailure,
+    #[serde(rename = "export_book")]
+    ExportBook,
 }
 
 /// 导出格式。对齐 TS `z.enum(["txt","md","epub"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"txt\" | \"md\" | \"epub\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"txt\" | \"md\" | \"epub\"")
+)]
 pub enum ExportFormat {
-    #[serde(rename = "txt")] Txt,
-    #[serde(rename = "md")] Md,
-    #[serde(rename = "epub")] Epub,
+    #[serde(rename = "txt")]
+    Txt,
+    #[serde(rename = "md")]
+    Md,
+    #[serde(rename = "epub")]
+    Epub,
 }
 
 /// 交互请求（intent + 可选上下文字段）。对齐 TS `InteractionRequestSchema`。
@@ -120,8 +148,14 @@ mod tests {
 
     #[test]
     fn intent_serializes() {
-        assert_eq!(serde_json::to_string(&InteractionIntentType::WriteNext).unwrap(), "\"write_next\"");
-        assert_eq!(serde_json::to_string(&InteractionIntentType::PatchChapterText).unwrap(), "\"patch_chapter_text\"");
+        assert_eq!(
+            serde_json::to_string(&InteractionIntentType::WriteNext).unwrap(),
+            "\"write_next\""
+        );
+        assert_eq!(
+            serde_json::to_string(&InteractionIntentType::PatchChapterText).unwrap(),
+            "\"patch_chapter_text\""
+        );
     }
 
     #[test]

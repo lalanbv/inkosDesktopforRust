@@ -3,8 +3,8 @@
 //! 唯一事实源 = `packages/core/src/__tests__/golden/entity-codex-vectors.json`。
 
 use inkos_engine::utils::entity_codex::{
-    derive_codex_cards, match_codex_cards, render_codex_block, revise_codex_card, CodexRosterEntity,
-    CodexRevision, EntityCodexCard,
+    derive_codex_cards, match_codex_cards, render_codex_block, revise_codex_card, CodexRevision,
+    CodexRosterEntity, EntityCodexCard,
 };
 use inkos_engine::utils::language::WritingLanguage;
 use serde_json::Value;
@@ -29,7 +29,8 @@ fn derive_matches_shared_vectors() {
         let got = derive_codex_cards(&roster);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "derive vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -47,7 +48,8 @@ fn revise_matches_shared_vectors() {
         let got = revise_codex_card(&base, &revision);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "revise vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -81,7 +83,8 @@ fn match_matches_shared_vectors() {
             })
             .collect();
         assert_eq!(
-            got_pairs, expected_pairs,
+            got_pairs,
+            expected_pairs,
             "match vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -101,7 +104,11 @@ fn render_matches_shared_vectors() {
         let got = render_codex_block(&matches, language);
         let expected = &vector["expected"];
         if expected.is_null() {
-            assert!(got.is_none(), "render vector '{}' should be none", vector["name"].as_str().unwrap());
+            assert!(
+                got.is_none(),
+                "render vector '{}' should be none",
+                vector["name"].as_str().unwrap()
+            );
             continue;
         }
         assert_eq!(

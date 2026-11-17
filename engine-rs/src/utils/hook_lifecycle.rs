@@ -6,7 +6,8 @@
 
 use crate::models::runtime_state::{HookPayoffTiming, HookRecord, HookStatus};
 use crate::utils::hook_policy::{
-    activity_thresholds, hook_phase_weight, hook_timing_profile, pressure_weights, resolve_hook_phase, HookPhase,
+    activity_thresholds, hook_phase_weight, hook_timing_profile, pressure_weights,
+    resolve_hook_phase, HookPhase,
 };
 use regex::Regex;
 use std::sync::OnceLock;
@@ -90,7 +91,10 @@ pub fn filter_active_hooks(hooks: &[HookRecord]) -> Vec<HookRecord> {
         .filter(|h| {
             // HookRecord.status 已是强类型 HookStatus，直接按变体判断
             //（805 号：superseded=已撤回前提，非活跃债务）
-            let active = !matches!(h.status, HookStatus::Resolved | HookStatus::Deferred | HookStatus::Superseded);
+            let active = !matches!(
+                h.status,
+                HookStatus::Resolved | HookStatus::Deferred | HookStatus::Superseded
+            );
             active && h.promoted != Some(false)
         })
         .cloned()
@@ -103,7 +107,12 @@ pub fn is_future_planned_hook(hook: &HookRecord, chapter_number: u32, lookahead:
 }
 
 /// hook 是否在章节窗口内（最近推进 / 起点在窗口）。
-pub fn is_hook_within_chapter_window(hook: &HookRecord, chapter_number: u32, recent_window: u32, lookahead: u32) -> bool {
+pub fn is_hook_within_chapter_window(
+    hook: &HookRecord,
+    chapter_number: u32,
+    recent_window: u32,
+    lookahead: u32,
+) -> bool {
     let recent_cutoff = chapter_number.saturating_sub(recent_window);
     if hook.last_advanced_chapter > 0 && hook.last_advanced_chapter >= recent_cutoff {
         return true;
@@ -170,7 +179,10 @@ fn parse_timing(s: &str) -> HookPayoffTiming {
 }
 
 /// 由 expectedPayoff + notes 推断节奏（信号词匹配）。默认 mid-arc。
-pub fn infer_hook_payoff_timing(expected_payoff: Option<&str>, notes: Option<&str>) -> HookPayoffTiming {
+pub fn infer_hook_payoff_timing(
+    expected_payoff: Option<&str>,
+    notes: Option<&str>,
+) -> HookPayoffTiming {
     let parts: Vec<&str> = [expected_payoff.unwrap_or(""), notes.unwrap_or("")]
         .iter()
         .filter(|s| !s.trim().is_empty())
@@ -206,12 +218,20 @@ pub fn infer_hook_payoff_timing(expected_payoff: Option<&str>, notes: Option<&st
 }
 
 /// 解析回收节奏：显式 payoffTiming 优先，否则推断。
-pub fn resolve_hook_payoff_timing(payoff_timing: Option<&str>, expected_payoff: Option<&str>, notes: Option<&str>) -> HookPayoffTiming {
-    normalize_hook_payoff_timing(payoff_timing).unwrap_or_else(|| infer_hook_payoff_timing(expected_payoff, notes))
+pub fn resolve_hook_payoff_timing(
+    payoff_timing: Option<&str>,
+    expected_payoff: Option<&str>,
+    notes: Option<&str>,
+) -> HookPayoffTiming {
+    normalize_hook_payoff_timing(payoff_timing)
+        .unwrap_or_else(|| infer_hook_payoff_timing(expected_payoff, notes))
 }
 
 /// 本地化节奏标签。
-pub fn localize_hook_payoff_timing(timing: HookPayoffTiming, language: crate::utils::language::WritingLanguage) -> &'static str {
+pub fn localize_hook_payoff_timing(
+    timing: HookPayoffTiming,
+    language: crate::utils::language::WritingLanguage,
+) -> &'static str {
     use crate::utils::language::WritingLanguage;
     match (timing, language) {
         (HookPayoffTiming::Immediate, WritingLanguage::En) => "immediate",
@@ -277,19 +297,48 @@ pub fn describe_hook_lifecycle(
 
     let advance_pressure = age
         + dormancy
-        + if stale { pressure_weights::STALE_ADVANCE_BONUS } else { 0 }
-        + if overdue { pressure_weights::OVERDUE_ADVANCE_BONUS } else { 0 };
+        + if stale {
+            pressure_weights::STALE_ADVANCE_BONUS
+        } else {
+            0
+        }
+        + if overdue {
+            pressure_weights::OVERDUE_ADVANCE_BONUS
+        } else {
+            0
+        };
 
     let resolve_pressure = if ready_to_resolve {
         profile.resolve_bias * pressure_weights::RESOLVE_BIAS_MULTIPLIER
-        + if explicit_progressing { pressure_weights::PROGRESSING_RESOLVE_BONUS } else { 0 }
-        + std::cmp::min(pressure_weights::MAX_DORMANCY_RESOLVE_BONUS, dormancy * pressure_weights::DORMANCY_RESOLVE_MULTIPLIER)
-        + if overdue { pressure_weights::OVERDUE_RESOLVE_BONUS } else { 0 }
+            + if explicit_progressing {
+                pressure_weights::PROGRESSING_RESOLVE_BONUS
+            } else {
+                0
+            }
+            + std::cmp::min(
+                pressure_weights::MAX_DORMANCY_RESOLVE_BONUS,
+                dormancy * pressure_weights::DORMANCY_RESOLVE_MULTIPLIER,
+            )
+            + if overdue {
+                pressure_weights::OVERDUE_RESOLVE_BONUS
+            } else {
+                0
+            }
     } else {
         0
     };
 
-    HookLifecycleDescription { timing, phase, age, dormancy, ready_to_resolve, stale, overdue, advance_pressure, resolve_pressure }
+    HookLifecycleDescription {
+        timing,
+        phase,
+        age,
+        dormancy,
+        ready_to_resolve,
+        stale,
+        overdue,
+        advance_pressure,
+        resolve_pressure,
+    }
 }
 
 // 触发未用 import 警告规避
@@ -304,23 +353,47 @@ mod tests {
 
     #[test]
     fn normalize_status() {
-        assert_eq!(normalize_stored_hook_status("resolved"), HookStatus::Resolved);
+        assert_eq!(
+            normalize_stored_hook_status("resolved"),
+            HookStatus::Resolved
+        );
         assert_eq!(normalize_stored_hook_status("已回收"), HookStatus::Resolved);
-        assert_eq!(normalize_stored_hook_status("deferred"), HookStatus::Deferred);
-        assert_eq!(normalize_stored_hook_status("progressing"), HookStatus::Progressing);
+        assert_eq!(
+            normalize_stored_hook_status("deferred"),
+            HookStatus::Deferred
+        );
+        assert_eq!(
+            normalize_stored_hook_status("progressing"),
+            HookStatus::Progressing
+        );
         assert_eq!(normalize_stored_hook_status("unknown"), HookStatus::Open);
         // 805 号：撤回终态别名（TS HOOK_STATUS_ALIASES superseded 组同集）
-        assert_eq!(normalize_stored_hook_status("superseded"), HookStatus::Superseded);
-        assert_eq!(normalize_stored_hook_status(" Withdrawn "), HookStatus::Superseded);
-        assert_eq!(normalize_stored_hook_status("已撤回"), HookStatus::Superseded);
+        assert_eq!(
+            normalize_stored_hook_status("superseded"),
+            HookStatus::Superseded
+        );
+        assert_eq!(
+            normalize_stored_hook_status(" Withdrawn "),
+            HookStatus::Superseded
+        );
+        assert_eq!(
+            normalize_stored_hook_status("已撤回"),
+            HookStatus::Superseded
+        );
     }
 
     /// 805 号：serde 名 ↔ 规范名 ↔ 词表三向同形（渲染→md→解析往返无损）。
     #[test]
     fn superseded_round_trips_through_serde_canonical_and_alias_table() {
         assert_eq!(hook_status_canonical(HookStatus::Superseded), "superseded");
-        assert_eq!(serde_json::to_string(&HookStatus::Superseded).unwrap(), "\"superseded\"");
-        assert_eq!(serde_json::from_str::<HookStatus>("\"superseded\"").unwrap(), HookStatus::Superseded);
+        assert_eq!(
+            serde_json::to_string(&HookStatus::Superseded).unwrap(),
+            "\"superseded\""
+        );
+        assert_eq!(
+            serde_json::from_str::<HookStatus>("\"superseded\"").unwrap(),
+            HookStatus::Superseded
+        );
         assert_eq!(
             normalize_stored_hook_status(hook_status_canonical(HookStatus::Superseded)),
             HookStatus::Superseded
@@ -355,36 +428,75 @@ mod tests {
             mk("later", HookStatus::Deferred),
             mk("live", HookStatus::Progressing),
         ];
-        let ids: Vec<_> = filter_active_hooks(&hooks).into_iter().map(|h| h.hook_id).collect();
+        let ids: Vec<_> = filter_active_hooks(&hooks)
+            .into_iter()
+            .map(|h| h.hook_id)
+            .collect();
         assert_eq!(ids, vec!["open", "live"]);
     }
 
     #[test]
     fn normalize_payoff_timing_aliases() {
-        assert_eq!(normalize_hook_payoff_timing(Some("立即")), Some(HookPayoffTiming::Immediate));
-        assert_eq!(normalize_hook_payoff_timing(Some("near-term")), Some(HookPayoffTiming::NearTerm));
-        assert_eq!(normalize_hook_payoff_timing(Some("endgame")), Some(HookPayoffTiming::Endgame));
+        assert_eq!(
+            normalize_hook_payoff_timing(Some("立即")),
+            Some(HookPayoffTiming::Immediate)
+        );
+        assert_eq!(
+            normalize_hook_payoff_timing(Some("near-term")),
+            Some(HookPayoffTiming::NearTerm)
+        );
+        assert_eq!(
+            normalize_hook_payoff_timing(Some("endgame")),
+            Some(HookPayoffTiming::Endgame)
+        );
         assert_eq!(normalize_hook_payoff_timing(Some("bogus")), None);
         assert_eq!(normalize_hook_payoff_timing(None), None);
     }
 
     #[test]
     fn infer_from_signal() {
-        assert_eq!(infer_hook_payoff_timing(Some("本章揭晓"), None), HookPayoffTiming::Immediate);
-        assert_eq!(infer_hook_payoff_timing(Some(""), Some("终局摊牌")), HookPayoffTiming::Endgame);
-        assert_eq!(infer_hook_payoff_timing(None, None), HookPayoffTiming::MidArc);
+        assert_eq!(
+            infer_hook_payoff_timing(Some("本章揭晓"), None),
+            HookPayoffTiming::Immediate
+        );
+        assert_eq!(
+            infer_hook_payoff_timing(Some(""), Some("终局摊牌")),
+            HookPayoffTiming::Endgame
+        );
+        assert_eq!(
+            infer_hook_payoff_timing(None, None),
+            HookPayoffTiming::MidArc
+        );
     }
 
     #[test]
     fn resolve_prefers_explicit() {
-        assert_eq!(resolve_hook_payoff_timing(Some("endgame"), Some("本章"), None), HookPayoffTiming::Endgame);
-        assert_eq!(resolve_hook_payoff_timing(None, Some("本章"), None), HookPayoffTiming::Immediate);
+        assert_eq!(
+            resolve_hook_payoff_timing(Some("endgame"), Some("本章"), None),
+            HookPayoffTiming::Endgame
+        );
+        assert_eq!(
+            resolve_hook_payoff_timing(None, Some("本章"), None),
+            HookPayoffTiming::Immediate
+        );
     }
 
     #[test]
     fn localize() {
-        assert_eq!(localize_hook_payoff_timing(HookPayoffTiming::Immediate, crate::utils::language::WritingLanguage::Zh), "立即");
-        assert_eq!(localize_hook_payoff_timing(HookPayoffTiming::Endgame, crate::utils::language::WritingLanguage::En), "endgame");
+        assert_eq!(
+            localize_hook_payoff_timing(
+                HookPayoffTiming::Immediate,
+                crate::utils::language::WritingLanguage::Zh
+            ),
+            "立即"
+        );
+        assert_eq!(
+            localize_hook_payoff_timing(
+                HookPayoffTiming::Endgame,
+                crate::utils::language::WritingLanguage::En
+            ),
+            "endgame"
+        );
     }
 
     #[test]

@@ -45,11 +45,15 @@ pub fn open_play_graph_db(run_dir: &Path) -> Result<PlayGraphDb, String> {
     if sqlite_path.is_file() {
         let conn = rusqlite::Connection::open(&sqlite_path).map_err(|e| e.to_string())?;
         ensure_sqlite_schema(&conn)?;
-        Ok(PlayGraphDb { backend: Backend::Sqlite { conn } })
+        Ok(PlayGraphDb {
+            backend: Backend::Sqlite { conn },
+        })
     } else {
         let path = run_dir.join("play-graph.json");
         let data = load_file_data(&path);
-        Ok(PlayGraphDb { backend: Backend::File { path, data } })
+        Ok(PlayGraphDb {
+            backend: Backend::File { path, data },
+        })
     }
 }
 
@@ -142,7 +146,11 @@ impl PlayGraphDb {
     }
 
     pub fn upsert_entity(&mut self, entity: &Value) -> Result<(), String> {
-        let id = entity.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = entity
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if id.is_empty() {
             return Ok(());
         }
@@ -172,7 +180,11 @@ impl PlayGraphDb {
     }
 
     pub fn upsert_edge(&mut self, edge: &Value) -> Result<(), String> {
-        let id = edge.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = edge
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if id.is_empty() {
             return Ok(());
         }
@@ -182,10 +194,17 @@ impl PlayGraphDb {
                 Ok(())
             }
             Backend::Sqlite { conn } => {
-                let text = |name: &str| edge.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
-                let value_json = serde_json::to_string(edge.get("value").unwrap_or(&json!({}))).unwrap_or_else(|_| "{}".into());
+                let text = |name: &str| {
+                    edge.get(name)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let value_json = serde_json::to_string(edge.get("value").unwrap_or(&json!({})))
+                    .unwrap_or_else(|_| "{}".into());
                 let visibility_json =
-                    serde_json::to_string(edge.get("visibility").unwrap_or(&json!({}))).unwrap_or_else(|_| "{}".into());
+                    serde_json::to_string(edge.get("visibility").unwrap_or(&json!({})))
+                        .unwrap_or_else(|_| "{}".into());
                 conn.execute(
                     "INSERT OR REPLACE INTO edges (id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength, confidence) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     rusqlite::params![
@@ -230,7 +249,11 @@ impl PlayGraphDb {
     }
 
     pub fn upsert_state_slot(&mut self, slot: &Value) -> Result<(), String> {
-        let id = slot.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = slot
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if id.is_empty() {
             return Ok(());
         }
@@ -240,8 +263,14 @@ impl PlayGraphDb {
                 Ok(())
             }
             Backend::Sqlite { conn } => {
-                let text = |name: &str| slot.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
-                let value_json = serde_json::to_string(slot.get("value").unwrap_or(&Value::Null)).unwrap_or_else(|_| "null".into());
+                let text = |name: &str| {
+                    slot.get(name)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let value_json = serde_json::to_string(slot.get("value").unwrap_or(&Value::Null))
+                    .unwrap_or_else(|_| "null".into());
                 conn.execute(
                     "INSERT OR REPLACE INTO state_slots (id, owner_entity_id, kind, label, value_json, updated_event) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     rusqlite::params![
@@ -275,10 +304,9 @@ impl PlayGraphDb {
                     Err(_) => return Vec::new(),
                 };
                 let Ok(rows) = stmt.query_map([entity_id], |row| {
-                    let value: Value = serde_json::from_str(
-                        row.get::<_, String>(4).unwrap_or_default().as_str(),
-                    )
-                    .unwrap_or(Value::Null);
+                    let value: Value =
+                        serde_json::from_str(row.get::<_, String>(4).unwrap_or_default().as_str())
+                            .unwrap_or(Value::Null);
                     Ok(json!({
                         "id": row.get::<_, String>(0)?,
                         "ownerEntityId": row.get::<_, Option<String>>(1)?,
@@ -296,7 +324,11 @@ impl PlayGraphDb {
     }
 
     pub fn record_event(&mut self, event: &Value) -> Result<(), String> {
-        let id = event.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = event
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if id.is_empty() {
             return Ok(());
         }
@@ -306,7 +338,13 @@ impl PlayGraphDb {
                 Ok(())
             }
             Backend::Sqlite { conn } => {
-                let text = |name: &str| event.get(name).and_then(Value::as_str).unwrap_or_default().to_string();
+                let text = |name: &str| {
+                    event
+                        .get(name)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
+                };
                 conn.execute(
                     "INSERT OR REPLACE INTO events (id, turn, action_kind, raw_input, outcome_summary, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     rusqlite::params![
@@ -354,7 +392,8 @@ impl PlayGraphDb {
                 Backend::Sqlite { conn } => conn,
                 Backend::File { .. } => unreachable!(),
             };
-            conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+            conn.execute_batch("BEGIN IMMEDIATE")
+                .map_err(|e| e.to_string())?;
             // conn 的可变借用在此结束（NLL）；f 需要 &mut Self。
             match f(self) {
                 Ok(value) => {
@@ -436,7 +475,10 @@ fn persist_file(path: &Path, data: &FileData) -> Result<(), String> {
         "stateSlots": to_record(&data.state_slots),
         "events": to_record(&data.events),
     });
-    let serialized = format!("{}\n", serde_json::to_string_pretty(&payload).unwrap_or_default());
+    let serialized = format!(
+        "{}\n",
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
     crate::utils::atomic_file_set::write_file_atomic_sync(path, serialized.as_bytes())
         .map_err(|e| e.to_string())
 }
@@ -524,7 +566,11 @@ fn snapshot_from_sqlite(conn: &rusqlite::Connection) -> Value {
 }
 
 fn id_of(value: &Value) -> String {
-    value.get("id").and_then(Value::as_str).unwrap_or_default().to_string()
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn turn_of(value: &Value) -> i64 {
@@ -535,7 +581,14 @@ fn turn_of(value: &Value) -> i64 {
 
 const PLAYER_ENTITY_ID: &str = "actor_player";
 const EVIDENCE_ORDER: &[&str] = &[
-    "unknown", "hinted", "seen", "collected", "verified", "weaponized", "exposed", "exhausted",
+    "unknown",
+    "hinted",
+    "seen",
+    "collected",
+    "verified",
+    "weaponized",
+    "exposed",
+    "exhausted",
 ];
 
 #[derive(Debug)]
@@ -555,7 +608,10 @@ pub fn apply_play_mutation(
     let mutation = resolve_edge_endpoint_labels(db, &mutation);
     let event = build_event(&mutation, raw_input);
     validate_mutation(db, &mutation)?;
-    let blocked = mutation.get("blocked").and_then(Value::as_bool).unwrap_or(false);
+    let blocked = mutation
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let event_clone = event.clone();
     db.with_transaction(|tx| {
         tx.record_event(&event_clone)?;
@@ -572,7 +628,10 @@ pub fn seed_play_graph(db: &mut PlayGraphDb, mutation: &Value) -> Result<(), Str
     let mutation = canonicalize_player_entity_ids(mutation);
     let mutation = resolve_edge_endpoint_labels(db, &mutation);
     validate_mutation(db, &mutation)?;
-    let blocked = mutation.get("blocked").and_then(Value::as_bool).unwrap_or(false);
+    let blocked = mutation
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if blocked {
         return Ok(());
     }
@@ -618,7 +677,10 @@ fn canonicalize_player_entity_ids(mutation: &Value) -> Value {
             }
         }
     }
-    if let Some(upserts) = next.pointer_mut("/edges/upsert").and_then(Value::as_array_mut) {
+    if let Some(upserts) = next
+        .pointer_mut("/edges/upsert")
+        .and_then(Value::as_array_mut)
+    {
         for edge in upserts {
             for field in ["fromId", "toId"] {
                 if let Some(value) = edge.get(field).cloned() {
@@ -629,7 +691,10 @@ fn canonicalize_player_entity_ids(mutation: &Value) -> Value {
             }
         }
     }
-    if let Some(upserts) = next.pointer_mut("/stateSlots/upsert").and_then(Value::as_array_mut) {
+    if let Some(upserts) = next
+        .pointer_mut("/stateSlots/upsert")
+        .and_then(Value::as_array_mut)
+    {
         for slot in upserts {
             if let Some(owner) = slot.get("ownerEntityId").cloned() {
                 if !owner.is_null() {
@@ -660,10 +725,18 @@ fn resolve_edge_endpoint_labels(db: &PlayGraphDb, mutation: &Value) -> Value {
         return mutation.clone();
     }
     let mut next = mutation.clone();
-    if let Some(edges) = next.pointer_mut("/edges/upsert").and_then(Value::as_array_mut) {
+    if let Some(edges) = next
+        .pointer_mut("/edges/upsert")
+        .and_then(Value::as_array_mut)
+    {
         for edge in edges {
             for field in ["fromId", "toId"] {
-                let raw = edge.get(field).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+                let raw = edge
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
                 if let Some(mapped) = alias_map.get(&raw) {
                     if let Some(obj) = edge.as_object_mut() {
                         obj.insert(field.to_string(), json!(mapped));
@@ -675,15 +748,13 @@ fn resolve_edge_endpoint_labels(db: &PlayGraphDb, mutation: &Value) -> Value {
     next
 }
 
-fn build_entity_alias_map(
-    db: &PlayGraphDb,
-    turn_entities: &[Value],
-) -> HashMap<String, String> {
+fn build_entity_alias_map(db: &PlayGraphDb, turn_entities: &[Value]) -> HashMap<String, String> {
     let mut aliases: HashMap<String, String> = HashMap::new();
     let mut ambiguous: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let add = |alias: Option<&str>, entity_id: Option<&str>,
-                   aliases: &mut HashMap<String, String>,
-                   ambiguous: &mut std::collections::HashSet<String>| {
+    let add = |alias: Option<&str>,
+               entity_id: Option<&str>,
+               aliases: &mut HashMap<String, String>,
+               ambiguous: &mut std::collections::HashSet<String>| {
         let alias = alias.map(str::trim).filter(|a| !a.is_empty());
         let id = entity_id.map(str::trim).filter(|i| !i.is_empty());
         let (Some(alias), Some(id)) = (alias, id) else {
@@ -702,15 +773,31 @@ fn build_entity_alias_map(
     };
     for entity in snapshot_entities(db) {
         let id = entity.get("id").and_then(Value::as_str).map(str::to_string);
-        let label = entity.get("label").and_then(Value::as_str).map(str::to_string);
+        let label = entity
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         add(id.as_deref(), id.as_deref(), &mut aliases, &mut ambiguous);
-        add(label.as_deref(), id.as_deref(), &mut aliases, &mut ambiguous);
+        add(
+            label.as_deref(),
+            id.as_deref(),
+            &mut aliases,
+            &mut ambiguous,
+        );
     }
     for entity in turn_entities {
         let id = entity.get("id").and_then(Value::as_str).map(str::to_string);
-        let label = entity.get("label").and_then(Value::as_str).map(str::to_string);
+        let label = entity
+            .get("label")
+            .and_then(Value::as_str)
+            .map(str::to_string);
         add(id.as_deref(), id.as_deref(), &mut aliases, &mut ambiguous);
-        add(label.as_deref(), id.as_deref(), &mut aliases, &mut ambiguous);
+        add(
+            label.as_deref(),
+            id.as_deref(),
+            &mut aliases,
+            &mut ambiguous,
+        );
     }
     aliases
 }
@@ -760,15 +847,18 @@ fn validate_mutation(db: &PlayGraphDb, mutation: &Value) -> Result<(), String> {
         .into_iter()
         .flatten()
     {
-        let entity_id = transition.get("entityId").and_then(Value::as_str).unwrap_or_default();
+        let entity_id = transition
+            .get("entityId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let entity = if upserted.contains(entity_id) {
             mutation
                 .pointer("/entities/upsert")
                 .and_then(Value::as_array)
                 .and_then(|items| {
-                    items
-                        .iter()
-                        .find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(entity_id))
+                    items.iter().find(|candidate| {
+                        candidate.get("id").and_then(Value::as_str) == Some(entity_id)
+                    })
                 })
                 .cloned()
         } else {
@@ -779,7 +869,10 @@ fn validate_mutation(db: &PlayGraphDb, mutation: &Value) -> Result<(), String> {
                 "Play mutation references missing entity in evidence transition: {entity_id}"
             ));
         };
-        let entity_type = entity.get("type").and_then(Value::as_str).unwrap_or_default();
+        let entity_type = entity
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if entity_type != "evidence" && entity_type != "clue" {
             return Err(format!(
                 "Play evidence transition requires evidence or clue entity: {entity_id}"
@@ -793,7 +886,10 @@ fn validate_mutation(db: &PlayGraphDb, mutation: &Value) -> Result<(), String> {
                 ));
             }
         }
-        let to = transition.get("to").and_then(Value::as_str).unwrap_or_default();
+        let to = transition
+            .get("to")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if evidence_rank(to) < evidence_rank(&current) {
             return Err(format!(
                 "Play evidence transition cannot regress from {current} to {to}"
@@ -823,7 +919,10 @@ fn apply_graph_changes(db: &mut PlayGraphDb, mutation: &Value) -> Result<(), Str
         .into_iter()
         .flatten()
     {
-        let edge_id = expire.get("edgeId").and_then(Value::as_str).unwrap_or_default();
+        let edge_id = expire
+            .get("edgeId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let until = expire
             .get("validUntilEventId")
             .and_then(Value::as_str)
@@ -837,10 +936,12 @@ fn apply_graph_changes(db: &mut PlayGraphDb, mutation: &Value) -> Result<(), Str
         .into_iter()
         .flatten()
     {
-        let from = edge.get("fromId").and_then(Value::as_str).unwrap_or_default();
+        let from = edge
+            .get("fromId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let to = edge.get("toId").and_then(Value::as_str).unwrap_or_default();
-        let endpoint_exists =
-            |id: &str| upserted.contains(id) || db.get_entity(id).is_some();
+        let endpoint_exists = |id: &str| upserted.contains(id) || db.get_entity(id).is_some();
         if endpoint_exists(from) && endpoint_exists(to) {
             let target = if upserted.contains(to) {
                 upsert_entities
@@ -861,14 +962,20 @@ fn apply_graph_changes(db: &mut PlayGraphDb, mutation: &Value) -> Result<(), Str
     {
         db.upsert_state_slot(&normalize_state_slot(slot))?;
     }
-    let event_id = mutation.get("eventId").and_then(Value::as_str).unwrap_or_default();
+    let event_id = mutation
+        .get("eventId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     for transition in mutation
         .pointer("/evidence/transitions")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
-        let entity_id = transition.get("entityId").and_then(Value::as_str).unwrap_or_default();
+        let entity_id = transition
+            .get("entityId")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         db.upsert_state_slot(&json!({
             "id": evidence_status_slot_id(entity_id),
             "ownerEntityId": entity_id,
@@ -988,7 +1095,8 @@ mod tests {
     use super::*;
 
     fn mutation(event_id: &str, turn: i64, body: Value) -> Value {
-        let mut base = json!({ "eventId": event_id, "turn": turn, "actionKind": "do", "blocked": false });
+        let mut base =
+            json!({ "eventId": event_id, "turn": turn, "actionKind": "do", "blocked": false });
         if let (Some(obj), Some(body_obj)) = (base.as_object_mut(), body.as_object()) {
             for (key, value) in body_obj {
                 obj.insert(key.clone(), value.clone());
@@ -1002,25 +1110,32 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut db = open_play_graph_db(dir.path()).unwrap();
         // legacy "player" 规范化 + holding 边目标为 actor（非物理）→ observed。
-        let m = mutation("evt-1", 1, json!({
-            "summary": "玩家捡起钥匙",
-            "entities": { "upsert": [
-                { "id": "player", "type": "actor", "label": "旅人", "summary": "" },
-                { "id": "item_key", "type": "item", "label": "铜钥匙" },
-                { "id": "actor_ghost", "type": "actor", "label": "看门人" }
-            ]},
-            "edges": { "upsert": [
-                { "id": "e1", "fromId": "player", "type": "持有", "toId": "item_key",
-                  "value": { "role": "holding" }, "validFromEventId": "evt-1", "sourceEventId": "evt-1" },
-                { "id": "e2", "fromId": "player", "type": "信任", "toId": "看门人",
-                  "value": { "role": "relation" }, "validFromEventId": "evt-1", "sourceEventId": "evt-1" }
-            ]}
-        }));
+        let m = mutation(
+            "evt-1",
+            1,
+            json!({
+                "summary": "玩家捡起钥匙",
+                "entities": { "upsert": [
+                    { "id": "player", "type": "actor", "label": "旅人", "summary": "" },
+                    { "id": "item_key", "type": "item", "label": "铜钥匙" },
+                    { "id": "actor_ghost", "type": "actor", "label": "看门人" }
+                ]},
+                "edges": { "upsert": [
+                    { "id": "e1", "fromId": "player", "type": "持有", "toId": "item_key",
+                      "value": { "role": "holding" }, "validFromEventId": "evt-1", "sourceEventId": "evt-1" },
+                    { "id": "e2", "fromId": "player", "type": "信任", "toId": "看门人",
+                      "value": { "role": "relation" }, "validFromEventId": "evt-1", "sourceEventId": "evt-1" }
+                ]}
+            }),
+        );
         let applied = apply_play_mutation(&mut db, &m, "捡起钥匙").unwrap();
         assert!(!applied.blocked);
         let snapshot = db.snapshot();
         let entities = snapshot["entities"].as_array().unwrap();
-        assert!(entities.iter().any(|e| e["id"] == "actor_player"), "player → actor_player");
+        assert!(
+            entities.iter().any(|e| e["id"] == "actor_player"),
+            "player → actor_player"
+        );
         // 别名解析：edges 的 toId "看门人" 应映射到实体 id actor_ghost。
         let edges = snapshot["edges"].as_array().unwrap();
         let trust = edges.iter().find(|e| e["id"] == "e2").unwrap();
@@ -1037,24 +1152,36 @@ mod tests {
     fn reducer_fail_open_edges_and_slot_clamp() {
         let dir = tempfile::tempdir().unwrap();
         let mut db = open_play_graph_db(dir.path()).unwrap();
-        let m = mutation("evt-1", 1, json!({
-            "entities": { "upsert": [ { "id": "actor_player", "type": "actor", "label": "旅人" } ]},
-            "edges": { "upsert": [
-                { "id": "dangling", "fromId": "actor_player", "type": "知道", "toId": "ghost_entity",
-                  "value": {}, "validFromEventId": "evt-1", "sourceEventId": "evt-1" }
-            ]},
-            "stateSlots": { "upsert": [
-                { "id": "hp", "ownerEntityId": "actor_player", "kind": "resource", "label": "体力",
-                  "value": { "current": 12, "min": 0, "max": 10 }, "updatedEventId": "evt-1" }
-            ]}
-        }));
+        let m = mutation(
+            "evt-1",
+            1,
+            json!({
+                "entities": { "upsert": [ { "id": "actor_player", "type": "actor", "label": "旅人" } ]},
+                "edges": { "upsert": [
+                    { "id": "dangling", "fromId": "actor_player", "type": "知道", "toId": "ghost_entity",
+                      "value": {}, "validFromEventId": "evt-1", "sourceEventId": "evt-1" }
+                ]},
+                "stateSlots": { "upsert": [
+                    { "id": "hp", "ownerEntityId": "actor_player", "kind": "resource", "label": "体力",
+                      "value": { "current": 12, "min": 0, "max": 10 }, "updatedEventId": "evt-1" }
+                ]}
+            }),
+        );
         apply_play_mutation(&mut db, &m, "x").unwrap();
         let snapshot = db.snapshot();
         // 悬空边跳过（fail-open）。
         let edges = snapshot["edges"].as_array().unwrap();
-        assert!(edges.iter().all(|e| e["id"] != "dangling"), "edges: {edges:?}");
+        assert!(
+            edges.iter().all(|e| e["id"] != "dangling"),
+            "edges: {edges:?}"
+        );
         // 数值槽夹取到 max。
-        let slot = snapshot["stateSlots"].as_array().unwrap().iter().find(|s| s["id"] == "hp").unwrap();
+        let slot = snapshot["stateSlots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "hp")
+            .unwrap();
         assert_eq!(slot["value"]["current"].as_f64(), Some(10.0));
     }
 
@@ -1062,34 +1189,55 @@ mod tests {
     fn reducer_evidence_lifecycle_and_regression_guard() {
         let dir = tempfile::tempdir().unwrap();
         let mut db = open_play_graph_db(dir.path()).unwrap();
-        let seed = mutation("evt-0", 0, json!({
-            "entities": { "upsert": [ { "id": "clue_1", "type": "clue", "label": "血迹" } ]}
-        }));
+        let seed = mutation(
+            "evt-0",
+            0,
+            json!({
+                "entities": { "upsert": [ { "id": "clue_1", "type": "clue", "label": "血迹" } ]}
+            }),
+        );
         seed_play_graph(&mut db, &seed).unwrap();
 
-        let advance = mutation("evt-1", 1, json!({
-            "entities": { "upsert": [ { "id": "clue_1", "type": "clue", "label": "血迹" } ]},
-            "evidence": { "transitions": [ { "entityId": "clue_1", "to": "seen", "reason": "注意到" } ]}
-        }));
+        let advance = mutation(
+            "evt-1",
+            1,
+            json!({
+                "entities": { "upsert": [ { "id": "clue_1", "type": "clue", "label": "血迹" } ]},
+                "evidence": { "transitions": [ { "entityId": "clue_1", "to": "seen", "reason": "注意到" } ]}
+            }),
+        );
         apply_play_mutation(&mut db, &advance, "看").unwrap();
         let snapshot = db.snapshot();
-        let slot = snapshot["stateSlots"].as_array().unwrap().iter().find(|s| s["id"] == "evidence:clue_1:status").unwrap();
+        let slot = snapshot["stateSlots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "evidence:clue_1:status")
+            .unwrap();
         assert_eq!(slot["value"]["status"], "seen");
         assert_eq!(slot["value"]["previous"], "unknown");
 
         // 回退 → Err。
-        let regress = mutation("evt-2", 2, json!({
-            "entities": { "upsert": [ { "id": "clue_1", "type": "clue", "label": "血迹" } ]},
-            "evidence": { "transitions": [ { "entityId": "clue_1", "to": "hinted" } ]}
-        }));
+        let regress = mutation(
+            "evt-2",
+            2,
+            json!({
+                "entities": { "upsert": [ { "id": "clue_1", "type": "clue", "label": "血迹" } ]},
+                "evidence": { "transitions": [ { "entityId": "clue_1", "to": "hinted" } ]}
+            }),
+        );
         let err = apply_play_mutation(&mut db, &regress, "y").unwrap_err();
         assert!(err.contains("cannot regress"), "{err}");
 
         // 非证据实体 → Err。
-        let bad = mutation("evt-3", 3, json!({
-            "entities": { "upsert": [ { "id": "actor_x", "type": "actor", "label": "X" } ]},
-            "evidence": { "transitions": [ { "entityId": "actor_x", "to": "seen" } ]}
-        }));
+        let bad = mutation(
+            "evt-3",
+            3,
+            json!({
+                "entities": { "upsert": [ { "id": "actor_x", "type": "actor", "label": "X" } ]},
+                "evidence": { "transitions": [ { "entityId": "actor_x", "to": "seen" } ]}
+            }),
+        );
         assert!(apply_play_mutation(&mut db, &bad, "z").is_err());
     }
 
@@ -1103,9 +1251,13 @@ mod tests {
         }
         let mut db = open_play_graph_db(dir.path()).unwrap();
         assert!(matches!(db.backend, Backend::Sqlite { .. }));
-        let m = mutation("evt-1", 1, json!({
-            "entities": { "upsert": [ { "id": "actor_player", "type": "actor", "label": "旅人", "summary": "测试" } ]}
-        }));
+        let m = mutation(
+            "evt-1",
+            1,
+            json!({
+                "entities": { "upsert": [ { "id": "actor_player", "type": "actor", "label": "旅人", "summary": "测试" } ]}
+            }),
+        );
         apply_play_mutation(&mut db, &m, "q").unwrap();
         let snapshot = db.snapshot();
         assert_eq!(snapshot["entities"][0]["label"], "旅人");
@@ -1119,15 +1271,22 @@ mod tests {
     fn blocked_mutation_records_event_without_changes() {
         let dir = tempfile::tempdir().unwrap();
         let mut db = open_play_graph_db(dir.path()).unwrap();
-        let m = mutation("evt-9", 9, json!({
-            "blocked": true,
-            "blockedReason": "门锁着",
-            "entities": { "upsert": [ { "id": "e", "type": "item", "label": "X" } ]}
-        }));
+        let m = mutation(
+            "evt-9",
+            9,
+            json!({
+                "blocked": true,
+                "blockedReason": "门锁着",
+                "entities": { "upsert": [ { "id": "e", "type": "item", "label": "X" } ]}
+            }),
+        );
         let applied = apply_play_mutation(&mut db, &m, "开门").unwrap();
         assert!(applied.blocked);
         let snapshot = db.snapshot();
-        assert!(snapshot["entities"].as_array().unwrap().is_empty(), "blocked 不落图");
+        assert!(
+            snapshot["entities"].as_array().unwrap().is_empty(),
+            "blocked 不落图"
+        );
         assert_eq!(snapshot["events"][0]["outcomeSummary"], "门锁着");
     }
 
@@ -1164,7 +1323,11 @@ mod tests {
 
             // 重新打开（落盘持久性）仍是替换后状态。
             let reopened = open_play_graph_db(&run).unwrap();
-            assert_eq!(reopened.snapshot()["entities"].as_array().unwrap().len(), 1, "{backend}");
+            assert_eq!(
+                reopened.snapshot()["entities"].as_array().unwrap().len(),
+                1,
+                "{backend}"
+            );
         }
     }
 }

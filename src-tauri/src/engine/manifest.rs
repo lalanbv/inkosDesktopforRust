@@ -37,15 +37,12 @@ impl EngineManifest {
     ///
     /// manifest 无敏感数据（无密钥），权限用默认（非 0600）；原子性仍保证（避免半写）。
     pub fn write(&self, path: &Path) -> anyhow::Result<()> {
-        let parent = path
-            .parent()
-            .context("manifest path 应有父目录")?;
+        let parent = path.parent().context("manifest path 应有父目录")?;
         std::fs::create_dir_all(parent)
             .with_context(|| format!("创建 manifest 父目录失败: {}", parent.display()))?;
-        let mut tmp = tempfile::NamedTempFile::new_in(parent)
-            .context("创建 manifest 临时文件失败")?;
-        let json = serde_json::to_string_pretty(self)
-            .context("序列化 manifest 失败")?;
+        let mut tmp =
+            tempfile::NamedTempFile::new_in(parent).context("创建 manifest 临时文件失败")?;
+        let json = serde_json::to_string_pretty(self).context("序列化 manifest 失败")?;
         use std::io::Write;
         writeln!(tmp, "{json}").context("写 manifest 临时文件失败")?;
         tmp.persist(path)
@@ -57,8 +54,8 @@ impl EngineManifest {
 /// 计算单文件 SHA256（hex 小写）。M3d updater 校验下载的 engine bundle 用。
 pub fn sha256_file(path: &Path) -> anyhow::Result<String> {
     use std::io::Read;
-    let mut f = std::fs::File::open(path)
-        .with_context(|| format!("打开文件失败: {}", path.display()))?;
+    let mut f =
+        std::fs::File::open(path).with_context(|| format!("打开文件失败: {}", path.display()))?;
     let mut hasher = Sha256::new();
     // 64KiB 缓冲流式读取：避免大 bundle 一次性入内存（架构 §6 性能/0GC 定位）。
     let mut buf = [0u8; 64 * 1024];

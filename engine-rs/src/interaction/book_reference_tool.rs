@@ -11,10 +11,16 @@ use serde_json::{json, Value};
 
 use crate::interaction::project_tools::{error_result, ToolResult};
 use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
-use crate::references::{bind_book_reference, list_book_references, unbind_book_reference, BindBookReferenceInput};
+use crate::references::{
+    bind_book_reference, list_book_references, unbind_book_reference, BindBookReferenceInput,
+};
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
@@ -54,7 +60,11 @@ pub fn manage_book_reference_schema() -> Value {
 }
 
 /// 工具执行（TS execute 逐字文本面；失败为错误文本）。
-pub async fn tool_manage_book_reference(root: &std::path::Path, active_book_id: &str, args: &Value) -> ToolResult {
+pub async fn tool_manage_book_reference(
+    root: &std::path::Path,
+    active_book_id: &str,
+    args: &Value,
+) -> ToolResult {
     let Some(action) = field_str(args, "action") else {
         return error_result("manage_book_reference requires action.");
     };
@@ -113,7 +123,9 @@ pub async fn tool_manage_book_reference(root: &std::path::Path, active_book_id: 
         }
         "unbind" | "bind" => {
             let Some(material_id) = field_str(args, "materialId") else {
-                return error_result(format!("manage_book_reference.{action} requires materialId."));
+                return error_result(format!(
+                    "manage_book_reference.{action} requires materialId."
+                ));
             };
             if action == "unbind" {
                 let (removed, _) = match unbind_book_reference(root, active_book_id, material_id) {
@@ -150,7 +162,11 @@ pub async fn tool_manage_book_reference(root: &std::path::Path, active_book_id: 
             let manifest = match bind_book_reference(
                 root,
                 active_book_id,
-                &BindBookReferenceInput { material_id, uses: &uses, note },
+                &BindBookReferenceInput {
+                    material_id,
+                    uses: &uses,
+                    note,
+                },
             ) {
                 Ok(manifest) => manifest,
                 Err(message) => return error_result(message),
@@ -161,7 +177,10 @@ pub async fn tool_manage_book_reference(root: &std::path::Path, active_book_id: 
                 .find(|entry| entry.material_id == material_id.trim())
                 .expect("just bound");
             let mut lines = vec![
-                format!("Reference {} was bound to \"{active_book_id}\".", binding.material_id),
+                format!(
+                    "Reference {} was bound to \"{active_book_id}\".",
+                    binding.material_id
+                ),
                 format!("Uses: {}", binding.uses.join("; ")),
             ];
             if let Some(note) = &binding.note {
@@ -186,7 +205,6 @@ pub async fn tool_manage_book_reference(root: &std::path::Path, active_book_id: 
     }
 }
 
-
 // ── 注册模块（R38b）：manage_book_reference 单件——绑定清单写面 →
 //    ProjectWrite（216 号注释：非生产写入面，不在剔除名单）；available =
 //    活动书在场（book/edit 会话恒有）。 ──
@@ -195,11 +213,17 @@ crate::interaction::registry::tool_def!(
     ManageBookReference,
     "manage_book_reference",
     MutationKind::ProjectWrite,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[manage_book_reference_schema()], "manage_book_reference") },
     schema_parameters(&[manage_book_reference_schema()], "manage_book_reference"),
     ctx.reference_book_id.is_some(),
-    tool_manage_book_reference(ctx.root, ctx.reference_book_id.expect("available 门控"), args).await
+    tool_manage_book_reference(
+        ctx.root,
+        ctx.reference_book_id.expect("available 门控"),
+        args
+    )
+    .await
 );
 
 /// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
@@ -234,7 +258,10 @@ mod tests {
     fn schema_shape_matches_ts_params() {
         let schema = manage_book_reference_schema();
         assert_eq!(schema["function"]["name"], "manage_book_reference");
-        assert_eq!(schema["function"]["parameters"]["required"], json!(["action"]));
+        assert_eq!(
+            schema["function"]["parameters"]["required"],
+            json!(["action"])
+        );
         assert_eq!(
             schema["function"]["parameters"]["properties"]["action"]["enum"],
             json!(["list", "bind", "unbind"])
@@ -248,8 +275,13 @@ mod tests {
         fixture(root);
         // list 空态。
         let result = tool_manage_book_reference(root, "b1", &json!({"action": "list"})).await;
-        assert!(result.text.contains("No reference materials are bound to book \"b1\"."));
-        assert_eq!(result.details.as_ref().unwrap()["kind"], "book_reference_list");
+        assert!(result
+            .text
+            .contains("No reference materials are bound to book \"b1\"."));
+        assert_eq!(
+            result.details.as_ref().unwrap()["kind"],
+            "book_reference_list"
+        );
         // bind。
         let result = tool_manage_book_reference(
             root,
@@ -257,25 +289,52 @@ mod tests {
             &json!({"action": "bind", "materialId": "mat1", "uses": ["开篇机制", "人物关系"], "note": "慢节奏"}),
         )
         .await;
-        assert!(result.text.contains("Reference mat1 was bound to \"b1\"."), "{}", result.text);
+        assert!(
+            result.text.contains("Reference mat1 was bound to \"b1\"."),
+            "{}",
+            result.text
+        );
         assert!(result.text.contains("Uses: 开篇机制; 人物关系"));
         assert!(result.text.contains("Note: 慢节奏"));
-        assert!(result.text.contains("Future chapter composition may select relevant sections"));
-        assert_eq!(result.details.as_ref().unwrap()["kind"], "book_reference_bound");
-        assert_eq!(result.details.as_ref().unwrap()["uses"], json!(["开篇机制", "人物关系"]));
+        assert!(result
+            .text
+            .contains("Future chapter composition may select relevant sections"));
+        assert_eq!(
+            result.details.as_ref().unwrap()["kind"],
+            "book_reference_bound"
+        );
+        assert_eq!(
+            result.details.as_ref().unwrap()["uses"],
+            json!(["开篇机制", "人物关系"])
+        );
         // list 有绑定。
         let result = tool_manage_book_reference(root, "b1", &json!({"action": "list"})).await;
         assert!(result.text.contains("- 开篇参考 (mat1)"), "{}", result.text);
         // unbind。
-        let result = tool_manage_book_reference(root, "b1", &json!({"action": "unbind", "materialId": "mat1"})).await;
+        let result = tool_manage_book_reference(
+            root,
+            "b1",
+            &json!({"action": "unbind", "materialId": "mat1"}),
+        )
+        .await;
         assert!(
-            result.text.contains("Reference mat1 was unbound from \"b1\". The project asset was kept."),
+            result
+                .text
+                .contains("Reference mat1 was unbound from \"b1\". The project asset was kept."),
             "{}",
             result.text
         );
-        assert_eq!(result.details.as_ref().unwrap()["kind"], "book_reference_unbound");
+        assert_eq!(
+            result.details.as_ref().unwrap()["kind"],
+            "book_reference_unbound"
+        );
         // 再 unbind：未绑定面。
-        let result = tool_manage_book_reference(root, "b1", &json!({"action": "unbind", "materialId": "mat1"})).await;
+        let result = tool_manage_book_reference(
+            root,
+            "b1",
+            &json!({"action": "unbind", "materialId": "mat1"}),
+        )
+        .await;
         assert!(result.text.contains("was not bound to"));
     }
 
@@ -286,9 +345,17 @@ mod tests {
         fixture(root);
         // materialId 缺失。
         let result = tool_manage_book_reference(root, "b1", &json!({"action": "bind"})).await;
-        assert_eq!(result.text, "manage_book_reference.bind requires materialId.");
+        assert_eq!(
+            result.text,
+            "manage_book_reference.bind requires materialId."
+        );
         // 非法素材 id → 校验错误文本。
-        let result = tool_manage_book_reference(root, "b1", &json!({"action": "bind", "materialId": "../x", "uses": ["u"]})).await;
+        let result = tool_manage_book_reference(
+            root,
+            "b1",
+            &json!({"action": "bind", "materialId": "../x", "uses": ["u"]}),
+        )
+        .await;
         assert_eq!(result.text, "Invalid materialId: \"../x\"");
         // 未知 action。
         let result = tool_manage_book_reference(root, "b1", &json!({"action": "destroy"})).await;

@@ -6,8 +6,8 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::production::{
-    commit_production_artifacts, write_production_run_snapshot,
-    CreateRunInput, ProductionKind, ProductionRunSnapshot, ProductionRunStatus,
+    commit_production_artifacts, write_production_run_snapshot, CreateRunInput, ProductionKind,
+    ProductionRunSnapshot, ProductionRunStatus,
 };
 use crate::translation::run_store::*;
 use crate::translation::types::*;
@@ -43,7 +43,16 @@ pub async fn run_translation_project(
     .await
     .map_err(|e| e.to_string())?;
 
-    match run_translation_inner(project_root, project_id, model, batch_size, &run_path, &base_artifacts).await {
+    match run_translation_inner(
+        project_root,
+        project_id,
+        model,
+        batch_size,
+        &run_path,
+        &base_artifacts,
+    )
+    .await
+    {
         Ok(result) => Ok(result),
         Err(error) => {
             let snapshot = ProductionRunSnapshot::create(CreateRunInput {
@@ -75,7 +84,9 @@ async fn run_translation_inner(
     let mut manifest = load_translation_manifest(project_root, project_id)
         .await
         .map_err(|e| match e {
-            LoadManifestError::NotFound => format!("translation project not found for {project_id}"),
+            LoadManifestError::NotFound => {
+                format!("translation project not found for {project_id}")
+            }
             LoadManifestError::BadPayload(message) => message,
         })?;
     let mut glossary = load_translation_glossary(project_root, project_id).await;
@@ -85,17 +96,22 @@ async fn run_translation_inner(
     let mut review_source_paths: Vec<String> = Vec::new();
     // 971 号：TS `captureWorkSourceState`——run 结尾按 changed-paths 把章译文/manifest/
     // 报告翻到新工件修订（工件账不过期，revise/export 的 sync 无冲突窗口）。
-    let source_before = crate::harness::source_sync::capture_work_source_state(project_root, project_id)
-        .await
-        .map_err(|error| error.to_string())?;
+    let source_before =
+        crate::harness::source_sync::capture_work_source_state(project_root, project_id)
+            .await
+            .map_err(|error| error.to_string())?;
     let batch_size = batch_size.unwrap_or(8).clamp(1, 32);
 
     for chapter_info in manifest.chapters.clone() {
         let source = load_translation_chapter(project_root, &chapter_info.source_path).await?;
-        let translated = match load_translation_chapter(project_root, &chapter_info.translated_path).await {
-            Ok(chapter) => chapter,
-            Err(_) => TranslationChapterFile { segments: Vec::new(), ..source.clone() },
-        };
+        let translated =
+            match load_translation_chapter(project_root, &chapter_info.translated_path).await {
+                Ok(chapter) => chapter,
+                Err(_) => TranslationChapterFile {
+                    segments: Vec::new(),
+                    ..source.clone()
+                },
+            };
         let mut translated_by_index: HashMap<u32, TranslationSegment> = translated
             .segments
             .into_iter()
@@ -118,7 +134,8 @@ async fn run_translation_inner(
 
         let mut processed = 0usize;
         for batch in pending.chunks(batch_size) {
-            let batch_owned: Vec<TranslationSegment> = batch.iter().map(|segment| (*segment).clone()).collect();
+            let batch_owned: Vec<TranslationSegment> =
+                batch.iter().map(|segment| (*segment).clone()).collect();
             let result = model
                 .translate_segments(TranslateSegmentsInput {
                     source_language: &manifest.source_language,
@@ -132,7 +149,10 @@ async fn run_translation_inner(
             // 已在模型端口硬失败（TS runner 同语义）。
             for item in result.segments {
                 let Some(original) = source.segments.iter().find(|s| s.index == item.index) else {
-                    return Err(format!("Translation source segment {} is missing.", item.index));
+                    return Err(format!(
+                        "Translation source segment {} is missing.",
+                        item.index
+                    ));
                 };
                 translated_by_index.insert(
                     item.index,
@@ -145,7 +165,12 @@ async fn run_translation_inner(
                 );
                 translated_segments += 1;
             }
-            if let Some(title) = result.chapter_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            if let Some(title) = result
+                .chapter_title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+            {
                 translated_title = title.to_string();
             }
             if !result.glossary.is_empty() {
@@ -156,7 +181,12 @@ async fn run_translation_inner(
             let ordered_segments: Vec<TranslationSegment> = source
                 .segments
                 .iter()
-                .map(|segment| translated_by_index.get(&segment.index).cloned().unwrap_or_else(|| segment.clone()))
+                .map(|segment| {
+                    translated_by_index
+                        .get(&segment.index)
+                        .cloned()
+                        .unwrap_or_else(|| segment.clone())
+                })
                 .collect();
             // 143 号：章译文 + 术语表同事务单点（TS saveTranslationProgress）。
             // 968 号：标题用译后标题（TS `{...source, title: translatedTitle}`）。
@@ -164,7 +194,11 @@ async fn run_translation_inner(
                 project_root,
                 project_id,
                 &chapter_info.translated_path,
-                &TranslationChapterFile { title: translated_title.clone(), segments: ordered_segments, ..source.clone() },
+                &TranslationChapterFile {
+                    title: translated_title.clone(),
+                    segments: ordered_segments,
+                    ..source.clone()
+                },
                 &glossary,
             )
             .await?;
@@ -196,11 +230,13 @@ async fn run_translation_inner(
         // 967/968 号：本章审校摘要/观察；969 号：passed=无 issue 级观察（TS 无 passed
         // 字段）；未审校即清空（TS updateChapterProgress 以 undefined 覆写同语义）。
         let mut reviewed: Option<(String, Vec<serde_json::Value>)> = None;
-        if completed_chapter
-            .segments
-            .iter()
-            .any(|segment| segment.target.as_deref().map(str::trim).is_some_and(|t| !t.is_empty()))
-        {
+        if completed_chapter.segments.iter().any(|segment| {
+            segment
+                .target
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|t| !t.is_empty())
+        }) {
             // 968/969 号：审校输入=译后标题+原文标题（TS `chapterTitle: completedChapter.
             // title, sourceChapterTitle: source.title`）；LLM 端口实现走审校 2.0 双段环
             // （review.rs），注入模型（测试）走端口缺省。
@@ -247,7 +283,8 @@ async fn run_translation_inner(
             report_lines.push(String::new());
             reviewed = Some((review.summary, observations));
         }
-        let translated_count = count_translated_segments(&source.segments, &completed_chapter.segments);
+        let translated_count =
+            count_translated_segments(&source.segments, &completed_chapter.segments);
         manifest.updated_at = crate::utils::utc_time::utc_now_iso();
         for chapter in &mut manifest.chapters {
             if chapter.number == chapter_info.number {
@@ -269,7 +306,12 @@ async fn run_translation_inner(
     // artifacts = base + 全部章译文 + 报告）。970 号：报告路径=works 布局。
     let report_path = format!("works/{project_id}/source/review-report.md");
     let mut artifacts = base_artifacts.to_vec();
-    artifacts.extend(manifest.chapters.iter().map(|chapter| chapter.translated_path.clone()));
+    artifacts.extend(
+        manifest
+            .chapters
+            .iter()
+            .map(|chapter| chapter.translated_path.clone()),
+    );
     artifacts.push(report_path.clone());
     commit_production_artifacts(
         project_root,
@@ -302,25 +344,39 @@ async fn run_translation_inner(
     // 直写的章译文/manifest/报告按前后指纹翻到新工件修订（账实同步，revise/export
     // 的后续 sync 无冲突窗口）。吞错对齐 TS（commit 失败仍返回结果？TS 上抛——此处
     // 亦上抛：工件账失真会让 revise 永远冲突，fail-loud）。
-    let changed_paths = crate::harness::source_sync::changed_work_source_paths(project_root, project_id, &source_before)
-        .await
-        .map_err(|error| error.to_string())?;
-    crate::harness::source_sync::sync_work_source_artifacts(crate::harness::source_sync::SyncWorkSourceInput {
+    let changed_paths = crate::harness::source_sync::changed_work_source_paths(
         project_root,
-        work_id: project_id,
-        accept: true,
-        accept_paths: Some(changed_paths),
-        episode_id: None,
-        updated_at: Some(manifest.updated_at.clone()),
-        writes: Vec::new(),
-        title: None,
-        status: None,
-    })
+        project_id,
+        &source_before,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::harness::source_sync::sync_work_source_artifacts(
+        crate::harness::source_sync::SyncWorkSourceInput {
+            project_root,
+            work_id: project_id,
+            accept: true,
+            accept_paths: Some(changed_paths),
+            episode_id: None,
+            updated_at: Some(manifest.updated_at.clone()),
+            writes: Vec::new(),
+            title: None,
+            status: None,
+        },
+    )
     .await
     .map_err(|error| error.to_string())?;
     // 967 号：TS 回执口径——total=源段总数、completed=已译段数（manifest 已逐章更新）。
-    let total_segments: usize = manifest.chapters.iter().map(|chapter| chapter.segment_count).sum();
-    let completed_segments: usize = manifest.chapters.iter().map(|chapter| chapter.translated_segments).sum();
+    let total_segments: usize = manifest
+        .chapters
+        .iter()
+        .map(|chapter| chapter.segment_count)
+        .sum();
+    let completed_segments: usize = manifest
+        .chapters
+        .iter()
+        .map(|chapter| chapter.translated_segments)
+        .sum();
     let pending_segments = total_segments.saturating_sub(completed_segments);
     // 968 号：回执 observations=manifest 全章 flatMap（TS 同口径，非仅本次运行）+
     // category/assessment/scope 缺省补齐（`chapter:N`）；targetHash/target 属 P4 工件面。
@@ -328,19 +384,33 @@ async fn run_translation_inner(
         .chapters
         .iter()
         .flat_map(|chapter| {
-            chapter.observations.iter().flatten().map(move |observation| {
-                let mut observation = observation.clone();
-                if let Some(object) = observation.as_object_mut() {
-                    object.entry("category").or_insert_with(|| serde_json::json!("quality"));
-                    object.entry("assessment").or_insert_with(|| serde_json::json!("observation"));
-                    object.entry("scope").or_insert_with(|| serde_json::json!(format!("chapter:{}", chapter.number)));
-                }
-                observation
-            })
+            chapter
+                .observations
+                .iter()
+                .flatten()
+                .map(move |observation| {
+                    let mut observation = observation.clone();
+                    if let Some(object) = observation.as_object_mut() {
+                        object
+                            .entry("category")
+                            .or_insert_with(|| serde_json::json!("quality"));
+                        object
+                            .entry("assessment")
+                            .or_insert_with(|| serde_json::json!("observation"));
+                        object.entry("scope").or_insert_with(|| {
+                            serde_json::json!(format!("chapter:{}", chapter.number))
+                        });
+                    }
+                    observation
+                })
         })
         .collect();
     Ok(RunTranslationProjectResult {
-        kind: if pending_segments > 0 { "translation_pending" } else { "translation_completed" },
+        kind: if pending_segments > 0 {
+            "translation_pending"
+        } else {
+            "translation_completed"
+        },
         work_id: project_id.to_string(),
         project_id: project_id.to_string(),
         translated_segments,

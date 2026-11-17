@@ -17,7 +17,10 @@ pub fn assert_safe_forecast_id(value: &str) -> Result<String, String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$").unwrap());
     if !re.is_match(value) {
-        return Err(format!("Invalid forecast id: {}", serde_json::to_string(value).unwrap_or_default()));
+        return Err(format!(
+            "Invalid forecast id: {}",
+            serde_json::to_string(value).unwrap_or_default()
+        ));
     }
     Ok(value.to_string())
 }
@@ -28,15 +31,22 @@ pub struct ForecastStore {
 
 impl ForecastStore {
     pub fn new(book_dir: impl Into<PathBuf>) -> Self {
-        ForecastStore { book_dir: book_dir.into() }
+        ForecastStore {
+            book_dir: book_dir.into(),
+        }
     }
 
     pub fn forecasts_dir(&self) -> PathBuf {
-        self.book_dir.join("story").join("runtime").join("narrative-forecasts")
+        self.book_dir
+            .join("story")
+            .join("runtime")
+            .join("narrative-forecasts")
     }
 
     pub fn forecast_dir(&self, forecast_id: &str) -> Result<PathBuf, String> {
-        Ok(self.forecasts_dir().join(assert_safe_forecast_id(forecast_id)?))
+        Ok(self
+            .forecasts_dir()
+            .join(assert_safe_forecast_id(forecast_id)?))
     }
 
     pub fn forecast_json_path(&self, forecast_id: &str) -> Result<String, String> {
@@ -69,7 +79,11 @@ impl ForecastStore {
         let base = format!("fc-{}", format_timestamp(now_iso));
         let mut candidate = base.clone();
         let mut suffix = 2;
-        while self.forecast_dir(&candidate).map(|d| d.is_dir()).unwrap_or(true) {
+        while self
+            .forecast_dir(&candidate)
+            .map(|d| d.is_dir())
+            .unwrap_or(true)
+        {
             candidate = format!("{base}-{suffix}");
             suffix += 1;
         }
@@ -85,16 +99,24 @@ impl ForecastStore {
     ) -> Result<(String, String), String> {
         validate_narrative_forecast(forecast)?;
         let dir = self.forecast_dir(&forecast.forecast_id)?;
-        tokio::fs::create_dir_all(&dir).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| e.to_string())?;
         let forecast_json_path = self.forecast_json_path(&forecast.forecast_id)?;
         let comparison_path = self.comparison_path(&forecast.forecast_id)?;
         let json = serde_json::to_string_pretty(forecast).map_err(|e| e.to_string())?;
-        crate::utils::atomic_file_set::write_file_atomic(&dir.join("forecast.json"), &format!("{json}\n"))
-            .await
-            .map_err(|e| e.to_string())?;
-        crate::utils::atomic_file_set::write_file_atomic(&dir.join("comparison.md"), &format!("{}\n", trim_end(comparison_markdown)))
-            .await
-            .map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &dir.join("forecast.json"),
+            &format!("{json}\n"),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &dir.join("comparison.md"),
+            &format!("{}\n", trim_end(comparison_markdown)),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok((forecast_json_path, comparison_path))
     }
 
@@ -107,7 +129,11 @@ impl ForecastStore {
                 let available = self.list().await;
                 return Err(format!(
                     "Narrative forecast \"{forecast_id}\" not found. Available forecasts: {}",
-                    if available.is_empty() { "(none)".to_string() } else { available.join(", ") }
+                    if available.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        available.join(", ")
+                    }
                 ));
             }
         };
@@ -118,8 +144,9 @@ impl ForecastStore {
         let parsed: NarrativeForecast = serde_json::from_value(value).map_err(|e| {
             format!("Narrative forecast \"{forecast_id}\" failed schema validation: {e}")
         })?;
-        validate_narrative_forecast(&parsed)
-            .map_err(|e| format!("Narrative forecast \"{forecast_id}\" failed schema validation: {e}"))?;
+        validate_narrative_forecast(&parsed).map_err(|e| {
+            format!("Narrative forecast \"{forecast_id}\" failed schema validation: {e}")
+        })?;
         Ok(parsed)
     }
 
@@ -139,24 +166,37 @@ impl ForecastStore {
     }
 
     /// 持久化 stale 标记（后续读者无需重算）。
-    pub async fn mark_stale(&self, forecast: &NarrativeForecast) -> Result<NarrativeForecast, String> {
+    pub async fn mark_stale(
+        &self,
+        forecast: &NarrativeForecast,
+    ) -> Result<NarrativeForecast, String> {
         let mut stale = forecast.clone();
         stale.status = super::schema::ForecastStatus::Stale;
         validate_narrative_forecast(&stale)?;
         let dir = self.forecast_dir(&stale.forecast_id)?;
         let json = serde_json::to_string_pretty(&stale).map_err(|e| e.to_string())?;
-        crate::utils::atomic_file_set::write_file_atomic(&dir.join("forecast.json"), &format!("{json}\n"))
-            .await
-            .map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &dir.join("forecast.json"),
+            &format!("{json}\n"),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(stale)
     }
 
-    pub async fn write_selected_plan(&self, forecast_id: &str, markdown: &str) -> Result<String, String> {
+    pub async fn write_selected_plan(
+        &self,
+        forecast_id: &str,
+        markdown: &str,
+    ) -> Result<String, String> {
         let path = self.selected_plan_path(forecast_id)?;
         let dir = self.forecast_dir(forecast_id)?;
-        crate::utils::atomic_file_set::write_file_atomic(&dir.join("selected-branch-plan.md"), &format!("{}\n", trim_end(markdown)))
-            .await
-            .map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &dir.join("selected-branch-plan.md"),
+            &format!("{}\n", trim_end(markdown)),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok(path)
     }
 }
@@ -231,18 +271,27 @@ mod tests {
         tokio::fs::create_dir_all(&book).await.unwrap();
         let store = ForecastStore::new(&book);
 
-        let (json_path, comparison_path) = store.save(&sample_forecast("fc-test-1"), "# 对比\n").await.unwrap();
+        let (json_path, comparison_path) = store
+            .save(&sample_forecast("fc-test-1"), "# 对比\n")
+            .await
+            .unwrap();
         assert!(json_path.ends_with("forecast.json"));
         assert!(comparison_path.ends_with("comparison.md"));
         // pretty JSON + 尾换行；comparison trimEnd + 尾换行。
-        let raw = tokio::fs::read_to_string(&book.join("story/runtime/narrative-forecasts/fc-test-1/forecast.json"))
-            .await
-            .unwrap();
+        let raw = tokio::fs::read_to_string(
+            &book.join("story/runtime/narrative-forecasts/fc-test-1/forecast.json"),
+        )
+        .await
+        .unwrap();
         assert!(raw.ends_with("}\n"));
-        assert!(raw.contains("\"branchId\": \"branch-1\"") || raw.contains("\"branchId\":\"branch-1\""));
-        let comparison = tokio::fs::read_to_string(&book.join("story/runtime/narrative-forecasts/fc-test-1/comparison.md"))
-            .await
-            .unwrap();
+        assert!(
+            raw.contains("\"branchId\": \"branch-1\"") || raw.contains("\"branchId\":\"branch-1\"")
+        );
+        let comparison = tokio::fs::read_to_string(
+            &book.join("story/runtime/narrative-forecasts/fc-test-1/comparison.md"),
+        )
+        .await
+        .unwrap();
         assert_eq!(comparison, "# 对比\n");
 
         let loaded = store.load("fc-test-1").await.unwrap();
@@ -250,19 +299,33 @@ mod tests {
         assert_eq!(store.list().await, vec!["fc-test-1".to_string()]);
 
         let stale = store.mark_stale(&loaded).await.unwrap();
-        assert!(matches!(stale.status, super::super::schema::ForecastStatus::Stale));
-        assert!(matches!(store.load("fc-test-1").await.unwrap().status, super::super::schema::ForecastStatus::Stale));
+        assert!(matches!(
+            stale.status,
+            super::super::schema::ForecastStatus::Stale
+        ));
+        assert!(matches!(
+            store.load("fc-test-1").await.unwrap().status,
+            super::super::schema::ForecastStatus::Stale
+        ));
 
         // 缺失 → 可用清单逐字。
         let err = store.load("fc-missing").await.unwrap_err();
-        assert_eq!(err, "Narrative forecast \"fc-missing\" not found. Available forecasts: fc-test-1");
+        assert_eq!(
+            err,
+            "Narrative forecast \"fc-missing\" not found. Available forecasts: fc-test-1"
+        );
 
         // 选择计划：trimEnd + 尾换行。
-        let plan = store.write_selected_plan("fc-test-1", "计划正文\n\n\n").await.unwrap();
-        assert!(plan.ends_with("selected-branch-plan.md"));
-        let saved = tokio::fs::read_to_string(&book.join("story/runtime/narrative-forecasts/fc-test-1/selected-branch-plan.md"))
+        let plan = store
+            .write_selected_plan("fc-test-1", "计划正文\n\n\n")
             .await
             .unwrap();
+        assert!(plan.ends_with("selected-branch-plan.md"));
+        let saved = tokio::fs::read_to_string(
+            &book.join("story/runtime/narrative-forecasts/fc-test-1/selected-branch-plan.md"),
+        )
+        .await
+        .unwrap();
         assert_eq!(saved, "计划正文\n");
     }
 
@@ -270,22 +333,41 @@ mod tests {
     async fn allocate_id_appends_suffix_on_collision() {
         let dir = tempfile::tempdir().unwrap();
         let book = dir.path().join("books").join("b1");
-        let forecasts = book.join("story").join("runtime").join("narrative-forecasts");
-        tokio::fs::create_dir_all(forecasts.join("fc-20260818-000000")).await.unwrap();
+        let forecasts = book
+            .join("story")
+            .join("runtime")
+            .join("narrative-forecasts");
+        tokio::fs::create_dir_all(forecasts.join("fc-20260818-000000"))
+            .await
+            .unwrap();
         let store = ForecastStore::new(&book);
-        let first = store.allocate_forecast_id("2026-08-18T00:00:00.000Z").await.unwrap();
+        let first = store
+            .allocate_forecast_id("2026-08-18T00:00:00.000Z")
+            .await
+            .unwrap();
         assert_eq!(first, "fc-20260818-000000-2");
         // 未实际创建 -2 目录时再次分配仍得 -2（pathExists 语义，与 TS 一致）。
-        let second = store.allocate_forecast_id("2026-08-18T00:00:00.000Z").await.unwrap();
+        let second = store
+            .allocate_forecast_id("2026-08-18T00:00:00.000Z")
+            .await
+            .unwrap();
         assert_eq!(second, "fc-20260818-000000-2");
-        tokio::fs::create_dir_all(forecasts.join("fc-20260818-000000-2")).await.unwrap();
-        let third = store.allocate_forecast_id("2026-08-18T00:00:00.000Z").await.unwrap();
+        tokio::fs::create_dir_all(forecasts.join("fc-20260818-000000-2"))
+            .await
+            .unwrap();
+        let third = store
+            .allocate_forecast_id("2026-08-18T00:00:00.000Z")
+            .await
+            .unwrap();
         assert_eq!(third, "fc-20260818-000000-3");
     }
 
     #[test]
     fn timestamp_format_and_safe_id() {
-        assert_eq!(format_timestamp("2026-08-18T09:05:07.123Z"), "20260818-090507");
+        assert_eq!(
+            format_timestamp("2026-08-18T09:05:07.123Z"),
+            "20260818-090507"
+        );
         assert!(assert_safe_forecast_id("fc-x").is_ok());
         assert!(assert_safe_forecast_id("../escape").is_err());
         assert!(assert_safe_forecast_id("").is_err());

@@ -38,7 +38,10 @@ fn main() -> ExitCode {
 fn run() -> Result<String> {
     let args: Vec<String> = env::args().collect();
     if args.len() != 3 {
-        bail!("参数错误：需要 <bundle-path> <private-key-hex>，实际 {} 个", args.len() - 1);
+        bail!(
+            "参数错误：需要 <bundle-path> <private-key-hex>，实际 {} 个",
+            args.len() - 1
+        );
     }
 
     let bundle_path = PathBuf::from(&args[1]);

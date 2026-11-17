@@ -21,12 +21,19 @@ pub mod prompt_pack;
 /// prompt 来源。对齐 TS `z.enum(["builtin","project","user","external"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"builtin\" | \"project\" | \"user\" | \"external\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"builtin\" | \"project\" | \"user\" | \"external\"")
+)]
 pub enum PromptSource {
-    #[serde(rename = "builtin")] Builtin,
-    #[serde(rename = "project")] Project,
-    #[serde(rename = "user")] User,
-    #[serde(rename = "external")] External,
+    #[serde(rename = "builtin")]
+    Builtin,
+    #[serde(rename = "project")]
+    Project,
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "external")]
+    External,
 }
 
 /// prompt pack 清单。
@@ -103,18 +110,78 @@ pub fn builtin_prompt_packs() -> Vec<PromptPackManifest> {
 
 /// 12 个内建 prompt（逐字移植 RAW_BUILTIN_PROMPTS）。
 pub const RAW_BUILTIN_PROMPTS: &[BuiltinPrompt] = &[
-    BuiltinPrompt { id: "longform.writer", pack_id: "longform", title: "Longform Writer", content: LONGFORM_WRITER },
-    BuiltinPrompt { id: "longform.reviser", pack_id: "longform", title: "Longform Reviser", content: LONGFORM_REVISER },
-    BuiltinPrompt { id: "longform.auditor", pack_id: "longform", title: "Longform Auditor", content: LONGFORM_AUDITOR },
-    BuiltinPrompt { id: "play.start", pack_id: "play", title: "Play Start", content: PLAY_START },
-    BuiltinPrompt { id: "play.mutator", pack_id: "play", title: "Play World Mutator", content: PLAY_MUTATOR },
-    BuiltinPrompt { id: "play.renderer", pack_id: "play", title: "Play Scene Renderer", content: PLAY_RENDERER },
-    BuiltinPrompt { id: "play.reconciler", pack_id: "play", title: "Play Scene Reconciler", content: PLAY_RECONCILER },
-    BuiltinPrompt { id: "play.image", pack_id: "play", title: "Play Image Prompt", content: PLAY_IMAGE },
-    BuiltinPrompt { id: "interactive-film.script", pack_id: "interactive-film", title: "Interactive Film Script", content: IF_SCRIPT },
-    BuiltinPrompt { id: "interactive-film.storyboard", pack_id: "interactive-film", title: "Interactive Film Storyboard", content: IF_STORYBOARD },
-    BuiltinPrompt { id: "interactive-film.story-graph", pack_id: "interactive-film", title: "Interactive Film Story Graph", content: IF_STORY_GRAPH },
-    BuiltinPrompt { id: "interactive-film.image-plan", pack_id: "interactive-film", title: "Interactive Film Image Plan", content: IF_IMAGE_PLAN },
+    BuiltinPrompt {
+        id: "longform.writer",
+        pack_id: "longform",
+        title: "Longform Writer",
+        content: LONGFORM_WRITER,
+    },
+    BuiltinPrompt {
+        id: "longform.reviser",
+        pack_id: "longform",
+        title: "Longform Reviser",
+        content: LONGFORM_REVISER,
+    },
+    BuiltinPrompt {
+        id: "longform.auditor",
+        pack_id: "longform",
+        title: "Longform Auditor",
+        content: LONGFORM_AUDITOR,
+    },
+    BuiltinPrompt {
+        id: "play.start",
+        pack_id: "play",
+        title: "Play Start",
+        content: PLAY_START,
+    },
+    BuiltinPrompt {
+        id: "play.mutator",
+        pack_id: "play",
+        title: "Play World Mutator",
+        content: PLAY_MUTATOR,
+    },
+    BuiltinPrompt {
+        id: "play.renderer",
+        pack_id: "play",
+        title: "Play Scene Renderer",
+        content: PLAY_RENDERER,
+    },
+    BuiltinPrompt {
+        id: "play.reconciler",
+        pack_id: "play",
+        title: "Play Scene Reconciler",
+        content: PLAY_RECONCILER,
+    },
+    BuiltinPrompt {
+        id: "play.image",
+        pack_id: "play",
+        title: "Play Image Prompt",
+        content: PLAY_IMAGE,
+    },
+    BuiltinPrompt {
+        id: "interactive-film.script",
+        pack_id: "interactive-film",
+        title: "Interactive Film Script",
+        content: IF_SCRIPT,
+    },
+    BuiltinPrompt {
+        id: "interactive-film.storyboard",
+        pack_id: "interactive-film",
+        title: "Interactive Film Storyboard",
+        content: IF_STORYBOARD,
+    },
+    BuiltinPrompt {
+        id: "interactive-film.story-graph",
+        pack_id: "interactive-film",
+        title: "Interactive Film Story Graph",
+        content: IF_STORY_GRAPH,
+    },
+    BuiltinPrompt {
+        id: "interactive-film.image-plan",
+        pack_id: "interactive-film",
+        title: "Interactive Film Image Plan",
+        content: IF_IMAGE_PLAN,
+    },
 ];
 
 /// BUILTIN_PROMPTS 的访问入口（与 TS 导出同名意图一致）。
@@ -169,7 +236,12 @@ mod tests {
         // 每个 pack.prompts 的 id 都应能在 RAW_BUILTIN_PROMPTS 找到
         for pack in builtin_prompt_packs() {
             for id in &pack.prompts {
-                assert!(get_builtin_prompt(id).is_some(), "pack {} 引用不存在的 prompt {}", pack.id, id);
+                assert!(
+                    get_builtin_prompt(id).is_some(),
+                    "pack {} 引用不存在的 prompt {}",
+                    pack.id,
+                    id
+                );
             }
         }
     }

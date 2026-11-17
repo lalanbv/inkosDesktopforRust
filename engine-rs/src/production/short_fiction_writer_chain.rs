@@ -18,14 +18,14 @@ use crate::utils::length_metrics::{count_chapter_length, resolve_length_counting
 
 use super::short_fiction::{
     find_incomplete_short_fiction_chapters, merge_short_fiction_batch,
-    render_short_fiction_draft_markdown, validate_opening_hook, opening_hook_length_contract,
+    opening_hook_length_contract, render_short_fiction_draft_markdown, validate_opening_hook,
     ShortDraftBounds, ShortFictionBatchDraft, ShortRevisionPlan, ShortRevisionPlanChapter,
 };
 use super::short_fiction_revision::{
     apply_revision_plan, validate_revision_plan, ApplyRevisionPlanContext, ReviseChapterFn,
     ReviseChapterOutcome, ReviseChapterRequest, RevisionPlanContext,
 };
-use super::short_fiction_tools::{ShortAuthorScope, short_revision_plan_submission_schema};
+use super::short_fiction_tools::{short_revision_plan_submission_schema, ShortAuthorScope};
 use super::structured_agent::{
     run_structured_tool, StructuredRunOptions, StructuredToolError, ValidateFn, WorkerToolSpec,
 };
@@ -40,11 +40,17 @@ pub struct WriterChainError {
 
 impl WriterChainError {
     fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.into(), message: message.into() }
+        Self {
+            code: code.into(),
+            message: message.into(),
+        }
     }
 
     fn from_revision(error: super::short_fiction_revision::RevisionPlanError) -> Self {
-        Self { code: error.code.into(), message: error.message }
+        Self {
+            code: error.code.into(),
+            message: error.message,
+        }
     }
 }
 
@@ -79,7 +85,9 @@ pub fn compress_revise_chapter_fn(
         );
         let selected_context = vec![super::narrative_context::ContextSource {
             source: "revision-scope".into(),
-            reason: "Keep this revision's scope while fitting its candidate to the length contract.".into(),
+            reason:
+                "Keep this revision's scope while fitting its candidate to the length contract."
+                    .into(),
             excerpt: Some(direction),
             protection: super::narrative_context::ContextProtection::Protected,
         }];
@@ -111,7 +119,11 @@ pub fn compress_revise_chapter_fn(
                 })
                 .map_err(|error| error.message)?;
             let accepted = sink
-                .map(|sink| sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
+                .map(|sink| {
+                    sink.lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone()
+                })
                 .unwrap_or_default();
             Ok(ReviseChapterOutcome {
                 revised_content: output.revised_content,
@@ -172,13 +184,16 @@ pub async fn writer_continue_draft(
     }
     // 独立开篇修复环（TS L456-481）。
     if let Some(target) = input.opening_hook_chars {
-        let valid = validate_opening_hook(current.opening_hook.as_deref(), target, input.language).is_ok();
+        let valid =
+            validate_opening_hook(current.opening_hook.as_deref(), target, input.language).is_ok();
         if !valid {
-        let (minimum, maximum) = opening_hook_length_contract(target, input.language);
-        let state: Arc<Mutex<ShortFictionBatchDraft>> = Arc::new(Mutex::new(current));
+            let (minimum, maximum) = opening_hook_length_contract(target, input.language);
+            let state: Arc<Mutex<ShortFictionBatchDraft>> = Arc::new(Mutex::new(current));
             let system = "Write the requested independent opening scene before chapter one. Preserve the supplied title, story events and first chapter. Submit only the opening scene through the tool.";
             let user = {
-                let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let guard = state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 serde_json::json!({
                     "title": guard.story_title,
                     "targetLength": target,
@@ -214,19 +229,30 @@ pub async fn writer_continue_draft(
                         )
                     };
                     let improves = {
-                        let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let guard = state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         distance(Some(&candidate)) <= distance(guard.opening_hook.as_deref())
                     };
                     if improves {
                         {
-                            let mut guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            let mut guard = state
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                             guard.opening_hook = Some(candidate.clone());
-                            guard.raw_content = render_short_fiction_draft_markdown(&guard, language_for_validate)
-                                .map_err(|error| WriterChainError::new("SHORT_RENDER_FAILED", error.message))
-                                .map_err(|error| StructuredToolError::coded(&error.code, error.message))?;
+                            guard.raw_content =
+                                render_short_fiction_draft_markdown(&guard, language_for_validate)
+                                    .map_err(|error| {
+                                        WriterChainError::new("SHORT_RENDER_FAILED", error.message)
+                                    })
+                                    .map_err(|error| {
+                                        StructuredToolError::coded(&error.code, error.message)
+                                    })?;
                         }
                         let (snapshot, completed) = {
-                            let guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            let guard = state
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
                             let invalid: std::collections::BTreeSet<u32> =
                                 find_incomplete_short_fiction_chapters(
                                     &guard,
@@ -249,24 +275,25 @@ pub async fn writer_continue_draft(
                                 .collect();
                             (guard.clone(), completed)
                         };
-                        on_batch_complete(&snapshot, &completed).await.map_err(|message| {
-                            StructuredToolError::coded("WORKER_PERSIST_FAILED", message)
-                        })?;
+                        on_batch_complete(&snapshot, &completed)
+                            .await
+                            .map_err(|message| {
+                                StructuredToolError::coded("WORKER_PERSIST_FAILED", message)
+                            })?;
                     }
-                    validate_opening_hook(Some(&candidate), target_for_validate, language_for_validate)
-                        .map_err(|error| {
-                            StructuredToolError::coded(error.code, error.message)
-                        })?;
+                    validate_opening_hook(
+                        Some(&candidate),
+                        target_for_validate,
+                        language_for_validate,
+                    )
+                    .map_err(|error| StructuredToolError::coded(error.code, error.message))?;
                     Ok(value)
                 })
             });
             let outcome = run_structured_tool(
                 Arc::clone(&agents.chat),
                 &agents.model,
-                &agents.messages_with_prelude(
-                    vec![llm_system(system), llm_user(&user)],
-                    true,
-                ),
+                &agents.messages_with_prelude(vec![llm_system(system), llm_user(&user)], true),
                 agents.defaults.clone(),
                 WorkerToolSpec {
                     name: "submit_short_opening_hook".into(),
@@ -289,7 +316,10 @@ pub async fn writer_continue_draft(
                 },
             )
             .await
-            .map_err(|error| WriterChainError { code: error.code, message: error.message })?;
+            .map_err(|error| WriterChainError {
+                code: error.code,
+                message: error.message,
+            })?;
             let hook = outcome
                 .result
                 .get("openingHook")
@@ -297,7 +327,9 @@ pub async fn writer_continue_draft(
                 .unwrap_or_default()
                 .trim()
                 .to_string();
-            let mut guard = state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             guard.opening_hook = Some(hook);
             guard.raw_content = render_short_fiction_draft_markdown(&guard, input.language)
                 .map_err(|error| WriterChainError::new("SHORT_RENDER_FAILED", error.message))?;
@@ -363,8 +395,8 @@ pub async fn writer_continue_draft(
     let complete_for_progress = on_batch_complete.clone();
     let language_for_progress = input.language;
     let bounds_for_progress = (input.min_chapter_length, input.max_chapter_length);
-    let on_revision_progress: OnRevisionProgress = Arc::new(
-        move |draft: &ShortFictionBatchDraft, _completed: &[u32]| {
+    let on_revision_progress: OnRevisionProgress =
+        Arc::new(move |draft: &ShortFictionBatchDraft, _completed: &[u32]| {
             let current_snapshot = current_snapshot.clone();
             let complete_for_progress = Arc::clone(&complete_for_progress);
             let (min_bound, max_bound) = bounds_for_progress;
@@ -397,8 +429,7 @@ pub async fn writer_continue_draft(
                     .collect();
                 complete_for_progress(&draft_owned, &completed).await
             })
-        },
-    );
+        });
     let context = ApplyRevisionPlanContext {
         chat: &agents.chat,
         model: &agents.model,
@@ -492,12 +523,25 @@ pub fn scoped_or_compress_revise_chapter_fn(
                         title: title.as_deref(),
                         path: None,
                     };
-                    super::source_locator::select(&agents, &source, &select_request, Some(&identity), select_language)
-                        .await
-                        .map_err(|error| error.message)
+                    super::source_locator::select(
+                        &agents,
+                        &source,
+                        &select_request,
+                        Some(&identity),
+                        select_language,
+                    )
+                    .await
+                    .map_err(|error| error.message)
                 })
                     as std::pin::Pin<
-                        Box<dyn std::future::Future<Output = Result<crate::production::author_edit_scope::AuthorTextScope, String>> + Send>,
+                        Box<
+                            dyn std::future::Future<
+                                    Output = Result<
+                                        crate::production::author_edit_scope::AuthorTextScope,
+                                        String,
+                                    >,
+                                > + Send,
+                        >,
                     >
             };
             // TS body()：章题在场时剥文档壳（chapterDocumentBody）。
@@ -512,29 +556,30 @@ pub fn scoped_or_compress_revise_chapter_fn(
             };
             let original_body = body(&scoped.author_original_content);
             let current_body = body(&request.pending_content);
-            let permission = crate::production::author_text_permission::resolve_author_text_permission(
-                select,
-                crate::production::author_text_permission::ResolveAuthorTextPermissionInput {
-                    work_id: &scoped.author_work_id,
-                    artifact_id: &scoped.author_artifact_id,
-                    revision_id: &scoped.author_revision_id,
-                    original_content: &original_body,
-                    current_content: &current_body,
-                    author_request: &scoped.author_request,
-                    selector_version: 7,
-                },
-            )
-            .await
-            .map_err(|error| error.message)?;
+            let permission =
+                crate::production::author_text_permission::resolve_author_text_permission(
+                    select,
+                    crate::production::author_text_permission::ResolveAuthorTextPermissionInput {
+                        work_id: &scoped.author_work_id,
+                        artifact_id: &scoped.author_artifact_id,
+                        revision_id: &scoped.author_revision_id,
+                        original_content: &original_body,
+                        current_content: &current_body,
+                        author_request: &scoped.author_request,
+                        selector_version: 7,
+                    },
+                )
+                .await
+                .map_err(|error| error.message)?;
             // TS：ranges[0] 有 startOffset 才走 authorized 直接执行；行区间
             // 面走 edit_ranges 自主（未授权 spot-fix 同形态）。
             let resolved = match permission.contract {
-                crate::production::author_edit_scope::AuthorTextEditContract::Scoped(scoped_contract) => {
-                    Some(super::short_fiction_reviser::ResolvedPermission {
-                        scoped: Arc::new(scoped_contract),
-                        original_selection_texts: permission.original_selection_texts,
-                    })
-                }
+                crate::production::author_edit_scope::AuthorTextEditContract::Scoped(
+                    scoped_contract,
+                ) => Some(super::short_fiction_reviser::ResolvedPermission {
+                    scoped: Arc::new(scoped_contract),
+                    original_selection_texts: permission.original_selection_texts,
+                }),
                 crate::production::author_edit_scope::AuthorTextEditContract::Ranges(_) => None,
             };
             let length_spec = super::length_contract::build_length_spec(
@@ -560,10 +605,16 @@ pub fn scoped_or_compress_revise_chapter_fn(
                 length_spec: Some(&length_spec),
                 candidate_sink: request.candidate_sink.clone(),
             };
-            let output = super::short_fiction_reviser::revise_chapter(&agents, input, resolved.as_ref()).await?;
+            let output =
+                super::short_fiction_reviser::revise_chapter(&agents, input, resolved.as_ref())
+                    .await?;
             let accepted = request
                 .candidate_sink
-                .map(|sink| sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
+                .map(|sink| {
+                    sink.lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone()
+                })
                 .unwrap_or_default();
             Ok(ReviseChapterOutcome {
                 revised_content: output.revised_content,
@@ -599,13 +650,18 @@ pub async fn writer_plan_revision(
 ) -> Result<ShortRevisionPlan, WriterChainError> {
     let system = "Plan only the changes required by the author's current request. Omit unchanged chapter fields, the opening scene and the outline. An opening-only edit needs no chapter edits. Chapter fields refer to FINAL slots: sourceNumber copies an original chapter unchanged, and an instruction revises that slot. Use sourceNumber 0 and a writing instruction for a new scene. When restructuring, provide the updated complete outline and map every displaced slot; each unchanged source scene can appear once. Use the supplied final chapter count, which includes the author's explicit updates. Preserve all other author constraints, chronology and scope. Reviewer and coordinator suggestions are candidate diagnoses, not permission or established story facts. Verify their proposed corrections against the original manuscript and the author's request before using them.";
     let mut user = serde_json::Map::new();
-    user.insert("title".into(), Value::String(input.draft.story_title.clone()));
+    user.insert(
+        "title".into(),
+        Value::String(input.draft.story_title.clone()),
+    );
     user.insert(
         "userRequest".into(),
-        Value::String(input
-            .author_source_request
-            .unwrap_or(input.direction)
-            .to_string()),
+        Value::String(
+            input
+                .author_source_request
+                .unwrap_or(input.direction)
+                .to_string(),
+        ),
     );
     user.insert(
         "allowedParts".into(),
@@ -625,7 +681,10 @@ pub async fn writer_plan_revision(
             }),
         );
     }
-    user.insert("requiredChapterCount".into(), Value::from(input.chapter_count));
+    user.insert(
+        "requiredChapterCount".into(),
+        Value::from(input.chapter_count),
+    );
     user.insert(
         "allowedChapterNumbers".into(),
         input
@@ -634,7 +693,10 @@ pub async fn writer_plan_revision(
             .map(|numbers| serde_json::to_value(numbers).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
     );
-    user.insert("outline".into(), Value::String(input.outline_markdown.to_string()));
+    user.insert(
+        "outline".into(),
+        Value::String(input.outline_markdown.to_string()),
+    );
     user.insert("review".into(), Value::String(input.review.to_string()));
     user.insert(
         "originalManuscript".into(),
@@ -657,7 +719,11 @@ pub async fn writer_plan_revision(
         );
     }
     let user = Value::Object(user).to_string();
-    let allow_story_title = input.author_scope.map(|scope| scope.story_title).unwrap_or(None).unwrap_or(false);
+    let allow_story_title = input
+        .author_scope
+        .map(|scope| scope.story_title)
+        .unwrap_or(None)
+        .unwrap_or(false);
     let schema = short_revision_plan_submission_schema(
         input.chapter_count,
         input.draft.chapters.len() as u32,
@@ -673,9 +739,14 @@ pub async fn writer_plan_revision(
     let opening_hook_chars = input.opening_hook_chars;
     let language = input.language;
     let outline_markdown = input.outline_markdown.to_string();
-    let author_scope_story_title =
-        input.author_scope.map(|scope| scope.story_title.unwrap_or(false)).unwrap_or(false);
-    let author_scope_opening = input.author_scope.map(|scope| scope.opening).unwrap_or(false);
+    let author_scope_story_title = input
+        .author_scope
+        .map(|scope| scope.story_title.unwrap_or(false))
+        .unwrap_or(false);
+    let author_scope_opening = input
+        .author_scope
+        .map(|scope| scope.opening)
+        .unwrap_or(false);
     let validate: ValidateFn = Arc::new(move |value: Value| {
         // Fn 语义：每次调用重建借用（捕获值在闭包内克隆）。
         let chapter_numbers = chapter_numbers.clone();
@@ -726,7 +797,10 @@ pub async fn writer_plan_revision(
         },
     )
     .await
-    .map_err(|error| WriterChainError { code: error.code, message: error.message })?;
+    .map_err(|error| WriterChainError {
+        code: error.code,
+        message: error.message,
+    })?;
     let plan = normalize_plan_result(&outcome.result, input.chapter_count)
         .map_err(|message| WriterChainError::new("SHORT_REVISION_PLAN_INVALID", message))?;
     validate_revision_plan(
@@ -766,26 +840,44 @@ fn normalize_plan_result(result: &Value, chapter_count: u32) -> Result<ShortRevi
         .get("outlineMarkdown")
         .and_then(Value::as_str)
         .map(str::to_string);
-    let opening_hook = result.get("openingHook").and_then(Value::as_str).map(str::to_string);
+    let opening_hook = result
+        .get("openingHook")
+        .and_then(Value::as_str)
+        .map(str::to_string);
     let chapters = (1..=chapter_count)
         .filter_map(|number| {
-            let source_number = result.get(format!("chapter_{number}_sourceNumber")).and_then(Value::as_u64).map(|value| value as u32);
+            let source_number = result
+                .get(format!("chapter_{number}_sourceNumber"))
+                .and_then(Value::as_u64)
+                .map(|value| value as u32);
             let instruction = result
                 .get(format!("chapter_{number}_instruction"))
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
                 .map(str::to_string);
-            let changed = source_number.map(|source| source != number).unwrap_or(false)
+            let changed = source_number
+                .map(|source| source != number)
+                .unwrap_or(false)
                 || instruction.is_some();
             if changed {
-                Some(ShortRevisionPlanChapter { number, source_number, instruction })
+                Some(ShortRevisionPlanChapter {
+                    number,
+                    source_number,
+                    instruction,
+                })
             } else {
                 None
             }
         })
         .collect();
-    Ok(ShortRevisionPlan { story_title, revision_brief, outline_markdown, opening_hook, chapters })
+    Ok(ShortRevisionPlan {
+        story_title,
+        revision_brief,
+        outline_markdown,
+        opening_hook,
+        chapters,
+    })
 }
 
 pub struct ReviseDraftInput<'a> {
@@ -815,7 +907,10 @@ pub async fn writer_revise_draft(
     on_revision_progress: OnRevisionProgress,
 ) -> Result<(ShortFictionBatchDraft, String), WriterChainError> {
     let fast_path = matches!(input.chapter_numbers.as_deref(), Some([_]))
-        && input.author_scope.map(|scope| !scope.opening && !scope.outline && !scope.story_title.unwrap_or(false)).unwrap_or(true);
+        && input
+            .author_scope
+            .map(|scope| !scope.opening && !scope.outline && !scope.story_title.unwrap_or(false))
+            .unwrap_or(true);
     let submitted = if fast_path {
         let numbers = input.chapter_numbers.clone().unwrap_or_default();
         ShortRevisionPlan {
@@ -921,7 +1016,10 @@ mod tests {
     use std::collections::VecDeque;
 
     fn tokio() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
     }
 
     fn scripted(script: Vec<ChatTurnResponse>) -> ShortAgents {
@@ -929,7 +1027,9 @@ mod tests {
         let chat: crate::production::structured_agent::ChatTurnFn = Arc::new(move |_request| {
             let script = Arc::clone(&script);
             Box::pin(async move {
-                let mut guard = script.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut guard = script
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard.pop_front().ok_or_else(|| {
                     crate::production::structured_agent::ChatTurnError {
                         message: "script exhausted".into(),
@@ -941,7 +1041,10 @@ mod tests {
         let mut agents = ShortAgents::new(
             chat,
             "test-model",
-            StructuredDefaults { temperature: 0.7, max_tokens: 8192 },
+            StructuredDefaults {
+                temperature: 0.7,
+                max_tokens: 8192,
+            },
         );
         agents.author_request = None;
         agents
@@ -997,41 +1100,49 @@ mod tests {
         );
         let notified = Arc::new(Mutex::new(Vec::new()));
         let notified_for_cb = Arc::clone(&notified);
-        let on_batch: OnBatchComplete = Arc::new(
-            move |draft: &ShortFictionBatchDraft, completed: &[u32]| {
+        let on_batch: OnBatchComplete =
+            Arc::new(move |draft: &ShortFictionBatchDraft, completed: &[u32]| {
                 let notified_for_cb = Arc::clone(&notified_for_cb);
-                let contents =
-                    draft.chapters.iter().map(|chapter| chapter.content.clone()).collect::<Vec<_>>();
+                let contents = draft
+                    .chapters
+                    .iter()
+                    .map(|chapter| chapter.content.clone())
+                    .collect::<Vec<_>>();
                 let completed: Vec<u32> = completed.to_vec();
                 Box::pin(async move {
-                    notified_for_cb.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((contents, completed));
+                    notified_for_cb
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push((contents, completed));
                     Ok(())
                 })
-            },
-        );
-        let result = tokio().block_on(writer_continue_draft(
-            &agents,
-            &ContinueDraftInput {
-                title: None,
-                opening_hook_chars: None,
-                direction: "完成缺章",
-                outline_markdown: "# 大纲",
-                chapter_count: 2,
-                chars_per_chapter: 30,
-                min_chapter_length: Some(1),
-                max_chapter_length: None,
-                language: WritingLanguage::Zh,
-                draft: &source,
-            },
-            Some(&revise),
-            on_batch,
-        ))
-        .unwrap();
+            });
+        let result = tokio()
+            .block_on(writer_continue_draft(
+                &agents,
+                &ContinueDraftInput {
+                    title: None,
+                    opening_hook_chars: None,
+                    direction: "完成缺章",
+                    outline_markdown: "# 大纲",
+                    chapter_count: 2,
+                    chars_per_chapter: 30,
+                    min_chapter_length: Some(1),
+                    max_chapter_length: None,
+                    language: WritingLanguage::Zh,
+                    draft: &source,
+                },
+                Some(&revise),
+                on_batch,
+            ))
+            .unwrap();
         assert_eq!(result.chapters.len(), 2);
         assert_eq!(result.chapters[1].title, "第二章");
         assert!(!result.chapters[1].content.trim().is_empty());
         assert!(result.raw_content.contains("第二章"));
-        let notifications = notified.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let notifications = notified
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert!(!notifications.is_empty());
     }
 
@@ -1039,24 +1150,25 @@ mod tests {
     fn continue_draft_title_mismatch_fails() {
         let source = draft_of(&[(1, "第一章", "正文。")]);
         let agents = scripted(vec![]);
-        let error = tokio().block_on(writer_continue_draft(
-            &agents,
-            &ContinueDraftInput {
-                title: Some("别的标题"),
-                opening_hook_chars: None,
-                direction: "方向",
-                outline_markdown: "# 大纲",
-                chapter_count: 1,
-                chars_per_chapter: 30,
-                min_chapter_length: None,
-                max_chapter_length: None,
-                language: WritingLanguage::Zh,
-                draft: &source,
-            },
-            None,
-            Arc::new(|_, _| Box::pin(async { Ok(()) })),
-        ))
-        .unwrap_err();
+        let error = tokio()
+            .block_on(writer_continue_draft(
+                &agents,
+                &ContinueDraftInput {
+                    title: Some("别的标题"),
+                    opening_hook_chars: None,
+                    direction: "方向",
+                    outline_markdown: "# 大纲",
+                    chapter_count: 1,
+                    chars_per_chapter: 30,
+                    min_chapter_length: None,
+                    max_chapter_length: None,
+                    language: WritingLanguage::Zh,
+                    draft: &source,
+                },
+                None,
+                Arc::new(|_, _| Box::pin(async { Ok(()) })),
+            ))
+            .unwrap_err();
         assert_eq!(error.code, "SHORT_TITLE_MISMATCH");
     }
 
@@ -1068,28 +1180,29 @@ mod tests {
             "submit_short_revision_chapter",
             serde_json::json!({ "title": "第一章改", "content": "修订后的正文内容，保持长度要求与事实一致。" }),
         )]);
-        let (revised, outline) = tokio().block_on(writer_revise_draft(
-            &agents,
-            &ReviseDraftInput {
-                direction: "重写第一章",
-                outline_markdown: "# 大纲",
-                chapter_count: 2,
-                chars_per_chapter: 30,
-                min_chapter_length: Some(1),
-                max_chapter_length: None,
-                opening_hook_chars: None,
-                language: WritingLanguage::Zh,
-                draft: &source,
-                review: "",
-                chapter_numbers: Some(vec![1]),
-                author_scope: None,
-                author_source_request: None,
-                author_source: None,
-            },
-            None,
-            Arc::new(|_, _| Box::pin(async { Ok(()) })),
-        ))
-        .unwrap();
+        let (revised, outline) = tokio()
+            .block_on(writer_revise_draft(
+                &agents,
+                &ReviseDraftInput {
+                    direction: "重写第一章",
+                    outline_markdown: "# 大纲",
+                    chapter_count: 2,
+                    chars_per_chapter: 30,
+                    min_chapter_length: Some(1),
+                    max_chapter_length: None,
+                    opening_hook_chars: None,
+                    language: WritingLanguage::Zh,
+                    draft: &source,
+                    review: "",
+                    chapter_numbers: Some(vec![1]),
+                    author_scope: None,
+                    author_source_request: None,
+                    author_source: None,
+                },
+                None,
+                Arc::new(|_, _| Box::pin(async { Ok(()) })),
+            ))
+            .unwrap();
         assert_eq!(revised.chapters[0].title, "第一章改");
         assert_eq!(revised.chapters[1].content, "原始正文二。");
         assert_eq!(outline, "# 大纲");

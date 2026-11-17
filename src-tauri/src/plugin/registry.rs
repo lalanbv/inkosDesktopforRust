@@ -151,11 +151,7 @@ impl PluginRegistryIndex {
 
     /// 返回每个 id 下**最高兼容版本**的条目（去重 + 兼容过滤）。
     /// 供 browse：一个插件只展示其最新可用版本。版本排序后 id 字典序，UI 稳定。
-    pub fn latest_compatible(
-        &self,
-        host_version: &Version,
-        host_abi: &str,
-    ) -> Vec<&RegistryEntry> {
+    pub fn latest_compatible(&self, host_version: &Version, host_abi: &str) -> Vec<&RegistryEntry> {
         let mut ids: Vec<&str> = self.plugins.iter().map(|e| e.id.as_str()).collect();
         ids.sort();
         ids.dedup();
@@ -183,10 +179,15 @@ impl RegistryEntry {
         if self.version.is_empty() {
             bail!("插件 {} version 不能为空", self.id);
         }
-        Version::parse(&self.version)
-            .map_err(|_| anyhow::anyhow!("插件 {} version 非法 semver: {}", self.id, self.version))?;
+        Version::parse(&self.version).map_err(|_| {
+            anyhow::anyhow!("插件 {} version 非法 semver: {}", self.id, self.version)
+        })?;
         Version::parse(&self.min_host_version).map_err(|_| {
-            anyhow::anyhow!("插件 {} min_host_version 非法 semver: {}", self.id, self.min_host_version)
+            anyhow::anyhow!(
+                "插件 {} min_host_version 非法 semver: {}",
+                self.id,
+                self.min_host_version
+            )
         })?;
         if !self.download_url.starts_with("https://") {
             bail!(
@@ -196,7 +197,12 @@ impl RegistryEntry {
             );
         }
         if !is_hex_of_len(&self.sha256, SHA256_HEX_LEN) {
-            bail!("插件 {} sha256 必须为 {} 位 hex: {}", self.id, SHA256_HEX_LEN, self.sha256);
+            bail!(
+                "插件 {} sha256 必须为 {} 位 hex: {}",
+                self.id,
+                SHA256_HEX_LEN,
+                self.sha256
+            );
         }
         if !is_hex_of_len(&self.signature, ED25519_SIG_HEX_LEN) {
             bail!(
@@ -270,9 +276,8 @@ impl RegistryEntry {
             );
         }
         let sig_bytes = sig::decode_hex(&self.signature).context("插件签名 hex 解码失败")?;
-        sig::verify(bundle, &sig_bytes, pubkey).with_context(|| {
-            format!("插件 {} 包签名验证失败——拒绝（可能被篡改）", self.id)
-        })?;
+        sig::verify(bundle, &sig_bytes, pubkey)
+            .with_context(|| format!("插件 {} 包签名验证失败——拒绝（可能被篡改）", self.id))?;
         Ok(())
     }
 }
@@ -294,7 +299,10 @@ pub struct UpdateInfo {
 ///
 /// 纯函数：注册表支持多版本（同 id 多条），`find_latest` 取最高版本做 semver 比较。
 /// 版本不可解析的条目跳过（不 panic）。
-pub fn check_updates(installed: &[(String, String)], registry: &PluginRegistryIndex) -> Vec<UpdateInfo> {
+pub fn check_updates(
+    installed: &[(String, String)],
+    registry: &PluginRegistryIndex,
+) -> Vec<UpdateInfo> {
     installed
         .iter()
         .filter_map(|(id, cur)| {
@@ -336,7 +344,9 @@ where
     F: Fn(&str) -> Fut,
     Fut: std::future::Future<Output = Result<Vec<u8>>>,
 {
-    let toml_bytes = fetch(registry_url).await.context("拉取 registry.toml 失败")?;
+    let toml_bytes = fetch(registry_url)
+        .await
+        .context("拉取 registry.toml 失败")?;
     let sig_bytes = fetch(&format!("{registry_url}.sig"))
         .await
         .context("拉取 registry.toml.sig 失败")?;
@@ -375,13 +385,14 @@ async fn check_resolved_addrs_public(host: &str) -> Result<()> {
     let host_owned = host.to_string();
     // to_socket_addrs 阻塞（OS resolver），放 blocking 池避免占用 async worker。
     // 端口 0 仅为满足 ToSocketAddrs 签名，不参与判定（filter 只看 IP）。
-    let filtered = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<std::net::SocketAddr>> {
-        let resolved: Vec<std::net::SocketAddr> =
-            std::net::ToSocketAddrs::to_socket_addrs(&(host_owned.as_str(), 0))?.collect();
-        filter_public_addrs(resolved)
-    })
-    .await
-    .context("DNS 解析任务执行失败")?;
+    let filtered =
+        tokio::task::spawn_blocking(move || -> std::io::Result<Vec<std::net::SocketAddr>> {
+            let resolved: Vec<std::net::SocketAddr> =
+                std::net::ToSocketAddrs::to_socket_addrs(&(host_owned.as_str(), 0))?.collect();
+            filter_public_addrs(resolved)
+        })
+        .await
+        .context("DNS 解析任务执行失败")?;
 
     // filter_public_addrs 在过滤后为空时已返回 Err（PermissionDenied），
     // 故此处无需单独判空——Ok 即意味着至少一个公网地址。
@@ -430,11 +441,7 @@ pub const MAX_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 /// 该不变量由 [`NoRedirectClient`] 在**类型层**保证：其构造函数是唯一入口且
 /// 强制 `Policy::none()`。reqwest 的 `Client` 不暴露策略查询接口，无法运行时断言，
 /// 故用新类型把「已禁重定向」变成编译期事实，而非调用方需记住的约定。
-pub async fn http_fetch(
-    client: &NoRedirectClient,
-    url: &str,
-    max_bytes: u64,
-) -> Result<Vec<u8>> {
+pub async fn http_fetch(client: &NoRedirectClient, url: &str, max_bytes: u64) -> Result<Vec<u8>> {
     let client = client.as_inner();
     // scheme 校验：仅允许 https://，拒绝 http://（防明文 MitM）和其他 scheme。
     // 注册表索引 + bundle 均须经 TLS 传输；bundle 有 Ed25519 签名（完整性保障），
@@ -551,9 +558,7 @@ pub fn safe_extract_tar_gz(archive: &[u8], dest: &Path) -> Result<()> {
             .with_context(|| format!("读条目 size 失败: {}", raw_path.display()))?;
         total_bytes = total_bytes.saturating_add(size);
         if total_bytes > MAX_EXTRACTED_BYTES {
-            bail!(
-                "tar 解压累计 {total_bytes} 字节超上限 {MAX_EXTRACTED_BYTES}，拒绝（防 DoS）"
-            );
+            bail!("tar 解压累计 {total_bytes} 字节超上限 {MAX_EXTRACTED_BYTES}，拒绝（防 DoS）");
         }
         // 关闭权限位保留（跨平台一致；避免解压出 setuid 等危险位）
         entry.set_preserve_permissions(false);
@@ -726,14 +731,19 @@ capabilities = []
 
     #[test]
     fn test_parse_rejects_entry_bad_version() {
-        let toml = valid_registry_toml().replacen("version = \"1.0.0\"", "version = \"not-semver\"", 1);
+        let toml =
+            valid_registry_toml().replacen("version = \"1.0.0\"", "version = \"not-semver\"", 1);
         let err = PluginRegistryIndex::parse(&toml).unwrap_err();
         assert!(err.to_string().contains("非法 semver"));
     }
 
     #[test]
     fn test_parse_rejects_entry_http_url() {
-        let toml = valid_registry_toml().replacen("https://example.com/plugin", "http://example.com/plugin", 1);
+        let toml = valid_registry_toml().replacen(
+            "https://example.com/plugin",
+            "http://example.com/plugin",
+            1,
+        );
         let err = PluginRegistryIndex::parse(&toml).unwrap_err();
         assert!(err.to_string().contains("必须为 https://"));
     }
@@ -745,7 +755,10 @@ capabilities = []
             "sha256 = \"tooshort\"",
             1,
         );
-        assert!(PluginRegistryIndex::parse(&toml).unwrap_err().to_string().contains("sha256"));
+        assert!(PluginRegistryIndex::parse(&toml)
+            .unwrap_err()
+            .to_string()
+            .contains("sha256"));
     }
 
     #[test]
@@ -755,7 +768,10 @@ capabilities = []
             "signature = \"deadbeef\"",
             1,
         );
-        assert!(PluginRegistryIndex::parse(&toml).unwrap_err().to_string().contains("signature"));
+        assert!(PluginRegistryIndex::parse(&toml)
+            .unwrap_err()
+            .to_string()
+            .contains("signature"));
     }
 
     #[test]
@@ -772,19 +788,21 @@ capabilities = []
     #[test]
     fn test_multi_version_find_latest_and_compatible() {
         // 多版本：把 another-plugin 改成 example-plugin 的另一版本（2.1.3）
-        let toml = valid_registry_toml()
-            .replacen("id = \"another-plugin\"", "id = \"example-plugin\"", 1);
+        let toml =
+            valid_registry_toml().replacen("id = \"another-plugin\"", "id = \"example-plugin\"", 1);
         let idx = PluginRegistryIndex::parse(&toml).unwrap(); // 多版本（同 id）允许
 
         // find_latest 取最高版本
         assert_eq!(
-            idx.find_latest("example-plugin").map(|e| e.version.as_str()),
+            idx.find_latest("example-plugin")
+                .map(|e| e.version.as_str()),
             Some("2.1.3")
         );
         // find_version 取指定版本（锁定/回滚）
         let v100 = Version::parse("1.0.0").unwrap();
         assert_eq!(
-            idx.find_version("example-plugin", &v100).map(|e| e.version.as_str()),
+            idx.find_version("example-plugin", &v100)
+                .map(|e| e.version.as_str()),
             Some("1.0.0")
         );
         // latest_compatible 去重：两个 example-plugin 条目 → 一个最高兼容版
@@ -796,8 +814,8 @@ capabilities = []
 
     #[test]
     fn test_find_all_versions_desc() {
-        let toml = valid_registry_toml()
-            .replacen("id = \"another-plugin\"", "id = \"example-plugin\"", 1);
+        let toml =
+            valid_registry_toml().replacen("id = \"another-plugin\"", "id = \"example-plugin\"", 1);
         let idx = PluginRegistryIndex::parse(&toml).unwrap();
         let versions = idx.find_all_versions("example-plugin");
         assert_eq!(versions.len(), 2);
@@ -944,7 +962,12 @@ capabilities = []{deps_line}
         let raw = valid_registry_toml();
         let sig_hex = sig::encode_hex(&signing_a.sign(raw.as_bytes()).to_bytes());
         // 用 B 的公钥验 A 的签名 → 失败
-        assert!(PluginRegistryIndex::verify_signature(raw.as_bytes(), &sig_hex, &signing_b.verifying_key().to_bytes()).is_err());
+        assert!(PluginRegistryIndex::verify_signature(
+            raw.as_bytes(),
+            &sig_hex,
+            &signing_b.verifying_key().to_bytes()
+        )
+        .is_err());
     }
 
     #[test]
@@ -960,7 +983,8 @@ capabilities = []{deps_line}
     fn test_find_latest_by_id() {
         let idx = PluginRegistryIndex::parse(&valid_registry_toml()).unwrap();
         assert_eq!(
-            idx.find_latest("example-plugin").map(|e| e.version.as_str()),
+            idx.find_latest("example-plugin")
+                .map(|e| e.version.as_str()),
             Some("1.0.0")
         );
         assert!(idx.find_latest("nope").is_none());
@@ -985,11 +1009,19 @@ capabilities = []{deps_line}
         assert_eq!(up[0].installed_version, "0.9.0");
 
         // 已装同版 → 无更新
-        assert!(check_updates(&[("example-plugin".to_string(), "1.0.0".to_string())], &idx).is_empty());
+        assert!(
+            check_updates(&[("example-plugin".to_string(), "1.0.0".to_string())], &idx).is_empty()
+        );
         // 已装更新版（registry 旧）→ 无更新
-        assert!(check_updates(&[("example-plugin".to_string(), "2.0.0".to_string())], &idx).is_empty());
+        assert!(
+            check_updates(&[("example-plugin".to_string(), "2.0.0".to_string())], &idx).is_empty()
+        );
         // 注册表无此 id → 无更新
-        assert!(check_updates(&[("not-in-registry".to_string(), "1.0.0".to_string())], &idx).is_empty());
+        assert!(check_updates(
+            &[("not-in-registry".to_string(), "1.0.0".to_string())],
+            &idx
+        )
+        .is_empty());
     }
 
     /// 用签名钥对 bundle 签名 + 算 sha256，构造合法条目（verify_bundle 测试用）
@@ -1027,10 +1059,34 @@ capabilities = []{deps_line}
         // 每种字段单独破坏 → validate 拒绝且错误点名该字段。
         // 直接构造变体条目（而非 Box<dyn Fn> mutator）：字段名与坏值就地对照，更易读。
         let bad_entries: [(&str, RegistryEntry); 6] = [
-            ("name", RegistryEntry { name: long.clone(), ..base.clone() }),
-            ("author", RegistryEntry { author: long.clone(), ..base.clone() }),
-            ("license", RegistryEntry { license: long.clone(), ..base.clone() }),
-            ("description", RegistryEntry { description: long_desc, ..base.clone() }),
+            (
+                "name",
+                RegistryEntry {
+                    name: long.clone(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "author",
+                RegistryEntry {
+                    author: long.clone(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "license",
+                RegistryEntry {
+                    license: long.clone(),
+                    ..base.clone()
+                },
+            ),
+            (
+                "description",
+                RegistryEntry {
+                    description: long_desc,
+                    ..base.clone()
+                },
+            ),
             // 换行可伪造结构化日志行
             (
                 "name",
@@ -1039,7 +1095,13 @@ capabilities = []{deps_line}
                     ..base.clone()
                 },
             ),
-            ("homepage", RegistryEntry { homepage: Some(long_url), ..base.clone() }),
+            (
+                "homepage",
+                RegistryEntry {
+                    homepage: Some(long_url),
+                    ..base.clone()
+                },
+            ),
         ];
 
         for (field, entry) in bad_entries {
@@ -1047,10 +1109,7 @@ capabilities = []{deps_line}
                 .validate()
                 .expect_err(&format!("{field} 超长/含控制字符应被拒绝"));
             let msg = err.to_string();
-            assert!(
-                msg.contains(field),
-                "错误应点名字段 {field}，实际: {msg}"
-            );
+            assert!(msg.contains(field), "错误应点名字段 {field}，实际: {msg}");
         }
 
         // 反向：正常中文元数据通过（校验不过严）
@@ -1110,7 +1169,8 @@ capabilities = []{deps_line}
     fn registry_fetch(
         toml_bytes: Vec<u8>,
         sig_hex: String,
-    ) -> impl Fn(&str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>>>> {
+    ) -> impl Fn(&str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>>>>
+    {
         move |url: &str| {
             let payload = if url.ends_with(".sig") {
                 sig_hex.clone().into_bytes()
@@ -1173,10 +1233,9 @@ capabilities = []{deps_line}
     async fn test_fetch_registry_rejects_fetch_error() {
         let signing = SigningKey::generate(&mut OsRng);
         let pubkey = signing.verifying_key().to_bytes();
-        let fetch_err = |_url: &str|
-            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>>>>> {
-            Box::pin(async { Err(anyhow::anyhow!("网络不可达")) })
-        };
+        let fetch_err = |_url: &str| -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<u8>>>>,
+        > { Box::pin(async { Err(anyhow::anyhow!("网络不可达")) }) };
         let result = fetch_registry("http://127.0.0.1/registry.toml", &pubkey, fetch_err).await;
         assert!(result.is_err());
         assert!(result
@@ -1270,11 +1329,11 @@ capabilities = []{deps_line}
     #[test]
     fn test_safe_extract_rejects_too_many_entries() {
         // MAX_TAR_ENTRIES + 1 个空条目 → 第 4097 个触发条目数上限中止（防海量条目 DoS）。
-        let names: Vec<String> = (0..(MAX_TAR_ENTRIES + 1)).map(|i| format!("f{i}")).collect();
-        let entries: Vec<(&str, &[u8])> = names
-            .iter()
-            .map(|n| (n.as_str(), b"" as &[u8]))
+        let names: Vec<String> = (0..(MAX_TAR_ENTRIES + 1))
+            .map(|i| format!("f{i}"))
             .collect();
+        let entries: Vec<(&str, &[u8])> =
+            names.iter().map(|n| (n.as_str(), b"" as &[u8])).collect();
         let archive = build_tar_gz(&entries);
         let dest = TempDir::new().unwrap();
         let err = safe_extract_tar_gz(&archive, dest.path()).unwrap_err();

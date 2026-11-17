@@ -23,7 +23,7 @@ use crate::harness::source_sync::SyncWorkSourceInput;
 use crate::harness::work_store::load_work_manifest;
 use crate::production::short_fiction_runner::{
     run_short_fiction_stage, EvidenceSink, ShortFictionRunOptions, ShortFictionRunRuntimes,
-    ShortProductionStage, ShortRunExecutionScope, ShortRunError,
+    ShortProductionStage, ShortRunError, ShortRunExecutionScope,
 };
 use crate::server::agent_production::short_production_agents;
 use crate::server::books_routes::BooksRuntime;
@@ -46,9 +46,8 @@ pub async fn run_short_capability_action(
     params: &Value,
 ) -> Result<CapabilityOutcome, String> {
     let store_path = root.join(".inkos").join("harness.sqlite");
-    let episodes = Arc::new(
-        CreativeEpisodeStore::new(&store_path).map_err(|error| error.to_string())?,
-    );
+    let episodes =
+        Arc::new(CreativeEpisodeStore::new(&store_path).map_err(|error| error.to_string())?);
     let outcome = run_action_ring(root, runtime, &episodes, work_id, action_id, params).await;
     episodes.close();
     outcome
@@ -63,10 +62,15 @@ async fn run_action_ring(
     params: &Value,
 ) -> Result<CapabilityOutcome, String> {
     let now = utc_now_iso();
-    let work = load_work_manifest(root, work_id).await.map_err(|error| error.to_string())?;
+    let work = load_work_manifest(root, work_id)
+        .await
+        .map_err(|error| error.to_string())?;
     let profiles = crate::harness::profile_registry::create_built_in_work_profile_registry(root)
         .map_err(|error| error.to_string())?;
-    let profile = profiles.require(&work.profile_id).map_err(|error| error.to_string())?.clone();
+    let profile = profiles
+        .require(&work.profile_id)
+        .map_err(|error| error.to_string())?
+        .clone();
     if !profile.capability_ids.iter().any(|id| id == CAPABILITY_ID) {
         return Err(format!(
             "Profile \"{}\" cannot use capability \"{CAPABILITY_ID}\"",
@@ -85,7 +89,9 @@ async fn run_action_ring(
         started_at: now.clone(),
         completed_at: None,
     };
-    episodes.create(&episode).map_err(|error| error.to_string())?;
+    episodes
+        .create(&episode)
+        .map_err(|error| error.to_string())?;
     let started_payload = json!({
         "profileId": profile.id,
         "baseline": work.artifacts.iter().map(|artifact| json!({
@@ -94,7 +100,15 @@ async fn run_action_ring(
         })).collect::<Vec<_>>(),
     });
     episodes
-        .append(&episode.id, "episode-started", episode.work_id.as_deref(), None, None, &started_payload, &episode.started_at)
+        .append(
+            &episode.id,
+            "episode-started",
+            episode.work_id.as_deref(),
+            None,
+            None,
+            &started_payload,
+            &episode.started_at,
+        )
         .map_err(|error| error.to_string())?;
 
     let action_execution_id = format!("action-{}", uuid::Uuid::new_v4());
@@ -115,8 +129,15 @@ async fn run_action_ring(
         );
     });
     let execution_scope = ShortRunExecutionScope {
-        author_request: params.get("instruction").and_then(Value::as_str).map(str::to_string),
-        baseline_work: Some(Arc::new(load_work_manifest(root, work_id).await.map_err(|error| error.to_string())?)),
+        author_request: params
+            .get("instruction")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        baseline_work: Some(Arc::new(
+            load_work_manifest(root, work_id)
+                .await
+                .map_err(|error| error.to_string())?,
+        )),
         evidence_sink: Some(evidence_sink),
     };
 
@@ -138,7 +159,8 @@ async fn run_action_ring(
                 &utc_now_iso(),
             )
             .map_err(|error| ShortRunError::new("EPISODE_EVENT_FAILED", error.to_string()))?;
-        let outcome = execute_action(runtime, root, work_id, action_id, params, &execution_scope).await?;
+        let outcome =
+            execute_action(runtime, root, work_id, action_id, params, &execution_scope).await?;
         // evidence sink：work-artifacts-synced（动作后登记面转写）。
         let synced = crate::harness::source_sync::sync_work_source_artifacts(SyncWorkSourceInput {
             project_root: root,
@@ -155,7 +177,10 @@ async fn run_action_ring(
         .map_err(|error| ShortRunError::new("SOURCE_SYNC_FAILED", error.to_string()))?;
         let mut payload = crate::harness::source_sync::evidence_payload(&synced.evidence);
         if let Value::Object(map) = &mut payload {
-            map.insert("actionExecutionId".into(), Value::String(action_execution_id.clone()));
+            map.insert(
+                "actionExecutionId".into(),
+                Value::String(action_execution_id.clone()),
+            );
         }
         episodes
             .append(
@@ -366,18 +391,56 @@ async fn execute_action(
 ) -> Result<CapabilityOutcome, ShortRunError> {
     match action_id {
         "plan_short_fiction" => {
-            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Outline, params, execution_scope).await
+            stage_action(
+                runtime,
+                root,
+                work_id,
+                action_id,
+                ShortProductionStage::Outline,
+                params,
+                execution_scope,
+            )
+            .await
         }
         "draft_short_fiction" => {
-            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Draft, params, execution_scope).await
+            stage_action(
+                runtime,
+                root,
+                work_id,
+                action_id,
+                ShortProductionStage::Draft,
+                params,
+                execution_scope,
+            )
+            .await
         }
         "review_short_fiction" => {
-            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Review, params, execution_scope).await
+            stage_action(
+                runtime,
+                root,
+                work_id,
+                action_id,
+                ShortProductionStage::Review,
+                params,
+                execution_scope,
+            )
+            .await
         }
         "package_short_fiction" => {
-            stage_action(runtime, root, work_id, action_id, ShortProductionStage::Package, params, execution_scope).await
+            stage_action(
+                runtime,
+                root,
+                work_id,
+                action_id,
+                ShortProductionStage::Package,
+                params,
+                execution_scope,
+            )
+            .await
         }
-        "revise_short_fiction" => revise_action(runtime, root, work_id, params, execution_scope).await,
+        "revise_short_fiction" => {
+            revise_action(runtime, root, work_id, params, execution_scope).await
+        }
         _ => Err(ShortRunError::new(
             "CAPABILITY_ACTION_UNKNOWN",
             format!("Unknown short-fiction capability action: {action_id}"),
@@ -462,21 +525,30 @@ async fn stage_action(
     options.title = Some(&work.title);
     // production 面（TS `stage==='outline'||stage==='draft' ? params : {}`）：
     // review/package 阶段不读产出参数（TS execute production={} 同语义）。
-    let production = matches!(stage, ShortProductionStage::Outline | ShortProductionStage::Draft);
+    let production = matches!(
+        stage,
+        ShortProductionStage::Outline | ShortProductionStage::Draft
+    );
     options.chapter_count = production.then(|| field_u32("chapters")).flatten();
     options.chars_per_chapter = production.then(|| field_u32("charsPerChapter")).flatten();
     options.min_chapter_length = production.then(|| field_u32("minChapterLength")).flatten();
     options.max_chapter_length = production.then(|| field_u32("maxChapterLength")).flatten();
     options.opening_hook_chars = production.then(|| field_u32("openingHookChars")).flatten();
-    options.max_chapters_per_call = production.then(|| field_u32("maxChaptersPerCall")).flatten();
+    options.max_chapters_per_call = production
+        .then(|| field_u32("maxChaptersPerCall"))
+        .flatten();
     options.cover_required = production
         .then(|| params.get("coverRequired").and_then(Value::as_bool))
         .flatten();
     // reviewScope 全阶段透传（TS `'reviewScope' in params ? params.reviewScope : undefined`）。
     options.review_scope = params.get("reviewScope").and_then(Value::as_str);
     options.retry_stages = match stage {
-        ShortProductionStage::Review => vec![crate::production::short_fiction_runner::ShortRetryStage::Review],
-        ShortProductionStage::Package => vec![crate::production::short_fiction_runner::ShortRetryStage::Package],
+        ShortProductionStage::Review => {
+            vec![crate::production::short_fiction_runner::ShortRetryStage::Review]
+        }
+        ShortProductionStage::Package => {
+            vec![crate::production::short_fiction_runner::ShortRetryStage::Package]
+        }
         _ => Vec::new(),
     };
     options.language = Some(language);
@@ -493,13 +565,20 @@ async fn stage_action(
         crate::production::short_fiction::ShortStageStatus::Completed => "completed",
         crate::production::short_fiction::ShortStageStatus::Failed => "failed",
     };
-    let text = format!("{stage_label} {status_label}: {}", result.artifact_paths.join(", "));
+    let text = format!(
+        "{stage_label} {status_label}: {}",
+        result.artifact_paths.join(", ")
+    );
     let mut details = serde_json::to_value(&result).unwrap_or(Value::Null);
     if let Some(map) = details.as_object_mut() {
         map.insert("workId".into(), json!(result.story_id));
         map.insert(
             "kind".into(),
-            json!(if status_label == "failed" { "short_stage_failed" } else { "short_stage_completed" }),
+            json!(if status_label == "failed" {
+                "short_stage_failed"
+            } else {
+                "short_stage_completed"
+            }),
         );
     }
     Ok(CapabilityOutcome { text, details })
@@ -520,7 +599,10 @@ async fn revise_action(
         crate::utils::language::WritingLanguage::Zh
     };
     let field_u32 = |name: &str| params.get(name).and_then(Value::as_u64).map(|v| v as u32);
-    let direction = params.get("instruction").and_then(Value::as_str).unwrap_or_default();
+    let direction = params
+        .get("instruction")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let runtimes = revise_runtimes(runtime).await;
     let mut options = ShortFictionRunOptions::new(root, direction, &runtimes);
     options.story_id = Some(work_id);
@@ -530,18 +612,28 @@ async fn revise_action(
     options.max_chapter_length = field_u32("maxChapterLength");
     options.cover = Some(false);
     options.resume_operation_id = params.get("resumeOperationId").and_then(Value::as_str);
-    options.restart_pending_revision =
-        params.get("restartPendingRevision").and_then(Value::as_bool).unwrap_or(false);
-    options.revision_chapter_numbers = params
-        .get("chapterNumbers")
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(Value::as_u64).map(|v| v as u32).collect::<Vec<_>>());
+    options.restart_pending_revision = params
+        .get("restartPendingRevision")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    options.revision_chapter_numbers =
+        params
+            .get("chapterNumbers")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .map(|v| v as u32)
+                    .collect::<Vec<_>>()
+            });
     options.language = Some(language);
     options.cover_model = None;
     options.execution = execution_scope.clone();
-    let result =
-        crate::production::short_fiction_runner::revise_short_fiction_production_locked(&options, root, work_id)
-            .await?;
+    let result = crate::production::short_fiction_runner::revise_short_fiction_production_locked(
+        &options, root, work_id,
+    )
+    .await?;
     let text = format!(
         "Revised short fiction \"{}\" with {} review observation(s).",
         work_id,

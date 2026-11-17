@@ -100,15 +100,24 @@ pub struct CoverGenerationRequest {
 /// `resolveCoverGenerationRequest`：env → 项目配置 → preset。
 /// TS `resolveCoverGenerationRequest` 的 model 覆盖面（894 号：coverModel
 /// 入参 → project config model 优先于 env/preset 缺省）。
-pub async fn resolve_cover_generation_request(root: &Path) -> Result<CoverGenerationRequest, String> {
-    let env_endpoint = std::env::var("INKOS_COVER_ENDPOINT").ok().filter(|v| !v.is_empty());
-    let env_base = std::env::var("INKOS_COVER_BASE_URL").ok().filter(|v| !v.is_empty());
+pub async fn resolve_cover_generation_request(
+    root: &Path,
+) -> Result<CoverGenerationRequest, String> {
+    let env_endpoint = std::env::var("INKOS_COVER_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty());
+    let env_base = std::env::var("INKOS_COVER_BASE_URL")
+        .ok()
+        .filter(|v| !v.is_empty());
     if env_endpoint.is_some() || env_base.is_some() {
         let endpoint = match env_endpoint {
             Some(endpoint) => endpoint,
             None => format!(
                 "{}/images/generations",
-                env_base.as_deref().unwrap_or_default().trim_end_matches('/')
+                env_base
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim_end_matches('/')
             ),
         };
         let base_url = env_base.unwrap_or_else(|| {
@@ -146,7 +155,10 @@ pub async fn resolve_cover_generation_request(root: &Path) -> Result<CoverGenera
         );
     };
     let Some(preset) = resolve_cover_provider_preset(&project_cover.service) else {
-        return Err(format!("Unsupported cover service: {}", project_cover.service));
+        return Err(format!(
+            "Unsupported cover service: {}",
+            project_cover.service
+        ));
     };
     let api_key = resolve_project_cover_api_key(root, &project_cover.service).await;
     if api_key.is_empty() {
@@ -193,7 +205,9 @@ struct ProjectCoverConfig {
 }
 
 async fn read_project_cover_config(root: &Path) -> Option<ProjectCoverConfig> {
-    let raw = tokio::fs::read_to_string(root.join("inkos.json")).await.ok()?;
+    let raw = tokio::fs::read_to_string(root.join("inkos.json"))
+        .await
+        .ok()?;
     let parsed: Value = serde_json::from_str(&raw).ok()?;
     let cover = parsed.get("llm")?.get("cover")?;
     let service = cover.get("service")?.as_str()?.trim().to_string();
@@ -246,7 +260,9 @@ fn resolve_cover_api_key(api_key_env: &str) -> Result<String, String> {
     std::env::var(api_key_env)
         .ok()
         .filter(|key| !key.is_empty())
-        .ok_or_else(|| format!("Cover API key is required. Set {api_key_env} or pass coverApiKeyEnv."))
+        .ok_or_else(|| {
+            format!("Cover API key is required. Set {api_key_env} or pass coverApiKeyEnv.")
+        })
 }
 
 // ── 生成（generateImageFromPrompt 三 API） ───────────────────────
@@ -285,7 +301,10 @@ async fn generate_images_cover(
     size: &str,
 ) -> Result<GeneratedImage, String> {
     let endpoint = request.endpoint.clone().unwrap_or_else(|| {
-        format!("{}/images/generations", request.base_url.trim_end_matches('/'))
+        format!(
+            "{}/images/generations",
+            request.base_url.trim_end_matches('/')
+        )
     });
     let response = http_client()
         .post(&endpoint)
@@ -301,8 +320,8 @@ async fn generate_images_cover(
         let preview: String = text.chars().take(500).collect();
         return Err(format!("cover generation failed: HTTP {status} {preview}"));
     }
-    let payload: Value =
-        serde_json::from_str(&text).map_err(|e| format!("cover generation returned non-JSON response: {e}"))?;
+    let payload: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("cover generation returned non-JSON response: {e}"))?;
     let image = extract_images_generation_image(&payload);
     if let Some((base64, extension)) = image {
         return decode_base64_image(&base64, extension);
@@ -324,9 +343,10 @@ async fn generate_responses_cover(
     prompt: &str,
     size: &str,
 ) -> Result<GeneratedImage, String> {
-    let endpoint = request.endpoint.clone().unwrap_or_else(|| {
-        format!("{}/responses", request.base_url.trim_end_matches('/'))
-    });
+    let endpoint = request
+        .endpoint
+        .clone()
+        .unwrap_or_else(|| format!("{}/responses", request.base_url.trim_end_matches('/')));
     let response = http_client()
         .post(&endpoint)
         .header("Content-Type", "application/json")
@@ -345,11 +365,13 @@ async fn generate_responses_cover(
         let preview: String = text.chars().take(500).collect();
         return Err(format!("image generation failed: HTTP {status} {preview}"));
     }
-    let payload: Value =
-        serde_json::from_str(&text).map_err(|e| format!("image generation returned non-JSON response: {e}"))?;
+    let payload: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("image generation returned non-JSON response: {e}"))?;
     let image_base64 = extract_responses_image_base64(&payload);
     let Some(image_base64) = image_base64 else {
-        return Err("image generation response did not include image_generation_call result.".to_string());
+        return Err(
+            "image generation response did not include image_generation_call result.".to_string(),
+        );
     };
     decode_base64_image(&image_base64, "png")
 }
@@ -381,11 +403,13 @@ async fn generate_gemini_cover(
         let preview: String = text.chars().take(500).collect();
         return Err(format!("cover generation failed: HTTP {status} {preview}"));
     }
-    let payload: Value =
-        serde_json::from_str(&text).map_err(|e| format!("cover generation returned non-JSON response: {e}"))?;
+    let payload: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("cover generation returned non-JSON response: {e}"))?;
     let image = extract_gemini_image_base64(&payload);
     let Some((base64, extension)) = image else {
-        return Err("cover generation response did not include Gemini inline image data.".to_string());
+        return Err(
+            "cover generation response did not include Gemini inline image data.".to_string(),
+        );
     };
     decode_base64_image(&base64, extension)
 }
@@ -400,7 +424,11 @@ fn decode_base64_image(base64: &str, extension: &str) -> Result<GeneratedImage, 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(base64.trim())
         .map_err(|e| format!("invalid base64 image payload: {e}"))?;
-    let extension = if extension == "jpg" || extension == "jpeg" { "jpg" } else { "png" };
+    let extension = if extension == "jpg" || extension == "jpeg" {
+        "jpg"
+    } else {
+        "png"
+    };
     Ok(GeneratedImage { bytes, extension })
 }
 
@@ -434,8 +462,10 @@ pub fn extract_responses_image_base64(payload: &Value) -> Option<String> {
         if let Some(content) = item.get("content").and_then(Value::as_array) {
             for content_item in content {
                 for field in ["result", "image_base64"] {
-                    if let Some(value) =
-                        content_item.get(field).and_then(Value::as_str).map(str::trim)
+                    if let Some(value) = content_item
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .map(str::trim)
                     {
                         if !value.is_empty() {
                             return Some(value.to_string());
@@ -452,7 +482,10 @@ pub fn extract_responses_image_base64(payload: &Value) -> Option<String> {
 pub fn extract_gemini_image_base64(payload: &Value) -> Option<(String, &'static str)> {
     let candidates = payload.get("candidates")?.as_array()?;
     for candidate in candidates {
-        let Some(parts) = candidate.pointer("/content/parts").and_then(Value::as_array) else {
+        let Some(parts) = candidate
+            .pointer("/content/parts")
+            .and_then(Value::as_array)
+        else {
             continue;
         };
         for part in parts {
@@ -485,20 +518,30 @@ pub fn extract_gemini_image_base64(payload: &Value) -> Option<(String, &'static 
 }
 
 /// url 下载（401/403 时带 Bearer 重试；仅 provider 同源携带凭据）。
-async fn download_generated_cover_image(url: &str, api_key: &str, provider_base_url: &str) -> Result<GeneratedImage, String> {
+async fn download_generated_cover_image(
+    url: &str,
+    api_key: &str,
+    provider_base_url: &str,
+) -> Result<GeneratedImage, String> {
     // 924 号：模型返回 URL 属不可信数据——发送前过 origin 策略（900 号
     // cover-download-origin.ts 的 Rust 镜像：协议仅 http/https；同 provider
     // origin/allowlist 放行；其余 host 环回/私网/保留地址与解析到私网一律
     // 拒绝；strict 收紧；未知取值 fail-closed）。
     let mut env_map = std::collections::BTreeMap::new();
-    for key in [crate::llm::cover_origin::ENV_COVER_DOWNLOAD_ORIGIN_POLICY, crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS] {
+    for key in [
+        crate::llm::cover_origin::ENV_COVER_DOWNLOAD_ORIGIN_POLICY,
+        crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS,
+    ] {
         if let Ok(value) = std::env::var(key) {
             env_map.insert(key.to_string(), value);
         }
     }
     let policy = crate::llm::cover_origin::resolve_cover_download_origin_policy(&env_map);
-    crate::llm::cover_origin::assert_cover_download_url_allowed(url, provider_base_url, &policy).await?;
-    let provider_origin = url::Url::parse(provider_base_url).ok().map(|p| p.origin().unicode_serialization());
+    crate::llm::cover_origin::assert_cover_download_url_allowed(url, provider_base_url, &policy)
+        .await?;
+    let provider_origin = url::Url::parse(provider_base_url)
+        .ok()
+        .map(|p| p.origin().unicode_serialization());
     let client = http_client();
     let response = client
         .get(url)
@@ -509,8 +552,20 @@ async fn download_generated_cover_image(url: &str, api_key: &str, provider_base_
     // Bearer 凭据仅对 provider 同源重试（原形态对任意 401/403 都带
     // key，泄露面更宽，一并收口）。
     let final_url = response.url().to_string();
-    crate::llm::cover_origin::assert_cover_download_url_allowed(&final_url, provider_base_url, &policy).await?;
-    let trusted = provider_origin.as_deref() == Some(url::Url::parse(&final_url).ok().map(|p| p.origin().unicode_serialization()).as_deref().unwrap_or(""));
+    crate::llm::cover_origin::assert_cover_download_url_allowed(
+        &final_url,
+        provider_base_url,
+        &policy,
+    )
+    .await?;
+    let trusted = provider_origin.as_deref()
+        == Some(
+            url::Url::parse(&final_url)
+                .ok()
+                .map(|p| p.origin().unicode_serialization())
+                .as_deref()
+                .unwrap_or(""),
+        );
     let response = if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
         let mut retry = client.get(url);
         if trusted {
@@ -530,7 +585,10 @@ async fn download_generated_cover_image(url: &str, api_key: &str, provider_base_
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_string();
-    let bytes = response.bytes().await.map_err(|e| format!("cover image download failed: {e}"))?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("cover image download failed: {e}"))?;
     if !status.is_success() {
         return Err(format!("cover image download failed: HTTP {status}"));
     }
@@ -581,10 +639,16 @@ pub fn build_cover_image_prompt(
                 lines.push(format!("Synopsis: {}", package.intro.trim()));
             }
             if !package.selling_points.is_empty() {
-                lines.push(format!("Selling points: {}", package.selling_points.join("; ")));
+                lines.push(format!(
+                    "Selling points: {}",
+                    package.selling_points.join("; ")
+                ));
             }
             if !package.cover_prompt.trim().is_empty() {
-                lines.push(format!("User visual notes: {}", package.cover_prompt.trim()));
+                lines.push(format!(
+                    "User visual notes: {}",
+                    package.cover_prompt.trim()
+                ));
             }
         } else {
             lines.push(format!("标题：{}", package.title));
@@ -620,8 +684,11 @@ pub fn build_cover_image_prompt(
         .into_iter()
         .map(|line| {
             if is_en {
-                line.replacen("Title: ", title_label, 1)
-                    .replacen("User visual notes: ", notes_label, 1)
+                line.replacen("Title: ", title_label, 1).replacen(
+                    "User visual notes: ",
+                    notes_label,
+                    1,
+                )
             } else {
                 line.replacen("标题：", title_label, 1)
                     .replacen("用户视觉要求：", notes_label, 1)
@@ -630,7 +697,10 @@ pub fn build_cover_image_prompt(
         .collect();
     let mut lines = Vec::new();
     if is_en {
-        lines.push("Generate a mobile portrait book cover for an English short story, 3:4 vertical.".to_string());
+        lines.push(
+            "Generate a mobile portrait book cover for an English short story, 3:4 vertical."
+                .to_string(),
+        );
         lines.append(&mut mapped);
         lines.push(String::new());
         lines.push("Cover direction: a platform short-fiction book cover, not a movie poster. The title lettering is the primary visual — reserve a large two-to-four-line type zone; character in close-up or half-body with a charged expression (cold smirk, shock, breakdown, menace, or payback); props few but large, telegraphing the conflict at a glance.".to_string());
@@ -642,7 +712,10 @@ pub fn build_cover_image_prompt(
         lines.push(String::new());
         lines.push("封面方向：平台短篇书封，不是电影海报。标题字要成为主视觉，预留两到四行大字排版区；人物近景或半身，表情有冷笑、震惊、崩溃、压迫或反杀感；道具少而大，一眼能看出冲突。".to_string());
         lines.push("颜色高对比、高饱和，适合手机列表缩略图。避免写实会议摄影、横版视频缩略图、杂志大片、小清新细字和长段文字。".to_string());
-        lines.push("如果模型文字不稳定，优先生成明确标题留白/字块/排版空间，不要把大量乱码文字铺满画面。".to_string());
+        lines.push(
+            "如果模型文字不稳定，优先生成明确标题留白/字块/排版空间，不要把大量乱码文字铺满画面。"
+                .to_string(),
+        );
     }
     lines.join("\n")
 }
@@ -677,7 +750,11 @@ pub async fn generate_short_fiction_cover(
             .chars()
             .flat_map(char::to_lowercase)
             .map(|c| {
-                if matches!(c, '\\' | '/' | ':' | '\0' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_whitespace() {
+                if matches!(
+                    c,
+                    '\\' | '/' | ':' | '\0' | '*' | '?' | '"' | '<' | '>' | '|'
+                ) || c.is_whitespace()
+                {
                     '-'
                 } else {
                     c
@@ -716,13 +793,17 @@ pub async fn generate_short_fiction_cover(
     let generic_prompt = build_cover_image_prompt(&package, "generic", None);
     let full_prompt_path = root.join(&prompt_path);
     if let Some(parent) = full_prompt_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     let mut payload = generic_prompt;
     if !payload.ends_with('\n') {
         payload.push('\n');
     }
-    crate::utils::atomic_file_set::write_file_atomic(&full_prompt_path, &payload).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(&full_prompt_path, &payload)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let request = resolve_cover_generation_request(root).await?;
     let size = std::env::var("INKOS_COVER_SIZE")
@@ -731,13 +812,21 @@ pub async fn generate_short_fiction_cover(
         .unwrap_or_else(|| "1024x1360".to_string());
     let short_prompt = build_cover_image_prompt(&package, "short", None);
     let image = generate_image_from_prompt(&request, &short_prompt, &size).await?;
-    let image_name = if image.extension == "jpg" { "cover.jpg" } else { "cover.png" };
+    let image_name = if image.extension == "jpg" {
+        "cover.jpg"
+    } else {
+        "cover.png"
+    };
     let image_rel = format!("{output_dir}/{image_name}");
     let full_image_path = root.join(&image_rel);
     if let Some(parent) = full_image_path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    crate::utils::atomic_file_set::write_file_atomic_bytes(&full_image_path, &image.bytes).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic_bytes(&full_image_path, &image.bytes)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(CoverGenerationOutcome {
         title: title.to_string(),
         output_dir,
@@ -767,7 +856,10 @@ mod tests {
             normalize_cover_base_url("https://api.example.com/v1/"),
             Some("https://api.example.com/v1".to_string())
         );
-        assert_eq!(normalize_cover_base_url("http://localhost:9000"), Some("http://localhost:9000".to_string()));
+        assert_eq!(
+            normalize_cover_base_url("http://localhost:9000"),
+            Some("http://localhost:9000".to_string())
+        );
         assert_eq!(normalize_cover_base_url("ftp://x"), None);
         assert_eq!(normalize_cover_base_url("https://u:p@x"), None);
         assert_eq!(normalize_cover_base_url("https://x?q=1"), None);
@@ -779,12 +871,18 @@ mod tests {
         let direct = json!({ "output": [
             { "type": "image_generation_call", "result": "  abc123  " }
         ]});
-        assert_eq!(extract_responses_image_base64(&direct).as_deref(), Some("abc123"));
+        assert_eq!(
+            extract_responses_image_base64(&direct).as_deref(),
+            Some("abc123")
+        );
 
         let nested = json!({ "output": [
             { "type": "message", "content": [ { "image_base64": "img64" } ] }
         ]});
-        assert_eq!(extract_responses_image_base64(&nested).as_deref(), Some("img64"));
+        assert_eq!(
+            extract_responses_image_base64(&nested).as_deref(),
+            Some("img64")
+        );
 
         assert!(extract_responses_image_base64(&json!({ "output": [] })).is_none());
         assert!(extract_responses_image_base64(&json!({})).is_none());
@@ -796,12 +894,18 @@ mod tests {
             { "text": "caption" },
             { "inlineData": { "data": "gg", "mimeType": "image/jpeg" } }
         ]}}]});
-        assert_eq!(extract_gemini_image_base64(&payload), Some(("gg".to_string(), "jpg")));
+        assert_eq!(
+            extract_gemini_image_base64(&payload),
+            Some(("gg".to_string(), "jpg"))
+        );
 
         let snake_case = json!({ "candidates": [ { "content": { "parts": [
             { "inline_data": { "data": "pp", "mime_type": "image/png" } }
         ]}}]});
-        assert_eq!(extract_gemini_image_base64(&snake_case), Some(("pp".to_string(), "png")));
+        assert_eq!(
+            extract_gemini_image_base64(&snake_case),
+            Some(("pp".to_string(), "png"))
+        );
         assert!(extract_gemini_image_base64(&json!({})).is_none());
     }
 
@@ -811,8 +915,14 @@ mod tests {
             { "b64_json": "  b64data  " },
             { "url": "https://cdn/x.png" }
         ]});
-        assert_eq!(extract_images_generation_image(&payload), Some(("b64data".to_string(), "png")));
-        assert!(extract_images_generation_image(&json!({ "data": [ { "url": "https://x" } ] })).is_none());
+        assert_eq!(
+            extract_images_generation_image(&payload),
+            Some(("b64data".to_string(), "png"))
+        );
+        assert!(
+            extract_images_generation_image(&json!({ "data": [ { "url": "https://x" } ] }))
+                .is_none()
+        );
         assert!(extract_images_generation_image(&json!({})).is_none());
     }
 
@@ -820,7 +930,9 @@ mod tests {
     async fn resolve_fails_without_config_and_uses_project_config() {
         let dir = tempfile::tempdir().unwrap();
         // 无 env 无 inkos.json → 明确错误。
-        let err = resolve_cover_generation_request(dir.path()).await.unwrap_err();
+        let err = resolve_cover_generation_request(dir.path())
+            .await
+            .unwrap_err();
         assert!(err.contains("cover endpoint is required"), "{err}");
 
         // inkos.json llm.cover（无 key）→ key 错误。
@@ -829,7 +941,9 @@ mod tests {
             r#"{ "llm": { "cover": { "service": "kkaiapi", "model": "gpt-image-2" } } }"#,
         )
         .unwrap();
-        let err = resolve_cover_generation_request(dir.path()).await.unwrap_err();
+        let err = resolve_cover_generation_request(dir.path())
+            .await
+            .unwrap_err();
         assert!(err.contains("Cover API key is required"), "{err}");
 
         // secrets 带 cover:{service} key → 完整请求。
@@ -858,7 +972,9 @@ mod tests {
             model: "gpt-image-2".to_string(),
             api_key: "k".to_string(),
         };
-        let image = generate_image_from_prompt(&request, "画一张封面", "1024x1024").await.unwrap();
+        let image = generate_image_from_prompt(&request, "画一张封面", "1024x1024")
+            .await
+            .unwrap();
         assert_eq!(image.bytes, b"hello");
         assert_eq!(image.extension, "png");
 
@@ -874,12 +990,19 @@ mod tests {
         );
         let download_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let download_addr = download_listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(download_listener, download_app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(download_listener, download_app).await.unwrap();
+        });
         // 924 号：provider 与下载服务器异 origin（端口不同）=「provider 返回
         // 异 origin CDN URL」场景——allowlist 显式放行（900 产品语义的镜像）。
-        std::env::set_var(crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS, format!("http://{download_addr}"));
+        std::env::set_var(
+            crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS,
+            format!("http://{download_addr}"),
+        );
 
-        let url_payload = json!({ "data": [ { "url": format!("http://{download_addr}/downloaded.jpg") } ] }).to_string();
+        let url_payload =
+            json!({ "data": [ { "url": format!("http://{download_addr}/downloaded.jpg") } ] })
+                .to_string();
         let app = axum::Router::new().route(
             "/images/generations",
             axum::routing::post(move || async move {
@@ -891,7 +1014,9 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let request = CoverGenerationRequest {
             api: CoverApi::Images,
             base_url: format!("http://{addr}"),
@@ -899,7 +1024,9 @@ mod tests {
             model: "m".to_string(),
             api_key: "k".to_string(),
         };
-        let image = generate_image_from_prompt(&request, "封面", "512x512").await.unwrap();
+        let image = generate_image_from_prompt(&request, "封面", "512x512")
+            .await
+            .unwrap();
         assert_eq!(image.bytes, b"\xff\xd8fakejpg");
         assert_eq!(image.extension, "jpg");
         std::env::remove_var(crate::llm::cover_origin::ENV_COVER_DOWNLOAD_EXTRA_ORIGINS);
@@ -908,7 +1035,9 @@ mod tests {
     #[tokio::test]
     async fn generate_responses_and_gemini_apis() {
         // responses：output[].image_generation_call.result。
-        let responses_body = json!({ "output": [ { "type": "image_generation_call", "result": "aGVsbG8=" } ] }).to_string();
+        let responses_body =
+            json!({ "output": [ { "type": "image_generation_call", "result": "aGVsbG8=" } ] })
+                .to_string();
         let app = axum::Router::new().route(
             "/responses",
             axum::routing::post(move || async move {
@@ -920,7 +1049,9 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let request = CoverGenerationRequest {
             api: CoverApi::Responses,
             base_url: format!("http://{addr}"),
@@ -928,7 +1059,9 @@ mod tests {
             model: "m".to_string(),
             api_key: "k".to_string(),
         };
-        let image = generate_image_from_prompt(&request, "prompt", "1024x1024").await.unwrap();
+        let image = generate_image_from_prompt(&request, "prompt", "1024x1024")
+            .await
+            .unwrap();
         assert_eq!(image.bytes, b"hello");
 
         // gemini：candidates[].content.parts[].inlineData（模型名进 URL path）。
@@ -947,7 +1080,9 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let request = CoverGenerationRequest {
             api: CoverApi::Gemini,
             base_url: format!("http://{addr}"),
@@ -955,7 +1090,9 @@ mod tests {
             model: "gemini-x".to_string(),
             api_key: "k".to_string(),
         };
-        let image = generate_image_from_prompt(&request, "prompt", "1024x1024").await.unwrap();
+        let image = generate_image_from_prompt(&request, "prompt", "1024x1024")
+            .await
+            .unwrap();
         assert_eq!(image.bytes, b"hello");
     }
 
@@ -969,7 +1106,9 @@ mod tests {
             model: "m".to_string(),
             api_key: "k".to_string(),
         };
-        let err = generate_image_from_prompt(&request, "p", "1x1").await.unwrap_err();
+        let err = generate_image_from_prompt(&request, "p", "1x1")
+            .await
+            .unwrap_err();
         assert!(err.contains("HTTP 429"), "{err}");
     }
 
@@ -987,7 +1126,9 @@ mod tests {
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         format!("http://{addr}")
     }
 }
@@ -998,7 +1139,10 @@ mod cover_prompt_tests {
 
     #[test]
     fn selling_points_normalization() {
-        assert_eq!(normalize_selling_points(Some("a；b\nc; d")), vec!["a", "b", "c", "d"]);
+        assert_eq!(
+            normalize_selling_points(Some("a；b\nc; d")),
+            vec!["a", "b", "c", "d"]
+        );
         assert!(normalize_selling_points(None).is_empty());
         assert!(normalize_selling_points(Some("  ")).is_empty());
     }
@@ -1012,12 +1156,18 @@ mod cover_prompt_tests {
             cover_prompt: "水墨",
         };
         let generic = build_cover_image_prompt(&package, "generic", None);
-        assert!(generic.starts_with("按用户给出的标题、简介、卖点和视觉要求生成封面图。"), "{generic}");
+        assert!(
+            generic.starts_with("按用户给出的标题、简介、卖点和视觉要求生成封面图。"),
+            "{generic}"
+        );
         assert!(generic.contains("标题：山雨"), "{generic}");
         assert!(generic.contains("卖点：卖点一；卖点二"), "{generic}");
 
         let short = build_cover_image_prompt(&package, "short", None);
-        assert!(short.starts_with("为中文短篇小说生成手机端竖版书封，3:4竖图。"), "{short}");
+        assert!(
+            short.starts_with("为中文短篇小说生成手机端竖版书封，3:4竖图。"),
+            "{short}"
+        );
         assert!(short.contains("主标题：山雨"), "{short}");
         assert!(short.contains("包装提示：水墨"), "{short}");
         assert!(short.contains("封面方向：平台短篇书封"), "{short}");
@@ -1048,7 +1198,8 @@ const PNG_MAGIC: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 /// TS `loadImageReference`：canonical 路径必须在项目根内 + PNG/JPEG 魔数校验。
 pub fn load_image_reference(root: &Path, path: &Path) -> Result<Option<ImageReference>, String> {
     let canonical_root = std::fs::canonicalize(root).map_err(|error| error.to_string())?;
-    let resolved = crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
+    let resolved =
+        crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
     let canonical_path = match std::fs::canonicalize(&resolved) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1110,7 +1261,10 @@ pub fn build_short_cover_image_prompt(
             Value::Null
         },
     );
-    request.insert("visualBrief".into(), Value::String(package.cover_prompt.to_string()));
+    request.insert(
+        "visualBrief".into(),
+        Value::String(package.cover_prompt.to_string()),
+    );
     request.insert("storyReference".into(), Value::Object(story_reference));
     let request = Value::Object(request);
     let instruction = if is_en {
@@ -1134,7 +1288,10 @@ async fn generate_images_cover_with_reference(
     reference: Option<&ImageReference>,
 ) -> Result<GeneratedImage, String> {
     let generation_endpoint = request.endpoint.clone().unwrap_or_else(|| {
-        format!("{}/images/generations", request.base_url.trim_end_matches('/'))
+        format!(
+            "{}/images/generations",
+            request.base_url.trim_end_matches('/')
+        )
     });
     let Some(reference) = reference else {
         return generate_images_cover(request, prompt, size).await;
@@ -1147,7 +1304,11 @@ async fn generate_images_cover_with_reference(
         .to_string();
     let endpoint = format!("{trimmed}/images/edits");
     let mime = reference.mime_type;
-    let file_name = if mime == "image/png" { "reference.png" } else { "reference.jpg" };
+    let file_name = if mime == "image/png" {
+        "reference.png"
+    } else {
+        "reference.jpg"
+    };
     let part = reqwest::multipart::Part::bytes(reference.bytes.clone())
         .file_name(file_name.to_string())
         .mime_str(mime)
@@ -1169,7 +1330,11 @@ async fn generate_images_cover_with_reference(
 }
 
 /// images 响应尾面（b64/url 分流 + 下载）。
-async fn finish_images_response(response: reqwest::Response, api_key: &str, provider_base_url: &str) -> Result<GeneratedImage, String> {
+async fn finish_images_response(
+    response: reqwest::Response,
+    api_key: &str,
+    provider_base_url: &str,
+) -> Result<GeneratedImage, String> {
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -1212,12 +1377,17 @@ pub async fn generate_cover_image_artifact(
     let request = resolve_cover_generation_request_with(root, cover_model).await?;
     let size = cover_size
         .map(str::to_string)
-        .or_else(|| std::env::var("INKOS_COVER_SIZE").ok().filter(|v| !v.is_empty()))
+        .or_else(|| {
+            std::env::var("INKOS_COVER_SIZE")
+                .ok()
+                .filter(|v| !v.is_empty())
+        })
         .unwrap_or_else(|| "1024x1360".to_string());
     // skills 注入（TS L1243-1253）：inkos-story-cover 必需；无查询相关检索面
     // （hydrateActivatedSkillGuidance 的 retrieveSkillResources）——全 body 注入
     // 备案（无 linked resources 时 TS 同形）。
-    let available = crate::skills::external_loader::load_available_agent_skills(root, &[], None).await;
+    let available =
+        crate::skills::external_loader::load_available_agent_skills(root, &[], None).await;
     let skill = available
         .skills
         .iter()
@@ -1230,7 +1400,10 @@ pub async fn generate_cover_image_artifact(
             let mut hasher = Sha256::new();
             hasher.update(skill.body.as_bytes());
             let digest = hasher.finalize();
-            digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+            digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
         };
         record(
             "skills-applied",
@@ -1251,17 +1424,32 @@ pub async fn generate_cover_image_artifact(
         if skill.body.trim().is_empty() { skill.description.as_str() } else { skill.body.trim() },
     ]
     .join("\n\n");
-    let base_prompt = build_short_cover_image_prompt(package, language, include_title, author_request, story_sources);
+    let base_prompt = build_short_cover_image_prompt(
+        package,
+        language,
+        include_title,
+        author_request,
+        story_sources,
+    );
     let prompt = format!("{guidance}\n\n{base_prompt}");
     write_cover_text(root, &output_dir.join("cover-request.md"), &prompt).await?;
-    let reference = load_image_reference(root, &output_dir.join("cover.png"))?
-        .or_else(|| load_image_reference(root, &output_dir.join("cover.jpg")).ok().flatten());
+    let reference = load_image_reference(root, &output_dir.join("cover.png"))?.or_else(|| {
+        load_image_reference(root, &output_dir.join("cover.jpg"))
+            .ok()
+            .flatten()
+    });
     let generated = match request.api {
-        CoverApi::Gemini => generate_gemini_cover_with_reference(&request, &prompt, reference.as_ref()).await?,
-        CoverApi::Images => {
-            generate_images_cover_with_reference(&request, &prompt, &size, reference.as_ref()).await?
+        CoverApi::Gemini => {
+            generate_gemini_cover_with_reference(&request, &prompt, reference.as_ref()).await?
         }
-        CoverApi::Responses => generate_responses_cover_with_reference(&request, &prompt, &size, reference.as_ref()).await?,
+        CoverApi::Images => {
+            generate_images_cover_with_reference(&request, &prompt, &size, reference.as_ref())
+                .await?
+        }
+        CoverApi::Responses => {
+            generate_responses_cover_with_reference(&request, &prompt, &size, reference.as_ref())
+                .await?
+        }
     };
     let cover_path = if generated.extension == "jpg" {
         output_dir.join("cover.jpg")
@@ -1273,41 +1461,50 @@ pub async fn generate_cover_image_artifact(
 }
 
 async fn write_cover_text(root: &Path, path: &Path, value: &str) -> Result<(), String> {
-    let resolved = crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
+    let resolved =
+        crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
     if let Some(parent) = resolved.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
-        root_dir: root,
-        writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
-            relative_path: resolved
-                .strip_prefix(root)
-                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/")),
-            content: crate::utils::atomic_file_set::FileContent::Text(format!("{}\n", value.trim_end())),
-        }],
-        deletes: Vec::new(),
-    })
+    crate::utils::atomic_file_set::commit_atomic_file_set(
+        &crate::utils::atomic_file_set::AtomicFileSet {
+            root_dir: root,
+            writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: resolved
+                    .strip_prefix(root)
+                    .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/")),
+                content: crate::utils::atomic_file_set::FileContent::Text(format!(
+                    "{}\n",
+                    value.trim_end()
+                )),
+            }],
+            deletes: Vec::new(),
+        },
+    )
     .await
     .map_err(|error| error.to_string())
 }
 
 async fn write_cover_binary(root: &Path, path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let resolved = crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
+    let resolved =
+        crate::utils::path::safe_child_path(&root.to_string_lossy(), &path.to_string_lossy())?;
     if let Some(parent) = resolved.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
-        root_dir: root,
-        writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
-            relative_path: resolved
-                .strip_prefix(root)
-                .map(|relative| relative.to_string_lossy().replace('\\', "/"))
-                .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/")),
-            content: crate::utils::atomic_file_set::FileContent::Bytes(bytes.to_vec()),
-        }],
-        deletes: Vec::new(),
-    })
+    crate::utils::atomic_file_set::commit_atomic_file_set(
+        &crate::utils::atomic_file_set::AtomicFileSet {
+            root_dir: root,
+            writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: resolved
+                    .strip_prefix(root)
+                    .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| path.to_string_lossy().replace('\\', "/")),
+                content: crate::utils::atomic_file_set::FileContent::Bytes(bytes.to_vec()),
+            }],
+            deletes: Vec::new(),
+        },
+    )
     .await
     .map_err(|error| error.to_string())
 }
@@ -1353,7 +1550,9 @@ async fn finish_gemini_response(response: reqwest::Response) -> Result<Generated
     let payload: Value = serde_json::from_str(&text)
         .map_err(|e| format!("cover generation returned non-JSON response: {e}"))?;
     let Some((base64, extension)) = extract_gemini_image_base64(&payload) else {
-        return Err("cover generation response did not include Gemini inline image data.".to_string());
+        return Err(
+            "cover generation response did not include Gemini inline image data.".to_string(),
+        );
     };
     decode_base64_image(&base64, extension)
 }
@@ -1367,9 +1566,10 @@ async fn generate_responses_cover_with_reference(
     let Some(reference) = reference else {
         return generate_responses_cover(request, prompt, size).await;
     };
-    let endpoint = request.endpoint.clone().unwrap_or_else(|| {
-        format!("{}/responses", request.base_url.trim_end_matches('/'))
-    });
+    let endpoint = request
+        .endpoint
+        .clone()
+        .unwrap_or_else(|| format!("{}/responses", request.base_url.trim_end_matches('/')));
     let data_url = format!(
         "data:{};base64,{}",
         reference.mime_type,
@@ -1399,7 +1599,9 @@ async fn generate_responses_cover_with_reference(
     let payload: Value = serde_json::from_str(&text)
         .map_err(|e| format!("image generation returned non-JSON response: {e}"))?;
     let Some(image_base64) = extract_responses_image_base64(&payload) else {
-        return Err("image generation response did not include image_generation_call result.".to_string());
+        return Err(
+            "image generation response did not include image_generation_call result.".to_string(),
+        );
     };
     decode_base64_image(&image_base64, "png")
 }

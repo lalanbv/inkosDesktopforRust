@@ -110,10 +110,7 @@ mod tests {
     fn resolves_project_and_launch_engine_roots() {
         let p = sample();
         assert_eq!(p.project_root(), Path::new("/tmp/proj"));
-        assert_eq!(
-            p.launch_engine_dir(),
-            Path::new("/tmp/src-tauri/engine")
-        );
+        assert_eq!(p.launch_engine_dir(), Path::new("/tmp/src-tauri/engine"));
     }
 
     #[test]
@@ -131,7 +128,10 @@ mod tests {
     #[test]
     fn projects_path_under_app_data() {
         let p = sample();
-        assert_eq!(p.projects_path(), PathBuf::from("/tmp/appdata/projects.json"));
+        assert_eq!(
+            p.projects_path(),
+            PathBuf::from("/tmp/appdata/projects.json")
+        );
     }
 
     #[test]

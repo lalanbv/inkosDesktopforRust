@@ -201,8 +201,11 @@ impl WasmPlugin {
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| PluginError::ExecutionFailed(format!("注册 WASI 失败: {e}")))?;
         // wasmtime 36 bindgen：add_to_linker 增 D 泛型（宿主数据类型），须显式标注。
-        InkosPlugin::add_to_linker::<PluginState, PluginState>(&mut linker, |state: &mut PluginState| state)
-            .map_err(|e| PluginError::ExecutionFailed(format!("add_to_linker 失败: {e}")))?;
+        InkosPlugin::add_to_linker::<PluginState, PluginState>(
+            &mut linker,
+            |state: &mut PluginState| state,
+        )
+        .map_err(|e| PluginError::ExecutionFailed(format!("add_to_linker 失败: {e}")))?;
 
         let host_context = HostContext::new(metadata.clone(), work_dir.to_path_buf());
 
@@ -265,14 +268,12 @@ impl WasmPlugin {
     ///
     /// on-event 是可选 hook（无返回值，插件可忽略）。失败仅 warn + 继续，
     /// 不阻断其他插件的事件处理。
-    pub fn broadcast_event(
-        &self,
-        event: &str,
-        payload: &str,
-    ) -> Result<(), PluginError> {
+    pub fn broadcast_event(&self, event: &str, payload: &str) -> Result<(), PluginError> {
         let mut store = self.create_store()?;
         let bindings = InkosPlugin::instantiate(&mut store, &self.component, &self.linker)
-            .map_err(|e| PluginError::ExecutionFailed(format!("实例化 Component 失败（event）: {e}")))?;
+            .map_err(|e| {
+                PluginError::ExecutionFailed(format!("实例化 Component 失败（event）: {e}"))
+            })?;
         // init 先于 on-event（WIT 契约顺序）
         let _ = bindings
             .inkos_plugin_plugin()

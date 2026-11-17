@@ -90,7 +90,9 @@ pub async fn write_next(
 ) -> impl IntoResponse {
     let Json(body) = body.unwrap_or_default();
 
-    runtime.hub.broadcast("write:start", &serde_json::json!({ "bookId": book_id }));
+    runtime
+        .hub
+        .broadcast("write:start", &serde_json::json!({ "bookId": book_id }));
 
     // fire-and-forget：完成/错误经 SSE 推送。
     let task_runtime = runtime.clone();
@@ -107,7 +109,8 @@ pub async fn write_next(
         let abort: AbortHandle = Arc::new(std::sync::Mutex::new(false));
         if let Some(entry) = &checkpoint {
             active_confirmed_tasks()
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(entry.execution_id.clone(), abort.clone());
             entry.persist_running(&task_runtime).await;
         }
@@ -121,9 +124,7 @@ pub async fn write_next(
             body.context,
         )
         .await
-        .map_err(|message| {
-            crate::pipeline::write_next::WriteNextError::Write(message)
-        });
+        .map_err(crate::pipeline::write_next::WriteNextError::Write);
         match result {
             Ok(outcome) => {
                 task_runtime.hub.broadcast(
@@ -137,10 +138,12 @@ pub async fn write_next(
                     }),
                 );
                 if let Some(entry) = &checkpoint {
-                    entry.persist_finished(&task_runtime, StudioTaskExecutionStatus::Completed, None)
+                    entry
+                        .persist_finished(&task_runtime, StudioTaskExecutionStatus::Completed, None)
                         .await;
                     active_confirmed_tasks()
-                        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .remove(&entry.execution_id);
                 }
             }
@@ -161,14 +164,16 @@ pub async fn write_next(
                     &serde_json::json!({ "bookId": task_book_id, "error": user_message }),
                 );
                 if let Some(entry) = &checkpoint {
-                    entry.persist_finished(
-                        &task_runtime,
-                        StudioTaskExecutionStatus::Error,
-                        Some(&user_message),
-                    )
-                    .await;
+                    entry
+                        .persist_finished(
+                            &task_runtime,
+                            StudioTaskExecutionStatus::Error,
+                            Some(&user_message),
+                        )
+                        .await;
                     active_confirmed_tasks()
-                        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
                         .remove(&entry.execution_id);
                 }
             }
@@ -177,7 +182,10 @@ pub async fn write_next(
 
     (
         StatusCode::OK,
-        Json(WriteNextResponse { status: "writing", book_id }),
+        Json(WriteNextResponse {
+            status: "writing",
+            book_id,
+        }),
     )
 }
 
@@ -209,7 +217,11 @@ impl WriteNextCheckpoint {
         }
     }
 
-    fn snapshot(&self, status: StudioTaskExecutionStatus, error: Option<&str>) -> StudioTaskSnapshot {
+    fn snapshot(
+        &self,
+        status: StudioTaskExecutionStatus,
+        error: Option<&str>,
+    ) -> StudioTaskSnapshot {
         let now = now_ms();
         StudioTaskSnapshot {
             version: 1,
@@ -249,7 +261,8 @@ impl WriteNextCheckpoint {
         status: StudioTaskExecutionStatus,
         error: Option<&str>,
     ) {
-        let _ = save_studio_task_snapshot(&runtime.project_root, &self.snapshot(status, error)).await;
+        let _ =
+            save_studio_task_snapshot(&runtime.project_root, &self.snapshot(status, error)).await;
     }
 }
 
@@ -263,11 +276,14 @@ fn now_ms() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::task_store::load_studio_task_snapshot;
     use crate::server::sse::BroadcastHub;
+    use crate::server::task_store::load_studio_task_snapshot;
     use tower::util::ServiceExt;
 
-    fn runtime_with(root: &std::path::Path, runner: WriteNextRunner) -> (WriteNextRuntime, Arc<BroadcastHub>) {
+    fn runtime_with(
+        root: &std::path::Path,
+        runner: WriteNextRunner,
+    ) -> (WriteNextRuntime, Arc<BroadcastHub>) {
         let hub = Arc::new(BroadcastHub::new());
         let runtime = WriteNextRuntime {
             hub: hub.clone(),
@@ -280,7 +296,10 @@ mod tests {
 
     fn app_for(runtime: WriteNextRuntime) -> axum::Router {
         axum::Router::new()
-            .route("/api/v1/books/:id/write-next", axum::routing::post(write_next))
+            .route(
+                "/api/v1/books/:id/write-next",
+                axum::routing::post(write_next),
+            )
             .with_state(runtime)
     }
 
@@ -359,7 +378,9 @@ mod tests {
                     .method("POST")
                     .uri("/api/v1/books/bck/write-next")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(r#"{"sessionId":"sess-ck","wordCount":800}"#))
+                    .body(axum::body::Body::from(
+                        r#"{"sessionId":"sess-ck","wordCount":800}"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -388,7 +409,8 @@ mod tests {
             Some(&serde_json::json!(800))
         );
         assert!(active_confirmed_tasks()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-bck"));
 
         // 放行 runner → 失败 → 终态快照 + 注销。
@@ -402,7 +424,9 @@ mod tests {
         }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         let finished = loop {
-            if let Some(snapshot) = load_studio_task_snapshot(&runtime.project_root, "sess-ck").await {
+            if let Some(snapshot) =
+                load_studio_task_snapshot(&runtime.project_root, "sess-ck").await
+            {
                 if snapshot.execution.status == StudioTaskExecutionStatus::Error {
                     break snapshot;
                 }
@@ -413,9 +437,15 @@ mod tests {
         assert_eq!(finished.execution.started_at, running.execution.started_at);
         assert!(finished.execution.completed_at.is_some());
         // WriteNextError Display 包一层「write chapter failed: …」——断言消息本体。
-        assert!(finished.execution.error.as_deref().unwrap().contains("boom"));
+        assert!(finished
+            .execution
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("boom"));
         assert!(!active_confirmed_tasks()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-bck"));
     }
 
@@ -432,7 +462,10 @@ mod tests {
                     // 模拟管线阶段边界轮询：置位即停，10s 兜底防挂死。
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
                     loop {
-                        if *abort.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) {
+                        if *abort
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        {
                             return Err::<crate::pipeline::write_next::ChapterPipelineResult, _>(
                                 "Operation aborted: the user requested to stop this task."
                                     .to_string(),
@@ -480,7 +513,9 @@ mod tests {
         .expect("stop 端点应找到 write-next 句柄");
 
         // abort_session 的置位动作 → runner 在检查点退出。
-        *handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        *handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(5), subscriber.recv()).await {
                 Ok(Ok(payload)) if payload.event == "write:error" => {
@@ -508,9 +543,15 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         };
         // 1005 号：快照 error 与广播同源（user_message），契约字面同步 EN 化。
-        assert!(finished.execution.error.as_deref().unwrap().contains("Writing stopped at your request."));
+        assert!(finished
+            .execution
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Writing stopped at your request."));
         assert!(!active_confirmed_tasks()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-stp"));
     }
 
@@ -548,7 +589,8 @@ mod tests {
         assert!(!dir.path().join(".inkos/tasks").exists());
         // 共享静态表——只断言本用例的 id 未入表（并行用例各自持有自己的 id）。
         assert!(!active_confirmed_tasks()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .contains_key("write-next-b0"));
     }
 }

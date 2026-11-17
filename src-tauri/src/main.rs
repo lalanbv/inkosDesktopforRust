@@ -26,9 +26,9 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use serde::Serialize;
 // Manager trait 在作用域里才能用 `app.get_webview_window` / `app_handle.try_state` / `app_handle.path()`。
-use tauri::{Manager, RunEvent, WindowEvent};
-use tauri::Emitter;
 use tauri::menu::{Menu, MenuItem, SubmenuBuilder};
+use tauri::Emitter;
+use tauri::{Manager, RunEvent, WindowEvent};
 // NotificationExt 才能用 `app.notification()`。
 use tauri_plugin_notification::NotificationExt;
 // DialogExt（M3b）：项目目录选择对话框（Rust 侧，不经 webview ACL）。
@@ -67,19 +67,31 @@ impl LoopbackGuardState {
         Self::default()
     }
     fn set_guard(&self, guard: Box<dyn LoopbackGuard>) {
-        let mut g = self.guard.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut g = self
+            .guard
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *g = Some(guard);
     }
     fn record_port(&self, port: u16) {
-        let mut p = self.port.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut p = self
+            .port
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *p = port;
     }
     fn take_guard(&self) -> Option<Box<dyn LoopbackGuard>> {
-        let mut g = self.guard.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut g = self
+            .guard
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         g.take()
     }
     fn current_port(&self) -> u16 {
-        *self.port.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        *self
+            .port
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -116,7 +128,8 @@ impl SecretsWritebackState {
             .store(true, Ordering::SeqCst);
         let mut guard = self
             .handle
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(handle) = guard.take() {
             if let Err(e) = handle.join() {
                 eprintln!("[main] secrets-writeback watcher join 失败: panic={e:?}");
@@ -160,9 +173,8 @@ struct LaunchStateDto {
 }
 
 fn to_js_string_literal(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| {
-        format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
-    })
+    serde_json::to_string(s)
+        .unwrap_or_else(|_| format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")))
 }
 
 /// P2-7：macOS 主菜单。菜单项不带命令语义，触发后以 `menu://command` 事件
@@ -205,14 +217,50 @@ fn build_main_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     // 视图与命令面板项不带 accelerator：快捷键统一走 web 内注册表
     // （HOTKEY_DEFS 单一事实源），避免 OS 级菜单键与 Web 键位双注册冲突。
     let view_menu = SubmenuBuilder::new(app, "视图")
-        .item(&MenuItem::with_id(app, "menu:palette", "命令面板", true, None::<&str>)?)
+        .item(&MenuItem::with_id(
+            app,
+            "menu:palette",
+            "命令面板",
+            true,
+            None::<&str>,
+        )?)
         .separator()
-        .item(&MenuItem::with_id(app, "menu:theme-light", "浅色主题", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "menu:theme-dark", "深色主题", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "menu:theme-auto", "跟随系统", true, None::<&str>)?)
+        .item(&MenuItem::with_id(
+            app,
+            "menu:theme-light",
+            "浅色主题",
+            true,
+            None::<&str>,
+        )?)
+        .item(&MenuItem::with_id(
+            app,
+            "menu:theme-dark",
+            "深色主题",
+            true,
+            None::<&str>,
+        )?)
+        .item(&MenuItem::with_id(
+            app,
+            "menu:theme-auto",
+            "跟随系统",
+            true,
+            None::<&str>,
+        )?)
         .separator()
-        .item(&MenuItem::with_id(app, "menu:lang-zh", "中文", true, None::<&str>)?)
-        .item(&MenuItem::with_id(app, "menu:lang-en", "English", true, None::<&str>)?)
+        .item(&MenuItem::with_id(
+            app,
+            "menu:lang-zh",
+            "中文",
+            true,
+            None::<&str>,
+        )?)
+        .item(&MenuItem::with_id(
+            app,
+            "menu:lang-en",
+            "English",
+            true,
+            None::<&str>,
+        )?)
         .build()?;
 
     let window_menu = SubmenuBuilder::new(app, "窗口")
@@ -224,7 +272,13 @@ fn build_main_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
     Menu::with_items(
         app,
-        &[&app_submenu, &file_menu, &edit_menu, &view_menu, &window_menu],
+        &[
+            &app_submenu,
+            &file_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+        ],
     )
 }
 
@@ -232,15 +286,22 @@ fn main() {
     // M4a：可观测性初始化（tracing 日志 + panic hook）
     let log_dir = dirs::data_dir()
         .map(|d| d.join(config::APP_DATA_DIR_NAME).join("logs"))
-        .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME).join("logs"));
-    let _log_guard = inkos_desktop::observability::init_logging(log_dir)
-        .expect("init_logging 失败");
+        .unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join(config::APP_DATA_DIR_NAME)
+                .join("logs")
+        });
+    let _log_guard =
+        inkos_desktop::observability::init_logging(log_dir).expect("init_logging 失败");
 
     let crash_dir = dirs::data_dir()
         .map(|d| d.join(config::APP_DATA_DIR_NAME).join("crashes"))
-        .unwrap_or_else(|| std::env::temp_dir().join(config::APP_DATA_DIR_NAME).join("crashes"));
-    inkos_desktop::observability::init_panic_hook(crash_dir)
-        .expect("init_panic_hook 失败");
+        .unwrap_or_else(|| {
+            std::env::temp_dir()
+                .join(config::APP_DATA_DIR_NAME)
+                .join("crashes")
+        });
+    inkos_desktop::observability::init_panic_hook(crash_dir).expect("init_panic_hook 失败");
 
     tracing::info!("inkosDesktop 启动");
 
@@ -499,7 +560,9 @@ fn main() {
             //（app_data 更新副本 → resource 打包副本；dev 的 engine-rs/target 无
             // manifest.json，读不到 → "0.0.0"，dev 不依赖 updater 通道）。
             let current_rust_engine_version = {
-                let manifest_path = app_data.join(config::RUST_ENGINE_DIR_NAME).join(config::ENGINE_MANIFEST_FILE);
+                let manifest_path = app_data
+                    .join(config::RUST_ENGINE_DIR_NAME)
+                    .join(config::ENGINE_MANIFEST_FILE);
                 let manifest_path = if manifest_path.is_file() {
                     manifest_path
                 } else {
@@ -507,7 +570,10 @@ fn main() {
                         .path()
                         .resource_dir()
                         .ok()
-                        .map(|rd| rd.join(config::RUST_ENGINE_DIR_NAME).join(config::ENGINE_MANIFEST_FILE))
+                        .map(|rd| {
+                            rd.join(config::RUST_ENGINE_DIR_NAME)
+                                .join(config::ENGINE_MANIFEST_FILE)
+                        })
                         .filter(|p| p.is_file())
                         .unwrap_or(manifest_path)
                 };
@@ -565,9 +631,7 @@ fn main() {
                     let port = guard_state.current_port();
                     if let Some(guard) = guard_state.take_guard() {
                         if let Err(e) = guard.release(port) {
-                            eprintln!(
-                                "[main] loopback guard: release port={port} 失败: {e:#}"
-                            );
+                            eprintln!("[main] loopback guard: release port={port} 失败: {e:#}");
                         }
                     }
                 }
@@ -576,7 +640,10 @@ fn main() {
             // 「关窗→隐藏保活」藏起后这是用户最本能的唤回路径。不处理则 App
             // 激活但窗口不现——0.1.0「关闭窗口后再也显示不出来」的主因之一。
             #[cfg(target_os = "macos")]
-            RunEvent::Reopen { has_visible_windows, .. } => {
+            RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
                 if !has_visible_windows {
                     // 全路径调用（仅此 macOS 分支使用，避免其它平台的 unused import）。
                     inkos_desktop::lifecycle::show_main_window(app_handle);
@@ -590,7 +657,10 @@ fn main() {
 /// setup（读 manifest 版本）与 spawn_sidecar_task（build_launch）共用。
 fn resolve_launch_engine(app_handle: &tauri::AppHandle) -> PathBuf {
     let app_data_engine = dirs::data_dir()
-        .map(|d| d.join(config::APP_DATA_DIR_NAME).join(config::ENGINE_DIR_NAME))
+        .map(|d| {
+            d.join(config::APP_DATA_DIR_NAME)
+                .join(config::ENGINE_DIR_NAME)
+        })
         .unwrap_or_else(|| std::env::temp_dir().join(config::ENGINE_DIR_NAME));
     if app_data_engine.is_dir() {
         return app_data_engine;
@@ -892,7 +962,8 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                     let state = app_handle.state::<SecretsWritebackState>();
                     let mut guard = state
                         .handle
-                        .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     if guard.is_none() {
                         let wb_shutdown = Arc::new(AtomicBool::new(false));
                         let wb_handle = secrets::spawn_writeback(
@@ -903,18 +974,15 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                         );
                         *state
                             .shutdown
-                            .lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = wb_shutdown;
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) = wb_shutdown;
                         *guard = Some(wb_handle);
                         eprintln!("[main] secrets writeback watcher 已装载");
                     }
                 }
 
-                let healthy = supervisor::health_probe(
-                    port,
-                    config::HEALTH_PROBE_TIMEOUT,
-                    probe_path,
-                )
-                .await;
+                let healthy =
+                    supervisor::health_probe(port, config::HEALTH_PROBE_TIMEOUT, probe_path).await;
 
                 if healthy {
                     let url = format!("http://127.0.0.1:{}/", port);
@@ -933,15 +1001,11 @@ fn spawn_sidecar_task(app_handle: tauri::AppHandle, project_root: PathBuf) {
                     if let Some(state) = app_handle.try_state::<SidecarHealthySince>() {
                         let mut since = state
                             .0
-                            .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         *since = Some(std::time::Instant::now());
                     }
-                    spawn_supervision_watcher(
-                        app_handle.clone(),
-                        port,
-                        probe_path,
-                        respawn_root,
-                    );
+                    spawn_supervision_watcher(app_handle.clone(), port, probe_path, respawn_root);
                 } else {
                     let secs = config::HEALTH_PROBE_TIMEOUT.as_secs();
                     let _ = window.eval(format!(
@@ -978,7 +1042,10 @@ fn cmd_get_launch_state(
     state: tauri::State<LaunchState>,
     app_handle: tauri::AppHandle,
 ) -> LaunchStateDto {
-    let recents = state.recents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let recents = state
+        .recents
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let project_state = app_handle.try_state::<inkos_desktop::project::commands::AppState>();
     let enriched = inkos_desktop::project::enrich_recents(&recents.recent, |path| {
@@ -986,7 +1053,11 @@ fn cmd_get_launch_state(
         // 展示增强不值得让启动流程失败。
         project_state
             .as_ref()
-            .and_then(|s| s.project_manager.get_by_path(std::path::Path::new(path)).ok())
+            .and_then(|s| {
+                s.project_manager
+                    .get_by_path(std::path::Path::new(path))
+                    .ok()
+            })
             .flatten()
     });
 
@@ -1004,9 +1075,7 @@ fn cmd_get_launch_state(
 /// recv）。这里改为回调桥 oneshot：命令体跑在 async runtime，主线程空出来转
 /// 对话框事件循环，取消/选中均正常返回。
 #[tauri::command]
-async fn cmd_pick_project_dialog(
-    app_handle: tauri::AppHandle,
-) -> Result<Option<String>, String> {
+async fn cmd_pick_project_dialog(app_handle: tauri::AppHandle) -> Result<Option<String>, String> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     // 1009 号：dialog 标题为用户直显面，随桌面壳 locale 双语输出。
     app_handle
@@ -1086,7 +1155,10 @@ fn cmd_choose_project(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     {
-        let mut recents = state.recents.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut recents = state
+            .recents
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let next = recents.record_open(&path, &name);
         *recents = next.clone();
         if let Err(e) = next.write(&state.projects_path) {
@@ -1100,7 +1172,11 @@ fn cmd_choose_project(
     {
         match project_state.project_manager.ensure_indexed(&p) {
             Ok(meta) => {
-                tracing::debug!("项目已同步进索引: {} ({})", meta.name, meta.project_type.as_str());
+                tracing::debug!(
+                    "项目已同步进索引: {} ({})",
+                    meta.name,
+                    meta.project_type.as_str()
+                );
             }
             Err(e) => {
                 tracing::warn!("同步项目进索引失败（不影响启动）: {e:#}");
@@ -1108,7 +1184,10 @@ fn cmd_choose_project(
         }
     }
 
-    eprintln!("[main] 用户选择项目 {}（picker → spawn sidecar）", p.display());
+    eprintln!(
+        "[main] 用户选择项目 {}（picker → spawn sidecar）",
+        p.display()
+    );
     spawn_sidecar_task(app_handle, p);
     Ok(())
 }
@@ -1131,9 +1210,7 @@ async fn cmd_check_updates(
         inkos_desktop::updater::engine::BundleFlavor::Rust => {
             state.current_rust_engine_version.clone()
         }
-        inkos_desktop::updater::engine::BundleFlavor::Node => {
-            state.current_engine_version.clone()
-        }
+        inkos_desktop::updater::engine::BundleFlavor::Node => state.current_engine_version.clone(),
     };
     let engine_ch =
         EngineChannel::new(state.repo.clone(), current_version.clone()).with_flavor(flavor);
@@ -1245,13 +1322,12 @@ async fn cmd_apply_engine_update(
             // 770 号续：extract 升格 Arc<dyn Fn + Send + Sync> 供 spawn_blocking 跨线程
             //（fn 指针显式 HRTB，规避闭包生命周期泛型不满足）。
             &(std::sync::Arc::new(
-                engine_extract_adapter as fn(
-                    &std::path::Path,
-                    &std::path::Path,
-                ) -> anyhow::Result<()>,
-            ) as std::sync::Arc<
-                dyn Fn(&std::path::Path, &std::path::Path) -> anyhow::Result<()> + Send + Sync,
-            >),
+                engine_extract_adapter
+                    as fn(&std::path::Path, &std::path::Path) -> anyhow::Result<()>,
+            )
+                as std::sync::Arc<
+                    dyn Fn(&std::path::Path, &std::path::Path) -> anyhow::Result<()> + Send + Sync,
+                >),
         )
         .await
         .map_err(|e| {
@@ -1275,18 +1351,19 @@ async fn cmd_apply_engine_update(
 
 /// 应用 shell 更新（Tauri updater：下载 + Ed25519 验签 + 安装）。完成后提示重启。
 #[tauri::command]
-async fn cmd_apply_shell_update(app_handle: tauri::AppHandle) -> inkos_desktop::error::Result<String> {
+async fn cmd_apply_shell_update(
+    app_handle: tauri::AppHandle,
+) -> inkos_desktop::error::Result<String> {
     use inkos_desktop::error::AppError;
     use tauri_plugin_updater::UpdaterExt;
 
-    let updater = app_handle.updater()
-        .map_err(|e| {
-            AppError::update(inkos_desktop::locale::pick(
-                "初始化 updater 失败",
-                "Failed to initialize the updater",
-            ))
-            .with_details(e.to_string())
-        })?;
+    let updater = app_handle.updater().map_err(|e| {
+        AppError::update(inkos_desktop::locale::pick(
+            "初始化 updater 失败",
+            "Failed to initialize the updater",
+        ))
+        .with_details(e.to_string())
+    })?;
 
     let update = updater
         .check()
@@ -1334,7 +1411,9 @@ async fn cmd_apply_shell_update(app_handle: tauri::AppHandle) -> inkos_desktop::
 
 /// M4a：获取诊断信息（版本/平台/路径/manifest/最近崩溃）。
 #[tauri::command]
-async fn cmd_get_diagnostics(app: tauri::AppHandle) -> inkos_desktop::error::Result<inkos_desktop::observability::diagnostics::DiagnosticInfo> {
+async fn cmd_get_diagnostics(
+    app: tauri::AppHandle,
+) -> inkos_desktop::error::Result<inkos_desktop::observability::diagnostics::DiagnosticInfo> {
     inkos_desktop::observability::diagnostics::cmd_get_diagnostics(app).await
 }
 
@@ -1348,9 +1427,7 @@ fn teardown_sidecar_generation(app_handle: &tauri::AppHandle) {
         let port = guard_state.current_port();
         if let Some(guard) = guard_state.take_guard() {
             if let Err(e) = guard.release(port) {
-                eprintln!(
-                    "[main] respawn teardown: loopback release port={port} 失败: {e:#}"
-                );
+                eprintln!("[main] respawn teardown: loopback release port={port} 失败: {e:#}");
             }
         }
     }
@@ -1384,14 +1461,16 @@ fn spawn_supervision_watcher(
                     let elapsed = {
                         let guard = since
                             .0
-                            .lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         guard.map(|t0| t0.elapsed())
                     };
                     if let Some(uptime) = elapsed {
                         if let Some(policy) = app_handle.try_state::<RespawnState>() {
                             policy
                                 .0
-                                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
                                 .note_healthy_uptime(uptime);
                         }
                     }
@@ -1400,8 +1479,7 @@ fn spawn_supervision_watcher(
             let action = app_handle
                 .try_state::<RespawnState>()
                 .map(|s| {
-                    let mut policy =
-                        s.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let mut policy = s.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     core.step(alive, &mut policy)
                 })
                 .unwrap_or(supervisor::SupervisionAction::Continue);
@@ -1493,7 +1571,10 @@ fn wire_observer_and_lifecycle(app_handle: &tauri::AppHandle, port: u16) {
             eprintln!("[main] notification.show 失败: {e:#}");
         }
     });
-    let notifier = NativeNotifier { is_unfocused, notify };
+    let notifier = NativeNotifier {
+        is_unfocused,
+        notify,
+    };
 
     let badge_app = app_handle.clone();
     let inc_badge: IncBadgeFn = Arc::new(move || {
@@ -1551,12 +1632,18 @@ struct ObserverShutdown(Mutex<Arc<AtomicBool>>);
 impl ObserverShutdown {
     /// 当前代 shutdown 标志（signal/Exit 清理消费）。
     fn current(&self) -> Arc<AtomicBool> {
-        self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
     /// 换代：装新代标志，旧代置停（旧 watcher 500ms 重试循环内退出）。
     fn rotate(&self, next: Arc<AtomicBool>) {
         let prev = {
-            let mut guard = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut guard = self
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             std::mem::replace(&mut *guard, next)
         };
         prev.store(true, Ordering::SeqCst);

@@ -17,7 +17,10 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 /// - [`WorkerGuard`]：持有期间保证异步 flush；drop 时阻塞写完剩余日志
 fn build_subscriber(
     log_dir: PathBuf,
-) -> Result<(impl tracing::Subscriber + Send + Sync + 'static, WorkerGuard)> {
+) -> Result<(
+    impl tracing::Subscriber + Send + Sync + 'static,
+    WorkerGuard,
+)> {
     // 1. 确保日志目录存在
     std::fs::create_dir_all(&log_dir)
         .with_context(|| format!("创建日志目录失败: {:?}", log_dir))?;

@@ -64,12 +64,7 @@ pub fn normalize_hook_id(value: Option<&str>) -> String {
     loop {
         if let Some(caps) = unwrap_re().captures(&normalized) {
             // 七个捕获组对应七种包装，取首个匹配的非空内组。
-            let unwrapped = caps
-                .iter()
-                .skip(1)
-                .flatten()
-                .map(|m| m.as_str())
-                .next();
+            let unwrapped = caps.iter().skip(1).flatten().map(|m| m.as_str()).next();
             if let Some(inner) = unwrapped {
                 let next = inner.trim().to_string();
                 if next == normalized || next.is_empty() {
@@ -115,7 +110,9 @@ fn chapter_summary_first_col_re() -> &'static Regex {
 fn current_chapter_label_re() -> &'static Regex {
     // TS: /^(当前章节|current chapter)$/i
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)^(当前章节|current chapter)$").expect("current chapter label regex"))
+    R.get_or_init(|| {
+        Regex::new(r"(?i)^(当前章节|current chapter)$").expect("current chapter label regex")
+    })
 }
 
 fn protagonist_label_re() -> &'static Regex {
@@ -137,14 +134,17 @@ fn optional_true_re() -> &'static Regex {
     // TS parseOptionalBooleanCell true 分支。
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"^(true|yes|y|是|核心|core|1|✓|✔|promoted|已升级)$").expect("optional true regex")
+        Regex::new(r"^(true|yes|y|是|核心|core|1|✓|✔|promoted|已升级)$")
+            .expect("optional true regex")
     })
 }
 
 fn optional_false_re() -> &'static Regex {
     // TS parseOptionalBooleanCell false 分支。
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(false|no|n|否|未升级|seed|0|✗|✘)$").expect("optional false regex"))
+    R.get_or_init(|| {
+        Regex::new(r"^(false|no|n|否|未升级|seed|0|✗|✘)$").expect("optional false regex")
+    })
 }
 
 fn depends_on_split_re() -> &'static Regex {
@@ -203,14 +203,19 @@ pub fn parse_markdown_table_rows(markdown: &str) -> Vec<Vec<String>> {
 
 // 811/812 号：拆分感知转义 + 单元格回读还原；816 号收敛到 utils::markdown_table 单一真源
 //（与渲染侧 escape_table_cell 成对，TS utils/markdown-table.ts 同集）。
-use crate::utils::markdown_table::{escape_table_cell, restore_table_cell, split_table_row_escaped};
+use crate::utils::markdown_table::{
+    escape_table_cell, restore_table_cell, split_table_row_escaped,
+};
 
 /// 解析章节摘要 markdown 表格 → [`StoredSummary`] 列表。
 /// 对齐 TS `parseChapterSummariesMarkdown`：首列须为纯数字（章节号）。
 pub fn parse_chapter_summaries_markdown(markdown: &str) -> Vec<StoredSummary> {
     parse_markdown_table_rows(markdown)
         .into_iter()
-        .filter(|row| row.first().is_some_and(|c| chapter_summary_first_col_re().is_match(c)))
+        .filter(|row| {
+            row.first()
+                .is_some_and(|c| chapter_summary_first_col_re().is_match(c))
+        })
         .map(|row| StoredSummary {
             chapter: row[0].parse::<i64>().unwrap_or(0),
             title: row.get(1).cloned().unwrap_or_default(),
@@ -243,12 +248,22 @@ fn parse_tension_cell(cell: Option<&String>) -> Option<i64> {
 pub fn parse_pending_hooks_markdown(markdown: &str) -> Vec<HookRecord> {
     let table_rows: Vec<Vec<String>> = parse_markdown_table_rows(markdown)
         .into_iter()
-        .filter(|row| row.first().map(|c| c.to_lowercase() != "hook_id").unwrap_or(true))
-        .filter(|row| row.first().is_some_and(|c| !normalize_hook_id(Some(c)).is_empty()))
+        .filter(|row| {
+            row.first()
+                .map(|c| c.to_lowercase() != "hook_id")
+                .unwrap_or(true)
+        })
+        .filter(|row| {
+            row.first()
+                .is_some_and(|c| !normalize_hook_id(Some(c)).is_empty())
+        })
         .collect();
 
     if !table_rows.is_empty() {
-        return table_rows.into_iter().map(|row| parse_pending_hook_row(&row)).collect();
+        return table_rows
+            .into_iter()
+            .map(|row| parse_pending_hook_row(&row))
+            .collect();
     }
 
     // bullet fallback：notes-only。
@@ -256,7 +271,12 @@ pub fn parse_pending_hooks_markdown(markdown: &str) -> Vec<HookRecord> {
         .lines()
         .map(|line| line.trim())
         .filter(|line| line.starts_with('-'))
-        .map(|line| line.replacen("- ", "", 1).replacen('-', "", 1).trim().to_string())
+        .map(|line| {
+            line.replacen("- ", "", 1)
+                .replacen('-', "", 1)
+                .trim()
+                .to_string()
+        })
         .filter(|line| !line.is_empty())
         .enumerate()
         .map(|(index, notes)| HookRecord {
@@ -346,7 +366,10 @@ pub fn render_hook_snapshot(
         out.push_str(" | ");
         push_escaped_cell(&mut out, &hook.hook_type);
         out.push_str(" | ");
-        push_escaped_cell(&mut out, crate::utils::hook_lifecycle::hook_status_text(hook));
+        push_escaped_cell(
+            &mut out,
+            crate::utils::hook_lifecycle::hook_status_text(hook),
+        );
         out.push_str(" | ");
         let _ = write!(out, "{}", hook.last_advanced_chapter);
         out.push_str(" | ");
@@ -357,9 +380,15 @@ pub fn render_hook_snapshot(
         let depends = render_depends_on_cell(hook.depends_on.as_deref(), language);
         push_escaped_cell(&mut out, &depends);
         out.push_str(" | ");
-        push_escaped_cell(&mut out, hook.pays_off_in_arc.as_deref().unwrap_or_default());
+        push_escaped_cell(
+            &mut out,
+            hook.pays_off_in_arc.as_deref().unwrap_or_default(),
+        );
         out.push_str(" | ");
-        push_escaped_cell(&mut out, &render_core_hook_cell(hook.core_hook == Some(true), language));
+        push_escaped_cell(
+            &mut out,
+            &render_core_hook_cell(hook.core_hook == Some(true), language),
+        );
         out.push_str(" | ");
         let half_life = render_half_life_cell(hook.half_life_chapters);
         push_escaped_cell(&mut out, &half_life);
@@ -371,7 +400,9 @@ pub fn render_hook_snapshot(
         // R23/393 号：第 14 列 kind（规范 id，无 kind 空单元格）。
         push_escaped_cell(
             &mut out,
-            hook.kind.map(crate::utils::hook_kind::hook_kind_id).unwrap_or_default(),
+            hook.kind
+                .map(crate::utils::hook_kind::hook_kind_id)
+                .unwrap_or_default(),
         );
         out.push_str(" |");
     }
@@ -426,8 +457,14 @@ pub fn render_summary_snapshot(
             summary.hook_activity.clone(),
             summary.mood.clone(),
             summary.chapter_type.clone(),
-            summary.conflict_level.map(|v| v.to_string()).unwrap_or_default(),
-            summary.reveal_level.map(|v| v.to_string()).unwrap_or_default(),
+            summary
+                .conflict_level
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            summary
+                .reveal_level
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
         ];
         let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
         lines.push(format!("| {} |", escaped.join(" | ")));
@@ -450,7 +487,10 @@ fn render_depends_on_cell(
     format!("[{}]", ids.unwrap().join(", "))
 }
 
-fn render_core_hook_cell(is_core: bool, language: crate::utils::language::WritingLanguage) -> String {
+fn render_core_hook_cell(
+    is_core: bool,
+    language: crate::utils::language::WritingLanguage,
+) -> String {
     if language == crate::utils::language::WritingLanguage::En {
         return if is_core { "true" } else { "false" }.to_string();
     }
@@ -532,7 +572,12 @@ pub fn parse_current_state_facts(markdown: &str, fallback_chapter: i64) -> Vec<N
         .lines()
         .map(|line| line.trim())
         .filter(|line| line.starts_with('-'))
-        .map(|line| line.replacen("- ", "", 1).replacen('-', "", 1).trim().to_string())
+        .map(|line| {
+            line.replacen("- ", "", 1)
+                .replacen('-', "", 1)
+                .trim()
+                .to_string()
+        })
         .filter(|line| !line.is_empty())
         .collect();
 
@@ -552,8 +597,14 @@ pub fn parse_current_state_facts(markdown: &str, fallback_chapter: i64) -> Vec<N
 
 /// 判定是否为状态表表头行（「字段|值」/「field|value」）。对齐 TS `isStateTableHeaderRow`。
 pub fn is_state_table_header_row(row: &[String]) -> bool {
-    let first = row.first().map(|s| s.trim().to_lowercase()).unwrap_or_default();
-    let second = row.get(1).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+    let first = row
+        .first()
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_default();
+    let second = row
+        .get(1)
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_default();
     (first == "字段" && second == "值") || (first == "field" && second == "value")
 }
 
@@ -694,8 +745,8 @@ fn parse_hook_status(cell: String) -> HookStatus {
         "deferred" | "defer" | "paused" | "hold" | "dormant" | "sleeping" | "inactive"
         | "unplanted" | "unseeded" | "not_started" | "not-started" | "not started"
         | "not_active" | "not-active" | "not active" | "搁置" | "延后" | "延期" | "暂缓"
-        | "休眠" | "未激活" | "未开启" | "待开启" | "未启动" | "待启动" | "未推进"
-        | "尚未推进" | "待推进" => HookStatus::Deferred,
+        | "休眠" | "未激活" | "未开启" | "待开启" | "未启动" | "待启动" | "未推进" | "尚未推进"
+        | "待推进" => HookStatus::Deferred,
         // resolved 组（TS 全表 + Rust 既有 complete/completed/已关闭）
         "resolved" | "closed" | "done" | "paid_off" | "paid-off" | "paid off" | "complete"
         | "completed" | "已回收" | "回收" | "完成" | "已解决" | "已兑现" | "兑现" | "已关闭" => {
@@ -705,9 +756,8 @@ fn parse_hook_status(cell: String) -> HookStatus {
         // 不识别则 md 往返把已撤回前提复活为 open）
         "superseded" | "withdrawn" | "已撤回" | "撤回" => HookStatus::Superseded,
         // open 组（TS 全表）
-        "open" | "pending" | "seeded" | "planted" | "待定" | "未回收" | "已埋" | "已种下" | "已铺垫" => {
-            HookStatus::Open
-        }
+        "open" | "pending" | "seeded" | "planted" | "待定" | "未回收" | "已埋" | "已种下"
+        | "已铺垫" => HookStatus::Open,
         _ => HookStatus::Open,
     }
 }
@@ -724,7 +774,9 @@ fn parse_depends_on(cell: &str) -> Vec<String> {
         return Vec::new();
     }
     let stripped = depends_on_wrap_re().replace_all(trimmed, "").into_owned();
-    let stripped = depends_on_close_wrap_re().replace_all(stripped.as_str(), "").into_owned();
+    let stripped = depends_on_close_wrap_re()
+        .replace_all(stripped.as_str(), "")
+        .into_owned();
     depends_on_split_re()
         .split(stripped.as_str())
         .map(|item| normalize_hook_id(Some(item)))
@@ -766,7 +818,11 @@ fn parse_optional_int(cell: Option<&str>) -> Option<u32> {
     }
     let m = digits_re().find(normalized)?;
     let value: u32 = m.as_str().parse().ok()?;
-    if value > 0 { Some(value) } else { None }
+    if value > 0 {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -827,10 +883,7 @@ mod tests {
     #[test]
     fn iterates_until_stable_for_nested_wrappers() {
         // 嵌套：[**text**](url) → 先剥 link → **text** → 再剥 bold → text
-        assert_eq!(
-            normalize_hook_id(Some("[**nested**](./x.md)")),
-            "nested"
-        );
+        assert_eq!(normalize_hook_id(Some("[**nested**](./x.md)")), "nested");
     }
 
     // --- 解析子集 ---------------------------------------------------------------
@@ -981,9 +1034,18 @@ mod tests {
 
     #[test]
     fn is_state_table_header_row_recognizes_zh_and_en() {
-        assert!(is_state_table_header_row(&["字段".to_string(), "值".to_string()]));
-        assert!(is_state_table_header_row(&["field".to_string(), "value".to_string()]));
-        assert!(!is_state_table_header_row(&["章节号".to_string(), "标题".to_string()]));
+        assert!(is_state_table_header_row(&[
+            "字段".to_string(),
+            "值".to_string()
+        ]));
+        assert!(is_state_table_header_row(&[
+            "field".to_string(),
+            "value".to_string()
+        ]));
+        assert!(!is_state_table_header_row(&[
+            "章节号".to_string(),
+            "标题".to_string()
+        ]));
     }
 
     #[test]
@@ -1022,9 +1084,18 @@ mod tests {
 
     #[test]
     fn parse_depends_on_handles_brackets_and_separators() {
-        assert_eq!(parse_depends_on("[H01, H02]"), vec!["H01".to_string(), "H02".to_string()]);
-        assert_eq!(parse_depends_on("H01/H02"), vec!["H01".to_string(), "H02".to_string()]);
-        assert_eq!(parse_depends_on("H01、H02"), vec!["H01".to_string(), "H02".to_string()]);
+        assert_eq!(
+            parse_depends_on("[H01, H02]"),
+            vec!["H01".to_string(), "H02".to_string()]
+        );
+        assert_eq!(
+            parse_depends_on("H01/H02"),
+            vec!["H01".to_string(), "H02".to_string()]
+        );
+        assert_eq!(
+            parse_depends_on("H01、H02"),
+            vec!["H01".to_string(), "H02".to_string()]
+        );
         assert_eq!(parse_depends_on("none"), Vec::<String>::new());
         assert_eq!(parse_depends_on("无"), Vec::<String>::new());
         assert_eq!(parse_depends_on("-"), Vec::<String>::new());
@@ -1053,16 +1124,37 @@ mod tests {
     #[test]
     fn parse_hook_status_normalizes_aliases() {
         assert_eq!(parse_hook_status("open".to_string()), HookStatus::Open);
-        assert_eq!(parse_hook_status("Progressing".to_string()), HookStatus::Progressing);
-        assert_eq!(parse_hook_status("deferred".to_string()), HookStatus::Deferred);
-        assert_eq!(parse_hook_status("已解决".to_string()), HookStatus::Resolved);
-        assert_eq!(parse_hook_status("closed".to_string()), HookStatus::Resolved);
+        assert_eq!(
+            parse_hook_status("Progressing".to_string()),
+            HookStatus::Progressing
+        );
+        assert_eq!(
+            parse_hook_status("deferred".to_string()),
+            HookStatus::Deferred
+        );
+        assert_eq!(
+            parse_hook_status("已解决".to_string()),
+            HookStatus::Resolved
+        );
+        assert_eq!(
+            parse_hook_status("closed".to_string()),
+            HookStatus::Resolved
+        );
         assert_eq!(parse_hook_status("".to_string()), HookStatus::Open);
         assert_eq!(parse_hook_status("unknown".to_string()), HookStatus::Open);
         // 805 号：撤回终态（md 往返不得把已撤回前提复活为 open）
-        assert_eq!(parse_hook_status("superseded".to_string()), HookStatus::Superseded);
-        assert_eq!(parse_hook_status("Withdrawn".to_string()), HookStatus::Superseded);
-        assert_eq!(parse_hook_status("已撤回".to_string()), HookStatus::Superseded);
+        assert_eq!(
+            parse_hook_status("superseded".to_string()),
+            HookStatus::Superseded
+        );
+        assert_eq!(
+            parse_hook_status("Withdrawn".to_string()),
+            HookStatus::Superseded
+        );
+        assert_eq!(
+            parse_hook_status("已撤回".to_string()),
+            HookStatus::Superseded
+        );
     }
 
     /// 811 号：单元格回读还原 `<br>` 三形态（忽略大小写）→ 换行；与渲染侧转义成对。
@@ -1070,15 +1162,25 @@ mod tests {
     fn parse_markdown_table_rows_restores_br_to_newline() {
         let md = "| a | b |\n| --- | --- |\n| 既有。<br>依据。 | x<BR/>y<br />z |\n";
         let rows = parse_markdown_table_rows(md);
-        assert_eq!(rows, vec![vec!["a".to_string(), "b".to_string()], vec!["既有。\n依据。".to_string(), "x\ny\nz".to_string()]]);
+        assert_eq!(
+            rows,
+            vec![
+                vec!["a".to_string(), "b".to_string()],
+                vec!["既有。\n依据。".to_string(), "x\ny\nz".to_string()]
+            ]
+        );
         // 普通单元格不受影响
-        assert_eq!(parse_markdown_table_rows("| plain |\n")[0], vec!["plain".to_string()]);
+        assert_eq!(
+            parse_markdown_table_rows("| plain |\n")[0],
+            vec!["plain".to_string()]
+        );
     }
 
     /// 812 号：`\|` 不作分隔且还原为竖线（与渲染侧转义成对）——含竖线 notes 不再错位拆列。
     #[test]
     fn parse_markdown_table_rows_keeps_escaped_pipes() {
-        let rows = parse_markdown_table_rows("| a\\|b | c |\n| --- | --- |\n| 备注含\\|竖线 | 1 |\n");
+        let rows =
+            parse_markdown_table_rows("| a\\|b | c |\n| --- | --- |\n| 备注含\\|竖线 | 1 |\n");
         assert_eq!(
             rows,
             vec![
@@ -1087,6 +1189,9 @@ mod tests {
             ]
         );
         // 未转义竖线仍正常分隔（非转义形态不受影响）。
-        assert_eq!(parse_markdown_table_rows("| a | b |\n"), vec![vec!["a".to_string(), "b".to_string()]]);
+        assert_eq!(
+            parse_markdown_table_rows("| a | b |\n"),
+            vec![vec!["a".to_string(), "b".to_string()]]
+        );
     }
 }

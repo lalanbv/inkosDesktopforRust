@@ -4,8 +4,7 @@
 use std::path::Path;
 
 use crate::translation::text::{
-    normalize_translation_text, split_translation_chapters, strip_html,
-    TranslationTextChapter,
+    normalize_translation_text, split_translation_chapters, strip_html, TranslationTextChapter,
 };
 use crate::translation::types::*;
 
@@ -68,7 +67,10 @@ pub async fn extract_translation_source(
                 content: chapter.content.clone(),
             })
             .collect();
-        let char_count: u64 = chapters.iter().map(|c| c.content.chars().count() as u64).sum();
+        let char_count: u64 = chapters
+            .iter()
+            .map(|c| c.content.chars().count() as u64)
+            .sum();
         return Ok(ExtractedTranslationSource {
             title: trimmed_title
                 .map(String::from)
@@ -133,7 +135,9 @@ fn safe_child_path(project_root: &Path, raw: &str) -> Result<std::path::PathBuf,
     if normalized.starts_with(&root) && normalized != root.parent().unwrap_or(&root) {
         Ok(normalized)
     } else {
-        Err(format!("Translation input path escapes project root: {raw}"))
+        Err(format!(
+            "Translation input path escapes project root: {raw}"
+        ))
     }
 }
 
@@ -150,8 +154,7 @@ pub struct ExtractedEpub {
 }
 
 pub fn extract_epub(buffer: &[u8]) -> Result<ExtractedEpub, String> {
-    let reader =
-        zip::ZipArchive::new(std::io::Cursor::new(buffer)).map_err(|e| e.to_string())?;
+    let reader = zip::ZipArchive::new(std::io::Cursor::new(buffer)).map_err(|e| e.to_string())?;
     // 926 号：显式拒绝 `<!ENTITY` 声明（XXE 注入源拔除）。手写正则解析
     // 无实体展开机制（decode_xml 只替换五个预定义实体，未声明实体保持
     // 字面），DOCTYPE 本身不展开故放行（真实 EPUB 章节普遍携带 XHTML
@@ -175,13 +178,12 @@ pub fn extract_epub(buffer: &[u8]) -> Result<ExtractedEpub, String> {
         Ok(Some(text))
     };
 
-    let container_xml = read_entry("META-INF/container.xml")?.ok_or(
-        "EPUB container.xml does not point to an OPF package.",
-    )?;
+    let container_xml = read_entry("META-INF/container.xml")?
+        .ok_or("EPUB container.xml does not point to an OPF package.")?;
     let opf_path = extract_opf_path(&container_xml)
         .ok_or("EPUB container.xml does not point to an OPF package.")?;
-    let opf = read_entry(&opf_path)?
-        .ok_or_else(|| format!("EPUB OPF package not found: {opf_path}"))?;
+    let opf =
+        read_entry(&opf_path)?.ok_or_else(|| format!("EPUB OPF package not found: {opf_path}"))?;
 
     let title = extract_first(&opf, r"(?i)<dc:title[^>]*>([\s\S]*?)</dc:title>")
         .map(|raw| decode_xml(&raw).trim().to_string())
@@ -207,12 +209,7 @@ pub fn extract_epub(buffer: &[u8]) -> Result<ExtractedEpub, String> {
             continue;
         };
         let title_from_html = extract_first(&html, r"(?i)<h[1-6][^>]*>([\s\S]*?)</h[1-6]>")
-            .map(|raw| {
-                decode_xml(&raw)
-                    .replace(['<', '>'], "")
-                    .trim()
-                    .to_string()
-            })
+            .map(|raw| decode_xml(&raw).replace(['<', '>'], "").trim().to_string())
             .filter(|t| !t.is_empty())
             .unwrap_or_else(|| format!("Chapter {}", chapters.len() + 1));
         let content = normalize_translation_text(&strip_html(&html));
@@ -229,7 +226,6 @@ pub fn extract_epub(buffer: &[u8]) -> Result<ExtractedEpub, String> {
     }
     Ok(ExtractedEpub { title, chapters })
 }
-
 
 fn extract_opf_path(container_xml: &str) -> Option<String> {
     extract_first(
@@ -279,9 +275,7 @@ fn extract_first(text: &str, pattern: &str) -> Option<String> {
 }
 
 fn normalize_zip_path(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_start_matches("./")
-        .to_string()
+    path.replace('\\', "/").trim_start_matches("./").to_string()
 }
 
 fn decode_xml(text: &str) -> String {

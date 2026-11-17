@@ -3,7 +3,6 @@
 //! 移植自 `packages/core/src/agents/sensitive-words.ts`（142 行）。纯规则分析（无 LLM），
 //! 检测中文网文的政治敏感（block）/ 色情（warn）/ 极端暴力（warn）词，产出 [`AuditIssue`]。
 
-
 use crate::agents::continuity::{AuditIssue, AuditSeverity};
 use crate::utils::language::WritingLanguage;
 
@@ -31,31 +30,59 @@ pub struct SensitiveWordResult {
 
 // 政治敏感词 — severity block
 const POLITICAL_WORDS: &[&str] = &[
-    "习近平", "习主席", "习总书记", "共产党", "中国共产党", "共青团",
-    "六四", "天安门事件", "天安门广场事件", "法轮功", "法轮大法",
-    "台独", "藏独", "疆独", "港独",
-    "新疆集中营", "再教育营",
-    "维吾尔", "达赖喇嘛", "达赖",
-    "刘晓波", "艾未未", "赵紫阳",
-    "文化大革命", "文革", "大跃进",
-    "反右运动", "镇压", "六四屠杀",
-    "中南海", "政治局常委",
-    "翻墙", "防火长城",
+    "习近平",
+    "习主席",
+    "习总书记",
+    "共产党",
+    "中国共产党",
+    "共青团",
+    "六四",
+    "天安门事件",
+    "天安门广场事件",
+    "法轮功",
+    "法轮大法",
+    "台独",
+    "藏独",
+    "疆独",
+    "港独",
+    "新疆集中营",
+    "再教育营",
+    "维吾尔",
+    "达赖喇嘛",
+    "达赖",
+    "刘晓波",
+    "艾未未",
+    "赵紫阳",
+    "文化大革命",
+    "文革",
+    "大跃进",
+    "反右运动",
+    "镇压",
+    "六四屠杀",
+    "中南海",
+    "政治局常委",
+    "翻墙",
+    "防火长城",
 ];
 
 // 色情敏感词 — severity warn
 const SEXUAL_WORDS: &[&str] = &[
-    "性交", "做爱", "口交", "肛交", "自慰", "手淫",
-    "阴茎", "阴道", "阴蒂", "乳房", "乳头",
-    "射精", "高潮", "潮吹",
-    "淫荡", "淫乱", "荡妇", "婊子",
-    "强奸", "轮奸",
+    "性交", "做爱", "口交", "肛交", "自慰", "手淫", "阴茎", "阴道", "阴蒂", "乳房", "乳头", "射精",
+    "高潮", "潮吹", "淫荡", "淫乱", "荡妇", "婊子", "强奸", "轮奸",
 ];
 
 // 极端暴力词 — severity warn
 const VIOLENCE_EXTREME: &[&str] = &[
-    "肢解", "碎尸", "挖眼", "剥皮", "开膛破肚",
-    "虐杀", "凌迟", "活剥", "活埋", "烹煮活人",
+    "肢解",
+    "碎尸",
+    "挖眼",
+    "剥皮",
+    "开膛破肚",
+    "虐杀",
+    "凌迟",
+    "活剥",
+    "活埋",
+    "烹煮活人",
 ];
 
 struct WordListEntry {
@@ -66,9 +93,24 @@ struct WordListEntry {
 }
 
 const WORD_LISTS: &[WordListEntry] = &[
-    WordListEntry { words: POLITICAL_WORDS, severity: SensitiveWordSeverity::Block, label: "政治敏感词", english_label: "political sensitive terms" },
-    WordListEntry { words: SEXUAL_WORDS, severity: SensitiveWordSeverity::Warn, label: "色情敏感词", english_label: "sexual sensitive terms" },
-    WordListEntry { words: VIOLENCE_EXTREME, severity: SensitiveWordSeverity::Warn, label: "极端暴力词", english_label: "extreme violence terms" },
+    WordListEntry {
+        words: POLITICAL_WORDS,
+        severity: SensitiveWordSeverity::Block,
+        label: "政治敏感词",
+        english_label: "political sensitive terms",
+    },
+    WordListEntry {
+        words: SEXUAL_WORDS,
+        severity: SensitiveWordSeverity::Warn,
+        label: "色情敏感词",
+        english_label: "sexual sensitive terms",
+    },
+    WordListEntry {
+        words: VIOLENCE_EXTREME,
+        severity: SensitiveWordSeverity::Warn,
+        label: "极端暴力词",
+        english_label: "extreme violence terms",
+    },
 ];
 
 /// 分析文本中的敏感词。对齐 TS `analyzeSensitiveWords`。
@@ -107,7 +149,10 @@ pub fn analyze_sensitive_words(
                 if list.severity == SensitiveWordSeverity::Block {
                     "You must remove or replace these blocked terms before publication".to_string()
                 } else {
-                    format!("Replace or soften these {} to reduce moderation risk", list.english_label)
+                    format!(
+                        "Replace or soften these {} to reduce moderation risk",
+                        list.english_label
+                    )
                 },
             )
         } else {
@@ -122,7 +167,12 @@ pub fn analyze_sensitive_words(
         };
         issues.push(AuditIssue {
             severity,
-            category: if is_english { "Sensitive terms" } else { "敏感词" }.to_string(),
+            category: if is_english {
+                "Sensitive terms"
+            } else {
+                "敏感词"
+            }
+            .to_string(),
             description,
             suggestion,
             repair_scope: None,
@@ -141,7 +191,12 @@ pub fn analyze_sensitive_words(
                 found.extend(custom_matches.iter().cloned());
                 issues.push(AuditIssue {
                     severity: AuditSeverity::Warning,
-                    category: if is_english { "Sensitive terms" } else { "敏感词" }.to_string(),
+                    category: if is_english {
+                        "Sensitive terms"
+                    } else {
+                        "敏感词"
+                    }
+                    .to_string(),
                     description: if is_english {
                         format!("Detected custom sensitive term(s): {word_summary}")
                     } else {
@@ -167,7 +222,11 @@ fn scan_static_list(content: &str, list: &WordListEntry) -> Vec<SensitiveWordMat
 }
 
 /// 自定义词表扫描。
-fn scan_words_strings(content: &str, words: &[String], severity: SensitiveWordSeverity) -> Vec<SensitiveWordMatch> {
+fn scan_words_strings(
+    content: &str,
+    words: &[String],
+    severity: SensitiveWordSeverity,
+) -> Vec<SensitiveWordMatch> {
     scan_words_impl(content, words.iter().map(|s| s.as_str()), severity)
 }
 
@@ -209,7 +268,11 @@ mod tests {
     #[test]
     fn political_word_blocks_as_critical() {
         let r = analyze_sensitive_words("他提到了文革和台独。", None, WritingLanguage::Zh);
-        let block = r.issues.iter().find(|i| i.severity == AuditSeverity::Critical).expect("应有 critical");
+        let block = r
+            .issues
+            .iter()
+            .find(|i| i.severity == AuditSeverity::Critical)
+            .expect("应有 critical");
         assert!(block.description.contains("政治敏感词"));
         assert!(block.description.contains("文革"));
         assert!(block.description.contains("台独"));
@@ -220,9 +283,18 @@ mod tests {
     fn sexual_and_violence_words_warn() {
         let r = analyze_sensitive_words("含强奸与碎尸的描写。", None, WritingLanguage::Zh);
         // 两个 warn 词表各一条 issue。
-        assert!(r.issues.iter().all(|i| i.severity == AuditSeverity::Warning));
-        assert!(r.issues.iter().any(|i| i.description.contains("色情敏感词")));
-        assert!(r.issues.iter().any(|i| i.description.contains("极端暴力词")));
+        assert!(r
+            .issues
+            .iter()
+            .all(|i| i.severity == AuditSeverity::Warning));
+        assert!(r
+            .issues
+            .iter()
+            .any(|i| i.description.contains("色情敏感词")));
+        assert!(r
+            .issues
+            .iter()
+            .any(|i| i.description.contains("极端暴力词")));
     }
 
     #[test]
@@ -236,7 +308,11 @@ mod tests {
     fn custom_words_match_as_warn() {
         let custom = vec!["禁忌词".to_string()];
         let r = analyze_sensitive_words("这里有禁忌词。", Some(&custom), WritingLanguage::Zh);
-        let issue = r.issues.iter().find(|i| i.description.contains("自定义敏感词")).expect("应有自定义 issue");
+        let issue = r
+            .issues
+            .iter()
+            .find(|i| i.description.contains("自定义敏感词"))
+            .expect("应有自定义 issue");
         assert_eq!(issue.severity, AuditSeverity::Warning);
         assert!(issue.description.contains("禁忌词"));
     }
@@ -244,7 +320,11 @@ mod tests {
     #[test]
     fn english_language_emits_english_message() {
         let r = analyze_sensitive_words("mentions 文革 here", None, WritingLanguage::En);
-        let block = r.issues.iter().find(|i| i.severity == AuditSeverity::Critical).unwrap();
+        let block = r
+            .issues
+            .iter()
+            .find(|i| i.severity == AuditSeverity::Critical)
+            .unwrap();
         assert!(block.description.contains("political sensitive terms"));
         assert!(block.suggestion.contains("must remove"));
     }

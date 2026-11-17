@@ -64,7 +64,10 @@ pub(crate) fn parse_fanfic_mode(value: Option<&str>) -> FanficMode {
 }
 
 /// 书级语言（book.language ?? genre.language）。
-async fn resolved_language(runtime: &BooksRuntime, book: &BookConfig) -> Result<WritingLanguage, String> {
+async fn resolved_language(
+    runtime: &BooksRuntime,
+    book: &BookConfig,
+) -> Result<WritingLanguage, String> {
     if book.language.is_some() {
         return Ok(if book.language.as_deref() == Some("en") {
             WritingLanguage::En
@@ -79,7 +82,11 @@ async fn resolved_language(runtime: &BooksRuntime, book: &BookConfig) -> Result<
     )
     .await
     .map_err(|e| e.to_string())?;
-    Ok(if parsed.profile.language == "en" { WritingLanguage::En } else { WritingLanguage::Zh })
+    Ok(if parsed.profile.language == "en" {
+        WritingLanguage::En
+    } else {
+        WritingLanguage::Zh
+    })
 }
 
 /// 审核环通用底座：reviewer 装配 + 反馈重生成驱动（generate 为同步重入函数）。
@@ -89,7 +96,15 @@ async fn review_loop(
     language: WritingLanguage,
     mode: FoundationReviewMode,
     source_canon: Option<&str>,
-    mut regenerate: impl FnMut(Option<String>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<crate::agents::architect::ArchitectOutput, String>> + Send>>,
+    mut regenerate: impl FnMut(
+        Option<String>,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<crate::agents::architect::ArchitectOutput, String>,
+                > + Send,
+        >,
+    >,
 ) -> Result<crate::agents::architect::ArchitectOutput, String> {
     let reviewer_chat = RoutedAgent {
         router: runtime.effective_router().await,
@@ -130,7 +145,10 @@ pub(crate) async fn init_fanfic_book(
     let book_dir = state.book_dir(&book.id);
     let language = resolved_language(runtime, book).await?;
 
-    state.save_book_config(&book.id, book).await.map_err(|e| e.to_string())?;
+    state
+        .save_book_config(&book.id, book)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Step 1：同人正典导入。
     let importer_chat = RoutedAgent {
@@ -139,10 +157,15 @@ pub(crate) async fn init_fanfic_book(
     };
     let canon = import_from_text(&importer_chat, source_text, source_name, fanfic_mode).await?;
     let story_dir = book_dir.join("story");
-    tokio::fs::create_dir_all(&story_dir).await.map_err(|e| e.to_string())?;
-    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("fanfic_canon.md"), &canon.full_document)
+    tokio::fs::create_dir_all(&story_dir)
         .await
         .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &story_dir.join("fanfic_canon.md"),
+        &canon.full_document,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // Step 2：审核环（fanfic 模式 + sourceCanon）。
     // 204 号：闭包 future 需 'static（`dyn Future + Send` 默认约束）——捕获
@@ -161,11 +184,24 @@ pub(crate) async fn init_fanfic_book(
             let root = state.project_root().to_path_buf();
             let router = architect_router.clone();
             Box::pin(async move {
-                let ctx = ArchitectCtx { project_root: &root, builtin_genres_dir: &builtin };
-                let chat = RoutedAgent { router, agent: "architect" };
-                generate_fanfic_foundation(&ctx, &chat, &book, &canon_text, fanfic_mode, feedback.as_deref())
-                    .await
-                    .map_err(|e| e.to_string())
+                let ctx = ArchitectCtx {
+                    project_root: &root,
+                    builtin_genres_dir: &builtin,
+                };
+                let chat = RoutedAgent {
+                    router,
+                    agent: "architect",
+                };
+                generate_fanfic_foundation(
+                    &ctx,
+                    &chat,
+                    &book,
+                    &canon_text,
+                    fanfic_mode,
+                    feedback.as_deref(),
+                )
+                .await
+                .map_err(|e| e.to_string())
             })
         },
     )
@@ -190,12 +226,17 @@ pub(crate) async fn init_fanfic_book(
     }
 
     // Step 4：chapters/ + 空索引 + 快照 0。
-    tokio::fs::create_dir_all(book_dir.join("chapters")).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(book_dir.join("chapters"))
+        .await
+        .map_err(|e| e.to_string())?;
     state
         .save_chapter_index_at(&book_dir, &[], true)
         .await
         .map_err(|e| e.to_string())?;
-    state.snapshot_state(&book.id, 0).await.map_err(|e| e.to_string())?;
+    state
+        .snapshot_state(&book.id, 0)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -210,7 +251,10 @@ pub(crate) async fn init_spinoff_book(
     let book_dir = state.book_dir(&book.id);
     let language = resolved_language(runtime, book).await?;
 
-    state.save_book_config(&book.id, book).await.map_err(|e| e.to_string())?;
+    state
+        .save_book_config(&book.id, book)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // 正传正典导入（复用 55 号 importCanon）。
     let parent_canon = run_import_canon(
@@ -238,8 +282,14 @@ pub(crate) async fn init_spinoff_book(
             let root = state.project_root().to_path_buf();
             let router = architect_router.clone();
             Box::pin(async move {
-                let ctx = ArchitectCtx { project_root: &root, builtin_genres_dir: &builtin };
-                let chat = RoutedAgent { router, agent: "architect" };
+                let ctx = ArchitectCtx {
+                    project_root: &root,
+                    builtin_genres_dir: &builtin,
+                };
+                let chat = RoutedAgent {
+                    router,
+                    agent: "architect",
+                };
                 generate_foundation(&ctx, &chat, &book, Some(&context), feedback.as_deref())
                     .await
                     .map_err(|e| e.to_string())
@@ -253,17 +303,26 @@ pub(crate) async fn init_spinoff_book(
         .await
         .map_err(|e| e.to_string())?;
 
-    tokio::fs::create_dir_all(book_dir.join("chapters")).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(book_dir.join("chapters"))
+        .await
+        .map_err(|e| e.to_string())?;
     state
         .save_chapter_index_at(&book_dir, &[], true)
         .await
         .map_err(|e| e.to_string())?;
-    state.snapshot_state(&book.id, 0).await.map_err(|e| e.to_string())?;
+    state
+        .snapshot_state(&book.id, 0)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
 /// spinoff 上下文拼装。对齐 runner.ts `buildSpinoffFoundationContext`（双语逐字）。
-fn build_spinoff_foundation_context(parent_canon: &str, direction: Option<&str>, language: WritingLanguage) -> String {
+fn build_spinoff_foundation_context(
+    parent_canon: &str,
+    direction: Option<&str>,
+    language: WritingLanguage,
+) -> String {
     let dir = direction.map(str::trim).filter(|d| !d.is_empty());
     let mut parts: Vec<String> = Vec::new();
     if language == WritingLanguage::En {
@@ -275,7 +334,9 @@ fn build_spinoff_foundation_context(parent_canon: &str, direction: Option<&str>,
         if let Some(dir) = dir {
             parts.push(format!("\n## Side-story direction\n{dir}"));
         }
-        parts.push(format!("\n## Parent canon (reuse these characters and settings)\n{parent_canon}"));
+        parts.push(format!(
+            "\n## Parent canon (reuse these characters and settings)\n{parent_canon}"
+        ));
     } else {
         parts.push("## 这是一部番外".to_string());
         parts.push(
@@ -285,17 +346,23 @@ fn build_spinoff_foundation_context(parent_canon: &str, direction: Option<&str>,
         if let Some(dir) = dir {
             parts.push(format!("\n## 番外方向\n{dir}"));
         }
-        parts.push(format!("\n## 正传正典（复用以下角色与设定）\n{parent_canon}"));
+        parts.push(format!(
+            "\n## 正传正典（复用以下角色与设定）\n{parent_canon}"
+        ));
     }
     parts.join("\n")
 }
 
 // ── POST /api/v1/fanfic/init ─────────────────────────────────────
 
-pub async fn fanfic_init(State(runtime): State<BooksRuntime>, req: axum::extract::Request) -> impl IntoResponse {
+pub async fn fanfic_init(
+    State(runtime): State<BooksRuntime>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
     // 273 号：sourceText 可为整本原著——`Bytes` 提取器 2MB 默认上限截断，
     // 改手工读（TS 无上限；此处 64MB 安全上界）。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
@@ -303,7 +370,10 @@ pub async fn fanfic_init(State(runtime): State<BooksRuntime>, req: axum::extract
         return flat_internal("Unexpected token");
     };
     let title = parsed.get("title").and_then(Value::as_str).unwrap_or("");
-    let source_text = parsed.get("sourceText").and_then(Value::as_str).unwrap_or("");
+    let source_text = parsed
+        .get("sourceText")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if title.is_empty() || source_text.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -326,10 +396,22 @@ pub async fn fanfic_init(State(runtime): State<BooksRuntime>, req: axum::extract
             .and_then(Value::as_str)
             .map(crate::models::book::normalize_platform_or_other)
             .unwrap_or(crate::models::book::Platform::Other),
-        genre: parsed.get("genre").and_then(Value::as_str).unwrap_or("other").to_string(),
+        genre: parsed
+            .get("genre")
+            .and_then(Value::as_str)
+            .unwrap_or("other")
+            .to_string(),
         status: crate::models::book::BookStatus::Outlining,
-        target_chapters: parsed.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(100),
-        chapter_word_count: parsed.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32).unwrap_or(3000),
+        target_chapters: parsed
+            .get("targetChapters")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32)
+            .unwrap_or(100),
+        chapter_word_count: parsed
+            .get("chapterWordCount")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32)
+            .unwrap_or(3000),
         language,
         created_at: now.clone(),
         updated_at: now,
@@ -341,20 +423,31 @@ pub async fn fanfic_init(State(runtime): State<BooksRuntime>, req: axum::extract
         governance: None,
     };
     let book_id = book.id.clone();
-    let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("source").to_string();
+    let source_name = parsed
+        .get("sourceName")
+        .and_then(Value::as_str)
+        .unwrap_or("source")
+        .to_string();
 
-    runtime
-        .hub
-        .broadcast("fanfic:start", &json!({ "bookId": book_id, "title": title }));
+    runtime.hub.broadcast(
+        "fanfic:start",
+        &json!({ "bookId": book_id, "title": title }),
+    );
     match init_fanfic_book(&runtime, &book, source_text, &source_name, fanfic_mode).await {
         Ok(()) => {
-            runtime.hub.broadcast("fanfic:complete", &json!({ "bookId": book_id }));
-            (StatusCode::OK, Json(json!({ "ok": true, "bookId": book_id })))
-        }
-        Err(error) => {
             runtime
                 .hub
-                .broadcast("fanfic:error", &json!({ "bookId": book_id, "error": error }));
+                .broadcast("fanfic:complete", &json!({ "bookId": book_id }));
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "bookId": book_id })),
+            )
+        }
+        Err(error) => {
+            runtime.hub.broadcast(
+                "fanfic:error",
+                &json!({ "bookId": book_id, "error": error }),
+            );
             flat_internal(error)
         }
     }
@@ -368,7 +461,8 @@ pub async fn fanfic_refresh(
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     // 273 号：同 fanfic_init——sourceText 整本，手工读放宽。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
@@ -381,23 +475,40 @@ pub async fn fanfic_refresh(
         .map(str::trim)
         .filter(|t| !t.is_empty())
     else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "sourceText is required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "sourceText is required" })),
+        );
     };
-    runtime.hub.broadcast("fanfic:refresh:start", &json!({ "bookId": book_id }));
+    runtime
+        .hub
+        .broadcast("fanfic:refresh:start", &json!({ "bookId": book_id }));
     let result = async {
-        let book = runtime.state.load_book_config(&book_id).await.map_err(|e| e.to_string())?;
+        let book = runtime
+            .state
+            .load_book_config(&book_id)
+            .await
+            .map_err(|e| e.to_string())?;
         let fanfic_mode = book.fanfic_mode.unwrap_or(FanficMode::Canon);
         let importer_chat = RoutedAgent {
             router: runtime.effective_router().await,
             agent: "fanfic-canon-importer",
         };
-        let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("source");
+        let source_name = parsed
+            .get("sourceName")
+            .and_then(Value::as_str)
+            .unwrap_or("source");
         let canon = import_from_text(&importer_chat, source_text, source_name, fanfic_mode).await?;
         let story_dir = runtime.state.book_dir(&book_id).join("story");
-        tokio::fs::create_dir_all(&story_dir).await.map_err(|e| e.to_string())?;
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("fanfic_canon.md"), &canon.full_document)
+        tokio::fs::create_dir_all(&story_dir)
             .await
             .map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("fanfic_canon.md"),
+            &canon.full_document,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok::<(), String>(())
     }
     .await;
@@ -409,9 +520,10 @@ pub async fn fanfic_refresh(
             (StatusCode::OK, Json(json!({ "ok": true })))
         }
         Err(error) => {
-            runtime
-                .hub
-                .broadcast("fanfic:refresh:error", &json!({ "bookId": book_id, "error": error }));
+            runtime.hub.broadcast(
+                "fanfic:refresh:error",
+                &json!({ "bookId": book_id, "error": error }),
+            );
             flat_internal(error)
         }
     }
@@ -419,16 +531,24 @@ pub async fn fanfic_refresh(
 
 // ── POST /api/v1/spinoff/init ────────────────────────────────────
 
-pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extract::Request) -> impl IntoResponse {
+pub async fn spinoff_init(
+    State(runtime): State<BooksRuntime>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
     // 273 号：统一大载荷读取（payload 小，但与 TS 无上限语义对齐，无害）。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };
-    let title = parsed.get("title").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let title = parsed
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
     let parent_book_id = parsed
         .get("parentBookId")
         .and_then(Value::as_str)
@@ -453,9 +573,15 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extrac
     let now = utc_now_iso();
     let book = crate::server::book_create_routes::build_studio_book_config_pub(
         title,
-        parsed.get("genre").and_then(Value::as_str).unwrap_or(&parent.genre),
+        parsed
+            .get("genre")
+            .and_then(Value::as_str)
+            .unwrap_or(&parent.genre),
         language.as_deref(),
-        parsed.get("platform").and_then(Value::as_str).or(Some(parent.platform.as_str())),
+        parsed
+            .get("platform")
+            .and_then(Value::as_str)
+            .or(Some(parent.platform.as_str())),
         parsed
             .get("targetChapters")
             .and_then(Value::as_f64)
@@ -481,7 +607,10 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extrac
             Json(json!({ "error": format!("Book \"{book_id}\" already exists") })),
         );
     }
-    let direction = parsed.get("direction").and_then(Value::as_str).map(str::to_string);
+    let direction = parsed
+        .get("direction")
+        .and_then(Value::as_str)
+        .map(str::to_string);
 
     runtime.hub.broadcast(
         "spinoff:start",
@@ -489,7 +618,10 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extrac
     );
     crate::server::book_create_routes::set_create_status(
         &book_id,
-        BookCreateStatus { status: "creating".to_string(), error: None },
+        BookCreateStatus {
+            status: "creating".to_string(),
+            error: None,
+        },
     )
     .await;
     let background = {
@@ -498,11 +630,14 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extrac
         let parent_book_id = parent_book_id.to_string();
         let book_id = book_id.clone();
         async move {
-            let result = init_spinoff_book(&runtime, &book, &parent_book_id, direction.as_deref()).await;
+            let result =
+                init_spinoff_book(&runtime, &book, &parent_book_id, direction.as_deref()).await;
             match result {
                 Ok(()) => {
                     crate::server::book_create_routes::set_create_status_removed(&book_id).await;
-                    runtime.hub.broadcast("spinoff:complete", &json!({ "bookId": book_id }));
+                    runtime
+                        .hub
+                        .broadcast("spinoff:complete", &json!({ "bookId": book_id }));
                     runtime
                         .hub
                         .broadcast("book:created", &json!({ "bookId": book_id }));
@@ -510,12 +645,16 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extrac
                 Err(error) => {
                     crate::server::book_create_routes::set_create_status(
                         &book_id,
-                        BookCreateStatus { status: "error".to_string(), error: Some(error.clone()) },
+                        BookCreateStatus {
+                            status: "error".to_string(),
+                            error: Some(error.clone()),
+                        },
                     )
                     .await;
-                    runtime
-                        .hub
-                        .broadcast("spinoff:error", &json!({ "bookId": book_id, "error": error }));
+                    runtime.hub.broadcast(
+                        "spinoff:error",
+                        &json!({ "bookId": book_id, "error": error }),
+                    );
                     // 962 号：TS 同点位 spinoff:error 后紧跟 book:error——studio 事件名单
                     // 只收 book:error（书目刷新集），Rust 此前缺发=后台创建失败 UI 无感知。
                     runtime
@@ -526,27 +665,42 @@ pub async fn spinoff_init(State(runtime): State<BooksRuntime>, req: axum::extrac
         }
     };
     tokio::spawn(background);
-    (StatusCode::OK, Json(json!({ "status": "creating", "bookId": book_id })))
+    (
+        StatusCode::OK,
+        Json(json!({ "status": "creating", "bookId": book_id })),
+    )
 }
 
 // ── POST /api/v1/imitation/init ──────────────────────────────────
 
-pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extract::Request) -> impl IntoResponse {
+pub async fn imitation_init(
+    State(runtime): State<BooksRuntime>,
+    req: axum::extract::Request,
+) -> impl IntoResponse {
     // 273 号：referenceText 可为整本仿写对象文本，手工读放宽。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
         return flat_internal("Unexpected token");
     };
-    let title = parsed.get("title").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let title = parsed
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
     let reference_text = parsed
         .get("referenceText")
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("");
-    let story_idea = parsed.get("storyIdea").and_then(Value::as_str).map(str::trim).unwrap_or("");
+    let story_idea = parsed
+        .get("storyIdea")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
     if title.is_empty() || reference_text.is_empty() || story_idea.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -556,11 +710,20 @@ pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extr
     let now = utc_now_iso();
     let book = crate::server::book_create_routes::build_studio_book_config_pub(
         title,
-        parsed.get("genre").and_then(Value::as_str).unwrap_or("other"),
+        parsed
+            .get("genre")
+            .and_then(Value::as_str)
+            .unwrap_or("other"),
         parsed.get("language").and_then(Value::as_str),
         parsed.get("platform").and_then(Value::as_str),
-        parsed.get("targetChapters").and_then(Value::as_f64).map(|v| v as u32),
-        parsed.get("chapterWordCount").and_then(Value::as_f64).map(|v| v as u32),
+        parsed
+            .get("targetChapters")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32),
+        parsed
+            .get("chapterWordCount")
+            .and_then(Value::as_f64)
+            .map(|v| v as u32),
         &now,
     );
     let book_id = book.id.clone();
@@ -584,10 +747,16 @@ pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extr
         .unwrap_or("reference")
         .to_string();
 
-    runtime.hub.broadcast("imitation:start", &json!({ "bookId": book_id, "title": title }));
+    runtime.hub.broadcast(
+        "imitation:start",
+        &json!({ "bookId": book_id, "title": title }),
+    );
     crate::server::book_create_routes::set_create_status(
         &book_id,
-        BookCreateStatus { status: "creating".to_string(), error: None },
+        BookCreateStatus {
+            status: "creating".to_string(),
+            error: None,
+        },
     )
     .await;
     let background = {
@@ -600,7 +769,14 @@ pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extr
         async move {
             // initBook（storyIdea 为外部指令）+ 强制风格向导（失败上抛）。
             let result = async {
-                crate::server::book_create_routes::init_book(&runtime, &book, Some(&story_idea), None, None).await?;
+                crate::server::book_create_routes::init_book(
+                    &runtime,
+                    &book,
+                    Some(&story_idea),
+                    None,
+                    None,
+                )
+                .await?;
                 // 强制风格向导（短样本走确定性指南——对齐 initImitationBook
                 // 直接 await generateStyleGuide 而非 tryGenerate 吞错）。
                 generate_style_guide_for_book(
@@ -618,18 +794,26 @@ pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extr
             match result {
                 Ok(()) => {
                     crate::server::book_create_routes::set_create_status_removed(&book_id).await;
-                    runtime.hub.broadcast("imitation:complete", &json!({ "bookId": book_id }));
-                    runtime.hub.broadcast("book:created", &json!({ "bookId": book_id }));
+                    runtime
+                        .hub
+                        .broadcast("imitation:complete", &json!({ "bookId": book_id }));
+                    runtime
+                        .hub
+                        .broadcast("book:created", &json!({ "bookId": book_id }));
                 }
                 Err(error) => {
                     crate::server::book_create_routes::set_create_status(
                         &book_id,
-                        BookCreateStatus { status: "error".to_string(), error: Some(error.clone()) },
+                        BookCreateStatus {
+                            status: "error".to_string(),
+                            error: Some(error.clone()),
+                        },
                     )
                     .await;
-                    runtime
-                        .hub
-                        .broadcast("imitation:error", &json!({ "bookId": book_id, "error": error }));
+                    runtime.hub.broadcast(
+                        "imitation:error",
+                        &json!({ "bookId": book_id, "error": error }),
+                    );
                     // 962 号：TS 同点位 imitation:error 后紧跟 book:error（同 spinoff）。
                     runtime
                         .hub
@@ -639,6 +823,8 @@ pub async fn imitation_init(State(runtime): State<BooksRuntime>, req: axum::extr
         }
     };
     tokio::spawn(background);
-    (StatusCode::OK, Json(json!({ "status": "creating", "bookId": book_id })))
+    (
+        StatusCode::OK,
+        Json(json!({ "status": "creating", "bookId": book_id })),
+    )
 }
-

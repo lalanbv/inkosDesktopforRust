@@ -96,7 +96,9 @@ fn write_locks() -> &'static Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>
 
 async fn path_lock(path: &Path) -> Arc<tokio::sync::Mutex<()>> {
     let lock = {
-        let mut locks = write_locks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut locks = write_locks()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         locks.entry(path.to_path_buf()).or_default().clone()
     };
     // 持锁期间移除空闲条目会破坏排队语义（新写入者拿新锁绕过队列）；
@@ -110,7 +112,10 @@ pub fn js_encode_uri_component(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         let keep = byte.is_ascii_alphanumeric()
-            || matches!(byte, b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')');
+            || matches!(
+                byte,
+                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+            );
         if keep {
             out.push(byte as char);
         } else {
@@ -143,7 +148,10 @@ pub(crate) fn attachment_disposition(file_name: &str) -> String {
     if fallback.is_empty() {
         fallback.push_str("download");
     }
-    format!("attachment; filename=\"{fallback}\"; filename*=UTF-8''{}", js_encode_uri_component(file_name))
+    format!(
+        "attachment; filename=\"{fallback}\"; filename*=UTF-8''{}",
+        js_encode_uri_component(file_name)
+    )
 }
 
 fn task_file_name(session_id: &str) -> String {
@@ -152,7 +160,9 @@ fn task_file_name(session_id: &str) -> String {
 
 /// 快照落盘路径。
 pub fn studio_task_snapshot_path(project_root: &Path, session_id: &str) -> PathBuf {
-    project_root.join(TASKS_DIR).join(task_file_name(session_id))
+    project_root
+        .join(TASKS_DIR)
+        .join(task_file_name(session_id))
 }
 
 /// 字段级校验解析（坏载荷 → None）。
@@ -163,7 +173,8 @@ pub fn parse_studio_task_snapshot(value: &serde_json::Value) -> Option<StudioTas
         return None;
     }
     // TS requestedIntent 只验 string；serde 已保证。
-    if snapshot.session_id.is_empty() && value.get("sessionId").and_then(|v| v.as_str()) != Some("") {
+    if snapshot.session_id.is_empty() && value.get("sessionId").and_then(|v| v.as_str()) != Some("")
+    {
         return None;
     }
     Some(snapshot)
@@ -179,8 +190,8 @@ pub async fn save_studio_task_snapshot(
     let _guard = lock.lock().await;
 
     tokio::fs::create_dir_all(project_root.join(TASKS_DIR)).await?;
-    let mut serialized = serde_json::to_string_pretty(snapshot)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let mut serialized =
+        serde_json::to_string_pretty(snapshot).map_err(|e| std::io::Error::other(e.to_string()))?;
     serialized.push('\n');
     crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await
 }
@@ -229,9 +240,18 @@ mod tests {
                 details: Some(serde_json::json!({ "chapter": 3 })),
                 error: None,
                 stages: Some(vec![
-                    StudioTaskStage { label: "规划".into(), status: StudioTaskStageStatus::Completed },
-                    StudioTaskStage { label: "撰写".into(), status: StudioTaskStageStatus::Active },
-                    StudioTaskStage { label: "落盘".into(), status: StudioTaskStageStatus::Pending },
+                    StudioTaskStage {
+                        label: "规划".into(),
+                        status: StudioTaskStageStatus::Completed,
+                    },
+                    StudioTaskStage {
+                        label: "撰写".into(),
+                        status: StudioTaskStageStatus::Active,
+                    },
+                    StudioTaskStage {
+                        label: "落盘".into(),
+                        status: StudioTaskStageStatus::Pending,
+                    },
                 ]),
                 logs: Some(vec!["stage: 规划完成".to_string()]),
                 started_at: 1_786_752_000.0,
@@ -244,19 +264,25 @@ mod tests {
     #[tokio::test]
     async fn snapshot_roundtrip_with_pretty_json_and_newline() {
         let dir = tempfile::tempdir().unwrap();
-        save_studio_task_snapshot(dir.path(), &sample("sess-1")).await.unwrap();
+        save_studio_task_snapshot(dir.path(), &sample("sess-1"))
+            .await
+            .unwrap();
         let path = studio_task_snapshot_path(dir.path(), "sess-1");
         let raw = tokio::fs::read_to_string(&path).await.unwrap();
         assert!(raw.ends_with("}\n"));
         assert!(raw.contains("\"requestedIntent\": \"write_next\""));
-        let loaded = load_studio_task_snapshot(dir.path(), "sess-1").await.unwrap();
+        let loaded = load_studio_task_snapshot(dir.path(), "sess-1")
+            .await
+            .unwrap();
         assert_eq!(loaded, sample("sess-1"));
     }
 
     #[tokio::test]
     async fn load_missing_returns_none_delete_silent() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(load_studio_task_snapshot(dir.path(), "nope").await.is_none());
+        assert!(load_studio_task_snapshot(dir.path(), "nope")
+            .await
+            .is_none());
         delete_studio_task_snapshot(dir.path(), "nope").await;
     }
 

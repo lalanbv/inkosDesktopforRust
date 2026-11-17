@@ -8,9 +8,9 @@ use std::time::Duration;
 use serde_json::Value;
 
 use crate::llm::lookup::lookup_model;
+use crate::llm::providers::ApiProtocol;
 use crate::llm::providers_bank::{get_all_endpoints, get_endpoint};
 use crate::llm::service_presets::{service_preset, ProviderFamily};
-use crate::llm::providers::ApiProtocol;
 
 /// live probe 得到的模型。
 #[derive(Debug, Clone, PartialEq)]
@@ -133,7 +133,12 @@ pub async fn list_models_for_service(
         .unwrap_or_else(|| provider_family_of(service));
     let can_probe_without_key = probe_base_url
         .as_deref()
-        .map(|url| crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(family_str(family), Some(url)))
+        .map(|url| {
+            crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
+                family_str(family),
+                Some(url),
+            )
+        })
         .unwrap_or(false);
     if let Some(base_url) = probe_base_url.as_deref() {
         let has_key = api_key.map(|k| !k.is_empty()).unwrap_or(false);
@@ -230,7 +235,9 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_service_returns_empty() {
-        assert!(list_models_for_service("nope-service", None, None).await.is_empty());
+        assert!(list_models_for_service("nope-service", None, None)
+            .await
+            .is_empty());
     }
 
     #[tokio::test]

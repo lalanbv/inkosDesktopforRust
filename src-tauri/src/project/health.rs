@@ -6,8 +6,7 @@
 //! 必须按 `crate::locale::pick` 双语化（1009 号机制）——见 error.rs 同形。
 
 use crate::project::{
-    HealthIssue, IssueCategory, IssueSeverity, ProjectHealth, ProjectMeta,
-    ProjectType,
+    HealthIssue, IssueCategory, IssueSeverity, ProjectHealth, ProjectMeta, ProjectType,
 };
 use anyhow::{Context, Result};
 use std::fs;
@@ -276,10 +275,7 @@ impl ProjectHealthChecker {
     }
 
     /// 统计依赖数量和缺失依赖
-    fn count_dependencies(
-        path: &Path,
-        project_type: ProjectType,
-    ) -> Result<(usize, Vec<String>)> {
+    fn count_dependencies(path: &Path, project_type: ProjectType) -> Result<(usize, Vec<String>)> {
         match project_type {
             ProjectType::NodeJs => {
                 let package_json = path.join("package.json");
@@ -328,12 +324,17 @@ mod tests {
     async fn test_check_nodejs_healthy() {
         let temp = create_test_project(
             ProjectType::NodeJs,
-            vec![
-                ("package.json", r#"{"name": "test", "dependencies": {"lodash": "^4.17.21"}}"#),
-            ],
+            vec![(
+                "package.json",
+                r#"{"name": "test", "dependencies": {"lodash": "^4.17.21"}}"#,
+            )],
         );
 
-        let meta = ProjectMeta::new("test".to_string(), temp.path().to_path_buf(), ProjectType::NodeJs);
+        let meta = ProjectMeta::new(
+            "test".to_string(),
+            temp.path().to_path_buf(),
+            ProjectType::NodeJs,
+        );
         let health = ProjectHealthChecker::check(&meta).await.unwrap();
 
         // Node.js 环境可能未安装，所以不检查环境问题
@@ -348,13 +349,16 @@ mod tests {
             vec![("package.json", r#"{"name": "test"}"#)],
         );
 
-        let meta = ProjectMeta::new("test".to_string(), temp.path().to_path_buf(), ProjectType::NodeJs);
+        let meta = ProjectMeta::new(
+            "test".to_string(),
+            temp.path().to_path_buf(),
+            ProjectType::NodeJs,
+        );
         let health = ProjectHealthChecker::check(&meta).await.unwrap();
 
         // 应该有 node_modules 缺失警告
         let has_node_modules_warning = health.issues.iter().any(|i| {
-            i.category == IssueCategory::DependencyMissing
-                && i.message.contains("node_modules")
+            i.category == IssueCategory::DependencyMissing && i.message.contains("node_modules")
         });
         assert!(has_node_modules_warning);
     }
@@ -366,13 +370,16 @@ mod tests {
             vec![("package.json", r#"{"name": "test", invalid}"#)],
         );
 
-        let meta = ProjectMeta::new("test".to_string(), temp.path().to_path_buf(), ProjectType::NodeJs);
+        let meta = ProjectMeta::new(
+            "test".to_string(),
+            temp.path().to_path_buf(),
+            ProjectType::NodeJs,
+        );
         let health = ProjectHealthChecker::check(&meta).await.unwrap();
 
         // 应该有配置无效错误
         let has_invalid_json = health.issues.iter().any(|i| {
-            i.category == IssueCategory::ConfigInvalid
-                && i.severity == IssueSeverity::Critical
+            i.category == IssueCategory::ConfigInvalid && i.severity == IssueSeverity::Critical
         });
         assert!(has_invalid_json);
     }
@@ -381,17 +388,24 @@ mod tests {
     async fn test_check_rust_project() {
         let temp = create_test_project(
             ProjectType::Rust,
-            vec![("Cargo.toml", "[package]\nname = \"test\"\nversion = \"0.1.0\"")],
+            vec![(
+                "Cargo.toml",
+                "[package]\nname = \"test\"\nversion = \"0.1.0\"",
+            )],
         );
 
-        let meta = ProjectMeta::new("test".to_string(), temp.path().to_path_buf(), ProjectType::Rust);
+        let meta = ProjectMeta::new(
+            "test".to_string(),
+            temp.path().to_path_buf(),
+            ProjectType::Rust,
+        );
         let health = ProjectHealthChecker::check(&meta).await.unwrap();
 
         // Cargo.lock 不存在，应该有 Info 级别提示
-        let has_lock_info = health.issues.iter().any(|i| {
-            i.severity == IssueSeverity::Info
-                && i.message.contains("Cargo.lock")
-        });
+        let has_lock_info = health
+            .issues
+            .iter()
+            .any(|i| i.severity == IssueSeverity::Info && i.message.contains("Cargo.lock"));
         assert!(has_lock_info || health.issues.is_empty()); // 可能没有问题
     }
 
@@ -402,7 +416,8 @@ mod tests {
             vec![("package.json", r#"{"name": "test"}"#)],
         );
 
-        let issues = ProjectHealthChecker::check_dependencies(temp.path(), ProjectType::NodeJs).unwrap();
+        let issues =
+            ProjectHealthChecker::check_dependencies(temp.path(), ProjectType::NodeJs).unwrap();
 
         // node_modules 缺失
         assert!(issues.iter().any(|i| i.message.contains("node_modules")));
@@ -444,13 +459,17 @@ mod tests {
     fn test_count_dependencies() {
         let temp = create_test_project(
             ProjectType::NodeJs,
-            vec![("package.json", r#"{
+            vec![(
+                "package.json",
+                r#"{
                 "dependencies": {"lodash": "^4.0.0", "axios": "^1.0.0"},
                 "devDependencies": {"jest": "^29.0.0"}
-            }"#)],
+            }"#,
+            )],
         );
 
-        let (count, _missing) = ProjectHealthChecker::count_dependencies(temp.path(), ProjectType::NodeJs).unwrap();
+        let (count, _missing) =
+            ProjectHealthChecker::count_dependencies(temp.path(), ProjectType::NodeJs).unwrap();
         assert_eq!(count, 3); // 2 dependencies + 1 devDependencies
     }
 }

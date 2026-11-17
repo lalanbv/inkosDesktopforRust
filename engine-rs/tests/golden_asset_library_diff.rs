@@ -16,9 +16,10 @@ const VECTORS: &str =
 
 fn as_asset(raw: &Value) -> LibraryAsset {
     let result = validate_library_asset(raw);
-    result.asset.clone().unwrap_or_else(|| {
-        panic!("golden asset should be valid: {:?}", result.errors)
-    })
+    result
+        .asset
+        .clone()
+        .unwrap_or_else(|| panic!("golden asset should be valid: {:?}", result.errors))
 }
 
 fn asset_ids(assets: &[LibraryAsset]) -> Vec<String> {
@@ -42,7 +43,10 @@ fn validate_matches_shared_vectors() {
         );
         if let Some(field) = vector["errorField"].as_str() {
             assert!(
-                result.errors.iter().any(|message| message.starts_with(field)),
+                result
+                    .errors
+                    .iter()
+                    .any(|message| message.starts_with(field)),
                 "validate vector '{}' error field drifted",
                 vector["name"].as_str().unwrap()
             );
@@ -89,15 +93,25 @@ fn merge_matches_shared_vectors() {
             .iter()
             .map(|value| value.as_str().unwrap().to_string())
             .collect();
-        assert_eq!(asset_ids(&result.merged), expected_ids, "merge vector '{name}' ids drifted");
+        assert_eq!(
+            asset_ids(&result.merged),
+            expected_ids,
+            "merge vector '{name}' ids drifted"
+        );
         if let Some(bodies) = vector["expected"]["mergedBodies"].as_array() {
             let expected_bodies: Vec<String> = bodies
                 .iter()
                 .map(|value| value.as_str().unwrap().to_string())
                 .collect();
-            let got_bodies: Vec<String> =
-                result.merged.iter().map(|asset| asset.body.clone()).collect();
-            assert_eq!(got_bodies, expected_bodies, "merge vector '{name}' bodies drifted");
+            let got_bodies: Vec<String> = result
+                .merged
+                .iter()
+                .map(|asset| asset.body.clone())
+                .collect();
+            assert_eq!(
+                got_bodies, expected_bodies,
+                "merge vector '{name}' bodies drifted"
+            );
         }
         assert_eq!(
             (result.skipped, result.overwritten, result.added),
@@ -148,7 +162,10 @@ fn package_matches_shared_vectors() {
         .iter()
         .map(|value| value.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(got_ids, expected_order, "package vector '{name}' export order drifted");
+    assert_eq!(
+        got_ids, expected_order,
+        "package vector '{name}' export order drifted"
+    );
 
     // 容错导入：golden 同一资产集合序列化后走 parse（双端同一字符串事实源）。
     let import_payload = serde_json::to_string(&serde_json::json!({
@@ -204,11 +221,16 @@ fn seeds_match_shared_vectors() {
     assert_eq!(got_ids, expected_ids, "seeds ids drifted");
     for seed in &seeds {
         assert!(
-            validate_library_asset(&serde_json::to_value(seed).unwrap()).asset.is_some(),
+            validate_library_asset(&serde_json::to_value(seed).unwrap())
+                .asset
+                .is_some(),
             "seed '{}' should be valid",
             seed.id
         );
-        assert_eq!(seed.kind, inkos_engine::utils::asset_library::AssetKind::GenreBase);
+        assert_eq!(
+            seed.kind,
+            inkos_engine::utils::asset_library::AssetKind::GenreBase
+        );
     }
     // 排序函数回归（seeds 定义序 ≠ 库序）。
     let mut sorted = seeds.clone();
@@ -236,7 +258,9 @@ fn progression_seeds_match_shared_vectors() {
     assert_eq!(got_ids, expected_ids, "progression seeds ids drifted");
     for seed in &seeds {
         assert!(
-            validate_library_asset(&serde_json::to_value(seed).unwrap()).asset.is_some(),
+            validate_library_asset(&serde_json::to_value(seed).unwrap())
+                .asset
+                .is_some(),
             "progression seed '{}' should be valid",
             seed.id
         );
@@ -268,5 +292,7 @@ fn guidance_block_matches_shared_vectors() {
         "guidance vector '{}' drifted",
         vector["name"].as_str().unwrap()
     );
-    assert!(inkos_engine::utils::asset_library::render_asset_guidance_block(&[], language).is_none());
+    assert!(
+        inkos_engine::utils::asset_library::render_asset_guidance_block(&[], language).is_none()
+    );
 }

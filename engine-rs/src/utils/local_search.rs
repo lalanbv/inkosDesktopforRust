@@ -139,8 +139,10 @@ impl LocalSearchIndex {
             .iter()
             .map(|document| normalize_document(document, scope))
             .collect();
-        let keep_ids: std::collections::HashSet<&str> =
-            normalized.iter().map(|document| document.id.as_str()).collect();
+        let keep_ids: std::collections::HashSet<&str> = normalized
+            .iter()
+            .map(|document| document.id.as_str())
+            .collect();
 
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let upsert_result = (|| -> rusqlite::Result<()> {
@@ -176,9 +178,9 @@ impl LocalSearchIndex {
                     updated_at = datetime('now')
                 "#,
             )?;
-            let mut remove = self.conn.prepare(
-                "DELETE FROM retrieval_documents WHERE scope = ? AND document_id = ?",
-            )?;
+            let mut remove = self
+                .conn
+                .prepare("DELETE FROM retrieval_documents WHERE scope = ? AND document_id = ?")?;
 
             for document in &normalized {
                 if existing_hashes.get(&document.id).map(String::as_str)
@@ -254,8 +256,7 @@ impl LocalSearchIndex {
             Ok(statement) => statement,
             Err(_) => return Vec::new(),
         };
-        let mut bind_params: Vec<String> =
-            vec![match_query.clone(), options.scope.to_string()];
+        let mut bind_params: Vec<String> = vec![match_query.clone(), options.scope.to_string()];
         for kind in &kinds {
             bind_params.push((*kind).to_string());
         }
@@ -352,8 +353,10 @@ pub fn tokenize_search_text(text: &str) -> Vec<String> {
     let normalized: String = text.nfkc().collect::<String>().to_lowercase();
     let mut tokens: Vec<String> = Vec::new();
     // Item=(边界, 边界前片段 WordType)——滑动窗口还原片段（官方示例同式）。
-    let breaks: Vec<(usize, icu_segmenter::options::WordType)> =
-        segmenter.segment_str(&normalized).iter_with_word_type().collect();
+    let breaks: Vec<(usize, icu_segmenter::options::WordType)> = segmenter
+        .segment_str(&normalized)
+        .iter_with_word_type()
+        .collect();
     for window in breaks.windows(2) {
         let (start, _) = window[0];
         let (end, word_type) = window[1];
@@ -525,15 +528,37 @@ mod tests {
 
         let hits = index.search(
             "开篇 核心冲突",
-            &SearchOptions { scope: "skill:combat", kinds: &[], limit: 4 },
+            &SearchOptions {
+                scope: "skill:combat",
+                kinds: &[],
+                limit: 4,
+            },
         );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "d1");
         assert!(hits[0].score > 0.0, "score = -bm25 应为正");
 
         // 空查询 / 无命中。
-        assert!(index.search("", &SearchOptions { scope: "skill:combat", kinds: &[], limit: 4 }).is_empty());
-        assert!(index.search("完全不相关词汇组合", &SearchOptions { scope: "skill:combat", kinds: &[], limit: 4 }).is_empty());
+        assert!(index
+            .search(
+                "",
+                &SearchOptions {
+                    scope: "skill:combat",
+                    kinds: &[],
+                    limit: 4
+                }
+            )
+            .is_empty());
+        assert!(index
+            .search(
+                "完全不相关词汇组合",
+                &SearchOptions {
+                    scope: "skill:combat",
+                    kinds: &[],
+                    limit: 4
+                }
+            )
+            .is_empty());
     }
 
     #[test]
@@ -543,8 +568,17 @@ mod tests {
             .replace_scope("s", &[doc("a", "A", "内容甲"), doc("b", "B", "内容乙")])
             .unwrap();
         // 二次替换只剩 a → b 被删除。
-        index.replace_scope("s", &[doc("a", "A2", "内容甲更新")]).unwrap();
-        let hits = index.search("内容", &SearchOptions { scope: "s", kinds: &[], limit: 10 });
+        index
+            .replace_scope("s", &[doc("a", "A2", "内容甲更新")])
+            .unwrap();
+        let hits = index.search(
+            "内容",
+            &SearchOptions {
+                scope: "s",
+                kinds: &[],
+                limit: 10,
+            },
+        );
         assert!(hits.iter().all(|hit| hit.id == "a"), "{hits:?}");
     }
 
@@ -615,7 +649,9 @@ mod tests {
         // 预建索引：migrate 完成后再进入持锁窗口。
         {
             let index = LocalSearchIndex::new(path.to_str().unwrap()).unwrap();
-            index.replace_scope("skill:combat", &[doc("a", "A", "内容甲")]).unwrap();
+            index
+                .replace_scope("skill:combat", &[doc("a", "A", "内容甲")])
+                .unwrap();
         }
         // A 连接持写锁（与生产 replace_scope 同款 BEGIN IMMEDIATE）。
         let blocker = Connection::open(&path).unwrap();
@@ -636,5 +672,4 @@ mod tests {
         drop(blocker);
         writer.join().expect("并发写者应在锁释放后完成");
     }
-
 }

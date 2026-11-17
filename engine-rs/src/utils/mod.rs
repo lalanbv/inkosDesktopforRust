@@ -13,10 +13,10 @@
 //! writing-methodology / ...
 
 pub mod analytics;
-pub mod author_error_catalog;
 pub mod asset_library;
-pub mod best_of_n;
 pub mod atomic_file_set;
+pub mod author_error_catalog;
+pub mod best_of_n;
 pub mod book_eval;
 pub mod book_id;
 pub mod cadence_policy;
@@ -24,35 +24,34 @@ pub mod chapter_cadence;
 pub mod chapter_memo_parser;
 pub mod chapter_splitter;
 pub mod context_assembly;
+pub mod context_filter;
+pub mod context_lens;
 pub mod context_ranker;
 pub mod context_source_tier;
-pub mod context_lens;
-pub mod hook_kind;
 pub mod deconstruction;
 pub mod detection_insights;
-pub mod entity_roster;
 pub mod entity_codex;
+pub mod entity_roster;
 pub mod goal_repeat_gate;
-pub mod run_log;
-pub mod series_canon;
-pub mod context_filter;
 pub mod governed_context;
 pub mod governed_working_set;
 pub mod hook_arbiter;
 pub mod hook_governance;
 pub mod hook_health;
+pub mod hook_kind;
 pub mod hook_ledger_validator;
 pub mod hook_lifecycle;
 pub mod hook_policy;
 pub mod hook_promotion;
 pub mod hook_stale_detection;
 pub mod hybrid_memory_selector;
+pub mod info_gap_ledger;
 pub mod language;
 pub mod length_metrics;
-pub mod local_search;
-pub mod log_file;
 pub mod llm_endpoint_auth;
 pub mod llm_env;
+pub mod local_search;
+pub mod log_file;
 pub mod long_span_fatigue;
 pub mod markdown_table;
 pub mod memory_retrieval;
@@ -60,37 +59,39 @@ pub mod narrative_control;
 pub mod outline_paths;
 pub mod path;
 pub mod planning_materials;
-pub mod spot_fix_patches;
 pub mod pov_filter;
-pub mod info_gap_ledger;
 pub mod promise_ledger;
 pub mod quality_trend;
-pub mod style_feature_engine;
-pub mod token_meter;
 pub mod resume_advice;
 pub mod rule_experience_engine;
-pub mod scene_beats;
+pub mod run_log;
 pub mod runtime_writer;
+pub mod scene_beats;
 pub mod semantic_retrieval;
+pub mod series_canon;
 pub mod source_text;
+pub mod spot_fix_patches;
 pub mod story_markdown;
+pub mod style_feature_engine;
 pub mod tension_curve;
-pub mod vector_engine;
+pub mod token_meter;
 pub mod truth_dialect;
 pub mod utc_time;
+pub mod vector_engine;
 pub mod writing_methodology;
 
 pub use book_id::{assert_safe_book_id, derive_book_id_from_title, is_safe_book_id};
 pub use cadence_policy::{resolve_cadence_pressure, CadencePressure, CadencePressureParams};
-pub use chapter_cadence::{analyze_chapter_cadence, is_high_tension_mood, ChapterCadenceAnalysis, CadenceSummaryRow};
+pub use chapter_cadence::{
+    analyze_chapter_cadence, is_high_tension_mood, CadenceSummaryRow, ChapterCadenceAnalysis,
+};
 pub use chapter_memo_parser::{parse_memo, PlannerParseError};
 pub use chapter_splitter::{split_chapters, SplitChapter};
-pub use pov_filter::{extract_pov_from_outline, filter_hooks_by_pov, filter_matrix_by_pov};
 pub use language::{infer_language, utf16_len, WritingLanguage};
 pub use length_metrics::{
-    build_length_spec, count_chapter_length, default_chapter_length,
-    format_length_count, is_outside_hard_range, is_outside_soft_range,
-    resolve_length_counting_mode,
+    build_length_spec, count_chapter_length, default_chapter_length, format_length_count,
+    is_outside_hard_range, is_outside_soft_range, resolve_length_counting_mode,
 };
 pub use path::to_posix_path;
+pub use pov_filter::{extract_pov_from_outline, filter_hooks_by_pov, filter_matrix_by_pov};
 pub mod web_search;

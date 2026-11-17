@@ -31,7 +31,8 @@ fn parse_matches_shared_vectors() {
         let got = parse_info_gaps_markdown(vector["input"].as_str().unwrap());
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            expected, vector["expected"],
+            expected,
+            vector["expected"],
             "parse vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -62,7 +63,8 @@ fn leaks_match_shared_vectors() {
             detect_secret_leaks(&case.content, &case.gaps, case.current_chapter);
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            expected, vector["expected"],
+            expected,
+            vector["expected"],
             "leaks vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -74,11 +76,11 @@ fn redundancy_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     for vector in vectors["redundancy"].as_array().expect("redundancy array") {
         let case: GapCase = serde_json::from_value(vector["input"].clone()).unwrap();
-        let got: Vec<ReaderRedundancyHit> =
-            detect_reader_redundancy(&case.content, &case.gaps);
+        let got: Vec<ReaderRedundancyHit> = detect_reader_redundancy(&case.content, &case.gaps);
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            expected, vector["expected"],
+            expected,
+            vector["expected"],
             "redundancy vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -98,11 +100,8 @@ fn audit_notes_match_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     for vector in vectors["auditNotes"].as_array().expect("auditNotes array") {
         let case: AuditNotesCase = serde_json::from_value(vector["input"].clone()).unwrap();
-        let got = render_info_gap_audit_notes(
-            &case.leaks,
-            &case.redundancies,
-            Some(&case.language),
-        );
+        let got =
+            render_info_gap_audit_notes(&case.leaks, &case.redundancies, Some(&case.language));
         let expected = vector["expected"].as_str().map(String::from);
         assert_eq!(
             got,

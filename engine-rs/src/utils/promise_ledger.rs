@@ -41,9 +41,12 @@ fn is_none_marker(text: &str) -> bool {
 
 /// TS `STRONG_PATTERNS`：钩子记号或动词（大小写不敏感的子串匹配）。
 fn has_strong_marker(lower: &str) -> bool {
-    ["hook", "h0", "h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9", "fk", "伏笔", "钩子", "回收", "埋", "推进", "兑现", "resolve", "plant", "advance"]
-        .iter()
-        .any(|marker| lower.contains(marker))
+    [
+        "hook", "h0", "h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9", "fk", "伏笔", "钩子",
+        "回收", "埋", "推进", "兑现", "resolve", "plant", "advance",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 /// TS `ID_TOKEN_PATTERN`：/\\d+/ 的近似（数字记号即视为 hookId token）。
@@ -175,7 +178,8 @@ pub fn detect_pacing_debts(
         // 818 号：已撤回前提无回收义务——不计节奏债（TS detectPacingDebts 同口径）。
         .filter(|hook| hook.core_hook && !is_fulfilled(&hook.status) && !is_withdrawn(&hook.status))
         .map(|hook| {
-            let anchor = std::cmp::max(hook.last_advanced_chapter.max(0), hook.start_chapter.max(0));
+            let anchor =
+                std::cmp::max(hook.last_advanced_chapter.max(0), hook.start_chapter.max(0));
             (hook, std::cmp::max(0, current_chapter - anchor))
         })
         .filter(|(_, stalled)| *stalled >= threshold)
@@ -236,7 +240,11 @@ pub fn detect_weak_hook_runs(
             if let (Some(from), Some(to)) = (*start, *end) {
                 let length = to - from + 1;
                 if length >= min_run {
-                    runs.push(WeakHookRun { from_chapter: from, to_chapter: to, length });
+                    runs.push(WeakHookRun {
+                        from_chapter: from,
+                        to_chapter: to,
+                        length,
+                    });
                 }
             }
             *start = None;
@@ -479,7 +487,11 @@ pub fn resolve_promise_urgency(
 
     let has_target = confidence != UrgencyConfidence::Unknown;
     let urgency = if !has_target {
-        if hook.last_advanced_chapter > 0 { 40 } else { 20 }
+        if hook.last_advanced_chapter > 0 {
+            40
+        } else {
+            20
+        }
     } else {
         let remaining = target - current_chapter;
         if remaining <= 0 {

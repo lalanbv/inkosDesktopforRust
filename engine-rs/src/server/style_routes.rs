@@ -63,7 +63,8 @@ pub async fn style_analyze(
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     // 273 号：风格样本可传整本文本——`Bytes` 提取器 2MB 默认上限截断，改手工读。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => {
             return (status, Json(json!({ "error": "request body too large" })));
@@ -71,18 +72,29 @@ pub async fn style_analyze(
     };
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let Some(text) = parsed.get("text").and_then(Value::as_str).map(str::trim) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "text is required" })),
+        );
     };
     if text.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "text is required" })),
+        );
     }
-    let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("unknown");
+    let source_name = parsed
+        .get("sourceName")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let root = runtime.state.project_root();
     let language = match parsed.get("language") {
-        None | Some(Value::Null) => match crate::server::agent_production::current_project_language(root).await {
-            crate::server::agent_production::StudioLang::En => WritingLanguage::En,
-            crate::server::agent_production::StudioLang::Zh => WritingLanguage::Zh,
-        },
+        None | Some(Value::Null) => {
+            match crate::server::agent_production::current_project_language(root).await {
+                crate::server::agent_production::StudioLang::En => WritingLanguage::En,
+                crate::server::agent_production::StudioLang::Zh => WritingLanguage::Zh,
+            }
+        }
         Some(Value::String(lang)) if lang == "en" => WritingLanguage::En,
         Some(_) => WritingLanguage::Zh,
     };
@@ -109,7 +121,11 @@ pub async fn style_analyze(
 // ── 风格向导核心（generateStyleGuide） ───────────────────────────
 
 /// 确定性风格指南（双语模板逐字；LLM 不可用/空响应/短样本兜底）。
-fn build_deterministic_style_guide(profile: &StyleProfile, language: WritingLanguage, reason: &str) -> String {
+fn build_deterministic_style_guide(
+    profile: &StyleProfile,
+    language: WritingLanguage,
+    reason: &str,
+) -> String {
     if language == WritingLanguage::En {
         [
             "# Style Guide".to_string(),
@@ -146,11 +162,17 @@ fn build_deterministic_style_guide(profile: &StyleProfile, language: WritingLang
             format!("> {reason}"),
             String::new(),
             "## 统计风格指纹".to_string(),
-            format!("- 来源：{}", profile.source_name.as_deref().unwrap_or("unknown")),
+            format!(
+                "- 来源：{}",
+                profile.source_name.as_deref().unwrap_or("unknown")
+            ),
             format!("- 平均句长：{}", profile.avg_sentence_length),
             format!("- 句长波动：{}", profile.sentence_length_std_dev),
             format!("- 平均段落长度：{}", profile.avg_paragraph_length),
-            format!("- 词汇多样性：{}%", (profile.vocabulary_diversity * 100.0).round() as i64),
+            format!(
+                "- 词汇多样性：{}%",
+                (profile.vocabulary_diversity * 100.0).round() as i64
+            ),
             if profile.top_patterns.is_empty() {
                 "- 高频句首/模式：样本内不明显".to_string()
             } else {
@@ -198,22 +220,32 @@ async fn generate_style_guide(
     tokio::fs::create_dir_all(&story_dir)
         .await
         .map_err(|e| e.to_string())?;
-    let book = state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
+    let book = state
+        .load_book_config(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let parsed_genre = read_genre_profile(state.project_root(), &book.genre, builtin_genres_dir)
         .await
         .map_err(|e| e.to_string())?;
-    let language = if book.language.as_deref().unwrap_or(&parsed_genre.profile.language) == "en" {
+    let language = if book
+        .language
+        .as_deref()
+        .unwrap_or(&parsed_genre.profile.language)
+        == "en"
+    {
         WritingLanguage::En
     } else {
         WritingLanguage::Zh
     };
 
     let profile = analyze_style(sample, source_name, language, Some(&utc_now_iso()));
-    let profile_json = serde_json::to_string_pretty(&profile)
-        .map_err(|e| e.to_string())?;
-    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("style_profile.json"), &profile_json)
-        .await
-        .map_err(|e| e.to_string())?;
+    let profile_json = serde_json::to_string_pretty(&profile).map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &story_dir.join("style_profile.json"),
+        &profile_json,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // TS sample.length：UTF-16 码元计数。
     let sample_len = sample.encode_utf16().count();
@@ -234,8 +266,18 @@ async fn generate_style_guide(
             .chat(
                 "style-guide",
                 vec![
-                    LLMMessage { role: LLMRole::System, content: style_system_prompt(language).to_string(), tool_calls: None, tool_call_id: None },
-                    LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+                    LLMMessage {
+                        role: LLMRole::System,
+                        content: style_system_prompt(language).to_string(),
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    LLMMessage {
+                        role: LLMRole::User,
+                        content: user_prompt,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
                 ],
                 0.3,
                 None,
@@ -265,9 +307,12 @@ async fn generate_style_guide(
 
     let methodology = build_writing_methodology_section(language);
     let full_style_guide = format!("{qualitative_guide}\n\n{methodology}");
-    crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("style_guide.md"), &full_style_guide)
-        .await
-        .map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(
+        &story_dir.join("style_guide.md"),
+        &full_style_guide,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(full_style_guide)
 }
 
@@ -280,7 +325,15 @@ pub async fn generate_style_guide_for_book(
     sample: &str,
     source_name: Option<&str>,
 ) -> Result<String, String> {
-    generate_style_guide(state, router, builtin_genres_dir, book_id, sample, source_name).await
+    generate_style_guide(
+        state,
+        router,
+        builtin_genres_dir,
+        book_id,
+        sample,
+        source_name,
+    )
+    .await
 }
 
 // ── POST /api/v1/books/:id/style/import ──────────────────────────
@@ -292,19 +345,31 @@ pub async fn style_import(
 ) -> impl IntoResponse {
     // 273 号：整本文本导入——`Bytes` 提取器 2MB 默认上限截断，改手工读
     //（TS 无上限；此处 64MB 安全上界）。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let Some(text) = parsed.get("text").and_then(Value::as_str).map(str::trim) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "text is required" })),
+        );
     };
     if text.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "text is required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "text is required" })),
+        );
     }
-    let source_name = parsed.get("sourceName").and_then(Value::as_str).unwrap_or("unknown");
-    runtime.hub.broadcast("style:start", &json!({ "bookId": book_id }));
+    let source_name = parsed
+        .get("sourceName")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    runtime
+        .hub
+        .broadcast("style:start", &json!({ "bookId": book_id }));
     match generate_style_guide(
         &runtime.state,
         &*runtime.effective_router().await,
@@ -316,11 +381,18 @@ pub async fn style_import(
     .await
     {
         Ok(result) => {
-            runtime.hub.broadcast("style:complete", &json!({ "bookId": book_id }));
-            (StatusCode::OK, Json(json!({ "ok": true, "result": result })))
+            runtime
+                .hub
+                .broadcast("style:complete", &json!({ "bookId": book_id }));
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "result": result })),
+            )
         }
         Err(error) => {
-            runtime.hub.broadcast("style:error", &json!({ "bookId": book_id, "error": error }));
+            runtime
+                .hub
+                .broadcast("style:error", &json!({ "bookId": book_id, "error": error }));
             flat_internal(error)
         }
     }
@@ -330,7 +402,9 @@ pub async fn style_import(
 
 /// 读文件，任何失败 → "(无)"。对齐 TS `readSafe`。
 async fn read_safe(path: &std::path::Path) -> String {
-    tokio::fs::read_to_string(path).await.unwrap_or_else(|_| "(无)".to_string())
+    tokio::fs::read_to_string(path)
+        .await
+        .unwrap_or_else(|_| "(无)".to_string())
 }
 
 /// 父书章节样本：.md 字典序前 5 个，累计 <20000（UTF-16 码元），
@@ -398,14 +472,19 @@ pub async fn import_canon(
         .map_err(|e| e.to_string())?;
 
     // Phase 5：story_frame 优先，空则回退 legacy story_bible。
-    async fn read_parent_outline(parent_dir: &std::path::Path, new_rel: &str, legacy_rel: &str) -> String {
+    async fn read_parent_outline(
+        parent_dir: &std::path::Path,
+        new_rel: &str,
+        legacy_rel: &str,
+    ) -> String {
         let preferred = read_safe(&parent_dir.join("story").join(new_rel)).await;
         if !preferred.trim().is_empty() && preferred != "(无)" {
             return preferred;
         }
         read_safe(&parent_dir.join("story").join(legacy_rel)).await
     }
-    let story_bible = read_parent_outline(&parent_dir, "outline/story_frame.md", "story_bible.md").await;
+    let story_bible =
+        read_parent_outline(&parent_dir, "outline/story_frame.md", "story_bible.md").await;
     let current_state = read_safe(&parent_dir.join("story").join("current_state.md")).await;
     let ledger = read_safe(&parent_dir.join("story").join("particle_ledger.md")).await;
     let hooks = read_safe(&parent_dir.join("story").join("pending_hooks.md")).await;
@@ -423,8 +502,18 @@ pub async fn import_canon(
         .chat(
             "parent-canon",
             vec![
-                LLMMessage { role: LLMRole::System, content: system.to_string(), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system.to_string(),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.3,
             None,
@@ -453,7 +542,15 @@ pub async fn import_canon(
     // 父书章节样本 ≥500 字 → 顺带风格向导（吞错）。
     let sample = read_parent_chapter_sample(&parent_dir.join("chapters")).await;
     if sample.encode_utf16().count() >= 500 {
-        let _ = generate_style_guide(state, router, builtin_genres_dir, target_book_id, &sample, Some(&parent_book.title)).await;
+        let _ = generate_style_guide(
+            state,
+            router,
+            builtin_genres_dir,
+            target_book_id,
+            &sample,
+            Some(&parent_book.title),
+        )
+        .await;
     }
     Ok(canon)
 }
@@ -465,11 +562,15 @@ pub async fn import_canon_endpoint(
 ) -> impl IntoResponse {
     let parsed: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let Some(from_book_id) = parsed.get("fromBookId").and_then(Value::as_str) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "fromBookId is required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "fromBookId is required" })),
+        );
     };
-    runtime
-        .hub
-        .broadcast("import:start", &json!({ "bookId": book_id, "type": "canon" }));
+    runtime.hub.broadcast(
+        "import:start",
+        &json!({ "bookId": book_id, "type": "canon" }),
+    );
     match import_canon(
         &runtime.state,
         &*runtime.effective_router().await,
@@ -480,15 +581,17 @@ pub async fn import_canon_endpoint(
     .await
     {
         Ok(_) => {
-            runtime
-                .hub
-                .broadcast("import:complete", &json!({ "bookId": book_id, "type": "canon" }));
+            runtime.hub.broadcast(
+                "import:complete",
+                &json!({ "bookId": book_id, "type": "canon" }),
+            );
             (StatusCode::OK, Json(json!({ "ok": true })))
         }
         Err(error) => {
-            runtime
-                .hub
-                .broadcast("import:error", &json!({ "bookId": book_id, "error": error }));
+            runtime.hub.broadcast(
+                "import:error",
+                &json!({ "bookId": book_id, "error": error }),
+            );
             flat_internal(error)
         }
     }
@@ -500,7 +603,11 @@ pub async fn fanfic_show(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
-    let canon_path = runtime.state.book_dir(&book_id).join("story").join("fanfic_canon.md");
+    let canon_path = runtime
+        .state
+        .book_dir(&book_id)
+        .join("story")
+        .join("fanfic_canon.md");
     let content = tokio::fs::read_to_string(&canon_path).await.ok();
     (
         StatusCode::OK,
@@ -575,9 +682,12 @@ pub async fn import_canon_file(
     req: axum::extract::Request,
 ) -> impl IntoResponse {
     let root = runtime.state.project_root().to_path_buf();
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
-        Err(status) => return (status, Json(json!({ "error": "request body too large" }))).into_response(),
+        Err(status) => {
+            return (status, Json(json!({ "error": "request body too large" }))).into_response()
+        }
     };
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
     let Some(file_path) = payload
@@ -593,9 +703,10 @@ pub async fn import_canon_file(
             .into_response();
     };
 
-    runtime
-        .hub
-        .broadcast("import:start", &json!({ "bookId": book_id, "type": "canon-file" }));
+    runtime.hub.broadcast(
+        "import:start",
+        &json!({ "bookId": book_id, "type": "canon-file" }),
+    );
     let result = async {
         // TS：`await state.loadBookConfig(id)`——结果不消费，纯存在性校验。
         runtime
@@ -637,9 +748,12 @@ pub async fn import_canon_file(
         tokio::fs::create_dir_all(&story_dir)
             .await
             .map_err(|e| e.to_string())?;
-        crate::utils::atomic_file_set::write_file_atomic(&story_dir.join("fanfic_canon.md"), &canon.full_document)
-            .await
-            .map_err(|e| e.to_string())?;
+        crate::utils::atomic_file_set::write_file_atomic(
+            &story_dir.join("fanfic_canon.md"),
+            &canon.full_document,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok::<_, String>(material)
     }
     .await;

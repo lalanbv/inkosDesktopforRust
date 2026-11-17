@@ -75,7 +75,10 @@ pub struct CompressibleContextCompileRequest<'a> {
 /// 可压缩上下文编译器端口（生产实现为 LLM 语义编译；测试 mock）。
 #[async_trait]
 pub trait CompressibleContextCompiler: Send + Sync {
-    async fn compile(&self, request: CompressibleContextCompileRequest<'_>) -> Result<String, String>;
+    async fn compile(
+        &self,
+        request: CompressibleContextCompileRequest<'_>,
+    ) -> Result<String, String>;
 }
 
 /// 大纲选段候选。
@@ -106,7 +109,10 @@ pub enum OutlineSectionKind {
 /// 大纲语义选择器端口（生产实现为 LLM 选择；测试 mock）。
 #[async_trait]
 pub trait OutlineSectionSelector: Send + Sync {
-    async fn select(&self, request: OutlineSectionSelectionRequest<'_>) -> Result<Vec<String>, String>;
+    async fn select(
+        &self,
+        request: OutlineSectionSelectionRequest<'_>,
+    ) -> Result<Vec<String>, String>;
 }
 
 /// 压缩进度回调（同步、fire-and-forget）。
@@ -124,7 +130,8 @@ pub struct ComposeChapterInput<'a> {
     /// 216 号：引用选段注入（TS `referenceContextProvider`——None = 不注入）。
     pub reference_context_provider: Option<&'a dyn crate::references::BookReferenceContextProvider>,
     /// 244 号：记忆语义精简（TS `memorySemanticSelector`——None = BM25 直通）。
-    pub memory_semantic_selector: Option<&'a dyn crate::utils::memory_retrieval::MemorySemanticSelector>,
+    pub memory_semantic_selector:
+        Option<&'a dyn crate::utils::memory_retrieval::MemorySemanticSelector>,
     pub on_context_compression: Option<CompressionCallback>,
     /// R20/390 号：系列正典文件路径（book.series_id 存在时由调用方解析，None 不注入）。
     pub series_canon_file: Option<&'a std::path::Path>,
@@ -152,7 +159,10 @@ pub enum ComposeChapterError {
         available_tokens: u64,
     },
     #[error("Context exceeds available input budget ({total_tokens}/{available_tokens} tokens), but no compressible context compiler was provided.")]
-    NoCompiler { total_tokens: u64, available_tokens: u64 },
+    NoCompiler {
+        total_tokens: u64,
+        available_tokens: u64,
+    },
     #[error("Compressible context compiler returned empty output.")]
     EmptyCompiledContext,
     #[error("compressible context compiler failed: {0}")]
@@ -190,7 +200,11 @@ pub async fn compose_governed_chapter(
     // notes 前置于预算 notes）。
     let mut reference_notes: Vec<String> = Vec::new();
     if let Some(provider) = input.reference_context_provider {
-        let lang_str = if language == WritingLanguage::En { "en" } else { "zh" };
+        let lang_str = if language == WritingLanguage::En {
+            "en"
+        } else {
+            "zh"
+        };
         let task = crate::references::ReferenceSelectionTask {
             chapter_number: input.chapter_number,
             goal: &input.plan.intent.goal,
@@ -203,8 +217,9 @@ pub async fn compose_governed_chapter(
         selected_context.extend(reference.entries);
     }
     // G4/340 号：书级写法绑定 → style-asset 条目（垫底参考层）。
-    if let Some(binding_entry) =
-        input.style_profiles_dir.and_then(|dir| load_style_binding_entry(input.book_dir, dir))
+    if let Some(binding_entry) = input
+        .style_profiles_dir
+        .and_then(|dir| load_style_binding_entry(input.book_dir, dir))
     {
         selected_context.push(binding_entry);
     }
@@ -223,8 +238,10 @@ pub async fn compose_governed_chapter(
     // 临时），参考资料/更低层永远排在章纲与事实之后。
     // R6/367 号：层内确定性排序（recency×frequency×hookBonus，权重可配），
     // 层间 precedence 对齐 330 号契约；无特征条目 score=0 保持既有组装序。
-    let selected_context =
-        crate::utils::context_ranker::rank_context_sources(&selected_context, &crate::utils::context_ranker::DEFAULT_RANKER_WEIGHTS);
+    let selected_context = crate::utils::context_ranker::rank_context_sources(
+        &selected_context,
+        &crate::utils::context_ranker::DEFAULT_RANKER_WEIGHTS,
+    );
     let initial_context_package = ContextPackage {
         chapter: input.chapter_number,
         selected_context,
@@ -347,9 +364,7 @@ async fn apply_context_budget_if_needed(
         emit(ContextCompressionEvent {
             category: ContextCompressionCategory::StoryContext,
             phase: ContextCompressionPhase::Error,
-            message: Some(
-                "Protected context exceeds available input budget.".to_string(),
-            ),
+            message: Some("Protected context exceeds available input budget.".to_string()),
             protected_tokens: Some(protected_tokens as u32),
             compressible_tokens: Some((total_tokens - protected_tokens) as u32),
             budget_tokens: Some(available_input_tokens as u32),
@@ -373,13 +388,17 @@ async fn apply_context_budget_if_needed(
             category: ContextCompressionCategory::StoryContext,
             phase: ContextCompressionPhase::Error,
             message: Some(
-                "Context exceeds available input budget but no compiler was provided."
-                    .to_string(),
+                "Context exceeds available input budget but no compiler was provided.".to_string(),
             ),
             protected_tokens: Some(protected_tokens as u32),
             compressible_tokens: Some(compressible_tokens as u32),
             budget_tokens: Some(available_input_tokens as u32),
-            sources: Some(compressible_entries.iter().map(|e| e.source.clone()).collect()),
+            sources: Some(
+                compressible_entries
+                    .iter()
+                    .map(|e| e.source.clone())
+                    .collect(),
+            ),
         });
         return Err(ComposeChapterError::NoCompiler {
             total_tokens,
@@ -389,8 +408,10 @@ async fn apply_context_budget_if_needed(
 
     let compile_budget = (available_input_tokens - protected_tokens).max(1);
     let compressible_tokens = estimate_selected_context_tokens(&compressible_entries);
-    let compressible_sources: Vec<String> =
-        compressible_entries.iter().map(|e| e.source.clone()).collect();
+    let compressible_sources: Vec<String> = compressible_entries
+        .iter()
+        .map(|e| e.source.clone())
+        .collect();
     let protected_sources: Vec<String> =
         protected_entries.iter().map(|e| e.source.clone()).collect();
 
@@ -521,8 +542,7 @@ pub fn render_context_entries(entries: &[ContextSource]) -> String {
                     .filter(|excerpt| !excerpt.is_empty())
                     .map(|_| String::new())
                     .unwrap_or_default(),
-            ]
-            [0]
+            ][0]
             .clone()
             .to_string()
         })
@@ -600,10 +620,23 @@ impl OutlineSectionSelector for LlmOutlineSelector<'_> {
             .chat
             .chat(
                 vec![
-                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                    LLMMessage {
+                        role: LLMRole::System,
+                        content: system,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    LLMMessage {
+                        role: LLMRole::User,
+                        content: user,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
                 ],
-                ComposerChatOptions { temperature: 0.1, max_tokens: Some(1024) },
+                ComposerChatOptions {
+                    temperature: 0.1,
+                    max_tokens: Some(1024),
+                },
             )
             .await?;
         let allowed: HashSet<String> = request
@@ -634,10 +667,23 @@ impl crate::references::ReferenceSectionSelector for LlmReferenceSelector<'_> {
             .chat
             .chat(
                 vec![
-                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                    LLMMessage {
+                        role: LLMRole::System,
+                        content: system,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    LLMMessage {
+                        role: LLMRole::User,
+                        content: user,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
                 ],
-                ComposerChatOptions { temperature: 0.1, max_tokens: Some(2048) },
+                ComposerChatOptions {
+                    temperature: 0.1,
+                    max_tokens: Some(2048),
+                },
             )
             .await?;
         let allowed: HashSet<String> = request
@@ -695,13 +741,29 @@ impl crate::utils::memory_retrieval::MemorySemanticSelector for LlmMemorySelecto
             candidates,
         ]
         .join("\n");
-        let response = self.chat.chat(
-            vec![
-                LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
-            ],
-            ComposerChatOptions { temperature: 0.1, max_tokens: Some(2048) },
-        ).await?;
+        let response = self
+            .chat
+            .chat(
+                vec![
+                    LLMMessage {
+                        role: LLMRole::System,
+                        content: system,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    LLMMessage {
+                        role: LLMRole::User,
+                        content: user,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                ],
+                ComposerChatOptions {
+                    temperature: 0.1,
+                    max_tokens: Some(2048),
+                },
+            )
+            .await?;
         let allowed: HashSet<String> = request
             .candidates
             .iter()
@@ -731,10 +793,23 @@ impl CompressibleContextCompiler for LlmContextCompiler<'_> {
             .chat
             .chat(
                 vec![
-                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                    LLMMessage {
+                        role: LLMRole::System,
+                        content: system,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    LLMMessage {
+                        role: LLMRole::User,
+                        content: user,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
                 ],
-                ComposerChatOptions { temperature: 0.2, max_tokens: Some(max_tokens) },
+                ComposerChatOptions {
+                    temperature: 0.2,
+                    max_tokens: Some(max_tokens),
+                },
             )
             .await?;
         Ok(response.content.trim().to_string())
@@ -789,10 +864,15 @@ pub fn build_reference_selector_messages(
             format!("Outline node: {}", request.outline_node),
             format!(
                 "Must keep: {}",
-                if request.must_keep.is_empty() { "(none)".to_string() } else { request.must_keep.join("; ") }
+                if request.must_keep.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    request.must_keep.join("; ")
+                }
             ),
             String::new(),
-            "Candidates (headings only; selected sections will be loaded verbatim by the host):".to_string(),
+            "Candidates (headings only; selected sections will be loaded verbatim by the host):"
+                .to_string(),
             candidates,
         ]
         .join("\n")
@@ -803,7 +883,11 @@ pub fn build_reference_selector_messages(
             format!("大纲节点：{}", request.outline_node),
             format!(
                 "必须保留：{}",
-                if request.must_keep.is_empty() { "（无）".to_string() } else { request.must_keep.join("；") }
+                if request.must_keep.is_empty() {
+                    "（无）".to_string()
+                } else {
+                    request.must_keep.join("；")
+                }
             ),
             String::new(),
             "候选段落（这里只给标题；宿主会把选中的段落原文完整载入）：".to_string(),
@@ -902,26 +986,48 @@ pub fn build_context_compiler_messages(
         [
             format!("Chapter: {}", request.chapter_number),
             format!("Goal: {}", request.goal),
-            format!("Target budget for compiled context: <= {} estimated input tokens", request.max_input_tokens),
+            format!(
+                "Target budget for compiled context: <= {} estimated input tokens",
+                request.max_input_tokens
+            ),
             String::new(),
             "## Protected Context (reference only, do not compile)".to_string(),
-            if protected_block.is_empty() { "(none)".to_string() } else { protected_block },
+            if protected_block.is_empty() {
+                "(none)".to_string()
+            } else {
+                protected_block
+            },
             String::new(),
             "## Compressible Context (compile this)".to_string(),
-            if compressible_block.is_empty() { "(none)".to_string() } else { compressible_block },
+            if compressible_block.is_empty() {
+                "(none)".to_string()
+            } else {
+                compressible_block
+            },
         ]
         .join("\n")
     } else {
         [
             format!("章节：第{}章", request.chapter_number),
             format!("目标：{}", request.goal),
-            format!("压缩后目标预算：不超过 {} 估算输入 tokens", request.max_input_tokens),
+            format!(
+                "压缩后目标预算：不超过 {} 估算输入 tokens",
+                request.max_input_tokens
+            ),
             String::new(),
             "## 受保护上下文（只作为参照，不要编译它）".to_string(),
-            if protected_block.is_empty() { "（无）".to_string() } else { protected_block },
+            if protected_block.is_empty() {
+                "（无）".to_string()
+            } else {
+                protected_block
+            },
             String::new(),
             "## 可压缩上下文（只编译这一部分）".to_string(),
-            if compressible_block.is_empty() { "（无）".to_string() } else { compressible_block },
+            if compressible_block.is_empty() {
+                "（无）".to_string()
+            } else {
+                compressible_block
+            },
         ]
         .join("\n")
     };
@@ -1037,7 +1143,10 @@ fn derive_retrieval_hints(plan: &PlanChapterOutput) -> Vec<String> {
     let mut hints = vec![plan.intent.goal.clone()];
     hints.extend(plan.intent.outline_node.iter().cloned());
     hints.extend(plan.memo.thread_refs.iter().cloned());
-    hints.into_iter().filter(|value| !value.is_empty()).collect()
+    hints
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 async fn build_recent_chapter_trail_entries(
@@ -1083,8 +1192,16 @@ async fn build_recent_chapter_trail_entries(
             format!(
                 "{}: {} / {}",
                 summary.chapter,
-                if summary.mood.is_empty() { "(none)" } else { &summary.mood },
-                if summary.chapter_type.is_empty() { "(none)" } else { &summary.chapter_type },
+                if summary.mood.is_empty() {
+                    "(none)"
+                } else {
+                    &summary.mood
+                },
+                if summary.chapter_type.is_empty() {
+                    "(none)"
+                } else {
+                    &summary.chapter_type
+                },
             )
         })
         .collect::<Vec<_>>()
@@ -1092,7 +1209,9 @@ async fn build_recent_chapter_trail_entries(
     if !mood_trail.is_empty() {
         entries.push(ContextSource {
             source: "story/chapter_summaries.md#recent_mood_type_trail".to_string(),
-            reason: "Keep recent mood and chapter-type cadence visible before writing the next chapter.".to_string(),
+            reason:
+                "Keep recent mood and chapter-type cadence visible before writing the next chapter."
+                    .to_string(),
             excerpt: Some(mood_trail),
             rank: None,
         });
@@ -1256,7 +1375,11 @@ async fn build_hook_debt_entries(
                 i64::from(hook.last_advanced_chapter),
                 false,
             );
-            let role = if en { "memo-referenced debt" } else { "备忘引用旧债" };
+            let role = if en {
+                "memo-referenced debt"
+            } else {
+                "备忘引用旧债"
+            };
             // R23/396 号：类型标注随行（英文 id；无 kind 省略段）。
             let kind_text = hook
                 .kind
@@ -1269,7 +1392,11 @@ async fn build_hook_debt_entries(
                 })
                 .unwrap_or_default();
             let promise = if hook.expected_payoff.is_empty() {
-                if en { "(unspecified)" } else { "（未写明）" }
+                if en {
+                    "(unspecified)"
+                } else {
+                    "（未写明）"
+                }
             } else {
                 &hook.expected_payoff
             };
@@ -1295,10 +1422,18 @@ async fn build_hook_debt_entries(
 
             let excerpt = if en {
                 [
-                    Some(format!("{} ({}{}, {}, open {} chapters)", hook.hook_id, hook.hook_type, kind_text, role, age)),
+                    Some(format!(
+                        "{} ({}{}, {}, open {} chapters)",
+                        hook.hook_id, hook.hook_type, kind_text, role, age
+                    )),
                     Some(format!("reader promise: {promise}")),
-                    Some(format!("original seed (ch{}): {}", hook.start_chapter, seed_beat)),
-                    latest_beat.map(|beat| format!("latest turn (ch{}): {}", hook.last_advanced_chapter, beat)),
+                    Some(format!(
+                        "original seed (ch{}): {}",
+                        hook.start_chapter, seed_beat
+                    )),
+                    latest_beat.map(|beat| {
+                        format!("latest turn (ch{}): {}", hook.last_advanced_chapter, beat)
+                    }),
                 ]
                 .into_iter()
                 .flatten()
@@ -1306,10 +1441,14 @@ async fn build_hook_debt_entries(
                 .join(" | ")
             } else {
                 [
-                    Some(format!("{}（{}{}，{}，已开{}章）", hook.hook_id, hook.hook_type, kind_text, role, age)),
+                    Some(format!(
+                        "{}（{}{}，{}，已开{}章）",
+                        hook.hook_id, hook.hook_type, kind_text, role, age
+                    )),
                     Some(format!("读者承诺：{promise}")),
                     Some(format!("种于第{}章：{}", hook.start_chapter, seed_beat)),
-                    latest_beat.map(|beat| format!("推进于第{}章：{}", hook.last_advanced_chapter, beat)),
+                    latest_beat
+                        .map(|beat| format!("推进于第{}章：{}", hook.last_advanced_chapter, beat)),
                 ]
                 .into_iter()
                 .flatten()
@@ -1343,8 +1482,7 @@ async fn maybe_context_source(
     if content.is_empty() || content == MISSING_FILE {
         // Phase 5 back-compat：legacy 书缺 outline/ 新文件时透明回退旧路径。
         if let Some(legacy_fallback) = outline_fallback(file_name) {
-            let legacy_content =
-                read_file_or_default(&story_dir.join(legacy_fallback)).await;
+            let legacy_content = read_file_or_default(&story_dir.join(legacy_fallback)).await;
             if !legacy_content.is_empty() && legacy_content != MISSING_FILE {
                 content = legacy_content;
                 resolved_file_name = legacy_fallback.to_string();
@@ -1430,14 +1568,10 @@ async fn select_outline_section_entries(
     let selected: Vec<&MarkdownSection> = sections
         .iter()
         .filter(|section| match kind {
-            OutlineSectionKind::StoryFrame => {
-                is_relevant_story_frame_section(section, &hints)
+            OutlineSectionKind::StoryFrame => is_relevant_story_frame_section(section, &hints),
+            OutlineSectionKind::VolumeMap => {
+                is_relevant_volume_map_section(section, &hints, plan.intent.chapter)
             }
-            OutlineSectionKind::VolumeMap => is_relevant_volume_map_section(
-                section,
-                &hints,
-                plan.intent.chapter,
-            ),
         })
         .collect();
     let final_sections: Vec<&MarkdownSection> = if !selected.is_empty() {
@@ -1451,7 +1585,10 @@ async fn select_outline_section_entries(
     let candidates: Vec<OutlineSectionCandidate> = sections
         .iter()
         .map(|section| OutlineSectionCandidate {
-            source: format!("story/{file_name}#{}", slugify_anchor(&section.heading, "section")),
+            source: format!(
+                "story/{file_name}#{}",
+                slugify_anchor(&section.heading, "section")
+            ),
             heading: section.heading.clone(),
             excerpt: section.raw.trim().to_string(),
         })
@@ -1473,8 +1610,10 @@ async fn select_outline_section_entries(
             let llm_sections: Vec<ContextSource> = sections
                 .iter()
                 .filter(|section| {
-                    selected_set
-                        .contains(&format!("story/{file_name}#{}", slugify_anchor(&section.heading, "section")))
+                    selected_set.contains(&format!(
+                        "story/{file_name}#{}",
+                        slugify_anchor(&section.heading, "section")
+                    ))
                 })
                 .map(|section| ContextSource {
                     source: format!(
@@ -1573,8 +1712,17 @@ fn derive_outline_selection_hints(plan: &PlanChapterOutput) -> Vec<String> {
 fn is_relevant_story_frame_section(section: &MarkdownSection, hints: &[String]) -> bool {
     let heading = normalize_for_match(&section.heading);
     const HARD_HEADING_SIGNALS: [&str; 11] = [
-        "世界观", "底色", "铁律", "规则", "核心冲突", "终局", "world", "tonal", "rule",
-        "core conflict", "endgame",
+        "世界观",
+        "底色",
+        "铁律",
+        "规则",
+        "核心冲突",
+        "终局",
+        "world",
+        "tonal",
+        "rule",
+        "core conflict",
+        "endgame",
     ];
     if HARD_HEADING_SIGNALS
         .iter()
@@ -1644,7 +1792,10 @@ fn extract_match_terms(value: &str) -> Vec<String> {
             terms.push(m.as_str().to_string());
         }
     }
-    terms.into_iter().filter(|term| term.chars().count() >= 2).collect()
+    terms
+        .into_iter()
+        .filter(|term| term.chars().count() >= 2)
+        .collect()
 }
 
 fn normalize_for_match(value: &str) -> String {
@@ -1696,8 +1847,7 @@ fn to_fact_anchor(predicate: &str) -> String {
 fn fact_entry(fact: &NewFact) -> ContextSource {
     ContextSource {
         source: format!("story/current_state.md#{}", to_fact_anchor(&fact.predicate)),
-        reason: "Relevant current-state fact retrieved for the current chapter goal."
-            .to_string(),
+        reason: "Relevant current-state fact retrieved for the current chapter goal.".to_string(),
         excerpt: Some(format!("{} | {}", fact.predicate, fact.object)),
         rank: None,
     }
@@ -1722,10 +1872,15 @@ fn summary_entry(summary: &StoredSummary, current_chapter: u32) -> ContextSource
         // R6/367 号：层内排序特征——近因（10 章窗口线性衰减）+ 钩子动静加成。
         rank: Some(crate::models::input_governance::ContextSourceRank {
             recency: Some(
-                (1.0 - (i64::from(current_chapter) - summary.chapter) as f64 / 10.0).clamp(0.0, 1.0),
+                (1.0 - (i64::from(current_chapter) - summary.chapter) as f64 / 10.0)
+                    .clamp(0.0, 1.0),
             ),
             frequency: None,
-            hook_bonus: Some(if summary.hook_activity.is_empty() { 0.0 } else { 1.0 }),
+            hook_bonus: Some(if summary.hook_activity.is_empty() {
+                0.0
+            } else {
+                1.0
+            }),
         }),
     }
 }
@@ -1733,8 +1888,7 @@ fn summary_entry(summary: &StoredSummary, current_chapter: u32) -> ContextSource
 fn volume_summary_entry(summary: &VolumeSummarySelection) -> ContextSource {
     ContextSource {
         source: format!("story/volume_summaries.md#{}", summary.anchor),
-        reason: "Carry forward long-span arc memory compressed from earlier volumes."
-            .to_string(),
+        reason: "Carry forward long-span arc memory compressed from earlier volumes.".to_string(),
         excerpt: Some(format!("{} | {}", summary.heading, summary.content)),
         rank: None,
     }
@@ -1783,9 +1937,14 @@ fn find_hook_summary(
         .iter()
         .enumerate()
         .filter(|(_, summary)| {
-            [summary.title.as_str(), summary.events.as_str(), summary.state_changes.as_str(), summary.hook_activity.as_str()]
-                .iter()
-                .any(|text| text.contains(hook_id))
+            [
+                summary.title.as_str(),
+                summary.events.as_str(),
+                summary.state_changes.as_str(),
+                summary.hook_activity.as_str(),
+            ]
+            .iter()
+            .any(|text| text.contains(hook_id))
         })
         .map(|(index, _)| index)
         .collect();
@@ -1869,7 +2028,6 @@ fn anchor_edge_re() -> &'static Regex {
     R.get_or_init(|| Regex::new(r"^-+|-+$").unwrap())
 }
 
-
 /// R10/376 号：实体卡场景命中注入；R20/390 号：系列正典双层注入。
 /// 读 story/entity_codex.json 与（series_canon_file 提供时）.inkos/series/
 /// {seriesId}.json（缺失/解析失败零打扰），以 goal+memo 正文命中卡片：
@@ -1919,22 +2077,24 @@ pub fn load_codex_entries(
         if let Ok(raw) = std::fs::read_to_string(series_path) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
                 // R20 覆盖语义：book 同名条目覆盖 series 条目（覆盖即省略）。
-                if let Some(parsed) =
-                    crate::utils::series_canon::parse_series_canon_file(&value)
-                {
+                if let Some(parsed) = crate::utils::series_canon::parse_series_canon_file(&value) {
                     if !parsed.entries.is_empty() {
                         let merged = crate::utils::series_canon::merge_codex_layers(
                             &book_cards,
                             &parsed.entries,
                         );
-                        let series_matches =
-                            crate::utils::entity_codex::match_codex_cards(&scene_text, &merged.series);
+                        let series_matches = crate::utils::entity_codex::match_codex_cards(
+                            &scene_text,
+                            &merged.series,
+                        );
                         let series_matches =
                             series_matches.iter().take(8).cloned().collect::<Vec<_>>();
-                        if let Some(series_block) = crate::utils::series_canon::render_series_codex_block(
-                            &series_matches,
-                            crate::utils::language::WritingLanguage::Zh,
-                        ) {
+                        if let Some(series_block) =
+                            crate::utils::series_canon::render_series_codex_block(
+                                &series_matches,
+                                crate::utils::language::WritingLanguage::Zh,
+                            )
+                        {
                             let first_name = series_matches
                                 .first()
                                 .map(|codex_match| codex_match.card.name.clone())
@@ -1964,23 +2124,23 @@ pub fn load_rule_experience_entries(
     book_dir: &Path,
 ) -> Vec<crate::models::input_governance::ContextSource> {
     let mut entries: Vec<crate::models::input_governance::ContextSource> = Vec::new();
-    let user_rules: Option<Vec<crate::utils::rule_experience_engine::AntiAiRule>> = std::fs::read_to_string(
-        book_dir.join("story").join("anti_ai_rules.json"),
-    )
-    .ok()
-    .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-    .and_then(|parsed| {
-        let rules = parsed.get("rules")?.as_array()?;
-        Some(
-            rules
-                .iter()
-                .filter_map(|rule| {
-                    crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
-                })
-                .collect(),
-        )
-    });
-    let resolved = crate::utils::rule_experience_engine::resolve_anti_ai_rules_with_seeds(user_rules);
+    let user_rules: Option<Vec<crate::utils::rule_experience_engine::AntiAiRule>> =
+        std::fs::read_to_string(book_dir.join("story").join("anti_ai_rules.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|parsed| {
+                let rules = parsed.get("rules")?.as_array()?;
+                Some(
+                    rules
+                        .iter()
+                        .filter_map(|rule| {
+                            crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
+                        })
+                        .collect(),
+                )
+            });
+    let resolved =
+        crate::utils::rule_experience_engine::resolve_anti_ai_rules_with_seeds(user_rules);
     if !resolved.rules.is_empty() {
         if let Some(guidance) = crate::utils::rule_experience_engine::compose_anti_ai_guidance(
             &resolved.rules,
@@ -2041,7 +2201,8 @@ pub fn load_style_binding_entry(
     book_dir: &Path,
     profiles_dir: &Path,
 ) -> Option<crate::models::input_governance::ContextSource> {
-    let binding_raw = std::fs::read_to_string(book_dir.join("story").join("style_binding.json")).ok()?;
+    let binding_raw =
+        std::fs::read_to_string(book_dir.join("story").join("style_binding.json")).ok()?;
     let binding: crate::utils::style_feature_engine::StyleBinding =
         serde_json::from_str(&binding_raw).ok()?;
     if binding.profile_name.is_empty() {
@@ -2055,10 +2216,13 @@ pub fn load_style_binding_entry(
         return None;
     }
     let profile_raw =
-        std::fs::read_to_string(profiles_dir.join(format!("{}.json", binding.profile_name))).ok()?;
-    let mut profile: crate::models::style_profile::StyleProfile = serde_json::from_str(&profile_raw).ok()?;
+        std::fs::read_to_string(profiles_dir.join(format!("{}.json", binding.profile_name)))
+            .ok()?;
+    let mut profile: crate::models::style_profile::StyleProfile =
+        serde_json::from_str(&profile_raw).ok()?;
     profile.source_name = Some(binding.profile_name.clone());
-    let resolution = crate::utils::style_feature_engine::resolve_style_binding(&[profile], &binding)?;
+    let resolution =
+        crate::utils::style_feature_engine::resolve_style_binding(&[profile], &binding)?;
     if resolution.enabled.is_empty() {
         return None;
     }
@@ -2110,13 +2274,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let entries = load_codex_entries(
-            &book_dir,
-            7,
-            "林动摩挲祖符石。",
-            "",
-            Some(&series_file),
-        );
+        let entries = load_codex_entries(&book_dir, 7, "林动摩挲祖符石。", "", Some(&series_file));
         let sources: Vec<&str> = entries.iter().map(|entry| entry.source.as_str()).collect();
         assert_eq!(sources, vec!["codex/林动", "codex-series/祖符石"]);
         let book_block = entries[0].excerpt.as_deref().unwrap();
@@ -2162,7 +2320,8 @@ mod tests {
 
     #[test]
     fn extract_last_meaningful_sentence_filters_and_truncates() {
-        let content = "# 标题行会被过滤掉哦\n| 表格行也会被过滤掉哦 |\n这是一句足够长的正文句子结尾。";
+        let content =
+            "# 标题行会被过滤掉哦\n| 表格行也会被过滤掉哦 |\n这是一句足够长的正文句子结尾。";
         assert_eq!(
             extract_last_meaningful_sentence(content),
             Some("这是一句足够长的正文句子结尾。".to_string())
@@ -2177,16 +2336,28 @@ mod tests {
     #[test]
     fn relevance_and_fallback_selection() {
         let sections = vec![
-            MarkdownSection { heading: "世界观铁律".into(), raw: "基础设定".into() },
-            MarkdownSection { heading: "闲聊杂谈".into(), raw: "无关内容".into() },
-            MarkdownSection { heading: "第3章 夜探".into(), raw: "本章安排".into() },
+            MarkdownSection {
+                heading: "世界观铁律".into(),
+                raw: "基础设定".into(),
+            },
+            MarkdownSection {
+                heading: "闲聊杂谈".into(),
+                raw: "无关内容".into(),
+            },
+            MarkdownSection {
+                heading: "第3章 夜探".into(),
+                raw: "本章安排".into(),
+            },
         ];
         let hints = vec!["祖符".to_string()];
         assert!(is_relevant_story_frame_section(&sections[0], &hints));
         assert!(!is_relevant_story_frame_section(&sections[1], &hints));
         assert!(is_relevant_volume_map_section(&sections[2], &hints, 3));
         // 兜底：volume-map 无章节命中 → 首段；有命中 → 命中段。
-        assert_eq!(fallback_outline_sections(&sections, OutlineSectionKind::StoryFrame, 9).len(), 1);
+        assert_eq!(
+            fallback_outline_sections(&sections, OutlineSectionKind::StoryFrame, 9).len(),
+            1
+        );
         let hit = fallback_outline_sections(&sections, OutlineSectionKind::VolumeMap, 3);
         assert_eq!(hit[0].heading, "第3章 夜探");
     }
@@ -2206,8 +2377,14 @@ mod tests {
 
     #[test]
     fn outline_fallback_mapping() {
-        assert_eq!(outline_fallback("outline/story_frame.md"), Some("story_bible.md"));
-        assert_eq!(outline_fallback("outline/volume_map.md"), Some("volume_outline.md"));
+        assert_eq!(
+            outline_fallback("outline/story_frame.md"),
+            Some("story_bible.md")
+        );
+        assert_eq!(
+            outline_fallback("outline/volume_map.md"),
+            Some("volume_outline.md")
+        );
         assert_eq!(outline_fallback("current_focus.md"), None);
     }
 
@@ -2258,7 +2435,10 @@ mod tests {
             2,
             "goal",
             WritingLanguage::Zh,
-            Some(ContextBudget { context_window_tokens: 1_000_000, reserved_output_tokens: 1000 }),
+            Some(ContextBudget {
+                context_window_tokens: 1_000_000,
+                reserved_output_tokens: 1000,
+            }),
             None,
             None,
         )
@@ -2273,16 +2453,24 @@ mod tests {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);
         let callback: CompressionCallback = Arc::new(move |event: &ContextCompressionEvent| {
-            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(event.phase);
+            sink.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event.phase);
         });
-        let compiler = MockCompiler { output: "  编译后的紧凑上下文  ".into(), fail: false };
+        let compiler = MockCompiler {
+            output: "  编译后的紧凑上下文  ".into(),
+            fail: false,
+        };
 
         let out = apply_context_budget_if_needed(
             &big_package(),
             2,
             "goal",
             WritingLanguage::Zh,
-            Some(ContextBudget { context_window_tokens: 100, reserved_output_tokens: 10 }),
+            Some(ContextBudget {
+                context_window_tokens: 100,
+                reserved_output_tokens: 10,
+            }),
             Some(&compiler),
             Some(&callback),
         )
@@ -2291,9 +2479,15 @@ mod tests {
 
         assert_eq!(out.notes, vec!["compiled-compressible-context"]);
         let compression = out.compression.unwrap();
-        assert_eq!(compression.compiled_source, "runtime/compiled-compressible-context");
+        assert_eq!(
+            compression.compiled_source,
+            "runtime/compiled-compressible-context"
+        );
         assert_eq!(compression.protected_sources, vec!["runtime/chapter_memo"]);
-        assert_eq!(compression.compressed_sources, vec!["story/chapter_summaries.md#1"]);
+        assert_eq!(
+            compression.compressed_sources,
+            vec!["story/chapter_summaries.md#1"]
+        );
         // 编译条目替换全部可压源。
         assert_eq!(out.context_package.selected_context.len(), 2);
         assert_eq!(
@@ -2305,11 +2499,10 @@ mod tests {
             Some("编译后的紧凑上下文")
         );
         assert_eq!(
-            *events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
-            vec![
-                ContextCompressionPhase::Start,
-                ContextCompressionPhase::End
-            ]
+            *events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![ContextCompressionPhase::Start, ContextCompressionPhase::End]
         );
     }
 
@@ -2320,7 +2513,10 @@ mod tests {
             2,
             "goal",
             WritingLanguage::Zh,
-            Some(ContextBudget { context_window_tokens: 100, reserved_output_tokens: 10 }),
+            Some(ContextBudget {
+                context_window_tokens: 100,
+                reserved_output_tokens: 10,
+            }),
             None,
             None,
         )
@@ -2334,31 +2530,58 @@ mod tests {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = Arc::clone(&events);
         let callback: CompressionCallback = Arc::new(move |event: &ContextCompressionEvent| {
-            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(event.phase);
+            sink.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(event.phase);
         });
-        let compiler = MockCompiler { output: String::new(), fail: true };
+        let compiler = MockCompiler {
+            output: String::new(),
+            fail: true,
+        };
         let result = apply_context_budget_if_needed(
             &big_package(),
             2,
             "goal",
             WritingLanguage::Zh,
-            Some(ContextBudget { context_window_tokens: 100, reserved_output_tokens: 10 }),
+            Some(ContextBudget {
+                context_window_tokens: 100,
+                reserved_output_tokens: 10,
+            }),
             Some(&compiler),
             Some(&callback),
         )
         .await;
         assert!(matches!(result, Err(ComposeChapterError::Compiler(_))));
-        assert_eq!(*events.lock().unwrap_or_else(|poisoned| poisoned.into_inner()), vec![ContextCompressionPhase::Start, ContextCompressionPhase::Error]);
+        assert_eq!(
+            *events
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![
+                ContextCompressionPhase::Start,
+                ContextCompressionPhase::Error
+            ]
+        );
     }
 
     #[tokio::test]
     async fn compose_full_flow_with_mocks() {
         let dir = tempfile::tempdir().unwrap();
         let story = dir.path().join("story");
-        tokio::fs::create_dir_all(story.join("runtime")).await.unwrap();
-        tokio::fs::create_dir_all(story.join("outline")).await.unwrap();
-        tokio::fs::write(story.join("outline").join("story_frame.md"), "## 世界观铁律\n灵气体系。\n").await.unwrap();
-        tokio::fs::write(story.join("current_focus.md"), "聚焦夺符").await.unwrap();
+        tokio::fs::create_dir_all(story.join("runtime"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(story.join("outline"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            story.join("outline").join("story_frame.md"),
+            "## 世界观铁律\n灵气体系。\n",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(story.join("current_focus.md"), "聚焦夺符")
+            .await
+            .unwrap();
         tokio::fs::write(
             story.join("chapter_summaries.md"),
             "| 章节 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| 1 | 初入 | 林动 | 祖符觉醒 | 无 | H01 open | 平静 | 开局 |\n",
@@ -2432,7 +2655,10 @@ mod tests {
         assert!(sources.contains(&"story/current_focus.md"));
         // mustAvoid 派生规则栈覆盖。
         assert_eq!(out.rule_stack.active_overrides.len(), 1);
-        assert_eq!(out.rule_stack.active_overrides[0].target, "chapter:2/mustAvoid");
+        assert_eq!(
+            out.rule_stack.active_overrides[0].target,
+            "chapter:2/mustAvoid"
+        );
         // trace 记录 composerInputs = plan.runtimePath。
         assert_eq!(out.trace.composer_inputs.len(), 1);
         // 三件套落盘。
@@ -2483,7 +2709,9 @@ mod tests {
         // story 目录最小面（基础上下文可空）。
         let story = book_dir.join("story");
         tokio::fs::create_dir_all(&story).await.unwrap();
-        tokio::fs::write(story.join("current_focus.md"), "聚焦夺符").await.unwrap();
+        tokio::fs::write(story.join("current_focus.md"), "聚焦夺符")
+            .await
+            .unwrap();
 
         let plan = PlanChapterOutput {
             intent: crate::models::input_governance::ChapterIntent {
@@ -2520,7 +2748,9 @@ mod tests {
                 self.result.clone()
             }
         }
-        let selector = ScriptedSelector { result: Ok(vec!["reference/mat1#人物关系".to_string()]) };
+        let selector = ScriptedSelector {
+            result: Ok(vec!["reference/mat1#人物关系".to_string()]),
+        };
         let provider = crate::references::ProductionReferenceContextProvider {
             project_root: root,
             book_id: "b1",
@@ -2560,12 +2790,19 @@ mod tests {
             .iter()
             .find(|entry| entry.source == "reference/mat1#人物关系")
             .expect("reference entry present");
-        assert_eq!(reference_entry.excerpt.as_deref(), Some("## 人物关系\n\n师徒线张力。"));
-        assert!(reference_entry.reason.contains("User-bound reference \"开篇参考\" for: 人物关系."));
+        assert_eq!(
+            reference_entry.excerpt.as_deref(),
+            Some("## 人物关系\n\n师徒线张力。")
+        );
+        assert!(reference_entry
+            .reason
+            .contains("User-bound reference \"开篇参考\" for: 人物关系."));
         assert!(out.trace.notes.is_empty(), "无失败时 notes 为空");
 
         // 选段失败 → 无条目 + book-reference-selection-failed 进 trace.notes。
-        let failing = ScriptedSelector { result: Err("llm down".to_string()) };
+        let failing = ScriptedSelector {
+            result: Err("llm down".to_string()),
+        };
         let provider = crate::references::ProductionReferenceContextProvider {
             project_root: root,
             book_id: "b1",
@@ -2592,7 +2829,10 @@ mod tests {
             .selected_context
             .iter()
             .any(|entry| entry.source.starts_with("reference/")));
-        assert!(out.trace.notes.contains(&"book-reference-selection-failed".to_string()));
+        assert!(out
+            .trace
+            .notes
+            .contains(&"book-reference-selection-failed".to_string()));
     }
 
     /// R22/392 号：种子兜底语义——文件缺失 → 内置种子条目（seeded reason）；
@@ -2607,7 +2847,10 @@ mod tests {
             .iter()
             .find(|entry| entry.source == "rules/anti-ai")
             .expect("missing rules file must yield seeded baseline entry");
-        assert_eq!(rules_entry.reason, "Built-in anti-AI baseline rules (seeded).");
+        assert_eq!(
+            rules_entry.reason,
+            "Built-in anti-AI baseline rules (seeded)."
+        );
 
         let story = book_dir.join("story");
         std::fs::create_dir_all(&story).unwrap();
@@ -2641,12 +2884,24 @@ mod tests {
             )
         };
         std::fs::write(pool.join("古风.json"), profile("古风")).unwrap();
-        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"古风"}"#).unwrap();
+        std::fs::write(
+            story.join("style_binding.json"),
+            r#"{"profileName":"古风"}"#,
+        )
+        .unwrap();
         let entry = load_style_binding_entry(&book_dir, &pool).expect("safe profile name resolves");
         assert_eq!(entry.source, "style/古风");
         // 穿越名：目标 = 池外 `.inkos/outside.json`（存在且可解析）——一律 None 不读。
-        std::fs::write(dir.path().join(".inkos").join("outside.json"), profile("../outside")).unwrap();
-        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"../outside"}"#).unwrap();
+        std::fs::write(
+            dir.path().join(".inkos").join("outside.json"),
+            profile("../outside"),
+        )
+        .unwrap();
+        std::fs::write(
+            story.join("style_binding.json"),
+            r#"{"profileName":"../outside"}"#,
+        )
+        .unwrap();
         assert!(load_style_binding_entry(&book_dir, &pool).is_none());
     }
 
@@ -2663,16 +2918,24 @@ mod tests {
         std::fs::create_dir_all(story.join("style-profiles")).unwrap();
         std::fs::create_dir_all(&pool).unwrap();
         let profile = r#"{"avgSentenceLength":18.0,"sentenceLengthStdDev":4.0,"avgParagraphLength":80.0,"paragraphLengthRange":{"min":40,"max":120},"vocabularyDiversity":0.6,"topPatterns":["他抬头"],"rhetoricalFeatures":["比喻"],"sourceName":"斗破苍穹样章"}"#;
-        std::fs::write(story.join("style_binding.json"), r#"{"profileName":"热血少年"}"#).unwrap();
+        std::fs::write(
+            story.join("style_binding.json"),
+            r#"{"profileName":"热血少年"}"#,
+        )
+        .unwrap();
         // ③ 仅书级旧树有文件 → None（不回退读旧树）。
         std::fs::write(story.join("style-profiles").join("热血少年.json"), profile).unwrap();
         assert!(load_style_binding_entry(&book_dir, &pool).is_none());
         // ①② 池中档案（sourceName=样本源名≠档案名）→ 按文件名命中注入。
         std::fs::write(pool.join("热血少年.json"), profile).unwrap();
-        let entry = load_style_binding_entry(&book_dir, &pool).expect("pool profile resolves by file identity");
+        let entry = load_style_binding_entry(&book_dir, &pool)
+            .expect("pool profile resolves by file identity");
         assert_eq!(entry.source, "style/热血少年");
         let excerpt = entry.excerpt.expect("guidance");
-        assert!(excerpt.starts_with("## 写法特征（绑定档案——写作时遵循）"), "{excerpt}");
+        assert!(
+            excerpt.starts_with("## 写法特征（绑定档案——写作时遵循）"),
+            "{excerpt}"
+        );
         assert!(excerpt.contains("「他抬头」"), "{excerpt}");
         assert!(excerpt.contains("「比喻」"), "{excerpt}");
     }

@@ -73,13 +73,18 @@ fn translation_result_tool_schema() -> Value {
 }
 
 fn schema_error(detail: String) -> StructuredToolError {
-    StructuredToolError::coded("WORKER_SCHEMA_INVALID", format!("Invalid submit_translation arguments: {detail}"))
+    StructuredToolError::coded(
+        "WORKER_SCHEMA_INVALID",
+        format!("Invalid submit_translation arguments: {detail}"),
+    )
 }
 
 /// TypeBox schema 面（TS runWorkerAgentTool toolArgumentIssues 等价——明细形态备案
 /// 不逐字，码面 WORKER_SCHEMA_INVALID 同）。
 fn check_submission_schema(args: &Value) -> Result<(), StructuredToolError> {
-    let object = args.as_object().ok_or_else(|| schema_error("expected an object".into()))?;
+    let object = args
+        .as_object()
+        .ok_or_else(|| schema_error("expected an object".into()))?;
     if let Some(title) = object.get("chapterTitle") {
         if !title.is_string() {
             return Err(schema_error("/chapterTitle must be a string".into()));
@@ -90,28 +95,57 @@ fn check_submission_schema(args: &Value) -> Result<(), StructuredToolError> {
         .and_then(Value::as_array)
         .ok_or_else(|| schema_error("/segments must be an array".into()))?;
     for (position, item) in segments.iter().enumerate() {
-        let record = item.as_object().ok_or_else(|| schema_error(format!("/segments/{position} must be an object")))?;
-        if record.get("index").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).is_none() {
-            return Err(schema_error(format!("/segments/{position}/index must be a non-negative integer")));
+        let record = item
+            .as_object()
+            .ok_or_else(|| schema_error(format!("/segments/{position} must be an object")))?;
+        if record
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .is_none()
+        {
+            return Err(schema_error(format!(
+                "/segments/{position}/index must be a non-negative integer"
+            )));
         }
-        if record.get("target").and_then(Value::as_str).is_none_or(str::is_empty) {
-            return Err(schema_error(format!("/segments/{position}/target must be a non-empty string")));
+        if record
+            .get("target")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            return Err(schema_error(format!(
+                "/segments/{position}/target must be a non-empty string"
+            )));
         }
         if record.get("notes").is_some_and(|notes| !notes.is_string()) {
-            return Err(schema_error(format!("/segments/{position}/notes must be a string")));
+            return Err(schema_error(format!(
+                "/segments/{position}/notes must be a string"
+            )));
         }
     }
     if let Some(glossary) = object.get("glossary") {
-        let terms = glossary.as_array().ok_or_else(|| schema_error("/glossary must be an array".into()))?;
+        let terms = glossary
+            .as_array()
+            .ok_or_else(|| schema_error("/glossary must be an array".into()))?;
         for (position, term) in terms.iter().enumerate() {
-            let record = term.as_object().ok_or_else(|| schema_error(format!("/glossary/{position} must be an object")))?;
+            let record = term
+                .as_object()
+                .ok_or_else(|| schema_error(format!("/glossary/{position} must be an object")))?;
             for field in ["source", "target"] {
-                if record.get(field).and_then(Value::as_str).is_none_or(str::is_empty) {
-                    return Err(schema_error(format!("/glossary/{position}/{field} must be a non-empty string")));
+                if record
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    return Err(schema_error(format!(
+                        "/glossary/{position}/{field} must be a non-empty string"
+                    )));
                 }
             }
             if record.get("note").is_some_and(|note| !note.is_string()) {
-                return Err(schema_error(format!("/glossary/{position}/note must be a string")));
+                return Err(schema_error(format!(
+                    "/glossary/{position}/note must be a string"
+                )));
             }
         }
     }
@@ -124,13 +158,23 @@ fn validate_translated_segments(
     items: &[Value],
     source_segments: &[TranslationSegment],
 ) -> Result<Vec<TranslatedSegmentItem>, StructuredToolError> {
-    let source_index: std::collections::HashSet<u32> =
-        source_segments.iter().map(|segment| segment.index).collect();
+    let source_index: std::collections::HashSet<u32> = source_segments
+        .iter()
+        .map(|segment| segment.index)
+        .collect();
     let mut by_index: std::collections::HashMap<u32, TranslatedSegmentItem> =
         std::collections::HashMap::new();
     for item in items {
-        let index = item.get("index").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
-        let target = item.get("target").and_then(Value::as_str).map(str::trim).unwrap_or("");
+        let index = item
+            .get("index")
+            .and_then(Value::as_u64)
+            .and_then(|v| u32::try_from(v).ok())
+            .unwrap_or(0);
+        let target = item
+            .get("target")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or("");
         if target.is_empty() {
             return Err(StructuredToolError::coded(
                 "TRANSLATION_TARGET_EMPTY",
@@ -138,10 +182,14 @@ fn validate_translated_segments(
             ));
         }
         if !source_index.contains(&index) {
-            return Err(StructuredToolError::plain(format!("Translation returned unknown segment index {index}.")));
+            return Err(StructuredToolError::plain(format!(
+                "Translation returned unknown segment index {index}."
+            )));
         }
         if by_index.contains_key(&index) {
-            return Err(StructuredToolError::plain(format!("Translation returned duplicate segment index {index}.")));
+            return Err(StructuredToolError::plain(format!(
+                "Translation returned duplicate segment index {index}."
+            )));
         }
         let notes = item
             .get("notes")
@@ -149,7 +197,14 @@ fn validate_translated_segments(
             .map(str::trim)
             .filter(|notes| !notes.is_empty())
             .map(String::from);
-        by_index.insert(index, TranslatedSegmentItem { index, target: target.to_string(), notes });
+        by_index.insert(
+            index,
+            TranslatedSegmentItem {
+                index,
+                target: target.to_string(),
+                notes,
+            },
+        );
     }
     let missing: Vec<String> = source_segments
         .iter()
@@ -174,7 +229,11 @@ pub(crate) fn validate_translation_submission(
     source_segments: &[TranslationSegment],
 ) -> Result<TranslateSegmentsOutput, StructuredToolError> {
     check_submission_schema(args)?;
-    let items = args.get("segments").and_then(Value::as_array).cloned().unwrap_or_default();
+    let items = args
+        .get("segments")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let segments = validate_translated_segments(&items, source_segments)?;
     Ok(TranslateSegmentsOutput {
         segments,
@@ -219,7 +278,10 @@ fn output_from_value(value: &Value) -> TranslateSegmentsOutput {
             })
             .unwrap_or_default(),
         glossary: parse_glossary(value.get("glossary")),
-        chapter_title: value.get("chapterTitle").and_then(Value::as_str).map(String::from),
+        chapter_title: value
+            .get("chapterTitle")
+            .and_then(Value::as_str)
+            .map(String::from),
     }
 }
 
@@ -258,7 +320,10 @@ impl TranslationModelPort for LlmTranslationModel {
         let source_owned: Arc<Vec<TranslationSegment>> = Arc::new(input.segments.to_vec());
         let validate: ValidateFn = Arc::new(move |args: Value| {
             let source = Arc::clone(&source_owned);
-            Box::pin(async move { validate_translation_submission(&args, &source).map(|output| output_to_value(&output)) })
+            Box::pin(async move {
+                validate_translation_submission(&args, &source)
+                    .map(|output| output_to_value(&output))
+            })
         });
         let max_tokens = self.max_tokens.unwrap_or(8192);
         let endpoint = self.router.resolve("translator");
@@ -266,7 +331,10 @@ impl TranslationModelPort for LlmTranslationModel {
             router_chat_turn_fn(Arc::clone(&self.router), "translator"),
             &endpoint.model,
             &messages,
-            StructuredDefaults { temperature: 0.2, max_tokens },
+            StructuredDefaults {
+                temperature: 0.2,
+                max_tokens,
+            },
             WorkerToolSpec {
                 name: "submit_translation".to_string(),
                 description: "Submit translated segments and glossary updates.".to_string(),
@@ -275,7 +343,10 @@ impl TranslationModelPort for LlmTranslationModel {
             },
             Some(validate),
             Vec::new(),
-            StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+            StructuredRunOptions {
+                temperature: None,
+                max_tokens: Some(max_tokens),
+            },
         )
         .await
         .map_err(|error| error.message)?;
@@ -320,7 +391,10 @@ impl TranslationModelPort for LlmTranslationModel {
             router_chat_turn_fn(Arc::clone(&self.router), "translator"),
             &endpoint.model,
             &messages,
-            StructuredDefaults { temperature: 0.2, max_tokens },
+            StructuredDefaults {
+                temperature: 0.2,
+                max_tokens,
+            },
             WorkerToolSpec {
                 name: "submit_translation_revision".into(),
                 description: "Submit only the revised target paragraph.".into(),
@@ -348,7 +422,10 @@ impl TranslationModelPort for LlmTranslationModel {
                 })
             })),
             Vec::new(),
-            StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+            StructuredRunOptions {
+                temperature: None,
+                max_tokens: Some(max_tokens),
+            },
         )
         .await
         .map_err(|error| error.message)?;
@@ -459,8 +536,18 @@ mod tests {
 
     fn source() -> Vec<TranslationSegment> {
         vec![
-            TranslationSegment { index: 1, source: "a".into(), target: None, notes: None },
-            TranslationSegment { index: 2, source: "b".into(), target: None, notes: None },
+            TranslationSegment {
+                index: 1,
+                source: "a".into(),
+                target: None,
+                notes: None,
+            },
+            TranslationSegment {
+                index: 2,
+                source: "b".into(),
+                target: None,
+                notes: None,
+            },
         ]
     }
 
@@ -473,19 +560,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ok.chapter_title.as_deref(), Some("第一章"));
-        assert_eq!(ok.segments.iter().map(|s| s.index).collect::<Vec<_>>(), [1, 2], "按源段序");
+        assert_eq!(
+            ok.segments.iter().map(|s| s.index).collect::<Vec<_>>(),
+            [1, 2],
+            "按源段序"
+        );
         assert_eq!(ok.segments[0].target, "甲");
         assert_eq!(ok.segments[1].notes.as_deref(), Some("注"));
         assert_eq!(ok.glossary[0].source, "Mana");
         let err = |args: Value| validate_translation_submission(&args, &source()).unwrap_err();
         let unknown = err(json!({ "segments": [ { "index": 9, "target": "x" } ] }));
-        assert_eq!(unknown.message, "Translation returned unknown segment index 9.");
-        let duplicate = err(json!({ "segments": [ { "index": 1, "target": "a" }, { "index": 1, "target": "b" } ] }));
-        assert_eq!(duplicate.message, "Translation returned duplicate segment index 1.");
+        assert_eq!(
+            unknown.message,
+            "Translation returned unknown segment index 9."
+        );
+        let duplicate = err(
+            json!({ "segments": [ { "index": 1, "target": "a" }, { "index": 1, "target": "b" } ] }),
+        );
+        assert_eq!(
+            duplicate.message,
+            "Translation returned duplicate segment index 1."
+        );
         let missing = err(json!({ "segments": [ { "index": 2, "target": "b" } ] }));
         assert_eq!(missing.message, "Translation omitted segment index(es): 1.");
-        let empty = err(json!({ "segments": [ { "index": 1, "target": "  " }, { "index": 2, "target": "b" } ] }));
-        assert_eq!(empty.message, "Translation returned an empty target for segment 1.");
+        let empty = err(
+            json!({ "segments": [ { "index": 1, "target": "  " }, { "index": 2, "target": "b" } ] }),
+        );
+        assert_eq!(
+            empty.message,
+            "Translation returned an empty target for segment 1."
+        );
         assert_eq!(empty.code.as_deref(), Some("TRANSLATION_TARGET_EMPTY"));
     }
 
@@ -503,7 +607,11 @@ mod tests {
             json!({ "segments": [], "glossary": [ { "source": "", "target": "x" } ] }),
         ] {
             let error = validate_translation_submission(&args, &source()).unwrap_err();
-            assert_eq!(error.code.as_deref(), Some("WORKER_SCHEMA_INVALID"), "{args}");
+            assert_eq!(
+                error.code.as_deref(),
+                Some("WORKER_SCHEMA_INVALID"),
+                "{args}"
+            );
         }
     }
 }

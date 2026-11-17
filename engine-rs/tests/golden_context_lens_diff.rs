@@ -23,8 +23,7 @@ fn lens_projection_matches_shared_vectors() {
         let got = build_context_lens(&package, &trace);
         let got_json = serde_json::to_value(&got).expect("lens serializable");
         assert_eq!(
-            got_json,
-            vector["expected"],
+            got_json, vector["expected"],
             "context lens vector '{name}' drifted"
         );
     }

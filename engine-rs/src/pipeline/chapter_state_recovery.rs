@@ -20,10 +20,7 @@ pub struct StateDegradedReviewNote {
 }
 
 /// 构建降级注记 JSON（kind=state-degraded + 基础状态 + 注入问题行）。
-pub fn build_state_degraded_review_note(
-    base_status: &str,
-    issues: &[AuditIssue],
-) -> String {
+pub fn build_state_degraded_review_note(base_status: &str, issues: &[AuditIssue]) -> String {
     serde_json::to_string(&StateDegradedReviewNote {
         kind: "state-degraded",
         base_status: base_status.to_string(),
@@ -36,7 +33,9 @@ pub fn build_state_degraded_review_note(
 }
 
 /// 解析降级注记；字段缺失/类型不符/JSON 损坏 → None。
-pub fn parse_state_degraded_review_note(review_note: Option<&str>) -> Option<StateDegradedReviewNote> {
+pub fn parse_state_degraded_review_note(
+    review_note: Option<&str>,
+) -> Option<StateDegradedReviewNote> {
     let raw = review_note?;
     let value: serde_json::Value = serde_json::from_str(raw).ok()?;
     if value.get("kind")?.as_str()? != "state-degraded" {
@@ -115,7 +114,10 @@ mod tests {
         assert!(parse_state_degraded_review_note(None).is_none());
         assert!(parse_state_degraded_review_note(Some("not json")).is_none());
         assert!(parse_state_degraded_review_note(Some("{\"kind\":\"other\"}")).is_none());
-        assert!(parse_state_degraded_review_note(Some("{\"kind\":\"state-degraded\",\"baseStatus\":\"weird\",\"injectedIssues\":[]}")).is_none());
+        assert!(parse_state_degraded_review_note(Some(
+            "{\"kind\":\"state-degraded\",\"baseStatus\":\"weird\",\"injectedIssues\":[]}"
+        ))
+        .is_none());
     }
 
     #[test]
@@ -140,7 +142,10 @@ mod tests {
         assert_eq!(resolve_state_degraded_base_status(&meta), "audit-failed");
 
         meta.audit_issues = vec!["[warning] 小问题".into()];
-        assert_eq!(resolve_state_degraded_base_status(&meta), "ready-for-review");
+        assert_eq!(
+            resolve_state_degraded_base_status(&meta),
+            "ready-for-review"
+        );
 
         meta.review_note = Some(build_state_degraded_review_note("audit-failed", &[]));
         assert_eq!(resolve_state_degraded_base_status(&meta), "audit-failed");
@@ -192,7 +197,8 @@ pub struct ValidateRequest<'a> {
     pub old_hooks: &'a str,
     pub new_hooks: &'a str,
     pub language: WritingLanguage,
-    pub authority_context: Option<&'a crate::agents::state_validator::StateValidationAuthorityContext>,
+    pub authority_context:
+        Option<&'a crate::agents::state_validator::StateValidationAuthorityContext>,
 }
 
 /// 重试结果。对齐 TS `SettlementRetryResult`（Recovered 装箱平衡变体尺寸）。
@@ -261,8 +267,14 @@ pub async fn retry_settlement_after_validation_failure(
             allow_reapply: true,
             allow_new_hooks: params.allow_new_hooks,
             baseline_chapter: params.baseline_chapter,
-            chapter_intent: params.control.as_ref().map(|control| control.chapter_intent),
-            context_package: params.control.as_ref().map(|control| control.context_package),
+            chapter_intent: params
+                .control
+                .as_ref()
+                .map(|control| control.chapter_intent),
+            context_package: params
+                .control
+                .as_ref()
+                .map(|control| control.context_package),
             rule_stack: params.control.as_ref().map(|control| control.rule_stack),
             validation_feedback: Some(&build_state_validation_feedback(
                 &params.original_validation.warnings,
@@ -521,7 +533,11 @@ mod retry_tests {
     #[async_trait::async_trait]
     impl ValidatePort for ScriptValidate {
         async fn validate(&self, _params: ValidateRequest<'_>) -> Result<ValidationResult, String> {
-            Ok(self.results.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0))
+            Ok(self
+                .results
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(0))
         }
     }
 
@@ -559,17 +575,21 @@ mod retry_tests {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![ValidationResult {
                 warnings: vec![],
-                passed: true, repair_required: false,
+                passed: true,
+                repair_required: false,
             }]),
         };
         let original = ValidationResult {
             warnings: vec![warning("c", "d")],
-            passed: false, repair_required: false,
+            passed: false,
+            repair_required: false,
         };
         let book = test_book();
-        match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original, &book))
-            .await
-            .unwrap()
+        match retry_settlement_after_validation_failure(retry_params(
+            &writer, &validator, &original, &book,
+        ))
+        .await
+        .unwrap()
         {
             SettlementRetryResult::Recovered { output, validation } => {
                 assert_eq!(output.updated_state, "fixed-state");
@@ -588,14 +608,21 @@ mod retry_tests {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![ValidationResult {
                 warnings: vec![warning("contradiction", "硬矛盾")],
-                passed: false, repair_required: false,
+                passed: false,
+                repair_required: false,
             }]),
         };
-        let original = ValidationResult { warnings: vec![], passed: false, repair_required: false };
+        let original = ValidationResult {
+            warnings: vec![],
+            passed: false,
+            repair_required: false,
+        };
         let book = test_book();
-        match retry_settlement_after_validation_failure(retry_params(&writer, &validator, &original, &book))
-            .await
-            .unwrap()
+        match retry_settlement_after_validation_failure(retry_params(
+            &writer, &validator, &original, &book,
+        ))
+        .await
+        .unwrap()
         {
             SettlementRetryResult::Degraded { issues } => {
                 assert_eq!(issues.len(), 1);
@@ -608,8 +635,11 @@ mod retry_tests {
     #[test]
     fn degraded_persistence_output_restores_old_truth() {
         let output = base_output();
-        let degraded =
-            build_state_degraded_persistence_output(&output, "old-state", ("old-hooks", "old-ledger"));
+        let degraded = build_state_degraded_persistence_output(
+            &output,
+            "old-state",
+            ("old-hooks", "old-ledger"),
+        );
         assert_eq!(degraded.updated_state, "old-state");
         assert_eq!(degraded.updated_hooks, "old-hooks");
         assert_eq!(degraded.updated_ledger, "old-ledger");

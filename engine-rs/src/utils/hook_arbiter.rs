@@ -90,7 +90,8 @@ pub fn arbitrate_runtime_state_delta_hooks(
     let chapter = delta.chapter;
     // 工作副本：仲裁过程中累积的「最新已知 hooks」（用于准入评估的去重/匹配）。
     let mut working_hooks: Vec<HookRecord> = hooks.to_vec();
-    let mut known_hook_ids: HashSet<String> = working_hooks.iter().map(|h| h.hook_id.clone()).collect();
+    let mut known_hook_ids: HashSet<String> =
+        working_hooks.iter().map(|h| h.hook_id.clone()).collect();
     let mut upserts_by_id: HashMap<String, HookRecord> = HashMap::new();
     let mut mentions: BTreeSet<String> = delta.hook_ops.mention.iter().cloned().collect();
     let resolves = unique_strings(&delta.hook_ops.resolve);
@@ -119,7 +120,12 @@ pub fn arbitrate_runtime_state_delta_hooks(
     // 2) fallback（未知 id 的 upsert）+ newHookCandidates 一起准入评估。
     let all_candidates: Vec<PendingCandidate> = fallback_candidates
         .into_iter()
-        .chain(delta.new_hook_candidates.iter().map(PendingCandidate::from_candidate))
+        .chain(
+            delta
+                .new_hook_candidates
+                .iter()
+                .map(PendingCandidate::from_candidate),
+        )
         .collect();
 
     for candidate in all_candidates {
@@ -189,7 +195,10 @@ pub fn arbitrate_runtime_state_delta_hooks(
                 }
 
                 // 有新颖内容 → 合并进既有 hook。
-                let base = upserts_by_id.get(&matched.hook_id).cloned().unwrap_or(matched);
+                let base = upserts_by_id
+                    .get(&matched.hook_id)
+                    .cloned()
+                    .unwrap_or(matched);
                 let mapped = merge_candidate_into_existing_hook(&base, &candidate, chapter);
                 upserts_by_id.insert(mapped.hook_id.clone(), mapped.clone());
                 mentions.remove(&mapped.hook_id);
@@ -308,7 +317,11 @@ fn merge_candidate_into_existing_hook(
 }
 
 /// 建规范 hook（对齐 TS `createCanonicalHook`）。
-fn create_canonical_hook(candidate: &PendingCandidate, chapter: u32, existing_ids: &HashSet<String>) -> HookRecord {
+fn create_canonical_hook(
+    candidate: &PendingCandidate,
+    chapter: u32,
+    existing_ids: &HashSet<String>,
+) -> HookRecord {
     let payoff_timing = resolve_hook_payoff_timing(
         payoff_timing_as_str(candidate.payoff_timing),
         Some(candidate.expected_payoff.trim()),
@@ -343,7 +356,10 @@ fn build_canonical_hook_id(candidate: &PendingCandidate, existing_ids: &HashSet<
         }
     }
 
-    let joined = format!("{} {} {}", candidate.hook_type, candidate.expected_payoff, candidate.notes);
+    let joined = format!(
+        "{} {} {}",
+        candidate.hook_type, candidate.expected_payoff, candidate.notes
+    );
     let base = slugify_hook_stem(&joined);
     let mut next = base.clone();
     let mut suffix = 2;
@@ -367,7 +383,11 @@ fn slugify_hook_stem(value: &str) -> String {
         .filter(|t| !stop_words_contains(t))
         .take(5)
         .collect();
-    let chinese_terms: Vec<&str> = chinese_term_re().find_iter(&normalized).map(|m| m.as_str()).take(3).collect();
+    let chinese_terms: Vec<&str> = chinese_term_re()
+        .find_iter(&normalized)
+        .map(|m| m.as_str())
+        .take(3)
+        .collect();
 
     let mut stem = String::new();
     for (i, t) in english_terms.iter().chain(chinese_terms.iter()).enumerate() {
@@ -531,20 +551,8 @@ fn admission_reason_str(reason: HookAdmissionReason) -> &'static str {
 
 /// 英文停用词（对齐 TS `STOP_WORDS`）。slugify 与 extractTerms 都用它过滤无信息量的高频词。
 const STOP_WORDS: &[&str] = &[
-    "that",
-    "this",
-    "with",
-    "from",
-    "into",
-    "still",
-    "just",
-    "have",
-    "will",
-    "reveal",
-    "about",
-    "already",
-    "question",
-    "chapter",
+    "that", "this", "with", "from", "into", "still", "just", "have", "will", "reveal", "about",
+    "already", "question", "chapter",
 ];
 
 fn stop_words_contains(t: &str) -> bool {
@@ -665,7 +673,10 @@ mod tests {
         );
         let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert_eq!(resolved.hook_ops.upsert.len(), 1);
-        assert_eq!(resolved.hook_ops.upsert[0].hook_id, "anonymous-source-scope");
+        assert_eq!(
+            resolved.hook_ops.upsert[0].hook_id,
+            "anonymous-source-scope"
+        );
         assert_eq!(resolved.hook_ops.upsert[0].last_advanced_chapter, 12);
         assert!(resolved.new_hook_candidates.is_empty());
     }
@@ -701,14 +712,21 @@ mod tests {
         );
         let (resolved, _decisions) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert!(resolved.hook_ops.upsert.is_empty());
-        assert!(resolved.hook_ops.mention.contains(&"mentor-debt".to_string()));
+        assert!(resolved
+            .hook_ops
+            .mention
+            .contains(&"mentor-debt".to_string()));
         assert!(resolved.new_hook_candidates.is_empty());
     }
 
     #[test]
     fn creates_canonical_hook_for_genuinely_new_candidate() {
         // 对齐 TS 第 3 个测试：全新候选 → 建 canonical hook（start=lastAdvanced=chapter，open）。
-        let existing = hook("mentor-debt", "relationship", "Reveal the real mentor debt.");
+        let existing = hook(
+            "mentor-debt",
+            "relationship",
+            "Reveal the real mentor debt.",
+        );
         let d = delta(
             15,
             vec![candidate(
@@ -865,7 +883,10 @@ mod tests {
         };
         let (resolved, _) = arbitrate_runtime_state_delta_hooks(&[existing], &d, None);
         assert_eq!(resolved.hook_ops.upsert.len(), 1);
-        assert_eq!(resolved.hook_ops.upsert[0].expected_payoff, "Reveal the updated secret");
+        assert_eq!(
+            resolved.hook_ops.upsert[0].expected_payoff,
+            "Reveal the updated secret"
+        );
     }
 
     #[test]

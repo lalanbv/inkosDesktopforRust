@@ -75,11 +75,19 @@ pub fn build_evidence_index(chapters: &[DeconChapter]) -> EvidenceIndex {
                 }
             }
         }
-        if let Some(kind) = chapter.chapter_type.as_ref().map(|kind| kind.trim().to_string()).filter(|kind| !kind.is_empty()) {
+        if let Some(kind) = chapter
+            .chapter_type
+            .as_ref()
+            .map(|kind| kind.trim().to_string())
+            .filter(|kind| !kind.is_empty())
+        {
             chapter_types.push((chapter.chapter, kind));
         }
     }
-    EvidenceIndex { by_character, chapter_types }
+    EvidenceIndex {
+        by_character,
+        chapter_types,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -185,14 +193,22 @@ pub fn analyze_pacing_stats(chapters: &[DeconChapter]) -> PacingStats {
             longest_length = run_length;
             longest_type = run_type.clone();
         }
-        if !chapter.hook_activity.as_ref().map(|text| text.trim().is_empty()).unwrap_or(true) {
+        if !chapter
+            .hook_activity
+            .as_ref()
+            .map(|text| text.trim().is_empty())
+            .unwrap_or(true)
+        {
             strong += 1;
         }
     }
     let total = chapters.len().max(1) as f64;
     PacingStats {
         counts,
-        longest_run: LongestRun { chapter_type: longest_type, length: longest_length },
+        longest_run: LongestRun {
+            chapter_type: longest_type,
+            length: longest_length,
+        },
         strong_hook_density: ((strong as f64 / total) * 10.0).round() / 10.0,
     }
 }
@@ -209,8 +225,16 @@ pub fn render_deconstruction_export(
     } else {
         "# 拆书产物（人物档案 / 节奏 / 卖点）"
     };
-    let mut body = vec![header.to_string(), String::new(), "## Extracted content".into()];
-    body.push(if is_en { "### Character dossiers".into() } else { "### 人物档案".into() });
+    let mut body = vec![
+        header.to_string(),
+        String::new(),
+        "## Extracted content".into(),
+    ];
+    body.push(if is_en {
+        "### Character dossiers".into()
+    } else {
+        "### 人物档案".into()
+    });
     for dossier in dossiers {
         body.push(format!("### {}", dossier.name));
         let appearances = if dossier.appearances.is_empty() {
@@ -226,13 +250,15 @@ pub fn render_deconstruction_export(
         body.push(if is_en {
             format!(
                 "- Chapters: {appearances} | span {}–{} | frequency {}",
-                dossier.first_chapter, dossier.last_chapter,
+                dossier.first_chapter,
+                dossier.last_chapter,
                 dossier.frequency.unwrap_or(0.0)
             )
         } else {
             format!(
                 "- 出场章：{appearances}｜跨度 {}–{}｜出场率 {}",
-                dossier.first_chapter, dossier.last_chapter,
+                dossier.first_chapter,
+                dossier.last_chapter,
                 dossier.frequency.unwrap_or(0.0)
             )
         });
@@ -312,5 +338,10 @@ pub fn build_deconstruction_export(
         .map(|(name, _)| derive_character_dossier(&index, &name, "full", None))
         .collect();
     let markdown = render_deconstruction_export(&dossiers, &pacing, language);
-    DeconstructionResult { index, dossiers, pacing, markdown }
+    DeconstructionResult {
+        index,
+        dossiers,
+        pacing,
+        markdown,
+    }
 }

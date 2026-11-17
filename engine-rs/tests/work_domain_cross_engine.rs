@@ -10,8 +10,7 @@ use inkos_engine::harness::episode_store::{CreativeEpisodeStore, ListEpisodesOpt
 use inkos_engine::harness::{
     create_work_manifest, list_work_manifests, load_work_manifest, parse_work_manifest_json,
     promote_artifact_revision, save_work_manifest, stage_artifact_revision, work_manifest_path,
-    ArtifactRevisionStatus, CreateWorkManifestInput, StageArtifactRevisionInput,
-    WorkProfile,
+    ArtifactRevisionStatus, CreateWorkManifestInput, StageArtifactRevisionInput, WorkProfile,
 };
 
 const GOLDEN_WORK_MANIFEST_JSON: &str = r#"{
@@ -57,7 +56,8 @@ const GOLDEN_WORK_MANIFEST_JSON: &str = r#"{
   "updatedAt": "2026-11-03T00:00:00.000Z"
 }"#;
 
-const GOLDEN_REV2_TEXT: &str = "# 短篇大纲 v2\n\n雨夜来客叩门；斋主窥见镜中人影与自己同貌，交易自此刻开始。\n";
+const GOLDEN_REV2_TEXT: &str =
+    "# 短篇大纲 v2\n\n雨夜来客叩门；斋主窥见镜中人影与自己同貌，交易自此刻开始。\n";
 
 /// 金标准 profile（与 builtin-profiles.ts 的 short-fiction WorkProfileSchema
 /// parse 输出一致：requiredSkillIds/recommendedSkillIds 来自 parse 补全）。
@@ -85,10 +85,14 @@ const GOLDEN_PROFILE_JSON: &str = r#"{
 
 #[test]
 fn golden_profile_round_trips() {
-    let profile: WorkProfile = serde_json::from_str(GOLDEN_PROFILE_JSON).expect("金标准 profile 可解析");
+    let profile: WorkProfile =
+        serde_json::from_str(GOLDEN_PROFILE_JSON).expect("金标准 profile 可解析");
     assert_eq!(profile.id, "short-fiction");
     assert_eq!(profile.capability_ids.len(), 4);
-    assert_eq!(profile.production.min_chapter_length_ratio, None, "production 默认空对象");
+    assert_eq!(
+        profile.production.min_chapter_length_ratio, None,
+        "production 默认空对象"
+    );
     profile.validate().unwrap();
     // 往返：序列化后再次解析等值
     let written = serde_json::to_value(&profile).unwrap();
@@ -134,24 +138,33 @@ async fn golden_manifest_survives_stage_new_revision_with_correct_checksums() {
     .unwrap();
     // candidate 不改变 current
     assert_eq!(staged.revision.status, ArtifactRevisionStatus::Candidate);
-    assert_eq!(staged.manifest.artifacts[0].current_revision_id.as_deref(), Some("r2"));
+    assert_eq!(
+        staged.manifest.artifacts[0].current_revision_id.as_deref(),
+        Some("r2")
+    );
     assert_eq!(
         staged.revision.checksum,
-        format!(
-            "sha256:{}",
-            {
-                use sha2::{Digest, Sha256};
-                let mut h = Sha256::new();
-                h.update(GOLDEN_REV2_TEXT.as_bytes());
-                format!("{:x}", h.finalize())
-            }
-        )
+        format!("sha256:{}", {
+            use sha2::{Digest, Sha256};
+            let mut h = Sha256::new();
+            h.update(GOLDEN_REV2_TEXT.as_bytes());
+            format!("{:x}", h.finalize())
+        })
     );
     // promote 后 current 翻转
-    let promoted = promote_artifact_revision(root, &staged.manifest, "outline", "r3", "2026-11-04T01:00:00.000Z")
-        .await
-        .unwrap();
-    assert_eq!(promoted.artifacts[0].current_revision_id.as_deref(), Some("r3"));
+    let promoted = promote_artifact_revision(
+        root,
+        &staged.manifest,
+        "outline",
+        "r3",
+        "2026-11-04T01:00:00.000Z",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        promoted.artifacts[0].current_revision_id.as_deref(),
+        Some("r3")
+    );
     let r2 = promoted.artifacts[0]
         .revisions
         .iter()
@@ -181,7 +194,9 @@ async fn create_work_manifest_produces_empty_draft_and_list_sorts_by_updated_at(
     assert_eq!(list.len(), 2);
     assert_eq!(list[0].id, "walk-diff", "updatedAt 降序");
     // draft-1 与 walk-diff 同为 short-fiction → 过滤结果为 2（过滤语义验证）
-    let shorts = list_work_manifests(root, Some("short-fiction")).await.unwrap();
+    let shorts = list_work_manifests(root, Some("short-fiction"))
+        .await
+        .unwrap();
     assert_eq!(shorts.len(), 2);
     assert_eq!(shorts[0].id, "walk-diff");
 }
@@ -189,10 +204,14 @@ async fn create_work_manifest_produces_empty_draft_and_list_sorts_by_updated_at(
 #[test]
 fn malformed_manifest_is_rejected_strictly() {
     // 未知字段（zod strict 语义）→ 拒
-    let bad = GOLDEN_WORK_MANIFEST_JSON.replace("\"lineage\": []", "\"lineage\": [], \"sneaky\": 1");
+    let bad =
+        GOLDEN_WORK_MANIFEST_JSON.replace("\"lineage\": []", "\"lineage\": [], \"sneaky\": 1");
     assert!(parse_work_manifest_json(&bad).is_err());
     // currentRevisionId 指向不存在的 revision → superRefine 拒
-    let bad = GOLDEN_WORK_MANIFEST_JSON.replace("\"currentRevisionId\": \"r2\"", "\"currentRevisionId\": \"ghost\"");
+    let bad = GOLDEN_WORK_MANIFEST_JSON.replace(
+        "\"currentRevisionId\": \"r2\"",
+        "\"currentRevisionId\": \"ghost\"",
+    );
     assert!(parse_work_manifest_json(&bad).is_err());
 }
 
@@ -207,10 +226,26 @@ fn episode_store_cross_engine_golden_round_trip() {
     .unwrap();
     store.create(&episode).unwrap();
     store
-        .append("ep-walkdiff-1", "stage.completed", Some("walk-diff"), Some("short-fiction"), Some("outline-draft"), &serde_json::json!({"stage": "outline"}), "2026-11-03T00:00:30.000Z")
+        .append(
+            "ep-walkdiff-1",
+            "stage.completed",
+            Some("walk-diff"),
+            Some("short-fiction"),
+            Some("outline-draft"),
+            &serde_json::json!({"stage": "outline"}),
+            "2026-11-03T00:00:30.000Z",
+        )
         .unwrap();
     store
-        .append("ep-walkdiff-1", "review.completed", Some("walk-diff"), Some("short-fiction"), None, &serde_json::json!({"score": 91}), "2026-11-03T00:00:50.000Z")
+        .append(
+            "ep-walkdiff-1",
+            "review.completed",
+            Some("walk-diff"),
+            Some("short-fiction"),
+            None,
+            &serde_json::json!({"score": 91}),
+            "2026-11-03T00:00:50.000Z",
+        )
         .unwrap();
     store
         .finish(
@@ -221,7 +256,10 @@ fn episode_store_cross_engine_golden_round_trip() {
         .unwrap();
 
     let detail = store.require_episode("ep-walkdiff-1").unwrap();
-    assert_eq!(detail.status, inkos_engine::harness::EpisodeStatus::Completed);
+    assert_eq!(
+        detail.status,
+        inkos_engine::harness::EpisodeStatus::Completed
+    );
     let events = store.list_events("ep-walkdiff-1").unwrap();
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].event_type, "stage.completed");
@@ -251,5 +289,8 @@ fn unknown_work_id_is_rejected_by_store_layer() {
         now: "2026-11-01T00:00:00.000Z",
     })
     .unwrap_err();
-    assert!(matches!(error, inkos_engine::harness::WorkStoreError::Invalid(_)));
+    assert!(matches!(
+        error,
+        inkos_engine::harness::WorkStoreError::Invalid(_)
+    ));
 }

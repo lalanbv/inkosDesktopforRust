@@ -42,7 +42,10 @@ pub async fn delete_latest_chapter(
     book_id: &str,
     request: DeleteRequest,
 ) -> Result<DeleteLatestChapterResult, String> {
-    let index = state.load_chapter_index(book_id).await.map_err(|e| e.to_string())?;
+    let index = state
+        .load_chapter_index(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
     if index.is_empty() {
         return Err(format!("Book \"{book_id}\" has no chapters to delete."));
     }
@@ -148,7 +151,10 @@ async fn pick_available_name(dir: &Path, file_name: &str) -> String {
     };
     let mut candidate = file_name.to_string();
     let mut suffix = 2;
-    while tokio::fs::try_exists(dir.join(&candidate)).await.unwrap_or(false) {
+    while tokio::fs::try_exists(dir.join(&candidate))
+        .await
+        .unwrap_or(false)
+    {
         candidate = format!("{base}-{suffix}{ext}");
         suffix += 1;
     }
@@ -166,16 +172,42 @@ mod tests {
     async fn fixture(root: &Path) {
         let book = root.join("books").join("b1");
         let story = book.join("story");
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(story.join("runtime")).await.unwrap();
-        tokio::fs::create_dir_all(story.join("snapshots").join("1")).await.unwrap();
-        tokio::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章").await.unwrap();
-        tokio::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章").await.unwrap();
-        tokio::fs::write(story.join("current_state.md"), "状态v1").await.unwrap();
-        tokio::fs::write(story.join("pending_hooks.md"), "| 伏笔 |").await.unwrap();
-        tokio::fs::write(story.join("snapshots").join("1").join("current_state.md"), "快照v1").await.unwrap();
-        tokio::fs::write(story.join("snapshots").join("1").join("pending_hooks.md"), "钩子v1").await.unwrap();
-        tokio::fs::write(story.join("runtime").join("chapter-0002.plan.md"), "plan2").await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(story.join("runtime"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(story.join("snapshots").join("1"))
+            .await
+            .unwrap();
+        tokio::fs::write(book.join("chapters").join("0001_风起.md"), "# 第1章")
+            .await
+            .unwrap();
+        tokio::fs::write(book.join("chapters").join("0002_云涌.md"), "# 第2章")
+            .await
+            .unwrap();
+        tokio::fs::write(story.join("current_state.md"), "状态v1")
+            .await
+            .unwrap();
+        tokio::fs::write(story.join("pending_hooks.md"), "| 伏笔 |")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            story.join("snapshots").join("1").join("current_state.md"),
+            "快照v1",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            story.join("snapshots").join("1").join("pending_hooks.md"),
+            "钩子v1",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(story.join("runtime").join("chapter-0002.plan.md"), "plan2")
+            .await
+            .unwrap();
         let now = "2026-01-01T00:00:00.000Z";
         let meta = |number: u32| {
             serde_json::json!({
@@ -206,18 +238,33 @@ mod tests {
         assert_eq!(result.title, "第2章");
         assert_eq!(result.rolled_back_to, 1);
         assert_eq!(result.discarded, vec![2]);
-        assert_eq!(result.trashed_files, vec!["chapters/.trash/0002_云涌.md".to_string()]);
+        assert_eq!(
+            result.trashed_files,
+            vec!["chapters/.trash/0002_云涌.md".to_string()]
+        );
         // 正文进 .trash、原位消失；快照恢复；runtime 工件清除。
-        assert!(book.join("chapters").join(".trash").join("0002_云涌.md").exists());
+        assert!(book
+            .join("chapters")
+            .join(".trash")
+            .join("0002_云涌.md")
+            .exists());
         assert!(!book.join("chapters").join("0002_云涌.md").exists());
         assert_eq!(
-            tokio::fs::read_to_string(book.join("story").join("current_state.md")).await.unwrap(),
+            tokio::fs::read_to_string(book.join("story").join("current_state.md"))
+                .await
+                .unwrap(),
             "快照v1"
         );
-        assert!(!book.join("story").join("runtime").join("chapter-0002.plan.md").exists());
+        assert!(!book
+            .join("story")
+            .join("runtime")
+            .join("chapter-0002.plan.md")
+            .exists());
         // 索引只剩第 1 章。
         let index: Vec<serde_json::Value> = serde_json::from_str(
-            &tokio::fs::read_to_string(book.join("chapters").join("index.json")).await.unwrap(),
+            &tokio::fs::read_to_string(book.join("chapters").join("index.json"))
+                .await
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(index.len(), 1);
@@ -229,9 +276,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture(&root).await;
-        let trash = root.join("books").join("b1").join("chapters").join(".trash");
+        let trash = root
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join(".trash");
         tokio::fs::create_dir_all(&trash).await.unwrap();
-        tokio::fs::write(trash.join("0002_云涌.md"), "旧废稿").await.unwrap();
+        tokio::fs::write(trash.join("0002_云涌.md"), "旧废稿")
+            .await
+            .unwrap();
 
         let result = delete_latest_chapter(&state(&root), "b1", DeleteRequest::Latest)
             .await
@@ -239,7 +292,9 @@ mod tests {
         assert_eq!(result.trashed_files[0], "chapters/.trash/0002_云涌-2.md");
         assert!(trash.join("0002_云涌-2.md").exists());
         assert_eq!(
-            tokio::fs::read_to_string(trash.join("0002_云涌.md")).await.unwrap(),
+            tokio::fs::read_to_string(trash.join("0002_云涌.md"))
+                .await
+                .unwrap(),
             "旧废稿"
         );
     }
@@ -262,7 +317,12 @@ Deleting a middle chapter would require renumbering later chapters and replaying
             .unwrap_err();
         assert!(err.contains("but chapter NaN was requested."), "{err}");
         // 中间章请求失败后文件原样。
-        assert!(root.join("books").join("b1").join("chapters").join("0001_风起.md").exists());
+        assert!(root
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join("0001_风起.md")
+            .exists());
     }
 
     #[tokio::test]
@@ -271,9 +331,14 @@ Deleting a middle chapter would require renumbering later chapters and replaying
         let root = dir.path().to_path_buf();
         fixture(&root).await;
         let book = root.join("books").join("b1");
-        tokio::fs::remove_file(book.join("story").join("snapshots").join("1").join("pending_hooks.md"))
-            .await
-            .unwrap();
+        tokio::fs::remove_file(
+            book.join("story")
+                .join("snapshots")
+                .join("1")
+                .join("pending_hooks.md"),
+        )
+        .await
+        .unwrap();
         let err = delete_latest_chapter(&state(&root), "b1", DeleteRequest::Latest)
             .await
             .unwrap_err();
@@ -290,7 +355,9 @@ Deleting a middle chapter would require renumbering later chapters and replaying
     async fn empty_book_error() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
-        tokio::fs::create_dir_all(root.join("books").join("b1").join("chapters")).await.unwrap();
+        tokio::fs::create_dir_all(root.join("books").join("b1").join("chapters"))
+            .await
+            .unwrap();
         let err = delete_latest_chapter(&state(&root), "b1", DeleteRequest::Latest)
             .await
             .unwrap_err();

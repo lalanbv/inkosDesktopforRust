@@ -10,7 +10,14 @@ use serde::{Deserialize, Serialize};
 use crate::utils::web_search::SearchResult;
 
 pub type ResearchPurpose = &'static str;
-pub const PURPOSES: &[&str] = &["worldbuilding", "era", "profession", "market", "fact-check", "general"];
+pub const PURPOSES: &[&str] = &[
+    "worldbuilding",
+    "era",
+    "profession",
+    "market",
+    "fact-check",
+    "general",
+];
 
 #[derive(Debug, Clone)]
 pub struct ResearchInput {
@@ -126,7 +133,11 @@ pub async fn run_research_report(
         let id = format!("S{}", sources.len() + 1);
         sources.push(ResearchSource {
             id,
-            title: if result.title.is_empty() { result.url.clone() } else { result.title.clone() },
+            title: if result.title.is_empty() {
+                result.url.clone()
+            } else {
+                result.title.clone()
+            },
             url: result.url.clone(),
             snippet: result.snippet.clone(),
             excerpt,
@@ -140,14 +151,26 @@ pub async fn run_research_report(
                 .excerpt
                 .as_deref()
                 .filter(|text| !text.is_empty())
-                .unwrap_or(if source.snippet.is_empty() { source.title.as_str() } else { source.snippet.as_str() });
+                .unwrap_or(if source.snippet.is_empty() {
+                    source.title.as_str()
+                } else {
+                    source.snippet.as_str()
+                });
             ResearchClaim {
                 text: {
                     let first = first_sentences(base, 1);
-                    if first.is_empty() { source.title.clone() } else { first }
+                    if first.is_empty() {
+                        source.title.clone()
+                    } else {
+                        first
+                    }
                 },
                 source_ids: vec![source.id.clone()],
-                confidence: if source.excerpt.is_some() { "medium" } else { "low" },
+                confidence: if source.excerpt.is_some() {
+                    "medium"
+                } else {
+                    "low"
+                },
             }
         })
         .collect();
@@ -166,7 +189,12 @@ pub async fn run_research_report(
         "low"
     };
     let report = ResearchReport {
-        summary: format!("Research collected {} source(s) for \"{topic}\" ({}, {}).", sources.len(), input.purpose, input.depth),
+        summary: format!(
+            "Research collected {} source(s) for \"{topic}\" ({}, {}).",
+            sources.len(),
+            input.purpose,
+            input.depth
+        ),
         claims,
         conflicts: Vec::new(),
         unknowns,
@@ -200,8 +228,7 @@ fn first_sentences(text: &str, max_sentences: usize) -> String {
         return String::new();
     }
     static SENTENCE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let re = SENTENCE_RE
-        .get_or_init(|| regex::Regex::new(r"[^。！？.!?]+[。！？.!?]?").unwrap());
+    let re = SENTENCE_RE.get_or_init(|| regex::Regex::new(r"[^。！？.!?]+[。！？.!?]?").unwrap());
     let joined: String = re
         .find_iter(&normalized)
         .take(max_sentences)
@@ -279,7 +306,12 @@ fn render_research_markdown(topic: &str, input: &ResearchInput, report: &Researc
     }
     lines.push(String::new());
     lines.push("## Creative implications".to_string());
-    lines.extend(report.creative_implications.iter().map(|item| format!("- {item}")));
+    lines.extend(
+        report
+            .creative_implications
+            .iter()
+            .map(|item| format!("- {item}")),
+    );
     lines.push(String::new());
     lines.push("## Sources".to_string());
     if report.sources.is_empty() {
@@ -306,7 +338,12 @@ fn render_research_markdown(topic: &str, input: &ResearchInput, report: &Researc
     if report.partial_failures.is_empty() {
         lines.push("- None.".to_string());
     } else {
-        lines.extend(report.partial_failures.iter().map(|item| format!("- {item}")));
+        lines.extend(
+            report
+                .partial_failures
+                .iter()
+                .map(|item| format!("- {item}")),
+        );
     }
     lines.push(String::new());
     lines.join("\n")
@@ -327,8 +364,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ResearchTransport for FakeTransport {
-        async fn search(&self, query: &str, max_results: usize) -> Result<Vec<SearchResult>, String> {
-            self.search_calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((query.to_string(), max_results));
+        async fn search(
+            &self,
+            query: &str,
+            max_results: usize,
+        ) -> Result<Vec<SearchResult>, String> {
+            self.search_calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((query.to_string(), max_results));
             if let Some(error) = &self.search_error {
                 return Err(error.clone());
             }
@@ -345,9 +389,21 @@ mod tests {
     fn fake() -> FakeTransport {
         FakeTransport {
             search_results: vec![
-                SearchResult { title: "冷库史料".to_string(), url: "https://a.example/1".to_string(), snippet: "1990 年代县冷库采用三联账。".to_string() },
-                SearchResult { title: "第二篇".to_string(), url: "https://a.example/2".to_string(), snippet: "赔偿流程需要主任签字。".to_string() },
-                SearchResult { title: "".to_string(), url: "https://a.example/3".to_string(), snippet: "无标题来源。".to_string() },
+                SearchResult {
+                    title: "冷库史料".to_string(),
+                    url: "https://a.example/1".to_string(),
+                    snippet: "1990 年代县冷库采用三联账。".to_string(),
+                },
+                SearchResult {
+                    title: "第二篇".to_string(),
+                    url: "https://a.example/2".to_string(),
+                    snippet: "赔偿流程需要主任签字。".to_string(),
+                },
+                SearchResult {
+                    title: "".to_string(),
+                    url: "https://a.example/3".to_string(),
+                    snippet: "无标题来源。".to_string(),
+                },
             ],
             search_error: None,
             fetch_text: "冷库夜班的账页有三联。第二句。第三句。第四句超出。".to_string(),
@@ -367,13 +423,24 @@ mod tests {
         let report = run_research_report(&input, &transport).await.unwrap();
         // standard：2 查询 × 4 上限，抓 4（来源 3 去重后）。
         assert_eq!(report.query_log.len(), 2);
-        assert!(report.query_log[0].contains("年代 背景 制度 物价 生活"), "{:?}", report.query_log);
+        assert!(
+            report.query_log[0].contains("年代 背景 制度 物价 生活"),
+            "{:?}",
+            report.query_log
+        );
         assert!(report.query_log[1].contains("资料 来源"));
         assert_eq!(report.sources.len(), 3);
         assert_eq!(report.sources[0].id, "S1");
-        assert!(report.sources[2].title.contains("a.example/3"), "空标题回退 URL");
+        assert!(
+            report.sources[2].title.contains("a.example/3"),
+            "空标题回退 URL"
+        );
         // 摘录取前三句。
-        assert!(!report.sources[0].excerpt.as_deref().unwrap().contains("第四句超出"));
+        assert!(!report.sources[0]
+            .excerpt
+            .as_deref()
+            .unwrap()
+            .contains("第四句超出"));
         assert_eq!(report.claims.len(), 3);
         assert_eq!(report.claims[0].confidence, "medium");
         // 3 来源 + 无失败 → high。
@@ -385,7 +452,9 @@ mod tests {
         );
         // markdown 形态。
         assert!(report.markdown.starts_with("# Research: 1990 年代县冷库会计流程\n\n- Purpose: era\n- Depth: standard\n- Confidence: high"));
-        assert!(report.markdown.contains("### [S1] 冷库史料\nhttps://a.example/1"));
+        assert!(report
+            .markdown
+            .contains("### [S1] 冷库史料\nhttps://a.example/1"));
         assert!(report.markdown.contains("## Partial failures\n- None."));
     }
 
@@ -393,22 +462,37 @@ mod tests {
     async fn deep_quick_queries_and_failures() {
         // quick：单查询。
         let transport = fake();
-        let input = ResearchInput { topic: "t".to_string(), purpose: "general", depth: "quick" };
+        let input = ResearchInput {
+            topic: "t".to_string(),
+            purpose: "general",
+            depth: "quick",
+        };
         let report = run_research_report(&input, &transport).await.unwrap();
         assert_eq!(report.query_log.len(), 1);
         assert_eq!(report.sources.len(), 2, "quick 只抓 2 源");
         assert_eq!(report.confidence, "medium", "2 源无失败");
 
         // 搜索恒败：0 源 + 失败记录 + low + unknowns。
-        let failing = FakeTransport { search_error: Some("TAVILY_API_KEY not set.".to_string()), ..fake() };
-        let input = ResearchInput { topic: "t".to_string(), purpose: "market", depth: "deep" };
+        let failing = FakeTransport {
+            search_error: Some("TAVILY_API_KEY not set.".to_string()),
+            ..fake()
+        };
+        let input = ResearchInput {
+            topic: "t".to_string(),
+            purpose: "market",
+            depth: "deep",
+        };
         let report = run_research_report(&input, &failing).await.unwrap();
         assert_eq!(report.query_log.len(), 3, "deep 三查询");
         assert!(report.sources.is_empty());
         assert_eq!(report.confidence, "low");
         assert_eq!(report.partial_failures.len(), 3);
-        assert!(report.partial_failures[0].contains("search failed for \"t 市场 趋势 受众 竞品\": TAVILY_API_KEY not set."));
-        assert_eq!(report.unknowns, vec!["No usable sources were collected. Treat this report as incomplete."]);
+        assert!(report.partial_failures[0]
+            .contains("search failed for \"t 市场 趋势 受众 竞品\": TAVILY_API_KEY not set."));
+        assert_eq!(
+            report.unknowns,
+            vec!["No usable sources were collected. Treat this report as incomplete."]
+        );
         assert_eq!(
             report.creative_implications,
             vec!["Do not promote any collected item to hard story canon yet."]

@@ -53,7 +53,11 @@ pub struct HybridMemorySelector {
 
 impl HybridMemorySelector {
     pub fn new(embedder: Arc<dyn EmbedFn>, cache: MemoryDb, limit: usize) -> Self {
-        Self { embedder, cache: std::sync::Arc::new(std::sync::Mutex::new(cache)), limit }
+        Self {
+            embedder,
+            cache: std::sync::Arc::new(std::sync::Mutex::new(cache)),
+            limit,
+        }
     }
 
     async fn run_selection(
@@ -80,7 +84,8 @@ impl HybridMemorySelector {
         let mut cached: HashMap<String, (String, Vec<f64>)> =
             tokio::task::spawn_blocking(move || {
                 cache_handle
-                    .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .list_chunk_vectors()
                     .map(|chunks| {
                         chunks
@@ -138,23 +143,25 @@ impl HybridMemorySelector {
                     created_at: now.clone(),
                 });
             }
-        let cache_handle = std::sync::Arc::clone(&self.cache);
-        let fresh_for_write = fresh.clone();
-        tokio::task::spawn_blocking(move || {
-            let db = cache_handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            for entry in &fresh_for_write {
-                db.upsert_chunk_vector(entry).map_err(|e| e.to_string())?;
+            let cache_handle = std::sync::Arc::clone(&self.cache);
+            let fresh_for_write = fresh.clone();
+            tokio::task::spawn_blocking(move || {
+                let db = cache_handle
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                for entry in &fresh_for_write {
+                    db.upsert_chunk_vector(entry).map_err(|e| e.to_string())?;
+                }
+                Ok::<(), String>(())
+            })
+            .await
+            .map_err(|e| e.to_string())??;
+            for entry in &fresh {
+                cached.insert(
+                    entry.chunk_id.clone(),
+                    (entry.fingerprint.clone(), entry.vector.clone()),
+                );
             }
-            Ok::<(), String>(())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
-        for entry in &fresh {
-            cached.insert(
-                entry.chunk_id.clone(),
-                (entry.fingerprint.clone(), entry.vector.clone()),
-            );
-        }
         }
 
         // 向量重排：全部候选取缓存最新向量（新嵌 + 已缓存；缺失补空向量），
@@ -209,7 +216,10 @@ mod tests {
     #[async_trait]
     impl EmbedFn for MockEmbedder {
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f64>>, String> {
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(texts.to_vec());
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(texts.to_vec());
             Ok(texts.iter().map(|text| vector_of(text)).collect())
         }
     }
@@ -239,7 +249,9 @@ mod tests {
     async fn reranks_by_similarity_and_caches_embeddings() {
         let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
         let selector = HybridMemorySelector::new(
-            Arc::new(MockEmbedder { calls: Arc::clone(&calls) }),
+            Arc::new(MockEmbedder {
+                calls: Arc::clone(&calls),
+            }),
             MemoryDb::open_in_memory().unwrap(),
             2,
         );
@@ -257,7 +269,9 @@ mod tests {
         let first = selector.select(&request).await.unwrap();
         assert_eq!(first, vec!["s-3".to_string(), "s-1".to_string()]);
         {
-            let calls = calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let calls = calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             assert_eq!(calls.len(), 2);
             assert_eq!(calls[0], vec!["青镇旧事 怀表".to_string()]);
             assert_eq!(
@@ -269,14 +283,30 @@ mod tests {
                 ]
             );
         }
-        assert_eq!(selector.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).chunk_vector_count().unwrap(), 3);
+        assert_eq!(
+            selector
+                .cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .chunk_vector_count()
+                .unwrap(),
+            3
+        );
 
         // 二轮同候选：全部缓存命中，仅嵌入 query。
         let second = selector.select(&request).await.unwrap();
         assert_eq!(second, vec!["s-3".to_string(), "s-1".to_string()]);
-        assert_eq!(calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 3);
         assert_eq!(
-            calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[2],
+            calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            3
+        );
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())[2],
             vec!["青镇旧事 怀表".to_string()]
         );
     }
@@ -295,7 +325,10 @@ mod tests {
             query: "任意",
             candidates: &candidates,
         };
-        assert_eq!(selector.select(&request).await.unwrap(), Vec::<String>::new());
+        assert_eq!(
+            selector.select(&request).await.unwrap(),
+            Vec::<String>::new()
+        );
     }
 
     /// 镜像 TS「short-circuits empty candidate lists」：空候选零嵌入调用。
@@ -303,7 +336,9 @@ mod tests {
     async fn short_circuits_empty_candidates() {
         let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
         let selector = HybridMemorySelector::new(
-            Arc::new(MockEmbedder { calls: Arc::clone(&calls) }),
+            Arc::new(MockEmbedder {
+                calls: Arc::clone(&calls),
+            }),
             MemoryDb::open_in_memory().unwrap(),
             HYBRID_SELECT_LIMIT,
         );
@@ -312,7 +347,13 @@ mod tests {
             query: "x",
             candidates: &[],
         };
-        assert_eq!(selector.select(&request).await.unwrap(), Vec::<String>::new());
-        assert!(calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
+        assert_eq!(
+            selector.select(&request).await.unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
     }
 }

@@ -32,7 +32,9 @@ where
     let value = Value::deserialize(deserializer)?;
     match &value {
         Value::Number(_) | Value::String(_) | Value::Bool(_) => Ok(value),
-        _ => Err(serde::de::Error::custom("var value must be number, string or boolean")),
+        _ => Err(serde::de::Error::custom(
+            "var value must be number, string or boolean",
+        )),
     }
 }
 
@@ -379,7 +381,9 @@ pub async fn save_story_graph(
     }
     let mut serialized = serde_json::to_string_pretty(graph).map_err(|e| e.to_string())?;
     serialized.push('\n');
-    crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&path, &serialized)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── evaluator（evaluator.ts） ────────────────────────────────────
@@ -495,7 +499,10 @@ pub fn build_add_variable_delta(v: Variable) -> StoryGraphDelta {
         world_anchor: None,
         characters: None,
         nodes: None,
-        variables: Some(UpsertRemove { upsert: vec![v], remove: Vec::new() }),
+        variables: Some(UpsertRemove {
+            upsert: vec![v],
+            remove: Vec::new(),
+        }),
         endings: None,
         notes: Vec::new(),
     }
@@ -507,7 +514,10 @@ pub fn build_define_ending_delta(e: Ending) -> StoryGraphDelta {
         characters: None,
         nodes: None,
         variables: None,
-        endings: Some(UpsertRemove { upsert: vec![e], remove: Vec::new() }),
+        endings: Some(UpsertRemove {
+            upsert: vec![e],
+            remove: Vec::new(),
+        }),
         notes: Vec::new(),
     }
 }
@@ -516,7 +526,10 @@ pub fn build_remove_node_delta(node_id: &str) -> StoryGraphDelta {
     StoryGraphDelta {
         world_anchor: None,
         characters: None,
-        nodes: Some(UpsertRemove { upsert: Vec::new(), remove: vec![node_id.to_string()] }),
+        nodes: Some(UpsertRemove {
+            upsert: Vec::new(),
+            remove: vec![node_id.to_string()],
+        }),
         variables: None,
         endings: None,
         notes: Vec::new(),
@@ -527,7 +540,10 @@ pub fn build_connect_choice_delta(node: StoryNode) -> StoryGraphDelta {
     StoryGraphDelta {
         world_anchor: None,
         characters: None,
-        nodes: Some(UpsertRemove { upsert: vec![node], remove: Vec::new() }),
+        nodes: Some(UpsertRemove {
+            upsert: vec![node],
+            remove: Vec::new(),
+        }),
         variables: None,
         endings: None,
         notes: Vec::new(),
@@ -537,7 +553,10 @@ pub fn build_connect_choice_delta(node: StoryNode) -> StoryGraphDelta {
 pub fn build_upsert_characters_delta(chars: Vec<Character>) -> StoryGraphDelta {
     StoryGraphDelta {
         world_anchor: None,
-        characters: Some(UpsertRemove { upsert: chars, remove: Vec::new() }),
+        characters: Some(UpsertRemove {
+            upsert: chars,
+            remove: Vec::new(),
+        }),
         nodes: None,
         variables: None,
         endings: None,
@@ -552,12 +571,20 @@ pub fn summarize_story_graph(graph: &StoryGraph) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push(format!(
         "# 互动影游：{}",
-        if graph.title.is_empty() { &graph.project_id } else { &graph.title }
+        if graph.title.is_empty() {
+            &graph.project_id
+        } else {
+            &graph.title
+        }
     ));
     if let Some(w) = &graph.world_anchor {
         lines.push(format!(
             "核心：{} / 主题：{} / 题材：{} / 规则：{} / 时长：{}分",
-            w.story_core, w.theme, w.genre, w.world_rules, format_args!("{}", w.duration_minutes)
+            w.story_core,
+            w.theme,
+            w.genre,
+            w.world_rules,
+            format_args!("{}", w.duration_minutes)
         ));
     }
     if !graph.variables.is_empty() {
@@ -572,8 +599,18 @@ pub fn summarize_story_graph(graph: &StoryGraph) -> String {
             .map(|c| format!("{}→{}", c.text, c.target_node_id))
             .collect::<Vec<_>>()
             .join(", ");
-        let edge_part = if edges.is_empty() { String::new() } else { format!(" -> {edges}") };
-        lines.push(format!("- {}[{}] {}{}", n.id, node_type_text(n), n.title, edge_part));
+        let edge_part = if edges.is_empty() {
+            String::new()
+        } else {
+            format!(" -> {edges}")
+        };
+        lines.push(format!(
+            "- {}[{}] {}{}",
+            n.id,
+            node_type_text(n),
+            n.title,
+            edge_part
+        ));
     }
     lines.join("\n")
 }
@@ -618,14 +655,22 @@ pub fn build_film_authoring_context(graph: &StoryGraph) -> String {
                     .ok()
                     .and_then(|v| v.as_str().map(str::to_string))
                     .unwrap_or_else(|| "other".to_string());
-                format!("- {}（{}）动机：{}{}", c.name, role_text, c.motivation, voice_part)
+                format!(
+                    "- {}（{}）动机：{}{}",
+                    c.name, role_text, c.motivation, voice_part
+                )
             })
             .collect();
-        blocks.push(["角色档案：".to_string()].into_iter().chain(chars).collect::<Vec<_>>().join("\n"));
+        blocks.push(
+            ["角色档案：".to_string()]
+                .into_iter()
+                .chain(chars)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
     blocks.join("\n\n")
 }
-
 
 fn apply_upsert_remove<T>(
     current: &[T],
@@ -857,8 +902,8 @@ fn emotion_lexicon(word: &str) -> Option<f64> {
 }
 
 const LEXICON_KEYS: &[&str] = &[
-    "喜悦", "高兴", "快乐", "希望", "坚定", "温暖", "感动", "释然", "平静", "中性",
-    "紧张", "焦虑", "愤怒", "恐惧", "悲伤", "绝望", "痛苦", "失落", "犹豫", "冷漠",
+    "喜悦", "高兴", "快乐", "希望", "坚定", "温暖", "感动", "释然", "平静", "中性", "紧张", "焦虑",
+    "愤怒", "恐惧", "悲伤", "绝望", "痛苦", "失落", "犹豫", "冷漠",
 ];
 
 /// `emotionScore`：全词命中 → 词典值；包含命中 → 否定字符（不没无别未）翻转。
@@ -925,7 +970,10 @@ pub fn analyze_emotional_arcs(graph: &StoryGraph) -> (Vec<EmotionalArc>, bool) {
                 .iter()
                 .map(|id| ArcPoint {
                     node_id: id.clone(),
-                    score: node_by_id.get(id.as_str()).map(|n| node_emotion(n)).unwrap_or(0.0),
+                    score: node_by_id
+                        .get(id.as_str())
+                        .map(|n| node_emotion(n))
+                        .unwrap_or(0.0),
                 })
                 .collect(),
         })
@@ -948,7 +996,10 @@ pub fn analyze_path_distribution(graph: &StoryGraph) -> PathDistribution {
     let mut by_ending: BTreeMap<String, usize> = BTreeMap::new();
     let mut length_histogram: BTreeMap<usize, usize> = BTreeMap::new();
     for path in &paths {
-        let key = path.ending_id.clone().unwrap_or_else(|| "(dead-end)".to_string());
+        let key = path
+            .ending_id
+            .clone()
+            .unwrap_or_else(|| "(dead-end)".to_string());
         *by_ending.entry(key).or_insert(0) += 1;
         *length_histogram.entry(path.length).or_insert(0) += 1;
     }
@@ -1004,7 +1055,9 @@ pub fn validate_story_graph(graph: &StoryGraph) -> ValidationReport {
                     level: "error",
                     message: format!(
                         "节点「{}」的选项「{}」指向不存在的节点 {}",
-                        node_label(node), choice.text, choice.target_node_id
+                        node_label(node),
+                        choice.text,
+                        choice.target_node_id
                     ),
                     node_ids: vec![node.id.clone()],
                 });
@@ -1016,7 +1069,10 @@ pub fn validate_story_graph(graph: &StoryGraph) -> ValidationReport {
         if node.node_type == NodeType::Ending {
             continue;
         }
-        let has_exit = node.choices.iter().any(|c| ids.contains(c.target_node_id.as_str()));
+        let has_exit = node
+            .choices
+            .iter()
+            .any(|c| ids.contains(c.target_node_id.as_str()));
         if !has_exit {
             issues.push(ValidationIssue {
                 code: "DEAD_END",
@@ -1065,9 +1121,11 @@ pub fn validate_story_graph(graph: &StoryGraph) -> ValidationReport {
     }
 
     if let Some(start) = start {
-        let can_end = reachable
-            .iter()
-            .any(|id| node_map.get(id.as_str()).is_some_and(|n| n.node_type == NodeType::Ending));
+        let can_end = reachable.iter().any(|id| {
+            node_map
+                .get(id.as_str())
+                .is_some_and(|n| n.node_type == NodeType::Ending)
+        });
         if !can_end {
             issues.push(ValidationIssue {
                 code: "NO_PATH_TO_ENDING",
@@ -1154,7 +1212,11 @@ pub fn review_story_graph(graph: &StoryGraph) -> ValidationReport {
 
     for node in &graph.nodes {
         if node.node_type != NodeType::Ending
-            && node.image_slot.as_ref().and_then(|slot| slot.asset_ref.as_deref()).is_none()
+            && node
+                .image_slot
+                .as_ref()
+                .and_then(|slot| slot.asset_ref.as_deref())
+                .is_none()
         {
             issues.push(ValidationIssue {
                 code: "IMAGE_MISSING",
@@ -1231,9 +1293,9 @@ pub fn review_story_graph(graph: &StoryGraph) -> ValidationReport {
         if node.node_type != NodeType::Start
             && node.node_type != NodeType::Ending
             && !incoming.contains(node.id.as_str())
-            && !issues.iter().any(|issue| {
-                issue.code == "UNREACHABLE" && issue.node_ids.contains(&node.id)
-            })
+            && !issues
+                .iter()
+                .any(|issue| issue.code == "UNREACHABLE" && issue.node_ids.contains(&node.id))
         {
             issues.push(ValidationIssue {
                 code: "ISOLATED_NODE",
@@ -1353,7 +1415,13 @@ fn find_long_linear_chain_heads(graph: &StoryGraph, threshold: usize) -> Vec<Str
 fn ink_sanitize(id: &str) -> String {
     let sanitized: String = id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if sanitized.starts_with(|c: char| c.is_ascii_digit()) {
         format!("n_{sanitized}")
@@ -1387,7 +1455,11 @@ pub fn export_ink(graph: &StoryGraph) -> String {
     let mut lines: Vec<String> = Vec::new();
     lines.push(format!(
         "// {} — exported from InkOS interactive film",
-        if graph.title.is_empty() { &graph.project_id } else { &graph.title }
+        if graph.title.is_empty() {
+            &graph.project_id
+        } else {
+            &graph.title
+        }
     ));
     for variable in &graph.variables {
         lines.push(format!(
@@ -1611,7 +1683,11 @@ mod tests {
             value: json!(2),
         });
         let mut brave = choice("a", "end1");
-        brave.effects = vec![Effect { var: "courage".into(), op: EffectOp::Add, value: json!(1) }];
+        brave.effects = vec![Effect {
+            var: "courage".into(),
+            op: EffectOp::Add,
+            value: json!(1),
+        }];
         StoryGraph {
             schema_version: 1,
             project_id: "p1".into(),
@@ -1669,7 +1745,10 @@ mod tests {
         }))
         .unwrap();
         let err = apply_story_graph_delta(&graph, &delta).unwrap_err();
-        assert!(err.contains("ending e2 references missing node ghost"), "{err}");
+        assert!(
+            err.contains("ending e2 references missing node ghost"),
+            "{err}"
+        );
 
         let ok_delta = serde_json::from_value::<StoryGraphDelta>(json!({
             "worldAnchor": { "theme": "救赎" },
@@ -1686,11 +1765,24 @@ mod tests {
     fn condition_evaluation_matches_js_coercion() {
         let vars: VarState = [("courage".to_string(), json!(1))].into_iter().collect();
         let cond = |op: CondOp, value: Value| {
-            Some(Condition { var: "courage".into(), op, value })
+            Some(Condition {
+                var: "courage".into(),
+                op,
+                value,
+            })
         };
-        assert!(evaluate_condition(cond(CondOp::Eq, json!(1)).as_ref(), &vars));
-        assert!(evaluate_condition(cond(CondOp::Ne, json!(2)).as_ref(), &vars));
-        assert!(!evaluate_condition(cond(CondOp::Ge, json!(2)).as_ref(), &vars));
+        assert!(evaluate_condition(
+            cond(CondOp::Eq, json!(1)).as_ref(),
+            &vars
+        ));
+        assert!(evaluate_condition(
+            cond(CondOp::Ne, json!(2)).as_ref(),
+            &vars
+        ));
+        assert!(!evaluate_condition(
+            cond(CondOp::Ge, json!(2)).as_ref(),
+            &vars
+        ));
         assert!(evaluate_condition(None, &vars));
     }
 
@@ -1732,8 +1824,15 @@ mod tests {
     fn validation_reports_structural_and_review_issues() {
         // 完好图谱：IMAGE_MISSING 两条 info（start/end1 无配图——end 豁免，仅 start）。
         let report = review_story_graph(&sample_graph());
-        assert!(report.ok, "issues: {:?}", report.issues.iter().map(|i| i.code).collect::<Vec<_>>());
-        assert!(report.issues.iter().any(|i| i.code == "IMAGE_MISSING" && i.node_ids == ["start"]));
+        assert!(
+            report.ok,
+            "issues: {:?}",
+            report.issues.iter().map(|i| i.code).collect::<Vec<_>>()
+        );
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "IMAGE_MISSING" && i.node_ids == ["start"]));
 
         // 断链 + 死路 + 不可达结局。
         let mut broken = sample_graph();
@@ -1762,7 +1861,11 @@ mod tests {
         // LONG_LINEAR_CHAIN：≥5 单选项 normal 链。
         let mut chain_nodes = vec![node("c0", NodeType::Start, vec![choice("g1", "c1")])];
         for i in 1..=5 {
-            chain_nodes.push(node(&format!("c{i}"), NodeType::Normal, vec![choice(&format!("g{i}+1"), &format!("c{}", i + 1))]));
+            chain_nodes.push(node(
+                &format!("c{i}"),
+                NodeType::Normal,
+                vec![choice(&format!("g{i}+1"), &format!("c{}", i + 1))],
+            ));
         }
         chain_nodes.push(node("c6", NodeType::Ending, Vec::new()));
         let chain_graph = StoryGraph {
@@ -1773,10 +1876,20 @@ mod tests {
             characters: Vec::new(),
             variables: Vec::new(),
             nodes: chain_nodes,
-            endings: vec![Ending { id: "ce".into(), node_id: "c6".into(), title: "终".into(), ending_type: EndingType::Neutral, description: String::new() }],
+            endings: vec![Ending {
+                id: "ce".into(),
+                node_id: "c6".into(),
+                title: "终".into(),
+                ending_type: EndingType::Neutral,
+                description: String::new(),
+            }],
         };
         let report = review_story_graph(&chain_graph);
-        assert!(report.issues.iter().any(|i| i.code == "LONG_LINEAR_CHAIN"), "codes: {:?}", report.issues.iter().map(|i| i.code).collect::<Vec<_>>());
+        assert!(
+            report.issues.iter().any(|i| i.code == "LONG_LINEAR_CHAIN"),
+            "codes: {:?}",
+            report.issues.iter().map(|i| i.code).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1798,7 +1911,10 @@ mod tests {
         graph.title = "危险</script>标题".into();
         let html = build_playable_html(&graph, &Default::default());
         assert!(html.starts_with("<!doctype html>"));
-        assert!(!html.contains("</script>标题</title>"), "标题应被 HTML 转义");
+        assert!(
+            !html.contains("</script>标题</title>"),
+            "标题应被 HTML 转义"
+        );
         assert!(html.contains("\\u003c"), "图谱 JSON 内的 < 应转义");
         assert!(html.contains("if-player"));
     }
@@ -1828,9 +1944,12 @@ mod tests {
 
         // 坏 schemaVersion → Err（loadStoryGraph 的 zod 失败面）。
         let raw = story_graph_path(root, "p1");
-        let mut bad: Value = serde_json::from_str(&tokio::fs::read_to_string(&raw).await.unwrap()).unwrap();
+        let mut bad: Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&raw).await.unwrap()).unwrap();
         bad["schemaVersion"] = json!(3);
-        tokio::fs::write(&raw, serde_json::to_string(&bad).unwrap()).await.unwrap();
+        tokio::fs::write(&raw, serde_json::to_string(&bad).unwrap())
+            .await
+            .unwrap();
         assert!(load_story_graph(root, "p1").await.is_err());
     }
 }
@@ -1880,7 +1999,12 @@ mod delta_builder_tests {
             ..Default::default()
         });
         assert!(wa.world_anchor.is_some());
-        assert!(wa.nodes.is_none() && wa.variables.is_none() && wa.characters.is_none() && wa.endings.is_none());
+        assert!(
+            wa.nodes.is_none()
+                && wa.variables.is_none()
+                && wa.characters.is_none()
+                && wa.endings.is_none()
+        );
         assert!(wa.notes.is_empty());
 
         let var_delta = build_add_variable_delta(variable());
@@ -1970,7 +2094,10 @@ mod authoring_context_tests {
         let graph = sample_graph();
         let context = build_film_authoring_context(&graph);
         assert!(context.contains("角色档案："), "{context}");
-        assert!(context.contains("- 沈青（protagonist）动机：查明真相 口吻：短句"), "{context}");
+        assert!(
+            context.contains("- 沈青（protagonist）动机：查明真相 口吻：短句"),
+            "{context}"
+        );
         // 摘要在前、角色档案在后（TS blocks 顺序）。
         let summary_idx = context.find("# 互动影游").unwrap();
         let chars_idx = context.find("角色档案：").unwrap();

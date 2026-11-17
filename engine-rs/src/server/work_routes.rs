@@ -26,7 +26,9 @@ use crate::harness::profile_registry::{
     create_built_in_work_profile_registry, parse_work_profile_json, save_work_profile,
 };
 use crate::harness::source_sync::hex_sha256;
-use crate::harness::work_store::{list_work_manifests, load_work_manifest, work_directory, WorkStoreError};
+use crate::harness::work_store::{
+    list_work_manifests, load_work_manifest, work_directory, WorkStoreError,
+};
 
 /// TS 全局 onError 非 ApiError 分支的固定形状。
 fn internal_error_response() -> Response {
@@ -149,9 +151,16 @@ pub async fn get_artifact_revision(
         Ok(work) => work,
         Err(error) => return work_store_error_response(error),
     };
-    let artifact = work.artifacts.iter().find(|candidate| candidate.id == artifact_id);
-    let revision = artifact
-        .and_then(|candidate| candidate.revisions.iter().find(|revision| revision.id == revision_id));
+    let artifact = work
+        .artifacts
+        .iter()
+        .find(|candidate| candidate.id == artifact_id);
+    let revision = artifact.and_then(|candidate| {
+        candidate
+            .revisions
+            .iter()
+            .find(|revision| revision.id == revision_id)
+    });
     let (Some(artifact), Some(revision)) = (artifact, revision) else {
         return local_error(StatusCode::NOT_FOUND, "Artifact revision not found");
     };
@@ -234,10 +243,21 @@ pub async fn post_adopt_work_revision(
         return internal_error_response();
     };
     let expected = flatten_double_option(body.expected_current_revision_id);
-    match adopt_work_revision(root, &work_id, &artifact_id, &revision_id, expected.as_deref()).await {
+    match adopt_work_revision(
+        root,
+        &work_id,
+        &artifact_id,
+        &revision_id,
+        expected.as_deref(),
+    )
+    .await
+    {
         Ok(outcome) => {
             let action: ActionResult = outcome.action_result;
-            (StatusCode::OK, Json(json!({ "action": serde_json::to_value(action).unwrap_or(Value::Null) })))
+            (
+                StatusCode::OK,
+                Json(json!({ "action": serde_json::to_value(action).unwrap_or(Value::Null) })),
+            )
                 .into_response()
         }
         Err(_) => internal_error_response(),
@@ -471,9 +491,19 @@ fn lexical_normalize(path: &Path) -> PathBuf {
 fn attachment_disposition(file_name: &str) -> String {
     let safe_ascii: String = file_name
         .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect();
-    let safe_ascii = if safe_ascii.is_empty() { "download".to_string() } else { safe_ascii };
+    let safe_ascii = if safe_ascii.is_empty() {
+        "download".to_string()
+    } else {
+        safe_ascii
+    };
     format!(
         "attachment; filename=\"{safe_ascii}\"; filename*=UTF-8''{}",
         crate::harness::artifact_validation::encode_uri_component(file_name)
@@ -482,10 +512,10 @@ fn attachment_disposition(file_name: &str) -> String {
 
 fn download_response(content_type: &str, file_name: &str, bytes: Vec<u8>) -> Response {
     let disposition = attachment_disposition(file_name);
-    let content_type_header =
-        HeaderValue::from_str(content_type).unwrap_or(HeaderValue::from_static("application/octet-stream"));
-    let disposition_header = HeaderValue::from_str(&disposition)
-        .unwrap_or(HeaderValue::from_static("attachment"));
+    let content_type_header = HeaderValue::from_str(content_type)
+        .unwrap_or(HeaderValue::from_static("application/octet-stream"));
+    let disposition_header =
+        HeaderValue::from_str(&disposition).unwrap_or(HeaderValue::from_static("attachment"));
     (
         StatusCode::OK,
         [

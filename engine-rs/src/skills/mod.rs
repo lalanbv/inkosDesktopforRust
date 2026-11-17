@@ -11,9 +11,9 @@ pub mod production_bindings;
 pub mod trust_store;
 
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::collections::{HashMap, HashSet};
 
 /// SkillIdSchema 校验错误（消息为 zod 默认文本）。
 #[derive(Debug, Clone, PartialEq)]
@@ -30,9 +30,7 @@ impl SkillIdError {
     pub fn message(&self) -> String {
         match self {
             SkillIdError::Empty => "String must contain at least 1 character(s)".to_string(),
-            SkillIdError::Pattern => {
-                "Skill id must use letters, numbers, and hyphens.".to_string()
-            }
+            SkillIdError::Pattern => "Skill id must use letters, numbers, and hyphens.".to_string(),
             SkillIdError::Io(message) => message.clone(),
         }
     }
@@ -59,12 +57,19 @@ pub fn normalize_skill_id_strict(value: &str) -> Result<String, SkillIdError> {
 /// （"builtin" 为 130 号合并同步：packages/core/skills 专业技能包）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"builtin\" | \"project\" | \"user\" | \"external\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"builtin\" | \"project\" | \"user\" | \"external\"")
+)]
 pub enum SkillSource {
-    #[serde(rename = "builtin")] Builtin,
-    #[serde(rename = "project")] Project,
-    #[serde(rename = "user")] User,
-    #[serde(rename = "external")] External,
+    #[serde(rename = "builtin")]
+    Builtin,
+    #[serde(rename = "project")]
+    Project,
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "external")]
+    External,
 }
 
 /// 技能定义。
@@ -84,7 +89,10 @@ pub struct AgentSkill {
     pub base_dir: Option<String>,
     /// R37 治理面（上游 pi disable-model-invocation）：人侧保留可见、模型
     /// 不可激活。serde 键面 camelCase 对齐 TS AgentSkillSchema。
-    #[serde(rename = "disableModelInvocation", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "disableModelInvocation",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub disable_model_invocation: Option<bool>,
     /// R44/566 号 invocation 双布尔第二位（dsh `user-invocable`，缺省 true）：
     /// false = 用户面不可见（skills 端点过滤），模型面不受影响。
@@ -185,7 +193,11 @@ impl SkillRegistry for BuiltinSkillRegistry {
         self.by_id.get(&normalize_skill_id(id)).cloned()
     }
     fn resolve_skills(&self, input: &SkillResolutionInput) -> SkillResolutionResult {
-        let mut disabled: HashSet<String> = input.disabled_skills.iter().map(|s| normalize_skill_id(s)).collect();
+        let mut disabled: HashSet<String> = input
+            .disabled_skills
+            .iter()
+            .map(|s| normalize_skill_id(s))
+            .collect();
         // R37 治理面（559/560 号）：disable-model-invocation 技能模型不可激活
         // ——并入拦截集但不进 disabled_skill_ids 输出（那是「显式禁用清单」
         // 语义，与 TS registry.ts 同构）。
@@ -195,13 +207,23 @@ impl SkillRegistry for BuiltinSkillRegistry {
             }
         }
         let requested: Vec<String> = dedupe_strings(
-            &input.requested_skills.iter().map(|s| normalize_skill_id(s)).filter(|s| !s.is_empty()).collect::<Vec<String>>(),
+            &input
+                .requested_skills
+                .iter()
+                .map(|s| normalize_skill_id(s))
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<String>>(),
         );
         let mut missing = Vec::new();
         // 536 号：disabled_skill_ids 对齐 TS Set 插入序（registry.ts resolveSkills：
         // 规范化+去重后按输入序过滤在册）——此前 HashSet 迭代随机序。
         let disabled_skill_ids: Vec<String> = dedupe_strings(
-            &input.disabled_skills.iter().map(|s| normalize_skill_id(s)).filter(|s| !s.is_empty()).collect::<Vec<String>>(),
+            &input
+                .disabled_skills
+                .iter()
+                .map(|s| normalize_skill_id(s))
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<String>>(),
         )
         .into_iter()
         .filter(|id| self.by_id.contains_key(id))
@@ -223,8 +245,14 @@ impl SkillRegistry for BuiltinSkillRegistry {
                 }
             }
         }
-        let available_skills: Vec<AgentSkill> = self.skills.iter().filter(|s| !disabled.contains(&s.id)).cloned().collect();
-        let available_skill_ids: Vec<String> = available_skills.iter().map(|s| s.id.clone()).collect();
+        let available_skills: Vec<AgentSkill> = self
+            .skills
+            .iter()
+            .filter(|s| !disabled.contains(&s.id))
+            .cloned()
+            .collect();
+        let available_skill_ids: Vec<String> =
+            available_skills.iter().map(|s| s.id.clone()).collect();
         SkillResolutionResult {
             used_skills: used,
             forced_skill_ids: forced,
@@ -246,7 +274,17 @@ mod tests {
     use super::*;
 
     fn skill(id: &str) -> AgentSkill {
-        AgentSkill { id: id.into(), name: id.into(), description: "d".into(), body: "".into(), source: SkillSource::External, base_dir: None, disable_model_invocation: None, user_invocable: None, rank: None }
+        AgentSkill {
+            id: id.into(),
+            name: id.into(),
+            description: "d".into(),
+            body: "".into(),
+            source: SkillSource::External,
+            base_dir: None,
+            disable_model_invocation: None,
+            user_invocable: None,
+            rank: None,
+        }
     }
 
     #[test]
@@ -310,7 +348,10 @@ mod tests {
         };
         let r = reg.resolve_skills(&input);
         assert_eq!(
-            r.used_skills.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            r.used_skills
+                .iter()
+                .map(|s| s.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["c", "a", "b"]
         );
         assert_eq!(r.forced_skill_ids, vec!["c", "a", "b"]);

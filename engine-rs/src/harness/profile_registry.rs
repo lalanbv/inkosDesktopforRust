@@ -173,14 +173,26 @@ impl From<&ProfileInput> for WorkProfile {
             id: input.id.to_string(),
             title: input.title.to_string(),
             description: input.description.to_string(),
-            capability_ids: input.capability_ids.iter().map(|s| (*s).to_string()).collect(),
-            required_skill_ids: input.required_skill_ids.iter().map(|s| (*s).to_string()).collect(),
+            capability_ids: input
+                .capability_ids
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            required_skill_ids: input
+                .required_skill_ids
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             recommended_skill_ids: input
                 .recommended_skill_ids
                 .iter()
                 .map(|s| (*s).to_string())
                 .collect(),
-            artifact_kinds: input.artifact_kinds.iter().map(|s| (*s).to_string()).collect(),
+            artifact_kinds: input
+                .artifact_kinds
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             confirmation: confirmation_default(),
             context_recipe: Some(context_recipe(input.id)),
             artifact_schemas: schema_map(input.schemas),
@@ -226,7 +238,8 @@ impl WorkProfileRegistry {
     }
 
     pub fn require(&self, id: &str) -> Result<&WorkProfile, ProfileRegistryError> {
-        self.get(id).ok_or_else(|| ProfileRegistryError::Unknown(id.to_string()))
+        self.get(id)
+            .ok_or_else(|| ProfileRegistryError::Unknown(id.to_string()))
     }
 
     pub fn list(&self) -> Vec<&WorkProfile> {
@@ -274,7 +287,9 @@ pub async fn save_work_profile(
     crate::utils::atomic_file_set::commit_atomic_file_set(&commit)
         .await
         .map_err(|error| ProfileRegistryError::Io(error.to_string()))?;
-    Ok(project_root.join(PROFILES_DIRECTORY).join(format!("{}.json", profile.id)))
+    Ok(project_root
+        .join(PROFILES_DIRECTORY)
+        .join(format!("{}.json", profile.id)))
 }
 
 /// TS `createBuiltInWorkProfileRegistry(projectRoot)`：内置 9 个 + `.inkos/profiles/*.json`

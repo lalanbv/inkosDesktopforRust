@@ -104,7 +104,9 @@ fn assemble(root: &Path) -> axum::Router {
         project_root: root.to_path_buf(),
     };
     inkos_engine::server::router_books(
-        inkos_engine::server::AppState { version: "work-m2".into() },
+        inkos_engine::server::AppState {
+            version: "work-m2".into(),
+        },
         hub,
         write_next,
         audit,
@@ -128,8 +130,14 @@ async fn request(
     };
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024).await.unwrap();
-    let value = if bytes.is_empty() { Value::Null } else { serde_json::from_slice(&bytes).unwrap_or(Value::Null) };
+    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .unwrap();
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
     (status, value)
 }
 
@@ -161,7 +169,13 @@ async fn post_profile_creates_custom_and_persists() {
     let root = dir.path();
     let app = assemble(root);
 
-    let (status, body) = request(&app, "POST", "/api/v1/profiles", Some(custom_profile_body("zz-m2", "自定义二"))).await;
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/api/v1/profiles",
+        Some(custom_profile_body("zz-m2", "自定义二")),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{}", body);
     assert_eq!(body["profile"]["id"], "zz-m2");
     assert_eq!(body["profile"]["title"], "自定义二");
@@ -172,7 +186,10 @@ async fn post_profile_creates_custom_and_persists() {
     let raw = std::fs::read_to_string(&file).unwrap();
     let parsed: Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(parsed["id"], "zz-m2");
-    assert!(!raw.ends_with('\n'), "TS JSON.stringify 无尾换行（work.json 才有）");
+    assert!(
+        !raw.ends_with('\n'),
+        "TS JSON.stringify 无尾换行（work.json 才有）"
+    );
 
     // GET /profiles 归并入列（10 = 内置 9 + 自定义 1）
     let (status, body) = request(&app, "GET", "/api/v1/profiles", None).await;
@@ -182,13 +199,25 @@ async fn post_profile_creates_custom_and_persists() {
     assert!(profiles.iter().any(|profile| profile["id"] == "zz-m2"));
 
     // 重复 POST（自定义重名）→ 409 PROFILE_EXISTS
-    let (status, body) = request(&app, "POST", "/api/v1/profiles", Some(custom_profile_body("zz-m2", "重复"))).await;
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/api/v1/profiles",
+        Some(custom_profile_body("zz-m2", "重复")),
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"]["code"], "PROFILE_EXISTS");
     assert_eq!(body["error"]["message"], "Choose a new profile ID");
 
     // 内置 id 重名 → 同 409（registry 全集判断，TS 同）
-    let (status, body) = request(&app, "POST", "/api/v1/profiles", Some(custom_profile_body("short-fiction", "冒名"))).await;
+    let (status, body) = request(
+        &app,
+        "POST",
+        "/api/v1/profiles",
+        Some(custom_profile_body("short-fiction", "冒名")),
+    )
+    .await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["error"]["code"], "PROFILE_EXISTS");
 
@@ -213,17 +242,37 @@ async fn put_profile_overrides_builtin_and_rejects_id_change() {
     let app = assemble(root);
 
     // PUT 内置 short-fiction（标题覆盖）→ 200 + 落盘覆盖文件
-    let overridden = GOLDEN_SHORT_FICTION_PROFILE_JSON
-        .replace("\"title\": \"Short fiction\"", "\"title\": \"短篇（编辑器覆盖）\"");
-    let (status, body) = request(&app, "PUT", "/api/v1/profiles/short-fiction", Some(overridden)).await;
+    let overridden = GOLDEN_SHORT_FICTION_PROFILE_JSON.replace(
+        "\"title\": \"Short fiction\"",
+        "\"title\": \"短篇（编辑器覆盖）\"",
+    );
+    let (status, body) = request(
+        &app,
+        "PUT",
+        "/api/v1/profiles/short-fiction",
+        Some(overridden),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{}", body);
     assert_eq!(body["profile"]["title"], "短篇（编辑器覆盖）");
-    assert!(root.join(".inkos").join("profiles").join("short-fiction.json").exists());
+    assert!(root
+        .join(".inkos")
+        .join("profiles")
+        .join("short-fiction.json")
+        .exists());
     let (_status, body) = request(&app, "GET", "/api/v1/profiles", None).await;
-    let overridden_served = body["profiles"].as_array().unwrap().iter()
-        .find(|profile| profile["id"] == "short-fiction").unwrap().clone();
+    let overridden_served = body["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|profile| profile["id"] == "short-fiction")
+        .unwrap()
+        .clone();
     assert_eq!(overridden_served["title"], "短篇（编辑器覆盖）");
-    assert_eq!(overridden_served["artifactSchemas"]["source/final/short-story.json"], "short-manuscript");
+    assert_eq!(
+        overridden_served["artifactSchemas"]["source/final/short-story.json"],
+        "short-manuscript"
+    );
 
     // id 不可变：body.id ≠ 路径 id → 400 PROFILE_ID_MISMATCH
     let (status, body) = request(
@@ -238,10 +287,20 @@ async fn put_profile_overrides_builtin_and_rejects_id_change() {
     assert_eq!(body["error"]["message"], "Profile identity cannot change");
 
     // PUT 新 id（无同名内置/自定义）→ 200（upsert 语义，TS 同——PUT 无存在性检查）
-    let (status, body) = request(&app, "PUT", "/api/v1/profiles/zz-m2", Some(custom_profile_body("zz-m2", "新落"))).await;
+    let (status, body) = request(
+        &app,
+        "PUT",
+        "/api/v1/profiles/zz-m2",
+        Some(custom_profile_body("zz-m2", "新落")),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["profile"]["title"], "新落");
-    assert!(root.join(".inkos").join("profiles").join("zz-m2.json").exists());
+    assert!(root
+        .join(".inkos")
+        .join("profiles")
+        .join("zz-m2.json")
+        .exists());
 }
 
 fn seed_project_skill(root: &Path) {
@@ -282,8 +341,12 @@ async fn put_skill_documents_writes_and_validates() {
     let (status, body) = request(&app, "GET", "/api/v1/skills/edit-skill/documents", None).await;
     assert_eq!(status, StatusCode::OK);
     let documents = body["documents"].as_array().unwrap();
-    assert!(documents.iter().any(|doc| doc["path"] == "docs/extra.md" && doc["content"] == "# 追加文档\n"));
-    assert!(documents.iter().any(|doc| doc["path"] == "SKILL.md" && doc["content"].as_str().unwrap().contains("更新")));
+    assert!(documents
+        .iter()
+        .any(|doc| doc["path"] == "docs/extra.md" && doc["content"] == "# 追加文档\n"));
+    assert!(documents
+        .iter()
+        .any(|doc| doc["path"] == "SKILL.md" && doc["content"].as_str().unwrap().contains("更新")));
 
     // SKILL.md 缺失（根）双面：仅 docs 文件 → 共享归一化先拒 INVALID_SKILL_IMPORT
     //（TS 同序）；嵌套 sub/SKILL.md 过归一化但不在根 → INVALID_SKILL_MANIFEST。
@@ -300,14 +363,20 @@ async fn put_skill_documents_writes_and_validates() {
         &app,
         "PUT",
         "/api/v1/skills/edit-skill/documents",
-        Some(json!({ "documents": [
+        Some(
+            json!({ "documents": [
             { "path": "sub/SKILL.md", "content": "---\nname: edit-skill\ndescription: x\n---\n" }
-        ] }).to_string()),
+        ] })
+            .to_string(),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "INVALID_SKILL_MANIFEST");
-    assert_eq!(body["error"]["message"], "SKILL.md must be at the folder root");
+    assert_eq!(
+        body["error"]["message"],
+        "SKILL.md must be at the folder root"
+    );
 
     // 身份不可变（SKILL.md name ≠ 路径 id）→ 400 SKILL_ID_MISMATCH
     let (status, body) = request(
@@ -343,7 +412,13 @@ async fn put_skill_documents_writes_and_validates() {
     assert_eq!(body["error"]["code"], "INVALID_SKILL_ID");
 
     // documents 缺失 → 500 固定文案（TS TypeError 无局部 catch）
-    let (status, body) = request(&app, "PUT", "/api/v1/skills/edit-skill/documents", Some(json!({}).to_string())).await;
+    let (status, body) = request(
+        &app,
+        "PUT",
+        "/api/v1/skills/edit-skill/documents",
+        Some(json!({}).to_string()),
+    )
+    .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(body["error"]["message"], "Unexpected server error.");
 }
@@ -377,5 +452,8 @@ async fn put_skill_documents_rejects_symlink_segment() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"]["code"], "INVALID_SKILL_PATH");
-    assert_eq!(body["error"]["message"], "Skill editor cannot follow symlinks");
+    assert_eq!(
+        body["error"]["message"],
+        "Skill editor cannot follow symlinks"
+    );
 }

@@ -23,12 +23,12 @@ use std::sync::OnceLock;
 
 use serde_json::{json, Value};
 
+use super::project_tools::ToolResult;
 use super::{
     author_skill_tool, book_edit_tools, book_reference_tool, film_authoring_tools, forecast_tools,
     import_chapters_tool, material_tools, play_tools, project_tools, propose_action_tool,
     research_tool, skill_tool, sub_agent_tool, translation_tools,
 };
-use super::project_tools::ToolResult;
 use crate::server::books_routes::BooksRuntime;
 use crate::skills::SkillRegistry;
 
@@ -228,7 +228,8 @@ tool_def!(
     ProjectRead,
     "read",
     MutationKind::ReadOnly,
-    ctx, args,
+    ctx,
+    args,
     ToolScope::Project,
     "读取项目内文本文件内容",
     json!({
@@ -244,7 +245,8 @@ tool_def!(
     ProjectLs,
     "ls",
     MutationKind::ReadOnly,
-    ctx, args,
+    ctx,
+    args,
     ToolScope::Project,
     "列出项目目录内容",
     json!({
@@ -259,7 +261,8 @@ tool_def!(
     ProjectGrep,
     "grep",
     MutationKind::ReadOnly,
-    ctx, args,
+    ctx,
+    args,
     ToolScope::Project,
     "在项目文本文件中搜索",
     json!({
@@ -280,7 +283,8 @@ tool_def!(
     BookRead,
     "read",
     MutationKind::ReadOnly,
-    ctx, args,
+    ctx,
+    args,
     ToolScope::BookSession,
     {
         if project_tools::allow_system_read() {
@@ -304,7 +308,8 @@ tool_def!(
     BookLs,
     "ls",
     MutationKind::ReadOnly,
-    ctx, args,
+    ctx,
+    args,
     ToolScope::BookSession,
     "List files in a book directory. Optionally specify a subdirectory like 'story' or 'chapters'.",
     json!({
@@ -399,14 +404,19 @@ impl ToolRegistry {
     /// 全表查找：声明序第一个「名称匹配且可用」的定义
     ///（原分发链序 + `if let Some(deps)` 在场门控的显式化）。
     pub fn find(&self, name: &str, ctx: &ToolCtx<'_>) -> Option<&dyn ToolDef> {
-        self.all().find(|def| def.name() == name && def.available(ctx))
+        self.all()
+            .find(|def| def.name() == name && def.available(ctx))
     }
 
     /// 按作用域层 schema 投影（文件三件面消费；声明序稳定）。
     pub fn entries(&self, scope: ToolScope) -> Vec<ToolEntry> {
         self.all()
             .filter(|def| def.scope() == scope)
-            .map(|def| ToolEntry { name: def.name(), description: def.description(), parameters: def.parameters() })
+            .map(|def| ToolEntry {
+                name: def.name(),
+                description: def.description(),
+                parameters: def.parameters(),
+            })
             .collect()
     }
 
@@ -429,7 +439,9 @@ impl ToolRegistry {
     /// 按名称查变更面定性（suppressProductionTools 剔除面消费；
     /// 可用性无关——注册面定性）。
     pub fn mutation_kind(&self, name: &str) -> Option<MutationKind> {
-        self.all().find(|def| def.name() == name).map(|def| def.mutation_kind())
+        self.all()
+            .find(|def| def.name() == name)
+            .map(|def| def.mutation_kind())
     }
 
     /// crate 内测试构造器（R39 管线行为测试注入 mock ToolDef——生产装配面
@@ -446,7 +458,9 @@ impl ToolRegistry {
 /// `Unknown tool` 错误文本（原兜底链语义）。
 pub async fn execute_routed(ctx: &ToolCtx<'_>, name: &str, args: &Value) -> ToolResult {
     let registry = ToolRegistry::global();
-    crate::interaction::pipeline::run_pipeline(registry, ctx, name, args).await.0
+    crate::interaction::pipeline::run_pipeline(registry, ctx, name, args)
+        .await
+        .0
 }
 
 #[cfg(test)]
@@ -493,7 +507,11 @@ mod tests {
         sorted.sort_unstable();
         let total = sorted.len();
         sorted.dedup();
-        assert_eq!(total - sorted.len(), 3, "唯一同名 = read/ls/grep 双作用域族");
+        assert_eq!(
+            total - sorted.len(),
+            3,
+            "唯一同名 = read/ls/grep 双作用域族"
+        );
     }
 
     #[test]
@@ -501,7 +519,12 @@ mod tests {
         // 遮蔽语义的序保证：同名三件，书会话层声明在前（最近层胜出）。
         let names: Vec<&str> = ToolRegistry::global().all().map(|def| def.name()).collect();
         let book_read = names.iter().position(|n| *n == "read").unwrap();
-        let project_read = names[book_read + 1..].iter().position(|n| *n == "read").unwrap() + book_read + 1;
+        let project_read = names[book_read + 1..]
+            .iter()
+            .position(|n| *n == "read")
+            .unwrap()
+            + book_read
+            + 1;
         assert!(book_read < project_read);
     }
 
@@ -517,7 +540,10 @@ mod tests {
             .map(|s| s["function"]["name"].as_str().unwrap())
             .collect();
         assert_eq!(names, vec!["read", "ls", "grep"], "声明序 = 投影序");
-        assert_eq!(schemas[0]["function"]["description"], "读取项目内文本文件内容");
+        assert_eq!(
+            schemas[0]["function"]["description"],
+            "读取项目内文本文件内容"
+        );
         assert_eq!(schemas[0]["function"]["parameters"]["required"][0], "path");
         assert_eq!(schemas[2]["function"]["parameters"]["required"][0], "query");
     }
@@ -539,8 +565,14 @@ mod tests {
             schemas[0]["function"]["description"],
             "Read a file from the book directory. Path is relative to books/."
         );
-        assert_eq!(schemas[1]["function"]["parameters"]["required"][0], "bookId");
-        assert_eq!(schemas[2]["function"]["parameters"]["required"], json!(["bookId", "pattern"]));
+        assert_eq!(
+            schemas[1]["function"]["parameters"]["required"][0],
+            "bookId"
+        );
+        assert_eq!(
+            schemas[2]["function"]["parameters"]["required"],
+            json!(["bookId", "pattern"])
+        );
     }
 
     #[test]
@@ -576,7 +608,15 @@ mod tests {
         // 文件六件 + material retrieve + research/use_skill 等定性为非生产
         // 变更面（TS 一致保留面——215 号剔除名单不含）。
         let registry = ToolRegistry::global();
-        for name in ["read", "ls", "grep", "retrieve_material", "research_web", "use_skill", "propose_action"] {
+        for name in [
+            "read",
+            "ls",
+            "grep",
+            "retrieve_material",
+            "research_web",
+            "use_skill",
+            "propose_action",
+        ] {
             assert_ne!(
                 registry.mutation_kind(name),
                 Some(MutationKind::ProductionMutation),
@@ -592,8 +632,17 @@ mod tests {
         let ctx = ToolCtx::root_only(root);
         // root_only：书三件不可用，read 落项目层。
         let def = ToolRegistry::global().find("read", &ctx).unwrap();
-        assert_eq!(def.scope(), ToolScope::Project, "无书会话依赖时 read 落项目层");
-        assert!(ToolRegistry::global().find("write_truth_file", &ctx).is_none(), "编辑族不可用");
+        assert_eq!(
+            def.scope(),
+            ToolScope::Project,
+            "无书会话依赖时 read 落项目层"
+        );
+        assert!(
+            ToolRegistry::global()
+                .find("write_truth_file", &ctx)
+                .is_none(),
+            "编辑族不可用"
+        );
     }
 
     #[tokio::test]
@@ -602,7 +651,11 @@ mod tests {
         let root = dir.path();
         std::fs::write(root.join("note.md"), "project-scope").unwrap();
         std::fs::create_dir_all(root.join("books").join("b1")).unwrap();
-        std::fs::write(root.join("books").join("b1").join("book.json"), "{\"id\":\"b1\"}").unwrap();
+        std::fs::write(
+            root.join("books").join("b1").join("book.json"),
+            "{\"id\":\"b1\"}",
+        )
+        .unwrap();
 
         let runtime = runtime_for(root);
         let edit_deps = book_edit_tools::BookEditDeps {
@@ -618,7 +671,10 @@ mod tests {
         assert!(book.text.contains("b1"), "书层遮蔽生效：{}", book.text);
         // 书层失败为非错误文本（TS textResult 逐字），项目根文件按书层语义不可达。
         let miss = execute_routed(&ctx, "read", &json!({ "path": "note.md" })).await;
-        assert!(!miss.is_error, "书 read 失败为非错误文本（TS textResult 形态）");
+        assert!(
+            !miss.is_error,
+            "书 read 失败为非错误文本（TS textResult 形态）"
+        );
         // 非书会话：项目层。
         let project_ctx = ToolCtx::root_only(root);
         let project = execute_routed(&project_ctx, "read", &json!({ "path": "note.md" })).await;
@@ -658,10 +714,18 @@ mod tests {
         let root = dir.path();
         std::fs::write(root.join("note.md"), "账页记载着冷库赔偿款。").unwrap();
         let ctx = ToolCtx::root_only(root);
-        let ingested = execute_routed(&ctx, "ingest_material", &json!({ "sourceKind": "file", "filePath": "note.md", "title": "账页资料" })).await;
+        let ingested = execute_routed(
+            &ctx,
+            "ingest_material",
+            &json!({ "sourceKind": "file", "filePath": "note.md", "title": "账页资料" }),
+        )
+        .await;
         assert!(!ingested.is_error, "{}", ingested.text);
-        assert!(ingested.text.starts_with("Material ingested: .inkos/materials/"));
-        let retrieved = execute_routed(&ctx, "retrieve_material", &json!({ "query": "冷库赔偿款" })).await;
+        assert!(ingested
+            .text
+            .starts_with("Material ingested: .inkos/materials/"));
+        let retrieved =
+            execute_routed(&ctx, "retrieve_material", &json!({ "query": "冷库赔偿款" })).await;
         assert!(!retrieved.is_error && retrieved.text.contains("Retrieved 1 material snippet."));
     }
 
@@ -675,6 +739,10 @@ mod tests {
             .iter()
             .map(|s| s["function"]["name"].as_str().unwrap())
             .collect();
-        assert_eq!(names, vec!["set_world_anchor", "revise_node"], "声明序胜过查询序");
+        assert_eq!(
+            names,
+            vec!["set_world_anchor", "revise_node"],
+            "声明序胜过查询序"
+        );
     }
 }

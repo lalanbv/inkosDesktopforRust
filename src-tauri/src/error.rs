@@ -153,8 +153,10 @@ impl From<std::io::Error> for AppError {
         use std::io::ErrorKind as IoKind;
 
         match err.kind() {
-            IoKind::NotFound => Self::filesystem(pick("文件或目录不存在", "File or directory not found"))
-                .with_details(err.to_string()),
+            IoKind::NotFound => {
+                Self::filesystem(pick("文件或目录不存在", "File or directory not found"))
+                    .with_details(err.to_string())
+            }
             IoKind::PermissionDenied => Self::filesystem(pick("权限被拒绝", "Permission denied"))
                 .with_details(err.to_string())
                 .with_suggestion(pick(
@@ -173,15 +175,13 @@ impl From<std::io::Error> for AppError {
 
 impl From<serde_json::Error> for AppError {
     fn from(err: serde_json::Error) -> Self {
-        Self::config(pick("JSON 格式错误", "Malformed JSON"))
-            .with_details(err.to_string())
+        Self::config(pick("JSON 格式错误", "Malformed JSON")).with_details(err.to_string())
     }
 }
 
 impl From<tauri::Error> for AppError {
     fn from(err: tauri::Error) -> Self {
-        Self::internal(pick("Tauri 内部错误", "Internal Tauri error"))
-            .with_details(err.to_string())
+        Self::internal(pick("Tauri 内部错误", "Internal Tauri error")).with_details(err.to_string())
     }
 }
 
@@ -202,11 +202,12 @@ impl From<keyring::Error> for AppError {
         use keyring::Error as KErr;
 
         match err {
-            KErr::NoEntry => Self::keychain(pick("密钥不存在", "Secret not found"))
-                .with_details(pick(
+            KErr::NoEntry => {
+                Self::keychain(pick("密钥不存在", "Secret not found")).with_details(pick(
                     "Keychain 中未找到该密钥",
                     "The secret was not found in the Keychain",
-                )),
+                ))
+            }
             KErr::PlatformFailure(ref e) => {
                 let msg = e.to_string();
                 if msg.contains("denied") || msg.contains("access") {
@@ -239,8 +240,7 @@ mod tests {
         // suggestion 文案随 locale：持锁防并行线程改全局态（locale.rs 1009 号）
         let _g = crate::locale::tests::test_locale_lock();
         crate::locale::set_locale(crate::locale::Locale::Zh);
-        let err = AppError::network("无法连接到服务器")
-            .with_details("Connection refused");
+        let err = AppError::network("无法连接到服务器").with_details("Connection refused");
 
         let json = serde_json::to_string(&err).unwrap();
         assert!(json.contains("network"));
@@ -291,8 +291,8 @@ mod tests {
             err.suggestion.as_deref(),
             Some("Check your network connection and try again later")
         );
-        let io_err: AppError = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied")
-            .into();
+        let io_err: AppError =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied").into();
         assert_eq!(io_err.message, "Permission denied");
 
         // 复位 zh（全局态，避免影响其它用例）

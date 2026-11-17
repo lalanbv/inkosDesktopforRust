@@ -70,7 +70,12 @@ pub fn resolve_author_error(
                 .iter()
                 .any(|pattern| haystack.contains(&pattern.to_lowercase()))
         })
-        .or_else(|| catalog.errors.iter().find(|entry| entry.patterns.is_empty()))
+        .or_else(|| {
+            catalog
+                .errors
+                .iter()
+                .find(|entry| entry.patterns.is_empty())
+        })
         .or_else(|| catalog.errors.last());
     let entry = match matched {
         Some(entry) => entry,
@@ -78,16 +83,32 @@ pub fn resolve_author_error(
             return ResolvedAuthorError {
                 code: "unknown-error".to_string(),
                 severity: "must-handle".to_string(),
-                message: if is_en { "The run failed and needs manual attention.".to_string() } else { "任务失败，需人工介入。".to_string() },
-                next_action: if is_en { "Check Doctor diagnostics and logs, fix the cause, then re-run.".to_string() } else { "查看 Doctor 诊断与日志定位原因，修复后重跑。".to_string() },
+                message: if is_en {
+                    "The run failed and needs manual attention.".to_string()
+                } else {
+                    "任务失败，需人工介入。".to_string()
+                },
+                next_action: if is_en {
+                    "Check Doctor diagnostics and logs, fix the cause, then re-run.".to_string()
+                } else {
+                    "查看 Doctor 诊断与日志定位原因，修复后重跑。".to_string()
+                },
             };
         }
     };
     ResolvedAuthorError {
         code: entry.code.clone(),
         severity: entry.severity.clone(),
-        message: if is_en { entry.message_en.clone() } else { entry.message_zh.clone() },
-        next_action: if is_en { entry.next_action_en.clone() } else { entry.next_action_zh.clone() },
+        message: if is_en {
+            entry.message_en.clone()
+        } else {
+            entry.message_zh.clone()
+        },
+        next_action: if is_en {
+            entry.next_action_en.clone()
+        } else {
+            entry.next_action_zh.clone()
+        },
     }
 }
 
@@ -95,13 +116,25 @@ pub fn resolve_author_error(
 pub fn next_action_for(severity: &str, language: CatalogLanguage) -> String {
     let catalog = load_author_error_catalog();
     let is_en = language == CatalogLanguage::En;
-    match catalog.errors.iter().find(|entry| entry.severity == severity) {
+    match catalog
+        .errors
+        .iter()
+        .find(|entry| entry.severity == severity)
+    {
         Some(entry) => {
-            if is_en { entry.next_action_en.clone() } else { entry.next_action_zh.clone() }
+            if is_en {
+                entry.next_action_en.clone()
+            } else {
+                entry.next_action_zh.clone()
+            }
         }
         None => {
             let fallback = catalog.errors.last().expect("catalog has fallback entry");
-            if is_en { fallback.next_action_en.clone() } else { fallback.next_action_zh.clone() }
+            if is_en {
+                fallback.next_action_en.clone()
+            } else {
+                fallback.next_action_zh.clone()
+            }
         }
     }
 }

@@ -5,8 +5,8 @@ use crate::config::{
     ConfigReloader, ConfigWatcher,
 };
 use std::path::PathBuf;
-use tauri::Emitter;
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::Mutex;
 
 /// Tauri 应用状态
@@ -210,7 +210,9 @@ pub async fn start_config_watch(
     let paths = state.config_loader.paths();
 
     // 监听用户全局配置（无上下文门槛，常驻监听——用户偏好随时可被外部编辑）
-    watcher.watch_user_config(paths).map_err(|e| e.to_string())?;
+    watcher
+        .watch_user_config(paths)
+        .map_err(|e| e.to_string())?;
 
     // 监听当前工作区配置
     if let Some(workspace_id) = state.current_workspace_id.lock().await.as_ref() {
@@ -271,11 +273,14 @@ async fn poll_config_changes(state: AppState, app_handle: tauri::AppHandle) {
                         {
                             // 通知前端
                             app_handle
-                                .emit("config-changed", serde_json::json!({
-                                    "layer": "Workspace",
-                                    "workspace_id": workspace_id,
-                                    "config": new_config,
-                                }))
+                                .emit(
+                                    "config-changed",
+                                    serde_json::json!({
+                                        "layer": "Workspace",
+                                        "workspace_id": workspace_id,
+                                        "config": new_config,
+                                    }),
+                                )
                                 .ok();
                         }
                     }
@@ -289,11 +294,14 @@ async fn poll_config_changes(state: AppState, app_handle: tauri::AppHandle) {
                         {
                             // 通知前端
                             app_handle
-                                .emit("config-changed", serde_json::json!({
-                                    "layer": "Project",
-                                    "project_root": project_root,
-                                    "config": new_config,
-                                }))
+                                .emit(
+                                    "config-changed",
+                                    serde_json::json!({
+                                        "layer": "Project",
+                                        "project_root": project_root,
+                                        "config": new_config,
+                                    }),
+                                )
                                 .ok();
                         }
                     }
@@ -301,15 +309,16 @@ async fn poll_config_changes(state: AppState, app_handle: tauri::AppHandle) {
                         tracing::info!("检测到用户全局配置变更");
 
                         let mut mgr = state.config.lock().await;
-                        if let Ok(new_config) =
-                            state.config_reloader.reload_user_config(&mut mgr)
-                        {
+                        if let Ok(new_config) = state.config_reloader.reload_user_config(&mut mgr) {
                             // 通知前端
                             app_handle
-                                .emit("config-changed", serde_json::json!({
-                                    "layer": "User",
-                                    "config": new_config,
-                                }))
+                                .emit(
+                                    "config-changed",
+                                    serde_json::json!({
+                                        "layer": "User",
+                                        "config": new_config,
+                                    }),
+                                )
                                 .ok();
                         }
                     }
@@ -324,7 +333,7 @@ async fn poll_config_changes(state: AppState, app_handle: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use tempfile::TempDir;
 
     fn create_test_state() -> (TempDir, AppState) {
@@ -373,10 +382,7 @@ mod tests {
             .save_workspace_config("ws-rt", &ws_cfg)
             .unwrap();
 
-        let loaded = state
-            .config_loader
-            .load_workspace_config("ws-rt")
-            .unwrap();
+        let loaded = state.config_loader.load_workspace_config("ws-rt").unwrap();
         assert_eq!(loaded.logging.level, "warn");
     }
 

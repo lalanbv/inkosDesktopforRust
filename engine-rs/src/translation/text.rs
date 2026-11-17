@@ -5,9 +5,9 @@
 use crate::utils::split_chapters;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
@@ -60,16 +60,35 @@ fn hex_entity_re() -> &'static Regex {
 
 /// HTML 实体解码（named + numeric + hex）。
 pub fn decode_html(value: &str) -> String {
-    let s = Regex::new(r"(?i)&nbsp;").unwrap().replace_all(value, " ").into_owned();
-    let s = Regex::new(r"(?i)&amp;").unwrap().replace_all(&s, "&").into_owned();
-    let s = Regex::new(r"(?i)&lt;").unwrap().replace_all(&s, "<").into_owned();
-    let s = Regex::new(r"(?i)&gt;").unwrap().replace_all(&s, ">").into_owned();
-    let s = Regex::new(r"(?i)&quot;").unwrap().replace_all(&s, "\"").into_owned();
-    let s = Regex::new(r"(?i)&#39;").unwrap().replace_all(&s, "'").into_owned();
+    let s = Regex::new(r"(?i)&nbsp;")
+        .unwrap()
+        .replace_all(value, " ")
+        .into_owned();
+    let s = Regex::new(r"(?i)&amp;")
+        .unwrap()
+        .replace_all(&s, "&")
+        .into_owned();
+    let s = Regex::new(r"(?i)&lt;")
+        .unwrap()
+        .replace_all(&s, "<")
+        .into_owned();
+    let s = Regex::new(r"(?i)&gt;")
+        .unwrap()
+        .replace_all(&s, ">")
+        .into_owned();
+    let s = Regex::new(r"(?i)&quot;")
+        .unwrap()
+        .replace_all(&s, "\"")
+        .into_owned();
+    let s = Regex::new(r"(?i)&#39;")
+        .unwrap()
+        .replace_all(&s, "'")
+        .into_owned();
     // numeric &#code;
     let s = numeric_entity_re()
         .replace_all(&s, |caps: &regex::Captures| {
-            caps[1].parse::<u32>()
+            caps[1]
+                .parse::<u32>()
                 .ok()
                 .and_then(char::from_u32)
                 .map(|c| c.to_string())
@@ -102,13 +121,22 @@ pub fn split_translation_chapters(text: &str) -> Vec<TranslationTextChapter> {
     let normalized = normalize_translation_text(text);
     let detected = split_chapters(&normalized, None);
     if !detected.is_empty() {
-        return detected.into_iter().map(|c| TranslationTextChapter { title: c.title, content: c.content }).collect();
+        return detected
+            .into_iter()
+            .map(|c| TranslationTextChapter {
+                title: c.title,
+                content: c.content,
+            })
+            .collect();
     }
     let md = split_markdown_headings(&normalized);
     if !md.is_empty() {
         return md;
     }
-    vec![TranslationTextChapter { title: "Chapter 1".into(), content: normalized }]
+    vec![TranslationTextChapter {
+        title: "Chapter 1".into(),
+        content: normalized,
+    }]
 }
 
 /// 按段落 + maxChars 分段（返回片段列表，对齐 TS segmentTranslationText）。
@@ -123,7 +151,11 @@ pub fn segment_translation_text_vec(text: &str, max_chars: usize) -> Vec<String>
         .map(|p| p.trim().to_string())
         .filter(|p| !p.is_empty())
         .collect();
-    let units: Vec<String> = if !paragraphs.is_empty() { paragraphs } else { vec![normalized] };
+    let units: Vec<String> = if !paragraphs.is_empty() {
+        paragraphs
+    } else {
+        vec![normalized]
+    };
     units
         .into_iter()
         .flat_map(|p| {
@@ -152,9 +184,18 @@ fn split_markdown_headings(text: &str) -> Vec<TranslationTextChapter> {
         .iter()
         .enumerate()
         .map(|(idx, (title, line))| {
-            let next = headings.get(idx + 1).map(|(_, l)| *l).unwrap_or(lines.len());
-            let content: String = lines[(*line + 1).min(next)..next].join("\n").trim().to_string();
-            TranslationTextChapter { title: title.clone(), content }
+            let next = headings
+                .get(idx + 1)
+                .map(|(_, l)| *l)
+                .unwrap_or(lines.len());
+            let content: String = lines[(*line + 1).min(next)..next]
+                .join("\n")
+                .trim()
+                .to_string();
+            TranslationTextChapter {
+                title: title.clone(),
+                content,
+            }
         })
         .filter(|c| !c.content.trim().is_empty())
         .collect()
@@ -242,7 +283,10 @@ mod tests {
 
     #[test]
     fn decode_named_and_numeric_entities() {
-        assert_eq!(decode_html("a&nbsp;b &amp; c &lt;tag&gt; &quot;q&quot; &#39;s"), "a b & c <tag> \"q\" 's");
+        assert_eq!(
+            decode_html("a&nbsp;b &amp; c &lt;tag&gt; &quot;q&quot; &#39;s"),
+            "a b & c <tag> \"q\" 's"
+        );
         assert_eq!(decode_html("&#65;&#66;&#67;"), "ABC"); // numeric
         assert_eq!(decode_html("&#x4e2d;&#x6587;"), "中文"); // hex
     }
@@ -344,7 +388,9 @@ mod tests {
         let chunks = segment_translation_text_vec(text, 8);
         assert!(!chunks.is_empty());
         assert!(
-            chunks.iter().all(|c| c.ends_with('。') || c.ends_with('！') || c.ends_with('？')),
+            chunks
+                .iter()
+                .all(|c| c.ends_with('。') || c.ends_with('！') || c.ends_with('？')),
             "{chunks:?}"
         );
     }

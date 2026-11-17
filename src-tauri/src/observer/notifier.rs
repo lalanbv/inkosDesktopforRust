@@ -28,10 +28,9 @@ impl EventHandler for NativeNotifier {
         if (self.is_unfocused)() {
             // 1009 号：通知标题为用户直显面，随桌面壳 locale 双语输出。
             let title = match ev.event.as_str() {
-                "write:complete" | "draft:complete" => crate::locale::pick(
-                    "inkos：章节写完",
-                    "InkOS: chapter finished",
-                ),
+                "write:complete" | "draft:complete" => {
+                    crate::locale::pick("inkos：章节写完", "InkOS: chapter finished")
+                }
                 "book:created" => {
                     crate::locale::pick("inkos：已创建新书", "InkOS: new book created")
                 }
@@ -56,7 +55,10 @@ mod tests {
     struct NotifySpy(Mutex<Vec<(String, String)>>);
     impl NotifySpy {
         fn captures(&self) -> Vec<(String, String)> {
-            self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
         }
     }
 
@@ -77,7 +79,11 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| true),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
+                spy_cap
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((t.into(), b.into()))
             }),
         };
 
@@ -99,7 +105,11 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| true),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
+                spy_cap
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((t.into(), b.into()))
             }),
         };
 
@@ -122,7 +132,11 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| false),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
+                spy_cap
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((t.into(), b.into()))
             }),
         };
 
@@ -142,7 +156,11 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| true),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
+                spy_cap
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((t.into(), b.into()))
             }),
         };
 
@@ -163,7 +181,11 @@ mod tests {
         let n = NativeNotifier {
             is_unfocused: Arc::new(|| true),
             notify: Arc::new(move |t: &str, b: &str| {
-                spy_cap.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((t.into(), b.into()))
+                spy_cap
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((t.into(), b.into()))
             }),
         };
 

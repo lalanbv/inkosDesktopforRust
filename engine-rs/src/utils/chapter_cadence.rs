@@ -81,20 +81,49 @@ pub const DEFAULT_CHAPTER_CADENCE_WINDOW: u32 = window_defaults::SUMMARY_LOOKBAC
 
 /// 高压情绪关键词（中英）。逐字移植 TS `HIGH_TENSION_KEYWORDS`。
 pub const HIGH_TENSION_KEYWORDS: &[&str] = &[
-    "紧张", "冷硬", "压抑", "逼仄", "肃杀", "沉重", "凝重",
-    "冷峻", "压迫", "阴沉", "焦灼", "窒息", "凛冽", "锋利",
-    "克制", "危机", "对峙", "绷紧", "僵持", "杀意",
-    "tense", "cold", "oppressive", "grim", "ominous", "dark",
-    "bleak", "hostile", "threatening", "heavy", "suffocating",
+    "紧张",
+    "冷硬",
+    "压抑",
+    "逼仄",
+    "肃杀",
+    "沉重",
+    "凝重",
+    "冷峻",
+    "压迫",
+    "阴沉",
+    "焦灼",
+    "窒息",
+    "凛冽",
+    "锋利",
+    "克制",
+    "危机",
+    "对峙",
+    "绷紧",
+    "僵持",
+    "杀意",
+    "tense",
+    "cold",
+    "oppressive",
+    "grim",
+    "ominous",
+    "dark",
+    "bleak",
+    "hostile",
+    "threatening",
+    "heavy",
+    "suffocating",
 ];
 
 const ENGLISH_STOP_WORDS: &[&str] = &[
-    "the", "and", "with", "from", "into", "after", "before",
-    "over", "under", "this", "that", "your", "their",
+    "the", "and", "with", "from", "into", "after", "before", "over", "under", "this", "that",
+    "your", "their",
 ];
 
 /// 分析最近窗口内的三类节奏压力。
-pub fn analyze_chapter_cadence(rows: &[CadenceSummaryRow], language: WritingLanguage) -> ChapterCadenceAnalysis {
+pub fn analyze_chapter_cadence(
+    rows: &[CadenceSummaryRow],
+    language: WritingLanguage,
+) -> ChapterCadenceAnalysis {
     let lookback = window_defaults::SUMMARY_LOOKBACK as usize;
     // 按章节号升序后取末尾 lookback 个（保持升序）
     let mut sorted: Vec<CadenceSummaryRow> = rows.to_vec();
@@ -116,7 +145,8 @@ pub fn is_high_tension_mood(mood: &str) -> bool {
 }
 
 fn analyze_scene_pressure(rows: &[CadenceSummaryRow]) -> Option<SceneCadencePressure> {
-    let types: Vec<String> = rows.iter()
+    let types: Vec<String> = rows
+        .iter()
         .map(|r| r.chapter_type.trim().to_string())
         .filter(|v| is_meaningful_value(v))
         .collect();
@@ -138,11 +168,16 @@ fn analyze_scene_pressure(rows: &[CadenceSummaryRow]) -> Option<SceneCadencePres
         medium_threshold: pressure_thresholds::scene::MEDIUM_COUNT,
         medium_window_floor: pressure_thresholds::scene::MEDIUM_WINDOW_FLOOR,
     });
-    pressure.map(|p| SceneCadencePressure { pressure: p, repeated_type, streak })
+    pressure.map(|p| SceneCadencePressure {
+        pressure: p,
+        repeated_type,
+        streak,
+    })
 }
 
 fn analyze_mood_pressure(rows: &[CadenceSummaryRow]) -> Option<MoodCadencePressure> {
-    let moods: Vec<String> = rows.iter()
+    let moods: Vec<String> = rows
+        .iter()
         .map(|r| r.mood.trim().to_string())
         .filter(|v| is_meaningful_value(v))
         .collect();
@@ -166,11 +201,19 @@ fn analyze_mood_pressure(rows: &[CadenceSummaryRow]) -> Option<MoodCadencePressu
         medium_threshold: pressure_thresholds::mood::MEDIUM_COUNT,
         medium_window_floor: pressure_thresholds::mood::MEDIUM_WINDOW_FLOOR,
     });
-    pressure.map(|p| MoodCadencePressure { pressure: p, high_tension_streak: streak, recent_moods })
+    pressure.map(|p| MoodCadencePressure {
+        pressure: p,
+        high_tension_streak: streak,
+        recent_moods,
+    })
 }
 
-fn analyze_title_pressure(rows: &[CadenceSummaryRow], language: WritingLanguage) -> Option<TitleCadencePressure> {
-    let titles: Vec<String> = rows.iter()
+fn analyze_title_pressure(
+    rows: &[CadenceSummaryRow],
+    language: WritingLanguage,
+) -> Option<TitleCadencePressure> {
+    let titles: Vec<String> = rows
+        .iter()
         .map(|r| r.title.trim().to_string())
         .filter(|v| is_meaningful_value(v))
         .collect();
@@ -187,8 +230,14 @@ fn analyze_title_pressure(rows: &[CadenceSummaryRow], language: WritingLanguage)
     }
     // 排序：count desc, length desc, 字节序（替代 localeCompare，仅 tiebreaker）
     let mut entries: Vec<(String, u32)> = counts.into_iter().collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.len().cmp(&a.0.len())).then_with(|| a.0.cmp(&b.0)));
-    let repeated = entries.into_iter().find(|(_, c)| *c >= pressure_thresholds::title::MINIMUM_REPEATED_COUNT)?;
+    entries.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.0.len().cmp(&a.0.len()))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    let repeated = entries
+        .into_iter()
+        .find(|(_, c)| *c >= pressure_thresholds::title::MINIMUM_REPEATED_COUNT)?;
     let (repeated_token, count) = repeated;
     let pressure = resolve_cadence_pressure(crate::utils::cadence_policy::CadencePressureParams {
         count,
@@ -197,7 +246,12 @@ fn analyze_title_pressure(rows: &[CadenceSummaryRow], language: WritingLanguage)
         medium_threshold: pressure_thresholds::title::MEDIUM_COUNT,
         medium_window_floor: pressure_thresholds::title::MEDIUM_WINDOW_FLOOR,
     });
-    pressure.map(|p| TitleCadencePressure { pressure: p, repeated_token, count, recent_titles: titles })
+    pressure.map(|p| TitleCadencePressure {
+        pressure: p,
+        repeated_token,
+        count,
+        recent_titles: titles,
+    })
 }
 
 fn extract_title_tokens(title: &str, language: WritingLanguage) -> Vec<String> {
@@ -249,7 +303,12 @@ mod tests {
     use super::*;
 
     fn row(ch: u32, title: &str, mood: &str, ctype: &str) -> CadenceSummaryRow {
-        CadenceSummaryRow { chapter: ch, title: title.into(), mood: mood.into(), chapter_type: ctype.into() }
+        CadenceSummaryRow {
+            chapter: ch,
+            title: title.into(),
+            mood: mood.into(),
+            chapter_type: ctype.into(),
+        }
     }
 
     #[test]
@@ -262,15 +321,28 @@ mod tests {
     #[test]
     fn scene_pressure_detects_repeated_type_streak() {
         // 末尾连续 3 个 "战斗" → high（highCount=3），window total ≥ floor
-        let rows = vec![row(1, "t1", "平静", "日常"), row(2, "t2", "紧张", "战斗"), row(3, "t3", "压抑", "战斗"), row(4, "t4", "危机", "战斗")];
+        let rows = vec![
+            row(1, "t1", "平静", "日常"),
+            row(2, "t2", "紧张", "战斗"),
+            row(3, "t3", "压抑", "战斗"),
+            row(4, "t4", "危机", "战斗"),
+        ];
         let a = analyze_chapter_cadence(&rows, WritingLanguage::Zh);
-        assert_eq!(a.scene_pressure.as_ref().unwrap().pressure, CadencePressure::High);
+        assert_eq!(
+            a.scene_pressure.as_ref().unwrap().pressure,
+            CadencePressure::High
+        );
         assert_eq!(a.scene_pressure.unwrap().streak, 3);
     }
 
     #[test]
     fn mood_pressure_detects_high_tension_streak() {
-        let rows = vec![row(1, "t1", "平静", "x"), row(2, "t2", "紧张", "y"), row(3, "t3", "压抑", "z"), row(4, "t4", "肃杀", "w")];
+        let rows = vec![
+            row(1, "t1", "平静", "x"),
+            row(2, "t2", "紧张", "y"),
+            row(3, "t3", "压抑", "z"),
+            row(4, "t4", "肃杀", "w"),
+        ];
         let a = analyze_chapter_cadence(&rows, WritingLanguage::Zh);
         assert!(a.mood_pressure.is_some());
         assert_eq!(a.mood_pressure.unwrap().high_tension_streak, 3);
@@ -279,7 +351,12 @@ mod tests {
     #[test]
     fn title_pressure_detects_repeated_zh_token() {
         // 「系统」在多个标题出现 ≥2 次
-        let rows = vec![row(1, "系统觉醒", "x", "y"), row(2, "系统升级", "x", "y"), row(3, "其他", "x", "y"), row(4, "再系统", "x", "y")];
+        let rows = vec![
+            row(1, "系统觉醒", "x", "y"),
+            row(2, "系统升级", "x", "y"),
+            row(3, "其他", "x", "y"),
+            row(4, "再系统", "x", "y"),
+        ];
         let a = analyze_chapter_cadence(&rows, WritingLanguage::Zh);
         // 至少检测出某个重复 token（具体 token 由排序决定）
         let tp = a.title_pressure.expect("应有标题压力");

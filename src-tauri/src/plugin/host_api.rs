@@ -94,7 +94,8 @@ impl HostContext {
 
     /// 累计已写字节数（供指标/诊断）。
     pub fn written_bytes(&self) -> u64 {
-        self.written_bytes.load(std::sync::atomic::Ordering::Relaxed)
+        self.written_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 覆盖 `http_get` 配额（仅测试用：避免为验证配额真发上千请求）。
@@ -107,7 +108,8 @@ impl HostContext {
 
     /// 累计 `http_get` 请求次数（供指标/诊断）。
     pub fn http_requests(&self) -> u64 {
-        self.http_requests.load(std::sync::atomic::Ordering::Relaxed)
+        self.http_requests
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 累计 `http_get` 响应字节数（供指标/诊断）。
@@ -140,7 +142,8 @@ impl HostContext {
                 if let Ok(canonical_allowed) = allowed.canonicalize() {
                     if let (Some(ref cwd), Some(ref cp)) = (&canonical_work_dir, &canonical_path) {
                         // 比较规范化后的路径：允许的路径包含 work_dir 或者文件在允许路径下
-                        return cwd.starts_with(&canonical_allowed) || cp.starts_with(&canonical_allowed);
+                        return cwd.starts_with(&canonical_allowed)
+                            || cp.starts_with(&canonical_allowed);
                     }
                 }
                 // 回退到字符串比较（allowed_path 已确认为绝对路径）
@@ -161,7 +164,8 @@ impl HostContext {
             .map_err(|e| PluginError::PermissionDenied(format!("路径不存在或无法访问: {}", e)))?;
 
         // 规范化 work_dir（macOS /var 是 /private/var 的符号链接）
-        let canonical_work_dir = self.work_dir
+        let canonical_work_dir = self
+            .work_dir
             .canonicalize()
             .map_err(|e| PluginError::PermissionDenied(format!("工作目录无法访问: {}", e)))?;
 
@@ -201,9 +205,7 @@ impl HostContext {
         // 文件大小守卫（在 filesystem 能力检查之前，fail-fast 避免不必要的权限查询）。
         // metadata().len() 为系统调用（无 IO），代价可忽略。
         const MAX_READ_FILE_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB
-        let file_size = std::fs::metadata(&full_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(&full_path).map(|m| m.len()).unwrap_or(0);
         if file_size > MAX_READ_FILE_BYTES {
             warn!(
                 target: "inkos.plugin.security",
@@ -449,9 +451,9 @@ impl HostContext {
             .map_err(|e| PluginError::ExecutionFailed(format!("读取目录失败: {}", e)))?
             .take(MAX_DIR_ENTRIES + 1) // +1 用于检测超限
             .filter_map(|entry| {
-                entry.ok().and_then(|e| {
-                    e.file_name().to_str().map(|s| s.to_string())
-                })
+                entry
+                    .ok()
+                    .and_then(|e| e.file_name().to_str().map(|s| s.to_string()))
             })
             .collect();
         if entries.len() > MAX_DIR_ENTRIES {
@@ -488,7 +490,11 @@ impl HostContext {
     ///   （对称 Network 的 `allowed_domains`）：仅 `allowed_commands` 内的裸命令名可执行。
     ///   bare `system_command` = 空白名单（fail-closed，无命令可执行）。命令名经
     ///   `is_safe_command_name` 校验（拒路径/shell 元字符），白名单本身不成注入向量。
-    pub fn exec_command(&self, command: &str, args: &[String]) -> Result<ExecCommandResponse, PluginError> {
+    pub fn exec_command(
+        &self,
+        command: &str,
+        args: &[String],
+    ) -> Result<ExecCommandResponse, PluginError> {
         // 命令白名单检查：须声明 SystemCommand 能力 且 command ∈ allowed_commands。
         if !self.can_exec(command) {
             warn!(
@@ -566,9 +572,7 @@ impl HostContext {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) => {}
-                Err(e) => {
-                    return Err(PluginError::ExecutionFailed(format!("等待子进程失败: {e}")))
-                }
+                Err(e) => return Err(PluginError::ExecutionFailed(format!("等待子进程失败: {e}"))),
             }
             if std::time::Instant::now() >= deadline {
                 let _ = child.kill();
@@ -589,8 +593,12 @@ impl HostContext {
         };
 
         // join 读线程（子进程已退出 → 管道 EOF，不会阻塞）
-        let stdout = stdout_handle.and_then(|h| h.join().ok()).unwrap_or_default();
-        let stderr = stderr_handle.and_then(|h| h.join().ok()).unwrap_or_default();
+        let stdout = stdout_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
+        let stderr = stderr_handle
+            .and_then(|h| h.join().ok())
+            .unwrap_or_default();
 
         Ok(ExecCommandResponse {
             stdout,
@@ -1256,8 +1264,14 @@ mod tests {
         let ctx = write_ctx(temp.path(), 100);
 
         // 60 + 40 = 100，正好用满 → 都应成功（边界是 `<=`）
-        assert!(ctx.write_file("a.txt", &"x".repeat(60)).is_ok(), "首次应成功");
-        assert!(ctx.write_file("b.txt", &"x".repeat(40)).is_ok(), "用满配额应成功");
+        assert!(
+            ctx.write_file("a.txt", &"x".repeat(60)).is_ok(),
+            "首次应成功"
+        );
+        assert!(
+            ctx.write_file("b.txt", &"x".repeat(40)).is_ok(),
+            "用满配额应成功"
+        );
         assert_eq!(ctx.written_bytes(), 100, "累计应精确等于已写字节");
 
         // 再写 1 字节即超 → 拒绝
@@ -1605,7 +1619,10 @@ mod tests {
             extract_host("https://api.example.com/path?x=1").as_deref(),
             Some("api.example.com")
         );
-        assert_eq!(extract_host("http://localhost:3000").as_deref(), Some("localhost"));
+        assert_eq!(
+            extract_host("http://localhost:3000").as_deref(),
+            Some("localhost")
+        );
         assert_eq!(extract_host("https://API.COM").as_deref(), Some("api.com"));
         assert!(extract_host("").is_none());
         // 无 scheme 的裸串不是合法 URL——ureq 同样无法请求它。返回 None 使
@@ -1701,12 +1718,24 @@ mod tests {
 
     #[test]
     fn test_check_network_domain_exact() {
-        let allowed = vec!["api.github.com".to_string(), "registry.npmjs.org".to_string()];
-        assert!(check_network_domain("https://api.github.com/repos", &allowed));
-        assert!(check_network_domain("https://registry.npmjs.org/pkg", &allowed));
+        let allowed = vec![
+            "api.github.com".to_string(),
+            "registry.npmjs.org".to_string(),
+        ];
+        assert!(check_network_domain(
+            "https://api.github.com/repos",
+            &allowed
+        ));
+        assert!(check_network_domain(
+            "https://registry.npmjs.org/pkg",
+            &allowed
+        ));
         // 不在白名单
         assert!(!check_network_domain("https://evil.com", &allowed));
-        assert!(!check_network_domain("https://api.github.com.evil.com", &allowed));
+        assert!(!check_network_domain(
+            "https://api.github.com.evil.com",
+            &allowed
+        ));
     }
 
     #[test]
@@ -1728,10 +1757,9 @@ mod tests {
 
     #[test]
     fn test_http_get_domain_not_in_whitelist() {
-        let (ctx, _temp) =
-            create_test_context(vec![Capability::Network {
-                allowed_domains: vec!["allowed.com".to_string()],
-            }]);
+        let (ctx, _temp) = create_test_context(vec![Capability::Network {
+            allowed_domains: vec!["allowed.com".to_string()],
+        }]);
         // 白名单外域名 → PermissionDenied（不发请求）
         let result = ctx.http_get("https://evil.com");
         assert!(matches!(result, Err(PluginError::PermissionDenied(_))));
@@ -1800,10 +1828,16 @@ mod tests {
         let allowed = vec!["allowed.com".to_string()];
         assert!(!check_network_domain("http://evilallowed.com/", &allowed));
         assert!(!check_network_domain("http://notallowed.com/", &allowed));
-        assert!(!check_network_domain("http://allowed.com.evil.com/", &allowed));
+        assert!(!check_network_domain(
+            "http://allowed.com.evil.com/",
+            &allowed
+        ));
         assert!(check_network_domain("http://allowed.com/", &allowed));
         assert!(check_network_domain("http://sub.allowed.com/", &allowed));
-        assert!(check_network_domain("http://anything.com/", &["*".to_string()]));
+        assert!(check_network_domain(
+            "http://anything.com/",
+            &["*".to_string()]
+        ));
         assert!(!check_network_domain("not-a-url", &allowed));
     }
 
@@ -1865,11 +1899,14 @@ mod tests {
         // 圈号形式 ①②⑦ 归一为 127.0.0.1（loopback）——注意 ①②⑧ 会得到
         // 128.0.0.1，那是公网地址，不能用来验证 SSRF 拦截。
         for (url, expect_ip) in [
-            ("http://\u{2460}\u{2461}\u{2466}.\u{24EA}.\u{24EA}.\u{2460}/", "127.0.0.1"), // 圈号 IDNA
-            ("http://１２７.０.０.１/", "127.0.0.1"),          // 全角
-            ("http://127.0.0.1\u{3002}/", "127.0.0.1"),      // 表意句号（IDNA 映射为 '.'）
-            ("http://12\n7.0.0.1/", "127.0.0.1"),            // LF 剥离
-            ("http://127.0.0.1\r/", "127.0.0.1"),            // CR 剥离
+            (
+                "http://\u{2460}\u{2461}\u{2466}.\u{24EA}.\u{24EA}.\u{2460}/",
+                "127.0.0.1",
+            ), // 圈号 IDNA
+            ("http://１２７.０.０.１/", "127.0.0.1"), // 全角
+            ("http://127.0.0.1\u{3002}/", "127.0.0.1"), // 表意句号（IDNA 映射为 '.'）
+            ("http://12\n7.0.0.1/", "127.0.0.1"),     // LF 剥离
+            ("http://127.0.0.1\r/", "127.0.0.1"),     // CR 剥离
             ("http://169.254.169\u{3002}254/", "169.254.169.254"), // 云元数据
         ] {
             // 第一层必须看到规范化后的真实 IP——否则 is_internal_ip 失效，
@@ -1895,9 +1932,9 @@ mod tests {
     #[test]
     fn test_exec_command_rejects_nul_byte_in_arg() {
         // NUL 字节在参数中会导致 OS 截断，必须在执行前拒绝。
-        let (ctx, _tmp) = create_test_context(vec![
-            Capability::SystemCommand { allowed_commands: vec!["echo".to_string()] },
-        ]);
+        let (ctx, _tmp) = create_test_context(vec![Capability::SystemCommand {
+            allowed_commands: vec!["echo".to_string()],
+        }]);
         let args = vec!["hello\0world".to_string()];
         let result = ctx.exec_command("echo", &args);
         assert!(result.is_err(), "含 NUL 字节的参数应被拒绝");
@@ -2002,8 +2039,14 @@ mod tests {
         // 直接测读线程的限量逻辑：达上限即停止读取（峰值内存有界），
         // 而非读完再截断。用 io::repeat 模拟无限输出流。
         let infinite = std::io::repeat(b'x');
-        let out = spawn_capped_reader(infinite).join().expect("读线程不应 panic");
-        assert!(out.contains("[输出截断"), "应含截断标记: {}", &out[..80.min(out.len())]);
+        let out = spawn_capped_reader(infinite)
+            .join()
+            .expect("读线程不应 panic");
+        assert!(
+            out.contains("[输出截断"),
+            "应含截断标记: {}",
+            &out[..80.min(out.len())]
+        );
         // 内容部分恰为上限字节数（标记额外追加）
         let content_len = out.find("\n[输出截断").expect("应有截断标记");
         assert_eq!(

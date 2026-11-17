@@ -35,8 +35,14 @@ fn env(key: &str, default: &str) -> String {
 
 /// agent 名（覆盖表键）。
 const AGENTS: &[&str] = &[
-    "writer", "planner", "composer", "reviser", "auditor",
-    "chapter-analyzer", "state-validator", "writer-settler",
+    "writer",
+    "planner",
+    "composer",
+    "reviser",
+    "auditor",
+    "chapter-analyzer",
+    "state-validator",
+    "writer-settler",
 ];
 
 fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
@@ -59,14 +65,21 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
 
     let mut overrides: HashMap<String, AgentOverride> = HashMap::new();
     for agent in AGENTS {
-        let model = std::env::var(format!("INKOS_AGENT_{}_MODEL", agent.to_uppercase().replace('-', "_")))
-            .ok();
-        let base_url =
-            std::env::var(format!("INKOS_AGENT_{}_BASE_URL", agent.to_uppercase().replace('-', "_")))
-                .ok();
-        let api_key =
-            std::env::var(format!("INKOS_AGENT_{}_API_KEY", agent.to_uppercase().replace('-', "_")))
-                .ok();
+        let model = std::env::var(format!(
+            "INKOS_AGENT_{}_MODEL",
+            agent.to_uppercase().replace('-', "_")
+        ))
+        .ok();
+        let base_url = std::env::var(format!(
+            "INKOS_AGENT_{}_BASE_URL",
+            agent.to_uppercase().replace('-', "_")
+        ))
+        .ok();
+        let api_key = std::env::var(format!(
+            "INKOS_AGENT_{}_API_KEY",
+            agent.to_uppercase().replace('-', "_")
+        ))
+        .ok();
         let max_tokens = std::env::var(format!(
             "INKOS_AGENT_{}_MAX_TOKENS",
             agent.to_uppercase().replace('-', "_")
@@ -76,23 +89,26 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
         if model.is_some() || base_url.is_some() || api_key.is_some() || max_tokens.is_some() {
             overrides.insert(
                 (*agent).to_string(),
-                AgentOverride { model, base_url, api_key, max_tokens },
+                AgentOverride {
+                    model,
+                    base_url,
+                    api_key,
+                    max_tokens,
+                },
             );
         }
     }
 
     // INKOS_LLM_API_FORMAT（106 号）/ INKOS_LLM_STREAM（108 号；TS parseBoolean：
     // "true"/"1"/"yes" → 流式，其余已设值 → 非流式，未设 → 缺省流式）。
-    let env_stream = std::env::var("INKOS_LLM_STREAM").ok().map(|value| {
-        value == "true" || value == "1" || value == "yes"
-    });
+    let env_stream = std::env::var("INKOS_LLM_STREAM")
+        .ok()
+        .map(|value| value == "true" || value == "1" || value == "yes");
     let router = AgentRouter::new(default, overrides)
-        .with_api_format(
-            match std::env::var("INKOS_LLM_API_FORMAT").as_deref() {
-                Ok("responses") => inkos_engine::llm::providers::TransportApiFormat::Responses,
-                _ => inkos_engine::llm::providers::TransportApiFormat::Chat,
-            },
-        )
+        .with_api_format(match std::env::var("INKOS_LLM_API_FORMAT").as_deref() {
+            Ok("responses") => inkos_engine::llm::providers::TransportApiFormat::Responses,
+            _ => inkos_engine::llm::providers::TransportApiFormat::Chat,
+        })
         .with_stream(env_stream);
     let state = Arc::new(StateManager::new(project_root.clone()));
     let hub = Arc::new(BroadcastHub::new());
@@ -124,23 +140,20 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
                     inkos_engine::server::books_routes::WriteNextAgentPorts::build(&books).await;
                 let settler = agent_ports.settler(0);
                 let mut agents = agent_ports.agents(&settler);
-                agents.full_auditor =
-                    Some(inkos_engine::llm::agent_router::FullCycleAuditor {
-                        router: books.effective_router().await,
-                        project_root: books.state.project_root().to_path_buf(),
-                        builtin_genres_dir: books.builtin_genres_dir.clone(),
-                        book_dir: books.state.project_root().join("books").join(&book_id),
-                        chapter_number: 0, // for_chapter 按章重绑
-                        genre: String::new(),
-                    });
-                let ports =
-                    inkos_engine::server::books_routes::WriteNextPorts::build(&books).await;
+                agents.full_auditor = Some(inkos_engine::llm::agent_router::FullCycleAuditor {
+                    router: books.effective_router().await,
+                    project_root: books.state.project_root().to_path_buf(),
+                    builtin_genres_dir: books.builtin_genres_dir.clone(),
+                    book_dir: books.state.project_root().join("books").join(&book_id),
+                    chapter_number: 0, // for_chapter 按章重绑
+                    genre: String::new(),
+                });
+                let ports = inkos_engine::server::books_routes::WriteNextPorts::build(&books).await;
                 let ctx = ports.ctx();
                 // 126 号：事件化配置（context:compression 广播）——与其余写面
                 // 同源；175 号：注入 stop 端点置位的中止句柄（阶段边界生效）。
                 let mut config =
-                    inkos_engine::server::books_routes::write_next_config_with_events(&books)
-                        .await;
+                    inkos_engine::server::books_routes::write_next_config_with_events(&books).await;
                 config.abort = Some(abort);
                 write_next_chapter(
                     &state,
@@ -171,11 +184,15 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
     };
     // 静态前端面（124 号）：INKOS_STATIC_DIR 指向前端产物目录（浏览器直连
     // 模式 = packages/studio/dist）；未设为纯 API 服务（Tauri 壳内嵌前端）。
-    let static_dir = std::env::var("INKOS_STATIC_DIR").ok().map(std::path::PathBuf::from);
+    let static_dir = std::env::var("INKOS_STATIC_DIR")
+        .ok()
+        .map(std::path::PathBuf::from);
     let app = inkos_engine::server::static_routes::router_books_with_static(
         // 编译期宏（非运行时 env()——CARGO_PKG_VERSION 仅构建期存在，
         // 运行时读取恒 miss 导致版本恒为 fallback，发布冒烟已证实）。
-        AppState { version: env!("CARGO_PKG_VERSION").to_string() },
+        AppState {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+        },
         hub.clone(),
         runtime,
         audit,
@@ -223,7 +240,10 @@ async fn shutdown_signal(hub: Arc<BroadcastHub>) {
         _ = terminate => {},
     }
     eprintln!("inkos-engine-server: shutdown signal received, notifying SSE subscribers");
-    hub.broadcast("engine:shutdown", &serde_json::json!({ "reason": "signal" }));
+    hub.broadcast(
+        "engine:shutdown",
+        &serde_json::json!({ "reason": "signal" }),
+    );
     // flush 窗口：事件先经各 SSE 流送出（含 keep-alive 计时器下的
     // 缓冲刷新），再终结流；管道残余由流内 shutdown 分支排空兜底。
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -263,4 +283,3 @@ async fn main() -> Result<(), std::io::Error> {
         }
     }
 }
-

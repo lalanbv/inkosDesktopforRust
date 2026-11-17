@@ -141,7 +141,6 @@ pub struct ResolvedTaskModel {
     pub sources: Vec<RoutingFieldSourceEntry>,
 }
 
-
 /// 逐字段合并：project.defaults → project.tasks[t] → book.defaults → book.tasks[t]，
 /// 后者覆盖前者；同时产出每字段来源。
 fn compose_task_override(
@@ -205,8 +204,7 @@ fn compose_task_override(
             merged.retry_count = Some(t);
         }
         if let Some(models) = layer.backup_models.as_ref() {
-            let models: Vec<String> =
-                models.iter().filter(|m| !m.is_empty()).cloned().collect();
+            let models: Vec<String> = models.iter().filter(|m| !m.is_empty()).cloned().collect();
             if !models.is_empty() {
                 merged.backup_models = Some(models);
             }
@@ -228,11 +226,8 @@ pub struct ResolveTaskModelParams<'a> {
 
 /// 任务模型解析（逐字段三层回退）。迁移兼容：routing 缺省全 fallback。
 pub fn resolve_task_model(params: ResolveTaskModelParams<'_>) -> ResolvedTaskModel {
-    let (override_value, sources) = compose_task_override(
-        params.book_routing,
-        params.project_routing,
-        params.task,
-    );
+    let (override_value, sources) =
+        compose_task_override(params.book_routing, params.project_routing, params.task);
     let model = override_value
         .model
         .clone()
@@ -299,7 +294,8 @@ pub fn resolve_task_model_chain(params: ResolveTaskModelParams<'_>) -> ResolvedT
         service: resolved.service.clone(),
     }];
     let mut seen: Vec<&str> = vec![resolved.model.as_str()];
-    let (override_value, _) = compose_task_override(params.book_routing, params.project_routing, params.task);
+    let (override_value, _) =
+        compose_task_override(params.book_routing, params.project_routing, params.task);
     for backup in override_value.backup_models.iter().flatten() {
         if attempts.len() as u32 >= TASK_MODEL_CHAIN_MAX_ATTEMPTS {
             break;

@@ -8,12 +8,17 @@ use crate::llm::provider::{LLMMessage, LLMRole};
 
 use super::prompts::{
     build_forecast_repair_prompt, build_forecast_system_prompt, build_forecast_user_prompt,
-    ForecastPromptInput, ForecastLanguage,
+    ForecastLanguage, ForecastPromptInput,
 };
 use super::schema::{parse_forecast_model_output, ForecastModelOutput};
 
 fn message(role: LLMRole, content: String) -> LLMMessage {
-    LLMMessage { role, content, tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role,
+        content,
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 pub struct ForecastGenerationInput<'a> {
@@ -90,7 +95,10 @@ pub async fn generate_branches(
     validate_generated_output(&retry, input.branch_count)
 }
 
-fn validate_generated_output(raw: &str, expected_branches: usize) -> Result<ForecastModelOutput, String> {
+fn validate_generated_output(
+    raw: &str,
+    expected_branches: usize,
+) -> Result<ForecastModelOutput, String> {
     let output = parse_forecast_model_output(raw)?;
     if output.branches.len() != expected_branches {
         return Err(format!(
@@ -124,8 +132,16 @@ mod tests {
             temperature: f64,
             max_tokens: Option<u32>,
         ) -> Result<String, String> {
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((temperature, max_tokens));
-            let index = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len() - 1;
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((temperature, max_tokens));
+            let index = self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+                - 1;
             Ok(self.responses[index].clone())
         }
     }
@@ -157,9 +173,21 @@ mod tests {
         };
         let output = generate_branches(&chat, &input).await.unwrap();
         assert_eq!(output.branches.len(), 3);
-        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 1);
+        assert_eq!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            1
+        );
         // maxTokens = max(8192, 3*(5*220+1600)) = max(8192, 8100) = 8192。
-        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].1, Some(8192));
+        assert_eq!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())[0]
+                .1,
+            Some(8192)
+        );
     }
 
     #[tokio::test]
@@ -178,9 +206,24 @@ mod tests {
         };
         let output = generate_branches(&chat, &input).await.unwrap();
         assert_eq!(output.branches.len(), 2);
-        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 2);
+        assert_eq!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            2
+        );
         // 重试降温 0.6 → 0.4。
-        assert!((chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[1].0 - 0.4).abs() < 1e-9);
+        assert!(
+            (chat
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())[1]
+                .0
+                - 0.4)
+                .abs()
+                < 1e-9
+        );
     }
 
     #[tokio::test]

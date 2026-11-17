@@ -9,9 +9,7 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 
-use crate::agents::researcher::{
-    run_research_report, ResearchInput, ResearchTransport,
-};
+use crate::agents::researcher::{run_research_report, ResearchInput, ResearchTransport};
 use crate::interaction::project_tools::{error_result, ToolResult};
 use crate::interaction::registry::{schema_description, schema_parameters, MutationKind, ToolDef};
 use crate::utils::utc_time::utc_now_iso;
@@ -47,11 +45,17 @@ pub async fn read_research_search_config(project_root: &Path) -> ResearchSearchC
             .map(String::from)
     };
     ResearchSearchConfig {
-        enabled: node.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        enabled: node
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         base_url: str_field("baseUrl"),
         api_key: str_field("apiKey"),
         api_key_env: str_field("apiKeyEnv"),
-        allow_private_egress: node.get("allowPrivateEgress").and_then(Value::as_bool).unwrap_or(false),
+        allow_private_egress: node
+            .get("allowPrivateEgress")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -73,13 +77,20 @@ impl TavilyTransport {
         } else {
             crate::utils::web_search::WebSearchOptions::default()
         };
-        Self { options, allow_private_egress: config.allow_private_egress }
+        Self {
+            options,
+            allow_private_egress: config.allow_private_egress,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl ResearchTransport for TavilyTransport {
-    async fn search(&self, query: &str, max_results: usize) -> Result<Vec<crate::utils::web_search::SearchResult>, String> {
+    async fn search(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> Result<Vec<crate::utils::web_search::SearchResult>, String> {
         crate::utils::web_search::search_web(query, max_results, &self.options).await
     }
     async fn fetch(&self, url: &str, max_chars: usize) -> Result<String, String> {
@@ -88,7 +99,11 @@ impl ResearchTransport for TavilyTransport {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 /// `slugResearchTopic`：NFKC lower + 非 [a-z0-9 汉字] 折叠 `-` + 首尾剥 +
@@ -110,7 +125,11 @@ pub fn slug_research_topic(topic: &str) -> String {
         units += ch_units;
         out.push(ch);
     }
-    if out.is_empty() { "research".to_string() } else { out }
+    if out.is_empty() {
+        "research".to_string()
+    } else {
+        out
+    }
 }
 
 /// `research_web` 执行器。
@@ -127,7 +146,10 @@ pub async fn tool_research_web(
     else {
         return error_result("research_web requires a topic argument");
     };
-    let purpose = args.get("purpose").and_then(Value::as_str).unwrap_or_default();
+    let purpose = args
+        .get("purpose")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let static_purpose: &'static str = match purpose {
         "worldbuilding" | "era" | "profession" | "market" | "fact-check" | "general" => {
             // 枚举已核，转 'static（常量集合内）。
@@ -146,7 +168,10 @@ pub async fn tool_research_web(
             ))
         }
     };
-    let depth = args.get("depth").and_then(Value::as_str).unwrap_or("standard");
+    let depth = args
+        .get("depth")
+        .and_then(Value::as_str)
+        .unwrap_or("standard");
     let static_depth: &'static str = match depth {
         "quick" | "standard" | "deep" => match depth {
             "quick" => "quick",
@@ -159,7 +184,11 @@ pub async fn tool_research_web(
             ))
         }
     };
-    let input = ResearchInput { topic: topic.to_string(), purpose: static_purpose, depth: static_depth };
+    let input = ResearchInput {
+        topic: topic.to_string(),
+        purpose: static_purpose,
+        depth: static_depth,
+    };
     let report = match run_research_report(&input, transport).await {
         Ok(report) => report,
         Err(message) => return error_result(message),
@@ -174,7 +203,9 @@ pub async fn tool_research_web(
         slug_research_topic(topic)
     );
     let report_path = research_dir.join(&file_name);
-    if let Err(e) = crate::utils::atomic_file_set::write_file_atomic(&report_path, &report.markdown).await {
+    if let Err(e) =
+        crate::utils::atomic_file_set::write_file_atomic(&report_path, &report.markdown).await
+    {
         return error_result(e.to_string());
     }
     let report_path_text = report_path.to_string_lossy().to_string();
@@ -186,7 +217,11 @@ pub async fn tool_research_web(
     text_result(
         [
             format!("Research report saved: {report_path_text}"),
-            format!("Sources: {}; confidence: {}.", report.sources.len(), report.confidence),
+            format!(
+                "Sources: {}; confidence: {}.",
+                report.sources.len(),
+                report.confidence
+            ),
             failures_line,
         ]
         .join("\n"),
@@ -235,7 +270,6 @@ pub fn research_tool_schema() -> Value {
     })
 }
 
-
 // ── 注册模块（R38b）：research_web 单件——写 .inkos/research/ 报告 →
 //    ProjectWrite（TS 剔除名单不含）；available = research 分支在场。 ──
 
@@ -243,15 +277,18 @@ crate::interaction::registry::tool_def!(
     ResearchWeb,
     "research_web",
     MutationKind::ProjectWrite,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[research_tool_schema()], "research_web") },
     schema_parameters(&[research_tool_schema()], "research_web"),
     ctx.research_enabled,
-    { {
-        let config = read_research_search_config(ctx.root).await;
-        let transport = TavilyTransport::from_config(&config);
-        tool_research_web(ctx.root, &transport, args).await
-    } }
+    {
+        {
+            let config = read_research_search_config(ctx.root).await;
+            let transport = TavilyTransport::from_config(&config);
+            tool_research_web(ctx.root, &transport, args).await
+        }
+    }
 );
 
 /// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
@@ -270,7 +307,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ResearchTransport for NoopTransport {
-        async fn search(&self, _query: &str, _max_results: usize) -> Result<Vec<SearchResult>, String> {
+        async fn search(
+            &self,
+            _query: &str,
+            _max_results: usize,
+        ) -> Result<Vec<SearchResult>, String> {
             Err("TAVILY_API_KEY not set.".to_string())
         }
         async fn fetch(&self, _url: &str, _max_chars: usize) -> Result<String, String> {
@@ -280,7 +321,10 @@ mod tests {
 
     #[test]
     fn slug_topic() {
-        assert_eq!(slug_research_topic("1990 年代 县冷库会计"), "1990-年代-县冷库会计");
+        assert_eq!(
+            slug_research_topic("1990 年代 县冷库会计"),
+            "1990-年代-县冷库会计"
+        );
         assert_eq!(slug_research_topic("!!!"), "research");
         assert_eq!(slug_research_topic(&"x".repeat(100)).chars().count(), 60);
     }
@@ -298,7 +342,11 @@ mod tests {
         .await;
         assert!(!result.is_error, "{}", result.text);
         let lines: Vec<&str> = result.text.split('\n').collect();
-        assert!(lines[0].starts_with("Research report saved: "), "{}", result.text);
+        assert!(
+            lines[0].starts_with("Research report saved: "),
+            "{}",
+            result.text
+        );
         assert!(lines[0].ends_with(".md"));
         assert_eq!(lines[1], "Sources: 0; confidence: low.");
         assert_eq!(lines[2], "Partial failures: 1.");
@@ -311,9 +359,17 @@ mod tests {
         let entries: Vec<_> = std::fs::read_dir(&research_dir).unwrap().collect();
         assert_eq!(entries.len(), 1);
         let markdown = std::fs::read_to_string(entries[0].as_ref().unwrap().path()).unwrap();
-        assert!(markdown.starts_with("# Research: 1990 年代冷库会计"), "{markdown}");
+        assert!(
+            markdown.starts_with("# Research: 1990 年代冷库会计"),
+            "{markdown}"
+        );
         // 校验错误。
-        let bad_purpose = tool_research_web(root, &NoopTransport, &json!({ "topic": "t", "purpose": "nope" })).await;
+        let bad_purpose = tool_research_web(
+            root,
+            &NoopTransport,
+            &json!({ "topic": "t", "purpose": "nope" }),
+        )
+        .await;
         assert!(bad_purpose.is_error && bad_purpose.text.contains("Invalid research_web.purpose"));
         let no_topic = tool_research_web(root, &NoopTransport, &json!({ "purpose": "era" })).await;
         assert!(no_topic.is_error && no_topic.text.contains("requires a topic"));

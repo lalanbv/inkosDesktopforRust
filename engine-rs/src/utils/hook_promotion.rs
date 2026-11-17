@@ -21,7 +21,8 @@ pub fn default_half_life_chapters(timing: Option<HookPayoffTiming>) -> u32 {
 
 /// 解析半衰期：显式 halfLifeChapters 优先，否则按 timing 默认。
 pub fn resolve_half_life_chapters(hook: &HookRecord) -> u32 {
-    hook.half_life_chapters.unwrap_or_else(|| default_half_life_chapters(hook.payoff_timing))
+    hook.half_life_chapters
+        .unwrap_or_else(|| default_half_life_chapters(hook.payoff_timing))
 }
 
 #[cfg(test)]
@@ -30,11 +31,26 @@ mod tests {
 
     #[test]
     fn defaults_by_timing() {
-        assert_eq!(default_half_life_chapters(Some(HookPayoffTiming::Immediate)), 10);
-        assert_eq!(default_half_life_chapters(Some(HookPayoffTiming::NearTerm)), 10);
-        assert_eq!(default_half_life_chapters(Some(HookPayoffTiming::MidArc)), 30);
-        assert_eq!(default_half_life_chapters(Some(HookPayoffTiming::SlowBurn)), 80);
-        assert_eq!(default_half_life_chapters(Some(HookPayoffTiming::Endgame)), 80);
+        assert_eq!(
+            default_half_life_chapters(Some(HookPayoffTiming::Immediate)),
+            10
+        );
+        assert_eq!(
+            default_half_life_chapters(Some(HookPayoffTiming::NearTerm)),
+            10
+        );
+        assert_eq!(
+            default_half_life_chapters(Some(HookPayoffTiming::MidArc)),
+            30
+        );
+        assert_eq!(
+            default_half_life_chapters(Some(HookPayoffTiming::SlowBurn)),
+            80
+        );
+        assert_eq!(
+            default_half_life_chapters(Some(HookPayoffTiming::Endgame)),
+            80
+        );
         assert_eq!(default_half_life_chapters(None), 30);
     }
 }
@@ -55,12 +71,13 @@ pub struct PromotionPassResult {
 
 /// 轻量晋级：读 hooks + chapter_summaries，`advancedCount >= 2` 翻 promoted。
 /// 零 LLM 调用；不做 I/O——调用方决定是否持久化。
-pub fn rerun_promotion_pass(
-    hooks: &[HookRecord],
-    summaries_raw: &str,
-) -> PromotionPassResult {
+pub fn rerun_promotion_pass(hooks: &[HookRecord], summaries_raw: &str) -> PromotionPassResult {
     if hooks.is_empty() {
-        return PromotionPassResult { updated: false, hooks: hooks.to_vec(), flipped_count: 0 };
+        return PromotionPassResult {
+            updated: false,
+            hooks: hooks.to_vec(),
+            flipped_count: 0,
+        };
     }
 
     let ids: Vec<&str> = hooks.iter().map(|h| h.hook_id.as_str()).collect();
@@ -143,10 +160,7 @@ fn detect_hook_activity_column_index(lines: &[&str]) -> usize {
         }
         if header_row_re().is_match(line) {
             let cols: Vec<&str> = line.split('|').map(|c| c.trim()).collect();
-            if let Some(position) = cols
-                .iter()
-                .position(|c| activity_header_re().is_match(c))
-            {
+            if let Some(position) = cols.iter().position(|c| activity_header_re().is_match(c)) {
                 return position;
             }
             return DEFAULT_INDEX;
@@ -222,9 +236,9 @@ mod promotion_tests {
     #[test]
     fn promotion_flips_at_two_advances() {
         let hooks = vec![
-            hook("H01", None, None),  // 摘要推导 = 2 → 翻
-            hook("H02", Some(2), None), // 显式 advancedCount = 2 → 翻
-            hook("H03", Some(1), None), // 1 → 不翻
+            hook("H01", None, None),       // 摘要推导 = 2 → 翻
+            hook("H02", Some(2), None),    // 显式 advancedCount = 2 → 翻
+            hook("H03", Some(1), None),    // 1 → 不翻
             hook("H04", None, Some(true)), // 已晋级 → 原样
         ];
         let result = rerun_promotion_pass(&hooks, SUMMARIES);

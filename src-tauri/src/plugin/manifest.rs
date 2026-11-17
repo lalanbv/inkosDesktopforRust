@@ -33,13 +33,11 @@ pub struct PluginInfo {
 pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
     let manifest_path = path.join("plugin.toml");
 
-    let content = fs::read_to_string(&manifest_path).map_err(|e| {
-        PluginError::InvalidManifest(format!("无法读取清单文件: {}", e))
-    })?;
+    let content = fs::read_to_string(&manifest_path)
+        .map_err(|e| PluginError::InvalidManifest(format!("无法读取清单文件: {}", e)))?;
 
-    let manifest: PluginManifest = toml::from_str(&content).map_err(|e| {
-        PluginError::InvalidManifest(format!("TOML 解析失败: {}", e))
-    })?;
+    let manifest: PluginManifest = toml::from_str(&content)
+        .map_err(|e| PluginError::InvalidManifest(format!("TOML 解析失败: {}", e)))?;
 
     // 验证必需字段
     if !is_safe_plugin_id(&manifest.plugin.id) {
@@ -60,9 +58,7 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
     }
 
     if manifest.plugin.version.is_empty() {
-        return Err(PluginError::InvalidManifest(
-            "version 不能为空".to_string(),
-        ));
+        return Err(PluginError::InvalidManifest("version 不能为空".to_string()));
     }
 
     // 展示字段长度 + 控制字符校验：manifest 来自不可信插件包，这些字段长期驻留
@@ -72,7 +68,11 @@ pub fn parse_manifest(path: &Path) -> Result<PluginMetadata, PluginError> {
         ("author", &manifest.plugin.author, MAX_DISPLAY_FIELD_LEN),
         ("license", &manifest.plugin.license, MAX_DISPLAY_FIELD_LEN),
         ("version", &manifest.plugin.version, MAX_DISPLAY_FIELD_LEN),
-        ("description", &manifest.plugin.description, MAX_DESCRIPTION_LEN),
+        (
+            "description",
+            &manifest.plugin.description,
+            MAX_DESCRIPTION_LEN,
+        ),
     ] {
         if !is_safe_display_string(value, max) {
             return Err(PluginError::InvalidManifest(format!(
@@ -138,7 +138,9 @@ pub const HOST_ABI_VERSION: &str = "1";
 pub(crate) fn is_safe_plugin_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// 展示类字段（name / author / license）长度上限。
@@ -189,7 +191,7 @@ pub(crate) fn is_safe_entrypoint(s: &str) -> bool {
     for comp in path.components() {
         match comp {
             Component::Normal(_) => depth += 1,
-            Component::CurDir => {}                              // `.` 忽略
+            Component::CurDir => {} // `.` 忽略
             Component::ParentDir => {
                 depth -= 1;
                 if depth < 0 {
@@ -220,7 +222,8 @@ pub(crate) fn is_safe_command_name(name: &str) -> bool {
 }
 
 /// 解析能力字符串（pub(crate)：registry 模块复用以校验条目 capability 语法一致）
-pub(crate) fn parse_capability(s: &str) -> Option<Capability> {    match s {
+pub(crate) fn parse_capability(s: &str) -> Option<Capability> {
+    match s {
         "read_project" => Some(Capability::ReadProject),
         "write_project" => Some(Capability::WriteProject),
         // bare = 空白名单（fail-closed；exec 不可达自 WASM，且「任意命令」违背白名单初衷）
@@ -286,7 +289,10 @@ mod tests {
 
     #[test]
     fn test_parse_capability() {
-        assert_eq!(parse_capability("read_project"), Some(Capability::ReadProject));
+        assert_eq!(
+            parse_capability("read_project"),
+            Some(Capability::ReadProject)
+        );
         assert_eq!(
             parse_capability("network"),
             Some(Capability::Network {
@@ -310,7 +316,11 @@ mod tests {
         );
         // 相对路径 fail-closed：canonicalize 会相对宿主 CWD 解析，
         // `filesystem:.` 在 CWD 为 work_dir 祖先时可绕过为全量访问。
-        assert_eq!(parse_capability("filesystem:."), None, "相对路径 `.` 应拒绝");
+        assert_eq!(
+            parse_capability("filesystem:."),
+            None,
+            "相对路径 `.` 应拒绝"
+        );
         assert_eq!(
             parse_capability("filesystem:../../etc"),
             None,
@@ -394,14 +404,26 @@ entrypoint = "plugin.wasm"
         let content = fs::read_to_string(plugin_dir.join("plugin.toml")).unwrap();
         let manifest: PluginManifest = toml::from_str(&content).unwrap();
         println!("Raw manifest capabilities: {:?}", manifest.capabilities);
-        assert_eq!(manifest.capabilities.len(), 2, "TOML should have 2 capabilities");
+        assert_eq!(
+            manifest.capabilities.len(),
+            2,
+            "TOML should have 2 capabilities"
+        );
 
         // 再测试完整解析
         let meta = parse_manifest(&plugin_dir).unwrap();
-        println!("Parsed metadata: id={}, capabilities={:?}", meta.id, meta.capabilities);
+        println!(
+            "Parsed metadata: id={}, capabilities={:?}",
+            meta.id, meta.capabilities
+        );
         assert_eq!(meta.id, "test-plugin");
         assert_eq!(meta.version, "1.0.0");
-        assert_eq!(meta.capabilities.len(), 2, "Expected 2 capabilities, got {}", meta.capabilities.len());
+        assert_eq!(
+            meta.capabilities.len(),
+            2,
+            "Expected 2 capabilities, got {}",
+            meta.capabilities.len()
+        );
     }
 
     #[test]
@@ -492,11 +514,7 @@ entrypoint = "plugin.wasm"
         let plugin_dir = temp_dir.path().join("my-plugin");
         fs::create_dir_all(&plugin_dir).unwrap();
 
-        let bad_entrypoints = [
-            "../../etc/passwd",
-            "../sibling/evil.wasm",
-            "/usr/bin/sh",
-        ];
+        let bad_entrypoints = ["../../etc/passwd", "../sibling/evil.wasm", "/usr/bin/sh"];
         for ep in &bad_entrypoints {
             let manifest = format!(
                 r#"[plugin]
@@ -529,7 +547,10 @@ abi_version = "1"
 entrypoint = "native/plugin.wasm"
 "#;
         fs::write(plugin_dir.join("plugin.toml"), ok_manifest).unwrap();
-        assert!(parse_manifest(&plugin_dir).is_ok(), "合法 entrypoint 应通过");
+        assert!(
+            parse_manifest(&plugin_dir).is_ok(),
+            "合法 entrypoint 应通过"
+        );
     }
 
     #[test]
@@ -559,7 +580,8 @@ entrypoint = "plugin.wasm"
         );
 
         // 合法 abi_version 仍通过
-        let ok_abi = format!(r#"[plugin]
+        let ok_abi = format!(
+            r#"[plugin]
 id = "abi-plugin"
 name = "x"
 version = "1.0.0"
@@ -568,17 +590,30 @@ author = ""
 license = "MIT"
 abi_version = "{HOST_ABI_VERSION}"
 entrypoint = "plugin.wasm"
-"#);
+"#
+        );
         fs::write(plugin_dir.join("plugin.toml"), &ok_abi).unwrap();
-        assert!(parse_manifest(&plugin_dir).is_ok(), "abi_version={HOST_ABI_VERSION} 应通过");
+        assert!(
+            parse_manifest(&plugin_dir).is_ok(),
+            "abi_version={HOST_ABI_VERSION} 应通过"
+        );
     }
 
     #[test]
     fn test_is_safe_display_string() {
         // 长度边界：恰好等于上限通过，超一字节拒绝
-        assert!(is_safe_display_string(&"a".repeat(128), 128), "恰好上限应通过");
-        assert!(!is_safe_display_string(&"a".repeat(129), 128), "超上限应拒绝");
-        assert!(is_safe_display_string("", 128), "空串应通过（可选字段留空）");
+        assert!(
+            is_safe_display_string(&"a".repeat(128), 128),
+            "恰好上限应通过"
+        );
+        assert!(
+            !is_safe_display_string(&"a".repeat(129), 128),
+            "超上限应拒绝"
+        );
+        assert!(
+            is_safe_display_string("", 128),
+            "空串应通过（可选字段留空）"
+        );
 
         // 控制字符全类别拒绝
         for (label, s) in [
@@ -589,10 +624,7 @@ entrypoint = "plugin.wasm"
             ("ANSI 转义", "ab\x1b[31mcd"),
             ("退格", "ab\x08cd"),
         ] {
-            assert!(
-                !is_safe_display_string(s, 128),
-                "{label} 应被拒绝: {s:?}"
-            );
+            assert!(!is_safe_display_string(s, 128), "{label} 应被拒绝: {s:?}");
         }
 
         // 正常多字节文本通过（中文插件名/描述是正当用法）
@@ -648,8 +680,8 @@ entrypoint = "plugin.wasm"
                 toml_str(&fields["license"]),
             );
             fs::write(plugin_dir.join("plugin.toml"), &manifest).unwrap();
-            let err = parse_manifest(&plugin_dir)
-                .expect_err(&format!("{field} 超长/含控制字符应被拒绝"));
+            let err =
+                parse_manifest(&plugin_dir).expect_err(&format!("{field} 超长/含控制字符应被拒绝"));
             let msg = err.to_string();
             assert!(
                 msg.contains(expect_in_msg),

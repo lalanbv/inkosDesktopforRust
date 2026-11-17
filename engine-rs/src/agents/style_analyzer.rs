@@ -26,7 +26,11 @@ pub fn analyze_style(
     let is_en = language == WritingLanguage::En;
 
     let sentences: Vec<&str> = {
-        let re = if is_en { sentence_split_en_re() } else { sentence_split_zh_re() };
+        let re = if is_en {
+            sentence_split_en_re()
+        } else {
+            sentence_split_zh_re()
+        };
         re.split(text)
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -47,7 +51,10 @@ pub fn analyze_style(
         0.0
     };
     let sentence_length_std_dev = if sentence_lengths.len() > 1 {
-        let var = sentence_lengths.iter().map(|l| (l - avg_sentence_length).powi(2)).sum::<f64>()
+        let var = sentence_lengths
+            .iter()
+            .map(|l| (l - avg_sentence_length).powi(2))
+            .sum::<f64>()
             / sentence_lengths.len() as f64;
         var.sqrt()
     } else {
@@ -55,7 +62,10 @@ pub fn analyze_style(
     };
 
     // 段落长统计。
-    let paragraph_lengths: Vec<f64> = paragraphs.iter().map(|p| measure(p, is_en) as f64).collect();
+    let paragraph_lengths: Vec<f64> = paragraphs
+        .iter()
+        .map(|p| measure(p, is_en) as f64)
+        .collect();
     let avg_paragraph_length = if !paragraph_lengths.is_empty() {
         paragraph_lengths.iter().sum::<f64>() / paragraph_lengths.len() as f64
     } else {
@@ -65,8 +75,14 @@ pub fn analyze_style(
         (0.0_f64, 0.0_f64)
     } else {
         (
-            paragraph_lengths.iter().cloned().fold(f64::INFINITY, f64::min),
-            paragraph_lengths.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            paragraph_lengths
+                .iter()
+                .cloned()
+                .fold(f64::INFINITY, f64::min),
+            paragraph_lengths
+                .iter()
+                .cloned()
+                .fold(f64::NEG_INFINITY, f64::max),
         )
     };
 
@@ -128,8 +144,9 @@ pub fn analyze_style(
         }
     }
     type Openings = Vec<(String, usize)>;
-    let (mut top_patterns, insertion_ordered): (Openings, Openings) =
-        openings.into_iter().partition(|(key, _)| js_array_index(key).is_some());
+    let (mut top_patterns, insertion_ordered): (Openings, Openings) = openings
+        .into_iter()
+        .partition(|(key, _)| js_array_index(key).is_some());
     top_patterns.sort_by_key(|(key, _)| js_array_index(key));
     top_patterns.extend(insertion_ordered);
     top_patterns.sort_by(|a, b| b.1.cmp(&a.1));
@@ -153,7 +170,10 @@ pub fn analyze_style(
         avg_sentence_length: round1(avg_sentence_length),
         sentence_length_std_dev: round1(sentence_length_std_dev),
         avg_paragraph_length: avg_paragraph_length.round(),
-        paragraph_length_range: ParagraphLengthRange { min: min_p, max: max_p },
+        paragraph_length_range: ParagraphLengthRange {
+            min: min_p,
+            max: max_p,
+        },
         vocabulary_diversity: round3(vocabulary_diversity),
         top_patterns,
         rhetorical_features,
@@ -176,10 +196,15 @@ fn measure(s: &str, is_en: bool) -> usize {
 /// `Object.entries` 先按数值升序列出此类键，再按插入序列出其余键。
 fn js_array_index(key: &str) -> Option<u64> {
     let bytes = key.as_bytes();
-    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) || (bytes.len() > 1 && bytes[0] == b'0') {
+    if bytes.is_empty()
+        || !bytes.iter().all(u8::is_ascii_digit)
+        || (bytes.len() > 1 && bytes[0] == b'0')
+    {
         return None;
     }
-    key.parse::<u64>().ok().filter(|value| *value < u64::from(u32::MAX))
+    key.parse::<u64>()
+        .ok()
+        .filter(|value| *value < u64::from(u32::MAX))
 }
 
 /// 修辞特征检测。排比用手动扫描，其余用 regex crate。
@@ -307,7 +332,9 @@ fn zh_char_keep_re() -> &'static Regex {
     // 仅弯引号——双端早已分叉）；数字取 ASCII `[0-9]`（JS 非 u 模式 `\d` 语义，Rust
     // `\d` 为 Unicode 数字会多剥全角数字）。
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r#"[\s\n\r，。！？、：；"'“”‘’（）【】《》0-9]"#).expect("zh char keep"))
+    R.get_or_init(|| {
+        Regex::new(r#"[\s\n\r，。！？、：；"'“”‘’（）【】《》0-9]"#).expect("zh char keep")
+    })
 }
 fn zh_simile_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -323,7 +350,10 @@ fn zh_hyperbole_re() -> &'static Regex {
 }
 fn zh_personification_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"[风雨雪月花树草石](?:在|像|仿佛).*?(?:笑|哭|叹|呻|吟|怒|舞)").expect("zh personification"))
+    R.get_or_init(|| {
+        Regex::new(r"[风雨雪月花树草石](?:在|像|仿佛).*?(?:笑|哭|叹|呻|吟|怒|舞)")
+            .expect("zh personification")
+    })
 }
 fn zh_short_rhythm_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -335,7 +365,12 @@ fn en_simile_re() -> &'static Regex {
 }
 fn en_rhetorical_q_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)\b(?:how could|why would|what if|wasn't it|isn't it|could it be)\b[^.!?]*\?").expect("en rhetorical q"))
+    R.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(?:how could|why would|what if|wasn't it|isn't it|could it be)\b[^.!?]*\?",
+        )
+        .expect("en rhetorical q")
+    })
 }
 fn en_tricolon_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -397,7 +432,10 @@ mod tests {
         // 构造 3 句同前缀（「我们」）+ 其它各异。
         let text = "我们出发。我们战斗。我们胜利。他来了。她走了。";
         let p = analyze_style(text, None, WritingLanguage::Zh, None);
-        assert!(p.top_patterns.iter().any(|s| s.contains("我们") && s.contains("3次")));
+        assert!(p
+            .top_patterns
+            .iter()
+            .any(|s| s.contains("我们") && s.contains("3次")));
     }
 
     #[test]
@@ -405,7 +443,11 @@ mod tests {
         // 2+ 处比喻 → 命中。
         let text = "她像是一阵风。他仿佛同雾气。";
         let p = analyze_style(text, None, WritingLanguage::Zh, None);
-        assert!(p.rhetorical_features.iter().any(|f| f.contains("比喻")), "features={:?}", p.rhetorical_features);
+        assert!(
+            p.rhetorical_features.iter().any(|f| f.contains("比喻")),
+            "features={:?}",
+            p.rhetorical_features
+        );
     }
 
     #[test]
@@ -418,7 +460,12 @@ mod tests {
 
     #[test]
     fn source_name_and_analyzed_at_propagated() {
-        let p = analyze_style("一二三。", Some("ref.txt"), WritingLanguage::Zh, Some("2024-01-01T00:00:00.000Z"));
+        let p = analyze_style(
+            "一二三。",
+            Some("ref.txt"),
+            WritingLanguage::Zh,
+            Some("2024-01-01T00:00:00.000Z"),
+        );
         assert_eq!(p.source_name.as_deref(), Some("ref.txt"));
         assert_eq!(p.analyzed_at.as_deref(), Some("2024-01-01T00:00:00.000Z"));
     }
@@ -436,16 +483,20 @@ mod tests {
     /// 产出的同一张向量表逐向量全等（数值按 f64 比较：JSON 整数 4 与 Rust 4.0 同值）。
     #[test]
     fn golden_vectors_match_ts_reference() {
-        const GOLDEN: &str =
-            include_str!("../../../packages/studio/src/__tests__/golden/style-fingerprint-vectors.json");
+        const GOLDEN: &str = include_str!(
+            "../../../packages/studio/src/__tests__/golden/style-fingerprint-vectors.json"
+        );
         fn same(a: &serde_json::Value, b: &serde_json::Value) -> bool {
             match (a, b) {
-                (serde_json::Value::Number(x), serde_json::Value::Number(y)) => x.as_f64() == y.as_f64(),
+                (serde_json::Value::Number(x), serde_json::Value::Number(y)) => {
+                    x.as_f64() == y.as_f64()
+                }
                 (serde_json::Value::Array(x), serde_json::Value::Array(y)) => {
                     x.len() == y.len() && x.iter().zip(y).all(|(l, r)| same(l, r))
                 }
                 (serde_json::Value::Object(x), serde_json::Value::Object(y)) => {
-                    x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+                    x.len() == y.len()
+                        && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
                 }
                 _ => a == b,
             }
@@ -455,7 +506,11 @@ mod tests {
         assert!(vectors.len() >= 8);
         let mut failures = Vec::new();
         for vector in vectors {
-            let language = if vector["language"] == "en" { WritingLanguage::En } else { WritingLanguage::Zh };
+            let language = if vector["language"] == "en" {
+                WritingLanguage::En
+            } else {
+                WritingLanguage::Zh
+            };
             let profile = analyze_style(
                 vector["text"].as_str().unwrap(),
                 vector["sourceName"].as_str(),
@@ -464,9 +519,16 @@ mod tests {
             );
             let actual = serde_json::to_value(&profile).unwrap();
             if !same(&actual, &vector["expected"]) {
-                failures.push(format!("{}: rust={actual} ts={}", vector["id"], vector["expected"]));
+                failures.push(format!(
+                    "{}: rust={actual} ts={}",
+                    vector["id"], vector["expected"]
+                ));
             }
         }
-        assert!(failures.is_empty(), "golden 分歧：\n{}", failures.join("\n"));
+        assert!(
+            failures.is_empty(),
+            "golden 分歧：\n{}",
+            failures.join("\n")
+        );
     }
 }

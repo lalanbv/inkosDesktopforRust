@@ -64,7 +64,10 @@ mod tests {
 
     #[test]
     fn anthropic_never_optional() {
-        assert!(!is_api_key_optional_for_endpoint("anthropic", Some("http://localhost:11434/v1")));
+        assert!(!is_api_key_optional_for_endpoint(
+            "anthropic",
+            Some("http://localhost:11434/v1")
+        ));
     }
 
     #[test]
@@ -80,14 +83,23 @@ mod tests {
             "http://192.168.1.5/v1",
             "http://172.16.0.1/v1",
         ] {
-            assert!(is_api_key_optional_for_endpoint("openai", Some(url)), "{url}");
+            assert!(
+                is_api_key_optional_for_endpoint("openai", Some(url)),
+                "{url}"
+            );
         }
     }
 
     #[test]
     fn public_hosts_require_key() {
-        assert!(!is_api_key_optional_for_endpoint("openai", Some("https://api.deepseek.com")));
-        assert!(!is_api_key_optional_for_endpoint("openai", Some("https://172.32.0.1/v1")));
+        assert!(!is_api_key_optional_for_endpoint(
+            "openai",
+            Some("https://api.deepseek.com")
+        ));
+        assert!(!is_api_key_optional_for_endpoint(
+            "openai",
+            Some("https://172.32.0.1/v1")
+        ));
         assert!(!is_api_key_optional_for_endpoint("openai", None));
         assert!(!is_api_key_optional_for_endpoint("openai", Some("")));
     }

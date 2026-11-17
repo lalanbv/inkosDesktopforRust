@@ -150,7 +150,9 @@ fn assemble(root: &Path) -> axum::Router {
         project_root: root.to_path_buf(),
     };
     inkos_engine::server::router_books(
-        inkos_engine::server::AppState { version: "work-m1b".into() },
+        inkos_engine::server::AppState {
+            version: "work-m1b".into(),
+        },
         hub,
         write_next,
         audit,
@@ -174,7 +176,9 @@ async fn request(
     };
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 8 * 1024 * 1024)
+        .await
+        .unwrap();
     let value = if bytes.is_empty() {
         Value::Null
     } else {
@@ -259,10 +263,21 @@ fn seed_adopt_work(root: &Path, work_id: &str, profile_id: &str, revision_path: 
     }
     std::fs::create_dir_all(work_dir.join("revisions").join("outline")).unwrap();
     std::fs::write(work_dir.join(revision_path), REV1_TEXT).unwrap();
-    std::fs::write(work_dir.join("revisions").join("outline").join("r1.md"), REV1_TEXT).unwrap();
-    std::fs::write(work_dir.join("revisions").join("outline").join("r2.md"), REV2_TEXT).unwrap();
-    std::fs::write(work_manifest_path(root, work_id).unwrap(), manifest_to_json(&manifest).unwrap())
-        .unwrap();
+    std::fs::write(
+        work_dir.join("revisions").join("outline").join("r1.md"),
+        REV1_TEXT,
+    )
+    .unwrap();
+    std::fs::write(
+        work_dir.join("revisions").join("outline").join("r2.md"),
+        REV2_TEXT,
+    )
+    .unwrap();
+    std::fs::write(
+        work_manifest_path(root, work_id).unwrap(),
+        manifest_to_json(&manifest).unwrap(),
+    )
+    .unwrap();
 }
 
 // ── profile 金标准 + 端点 ────────────────────────────────────────────
@@ -277,14 +292,21 @@ fn golden_builtin_profiles_match_ts_shared_strings() {
     // 必须全等；顶层字段序由结构体声明序保证（与 zod schema 序一致）。TS 侧
     // 同字符串逐字节锁（work-store-cross-engine.test.ts）。
     let golden_short: Value = serde_json::from_str(GOLDEN_SHORT_FICTION_PROFILE_JSON).unwrap();
-    let golden_workspace: Value = serde_json::from_str(GOLDEN_WORKSPACE_DEFAULT_PROFILE_JSON).unwrap();
-    let short_fiction = profiles.iter().find(|profile| profile.id == "short-fiction").unwrap();
+    let golden_workspace: Value =
+        serde_json::from_str(GOLDEN_WORKSPACE_DEFAULT_PROFILE_JSON).unwrap();
+    let short_fiction = profiles
+        .iter()
+        .find(|profile| profile.id == "short-fiction")
+        .unwrap();
     assert_eq!(
         serde_json::to_value(short_fiction).unwrap(),
         golden_short,
         "short-fiction 金标准全字段全值一致（与 TS 测试共用字符串）"
     );
-    let workspace = profiles.iter().find(|profile| profile.id == "workspace-default").unwrap();
+    let workspace = profiles
+        .iter()
+        .find(|profile| profile.id == "workspace-default")
+        .unwrap();
     assert_eq!(
         serde_json::to_value(workspace).unwrap(),
         golden_workspace,
@@ -302,15 +324,26 @@ async fn profiles_endpoint_lists_nine_sorted_and_merges_custom() {
     let profiles = body["profiles"].as_array().unwrap();
     assert_eq!(profiles.len(), 9);
     // list 按 id 升序（TS localeCompare）
-    let ids: Vec<&str> = profiles.iter().map(|profile| profile["id"].as_str().unwrap()).collect();
+    let ids: Vec<&str> = profiles
+        .iter()
+        .map(|profile| profile["id"].as_str().unwrap())
+        .collect();
     let mut sorted = ids.clone();
     sorted.sort();
     assert_eq!(ids, sorted);
     // 全字段出参（zod parse 后 default 已应用——artifactSchemas {} 等在场）
-    assert!(profiles.iter().all(|profile| profile["qualityCriteria"].is_array()));
-    assert!(profiles.iter().all(|profile| profile["artifactSchemas"].is_object()));
-    assert!(profiles.iter().all(|profile| profile["confirmation"]["destructiveMutation"] == "confirm"));
-    assert!(profiles.iter().all(|profile| profile["contextRecipe"]["sourceIds"][0] == "task"));
+    assert!(profiles
+        .iter()
+        .all(|profile| profile["qualityCriteria"].is_array()));
+    assert!(profiles
+        .iter()
+        .all(|profile| profile["artifactSchemas"].is_object()));
+    assert!(profiles
+        .iter()
+        .all(|profile| profile["confirmation"]["destructiveMutation"] == "confirm"));
+    assert!(profiles
+        .iter()
+        .all(|profile| profile["contextRecipe"]["sourceIds"][0] == "task"));
 
     // 自定义归并：新增 + 同名覆盖内置
     std::fs::create_dir_all(root.join(".inkos").join("profiles")).unwrap();
@@ -320,17 +353,28 @@ async fn profiles_endpoint_lists_nine_sorted_and_merges_custom() {
     )
     .unwrap();
     std::fs::write(
-        root.join(".inkos").join("profiles").join("short-fiction.json"),
-        GOLDEN_SHORT_FICTION_PROFILE_JSON.replace("\"title\": \"Short fiction\"", "\"title\": \"短篇（项目覆盖）\""),
+        root.join(".inkos")
+            .join("profiles")
+            .join("short-fiction.json"),
+        GOLDEN_SHORT_FICTION_PROFILE_JSON.replace(
+            "\"title\": \"Short fiction\"",
+            "\"title\": \"短篇（项目覆盖）\"",
+        ),
     )
     .unwrap();
     let (status, body) = request(&app, "GET", "/api/v1/profiles", None).await;
     assert_eq!(status, StatusCode::OK);
     let profiles = body["profiles"].as_array().unwrap();
     assert_eq!(profiles.len(), 10, "新增 1 + 覆盖 0（replace 语义）");
-    let overridden = profiles.iter().find(|profile| profile["id"] == "short-fiction").unwrap();
+    let overridden = profiles
+        .iter()
+        .find(|profile| profile["id"] == "short-fiction")
+        .unwrap();
     assert_eq!(overridden["title"], "短篇（项目覆盖）");
-    assert_eq!(overridden["artifactSchemas"]["source/final/short-story.json"], "short-manuscript");
+    assert_eq!(
+        overridden["artifactSchemas"]["source/final/short-story.json"],
+        "short-manuscript"
+    );
     assert!(profiles.iter().any(|profile| profile["id"] == "zz-custom"));
 
     // 非法自定义 profile（version≠2）→ 500 INTERNAL_ERROR 固定文案
@@ -364,8 +408,13 @@ async fn works_endpoints_shapes_and_error_faces() {
     assert_eq!(works[0]["profileId"], "workspace-default");
 
     // profileId 过滤：命中与不命中
-    let (status, body) =
-        request(&app, "GET", "/api/v1/works?profileId=workspace-default", None).await;
+    let (status, body) = request(
+        &app,
+        "GET",
+        "/api/v1/works?profileId=workspace-default",
+        None,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["works"].as_array().unwrap().len(), 1);
     let (status, body) = request(&app, "GET", "/api/v1/works?profileId=short-fiction", None).await;
@@ -390,7 +439,11 @@ async fn works_endpoints_shapes_and_error_faces() {
     // 错误面：未知 work → 404 纯字符串 error（局部 catch）
     let (status, body) = request(&app, "GET", "/api/v1/works/ghost", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(body["error"].is_string(), "局部 catch = 纯字符串 error：{}", body);
+    assert!(
+        body["error"].is_string(),
+        "局部 catch = 纯字符串 error：{}",
+        body
+    );
 
     // 变异③ 未知字段：strict 拒 → 400 纯字符串
     let work_dir = root.join("works").join("adopt-work");
@@ -401,7 +454,12 @@ async fn works_endpoints_shapes_and_error_faces() {
     )
     .unwrap();
     let (status, body) = request(&app, "GET", "/api/v1/works/adopt-work", None).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST, "strict 未知键 → 400：{}", body);
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "strict 未知键 → 400：{}",
+        body
+    );
     assert!(body["error"].is_string());
     std::fs::write(work_dir.join("work.json"), original).unwrap();
 }
@@ -443,9 +501,15 @@ async fn revision_endpoint_content_download_and_checksum_face() {
         .and_then(|value| value.to_str().ok())
         .unwrap()
         .to_string();
-    assert!(disposition.starts_with("attachment; filename=\""), "{}", disposition);
+    assert!(
+        disposition.starts_with("attachment; filename=\""),
+        "{}",
+        disposition
+    );
     assert!(disposition.contains("filename*=UTF-8''"), "{}", disposition);
-    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     assert_eq!(bytes.as_ref(), REV2_TEXT.as_bytes());
 
     // 变异① checksum 不符 → 400 固定文案（TS ApiError(409) 被局部 catch 降级）
@@ -468,7 +532,10 @@ async fn revision_endpoint_content_download_and_checksum_face() {
         StatusCode::BAD_REQUEST,
         "checksum 不符 → 400（非 409，TS 局部 catch 同款降级）"
     );
-    assert_eq!(body["error"], "Revision content does not match its recorded checksum");
+    assert_eq!(
+        body["error"],
+        "Revision content does not match its recorded checksum"
+    );
     std::fs::write(&snapshot, REV2_TEXT).unwrap();
 
     // 快照缺失 → 404
@@ -535,19 +602,34 @@ async fn adopt_happy_path_end_to_end() {
         std::fs::read_to_string(work_manifest_path(root, "adopt-work").unwrap()).unwrap();
     let manifest = parse_work_manifest_json(&manifest_text).unwrap();
     let artifact = &manifest.artifacts[0];
-    assert_eq!(artifact.current_revision_id.as_deref(), Some(expected_revision.as_str()));
+    assert_eq!(
+        artifact.current_revision_id.as_deref(),
+        Some(expected_revision.as_str())
+    );
     let statuses: Vec<(&str, String)> = artifact
         .revisions
         .iter()
         .map(|revision| (revision.id.as_str(), format!("{:?}", revision.status)))
         .collect();
-    assert!(statuses.contains(&("r1", "Superseded".to_string())), "{statuses:?}");
-    assert!(statuses.contains(&("r2", "Candidate".to_string())), "{statuses:?}");
-    assert!(statuses.contains(&(expected_revision.as_str(), "Current".to_string())), "{statuses:?}");
+    assert!(
+        statuses.contains(&("r1", "Superseded".to_string())),
+        "{statuses:?}"
+    );
+    assert!(
+        statuses.contains(&("r2", "Candidate".to_string())),
+        "{statuses:?}"
+    );
+    assert!(
+        statuses.contains(&(expected_revision.as_str(), "Current".to_string())),
+        "{statuses:?}"
+    );
 
     // 源文件与快照落位
     let source = std::fs::read_to_string(
-        root.join("works").join("adopt-work").join("source").join("outline.md"),
+        root.join("works")
+            .join("adopt-work")
+            .join("source")
+            .join("outline.md"),
     )
     .unwrap();
     assert_eq!(source, REV2_TEXT);
@@ -574,10 +656,16 @@ async fn adopt_happy_path_end_to_end() {
         .unwrap();
     assert_eq!(listed.len(), 1);
     let episode = &listed[0];
-    assert_eq!(episode.status, inkos_engine::harness::EpisodeStatus::Completed);
+    assert_eq!(
+        episode.status,
+        inkos_engine::harness::EpisodeStatus::Completed
+    );
     assert_eq!(episode.profile_id.as_deref(), Some("workspace-default"));
     let events = store.list_events(&episode.id).unwrap();
-    let types: Vec<&str> = events.iter().map(|event| event.event_type.as_str()).collect();
+    let types: Vec<&str> = events
+        .iter()
+        .map(|event| event.event_type.as_str())
+        .collect();
     assert_eq!(
         types,
         vec![
@@ -593,7 +681,10 @@ async fn adopt_happy_path_end_to_end() {
     assert_eq!(events[0].payload["baseline"][0]["artifactId"], "outline");
     assert_eq!(events[1].payload["risk"], "recoverable-write");
     assert_eq!(events[1].payload["source"], "explicit");
-    assert_eq!(events[1].payload["parameters"]["expectedCurrentRevisionId"], "r1");
+    assert_eq!(
+        events[1].payload["parameters"]["expectedCurrentRevisionId"],
+        "r1"
+    );
     assert_eq!(events[2].payload["workId"], "adopt-work");
     assert_eq!(events[2].payload["accepted"], true);
     assert!(events[2].payload["actionExecutionId"].is_string());
@@ -638,8 +729,14 @@ async fn adopt_failures_match_global_error_face_and_record_events() {
     std::fs::write(
         &manifest_path,
         original
-            .replace(r#""path": "source/outline.md""#, r#""path": "artifacts/outline.md""#)
-            .replace("works/adopt-work/source/outline.md", "works/adopt-work/artifacts/outline.md"),
+            .replace(
+                r#""path": "source/outline.md""#,
+                r#""path": "artifacts/outline.md""#,
+            )
+            .replace(
+                "works/adopt-work/source/outline.md",
+                "works/adopt-work/artifacts/outline.md",
+            ),
     )
     .unwrap();
     let (status, _) = request(
@@ -662,20 +759,44 @@ async fn adopt_failures_match_global_error_face_and_record_events() {
         })
         .unwrap();
     assert_eq!(listed.len(), 3, "每次失败产生独立 episode 行");
-    assert!(listed.iter().all(|episode| episode.status == inkos_engine::harness::EpisodeStatus::Failed));
+    assert!(listed
+        .iter()
+        .all(|episode| episode.status == inkos_engine::harness::EpisodeStatus::Failed));
     let mut codes = Vec::new();
     for episode in &listed {
         let events = store.list_events(&episode.id).unwrap();
-        assert!(events.iter().any(|event| event.event_type == "episode-failed"));
-        if let Some(failed) = events.iter().find(|event| event.event_type == "action-failed") {
-            codes.push(failed.payload["code"].as_str().unwrap_or("(no code)").to_string());
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "episode-failed"));
+        if let Some(failed) = events
+            .iter()
+            .find(|event| event.event_type == "action-failed")
+        {
+            codes.push(
+                failed.payload["code"]
+                    .as_str()
+                    .unwrap_or("(no code)")
+                    .to_string(),
+            );
         }
     }
-    assert!(codes.iter().any(|code| code == "ARTIFACT_REVISION_CONFLICT"), "{codes:?}");
-    assert!(codes.iter().any(|code| code == "ARTIFACT_DERIVED"), "{codes:?}");
+    assert!(
+        codes
+            .iter()
+            .any(|code| code == "ARTIFACT_REVISION_CONFLICT"),
+        "{codes:?}"
+    );
+    assert!(
+        codes.iter().any(|code| code == "ARTIFACT_DERIVED"),
+        "{codes:?}"
+    );
     // 清单未被触碰（r1 仍为 current）
-    let manifest = parse_work_manifest_json(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
-    assert_eq!(manifest.artifacts[0].current_revision_id.as_deref(), Some("r1"));
+    let manifest =
+        parse_work_manifest_json(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    assert_eq!(
+        manifest.artifacts[0].current_revision_id.as_deref(),
+        Some("r1")
+    );
     store.close();
 }
 
@@ -687,7 +808,12 @@ async fn adopt_regenerates_short_manuscript_projections() {
     // 再生路径（884 号该场景为 fail-closed：ARTIFACT_DOMAIN_PROJECTION_UNAVAILABLE；
     // M3a 纯函数层落位后与 TS 对齐：parse→charCount 重算→终稿校验→投影族多写
     // + storyTitle 覆写 work 标题）。
-    seed_adopt_work(root, "short-work", "short-fiction", "source/final/short-story.json");
+    seed_adopt_work(
+        root,
+        "short-work",
+        "short-fiction",
+        "source/final/short-story.json",
+    );
     let candidate = r#"{"storyTitle":"镜中雨","openingHook":"雨夜来客叩门。","chapters":[{"number":1,"title":"换名","content":"斋主以镜换名，来客留下一个再未使用的名字。","charCount":21},{"number":2,"title":"窥影","content":"镜中人影与来客同貌，交易自此刻开始。","charCount":18}],"rawContent":""}"#;
     let snapshot = root
         .join("works")
@@ -699,8 +825,14 @@ async fn adopt_regenerates_short_manuscript_projections() {
     let manifest_path = work_manifest_path(root, "short-work").unwrap();
     let original = std::fs::read_to_string(&manifest_path).unwrap();
     let patched = original
-        .replace(&format!("\"checksum\": \"sha256:{}\"", sha256_hex(REV2_TEXT)), &format!("\"checksum\": \"sha256:{}\"", sha256_hex(candidate)))
-        .replace(&format!("\"byteLength\": {}", REV2_TEXT.len()), &format!("\"byteLength\": {}", candidate.len()));
+        .replace(
+            &format!("\"checksum\": \"sha256:{}\"", sha256_hex(REV2_TEXT)),
+            &format!("\"checksum\": \"sha256:{}\"", sha256_hex(candidate)),
+        )
+        .replace(
+            &format!("\"byteLength\": {}", REV2_TEXT.len()),
+            &format!("\"byteLength\": {}", candidate.len()),
+        );
     std::fs::write(&manifest_path, patched).unwrap();
 
     let app = assemble(root);
@@ -714,8 +846,13 @@ async fn adopt_regenerates_short_manuscript_projections() {
     assert_eq!(status, StatusCode::OK, "{}", body);
     // storyTitle 覆写 work 标题（adopt title_override，TS L172 同款）
     assert_eq!(body["action"]["status"], "success");
-    let detail = request(&app, "GET", "/api/v1/works/short-work", None).await.1;
-    assert_eq!(detail["work"]["title"], "镜中雨", "storyTitle 覆写 work 标题");
+    let detail = request(&app, "GET", "/api/v1/works/short-work", None)
+        .await
+        .1;
+    assert_eq!(
+        detail["work"]["title"], "镜中雨",
+        "storyTitle 覆写 work 标题"
+    );
 
     // 投影族落盘（acceptPaths 只注册 authority 修订；投影文件为写入面产物）
     let work_dir = root.join("works").join("short-work");
@@ -742,7 +879,10 @@ async fn adopt_regenerates_short_manuscript_projections() {
         &std::fs::read_to_string(work_manifest_path(root, "short-work").unwrap()).unwrap(),
     )
     .unwrap();
-    assert_ne!(manifest.artifacts[0].current_revision_id.as_deref(), Some("r1"));
+    assert_ne!(
+        manifest.artifacts[0].current_revision_id.as_deref(),
+        Some("r1")
+    );
     let adopted = &manifest.artifacts[0]
         .revisions
         .iter()
@@ -904,11 +1044,17 @@ async fn source_sync_accept_new_file_supersedes_and_removes() {
         .artifacts
         .iter()
         .find(|artifact| {
-            artifact.revisions.iter().any(|revision| revision.path == "source/chapters/0001.md")
+            artifact
+                .revisions
+                .iter()
+                .any(|revision| revision.path == "source/chapters/0001.md")
         })
         .unwrap();
     assert_eq!(chapter.kind, "chapter", "chapters/<n>.md → chapter kind");
-    assert!(chapter.current_revision_id.is_some(), "accept 全量语义 = 新文件直接 current");
+    assert!(
+        chapter.current_revision_id.is_some(),
+        "accept 全量语义 = 新文件直接 current"
+    );
     // 源文件落盘
     assert_eq!(
         std::fs::read_to_string(source_dir.join("chapters").join("0001.md")).unwrap(),
@@ -953,7 +1099,8 @@ async fn skill_documents_endpoint_lists_sorted_with_error_face() {
     let root = dir.path();
     let skill_dir = root.join(".agents").join("skills").join("doc-skill");
     std::fs::create_dir_all(skill_dir.join("docs")).unwrap();
-    let skill_markdown = "---\nname: doc-skill\ndescription: 文档编辑器种子技能\n---\n\n# doc-skill\n";
+    let skill_markdown =
+        "---\nname: doc-skill\ndescription: 文档编辑器种子技能\n---\n\n# doc-skill\n";
     std::fs::write(skill_dir.join("SKILL.md"), skill_markdown).unwrap();
     std::fs::write(skill_dir.join("docs").join("notes.md"), "# 笔记\n").unwrap();
     std::fs::write(skill_dir.join("docs").join("appendix.txt"), "附录\n").unwrap();
@@ -969,7 +1116,10 @@ async fn skill_documents_endpoint_lists_sorted_with_error_face() {
     assert_eq!(status, StatusCode::OK, "{}", body);
     assert_eq!(body["id"], "doc-skill");
     let documents = body["documents"].as_array().unwrap();
-    let paths: Vec<&str> = documents.iter().map(|doc| doc["path"].as_str().unwrap()).collect();
+    let paths: Vec<&str> = documents
+        .iter()
+        .map(|doc| doc["path"].as_str().unwrap())
+        .collect();
     assert_eq!(
         paths,
         vec!["SKILL.md", "docs/appendix.txt", "docs/notes.md"],

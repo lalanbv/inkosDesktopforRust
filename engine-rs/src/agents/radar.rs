@@ -149,10 +149,8 @@ async fn fetch_qidian() -> PlatformRankings {
             entries,
         };
     };
-    let re = regex::Regex::new(
-        r#"<a[^>]*href="//book\.qidian\.com/info/\d+"[^>]*>([^<]+)</a>"#,
-    )
-    .unwrap();
+    let re = regex::Regex::new(r#"<a[^>]*href="//book\.qidian\.com/info/\d+"[^>]*>([^<]+)</a>"#)
+        .unwrap();
     let mut seen = std::collections::HashSet::new();
     for caps in re.captures_iter(&html) {
         let title = caps.get(1).map(|m| m.as_str().trim()).unwrap_or_default();
@@ -246,12 +244,16 @@ pub fn filter_rankings_by_selection(
         .map(|mut r| {
             r.entries.retain(|e| {
                 if !categories.is_empty()
-                    && categories.iter().any(|cat| e.category.to_lowercase().contains(cat.as_str()))
+                    && categories
+                        .iter()
+                        .any(|cat| e.category.to_lowercase().contains(cat.as_str()))
                 {
                     return true;
                 }
                 if !titles.is_empty()
-                    && titles.iter().any(|t| e.title.to_lowercase().contains(t.as_str()))
+                    && titles
+                        .iter()
+                        .any(|t| e.title.to_lowercase().contains(t.as_str()))
                 {
                     return true;
                 }
@@ -279,11 +281,18 @@ pub async fn run_radar_analyze(
     let scoped_any = selection
         .map(|s| !s.platforms.is_empty() || !s.categories.is_empty() || !s.titles.is_empty())
         .unwrap_or(false);
-    let scope_note = if scoped_any { "（本次分析仅针对用户勾选的范围，请严格基于以下数据）" } else { "" };
-    let rankings_text = format!("{scope_note}
-{}", format_rankings_for_prompt(&scoped))
-        .trim()
-        .to_string();
+    let scope_note = if scoped_any {
+        "（本次分析仅针对用户勾选的范围，请严格基于以下数据）"
+    } else {
+        ""
+    };
+    let rankings_text = format!(
+        "{scope_note}
+{}",
+        format_rankings_for_prompt(&scoped)
+    )
+    .trim()
+    .to_string();
 
     let system_prompt = format!(
         r#"你是一个专业的网络小说市场分析师。下面是从各平台实时抓取的排行榜数据，请基于这些真实数据分析市场趋势。
@@ -331,7 +340,8 @@ pub async fn run_radar_analyze(
                 },
                 LLMMessage {
                     role: LLMRole::User,
-                    content: "请基于上面的实时排行榜数据，分析当前网文市场热度，给出开书建议。".to_string(),
+                    content: "请基于上面的实时排行榜数据，分析当前网文市场热度，给出开书建议。"
+                        .to_string(),
                     tool_calls: None,
                     tool_call_id: None,
                 },
@@ -353,7 +363,9 @@ pub async fn run_radar(router: &AgentRouter) -> Result<RadarResult, String> {
 
 /// `parseResult`：`/\{[\s\S]*\}/`（贪婪）→ 首个 `{` 到末个 `}` 子串解析。
 pub fn parse_radar_result(content: &str) -> Result<RadarResult, String> {
-    let start = content.find('{').ok_or("Radar output format error: no JSON found")?;
+    let start = content
+        .find('{')
+        .ok_or("Radar output format error: no JSON found")?;
     let end = content
         .rfind('}')
         .ok_or("Radar output format error: no JSON found")?;
@@ -417,20 +429,36 @@ mod tests {
             PlatformRankings {
                 platform: "番茄小说".to_string(),
                 entries: vec![
-                    RankingEntry { title: "书A".into(), author: String::new(), category: "都市".into(), extra: String::new() },
-                    RankingEntry { title: "书B".into(), author: String::new(), category: "仙侠".into(), extra: String::new() },
+                    RankingEntry {
+                        title: "书A".into(),
+                        author: String::new(),
+                        category: "都市".into(),
+                        extra: String::new(),
+                    },
+                    RankingEntry {
+                        title: "书B".into(),
+                        author: String::new(),
+                        category: "仙侠".into(),
+                        extra: String::new(),
+                    },
                 ],
             },
             PlatformRankings {
                 platform: "起点中文网".to_string(),
-                entries: vec![
-                    RankingEntry { title: "书C".into(), author: String::new(), category: "都市".into(), extra: String::new() },
-                ],
+                entries: vec![RankingEntry {
+                    title: "书C".into(),
+                    author: String::new(),
+                    category: "都市".into(),
+                    extra: String::new(),
+                }],
             },
         ];
 
         // 空勾选 = 全量。
-        assert_eq!(filter_rankings_by_selection(rankings.clone(), None).len(), 2);
+        assert_eq!(
+            filter_rankings_by_selection(rankings.clone(), None).len(),
+            2
+        );
         assert_eq!(
             filter_rankings_by_selection(rankings.clone(), Some(&RadarSelection::default())).len(),
             2
@@ -439,7 +467,10 @@ mod tests {
         // 平台勾选：只留起点。
         let only_qidian = filter_rankings_by_selection(
             rankings.clone(),
-            Some(&RadarSelection { platforms: vec!["起点中文网".into()], ..Default::default() }),
+            Some(&RadarSelection {
+                platforms: vec!["起点中文网".into()],
+                ..Default::default()
+            }),
         );
         assert_eq!(only_qidian.len(), 1);
         assert_eq!(only_qidian[0].platform, "起点中文网");
@@ -447,7 +478,10 @@ mod tests {
         // 分类勾选：跨平台只留都市条目。
         let urban = filter_rankings_by_selection(
             rankings.clone(),
-            Some(&RadarSelection { categories: vec!["都市".into()], ..Default::default() }),
+            Some(&RadarSelection {
+                categories: vec!["都市".into()],
+                ..Default::default()
+            }),
         );
         assert_eq!(urban.len(), 2);
         assert_eq!(urban[0].entries.len(), 1);
@@ -456,7 +490,10 @@ mod tests {
         // 无匹配条目的平台整源剔除。
         let missing = filter_rankings_by_selection(
             rankings,
-            Some(&RadarSelection { categories: vec!["科幻".into()], ..Default::default() }),
+            Some(&RadarSelection {
+                categories: vec!["科幻".into()],
+                ..Default::default()
+            }),
         );
         assert!(missing.is_empty());
     }

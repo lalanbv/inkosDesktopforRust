@@ -30,8 +30,7 @@ use serde_json::{json, Value};
 use crate::interaction::session::is_safe_book_id;
 use crate::server::books_routes::BooksRuntime;
 use crate::translation::run_store::{
-    load_translation_chapter, load_translation_manifest, translation_project_dir,
-    LoadManifestError,
+    load_translation_chapter, load_translation_manifest, translation_project_dir, LoadManifestError,
 };
 use crate::translation::types::*;
 
@@ -66,9 +65,7 @@ fn load_error(id: &str, e: LoadManifestError) -> Response {
 
 // ── GET /translations ───────────────────────────────────────────
 
-pub async fn list_translations(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn list_translations(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root();
     // 970 号 P4：列表=works/ 扫 work.json（profileId=translation）——TS `listWorkManifests
     // (root, "translation")` 同面；`translations/` 旧项目由 load_translation_manifest 的
@@ -120,7 +117,10 @@ pub async fn list_translations(
         let b = b["projectId"].as_str().unwrap_or_default();
         b.cmp(a)
     });
-    (StatusCode::OK, Json(json!({ "translations": translations })))
+    (
+        StatusCode::OK,
+        Json(json!({ "translations": translations })),
+    )
 }
 
 // ── POST /translations/upload ───────────────────────────────────
@@ -134,10 +134,19 @@ pub async fn upload_translation(
     let root = runtime.state.project_root();
     // 273 号：TS 解码上限 80MB，base64 膨胀后 body ≥107MB——axum 默认 2MB
     // 提取器上限先行截断，改手工读取（BODY_CAP_TRANSLATION_UPLOAD=128MB）。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_TRANSLATION_UPLOAD).await {
+    let body = match crate::server::read_body_capped(
+        req,
+        crate::server::BODY_CAP_TRANSLATION_UPLOAD,
+    )
+    .await
+    {
         Ok(body) => body,
         Err(status) => {
-            return api_error(status, "TRANSLATION_UPLOAD_TOO_LARGE", "Translation upload body too large")
+            return api_error(
+                status,
+                "TRANSLATION_UPLOAD_TOO_LARGE",
+                "Translation upload body too large",
+            )
         }
     };
     // 321 号：落地逻辑收敛到 upload_common::store_project_upload（TS
@@ -198,7 +207,12 @@ pub async fn create_translation(
                     Some(crate::translation::types::TranslationGlossaryTerm {
                         source: term.get("source")?.as_str()?.trim().to_string(),
                         target: term.get("target")?.as_str()?.trim().to_string(),
-                        note: term.get("note").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).map(String::from),
+                        note: term
+                            .get("note")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|n| !n.is_empty())
+                            .map(String::from),
                     })
                 })
                 .collect()
@@ -270,8 +284,7 @@ pub async fn create_translation(
     };
     match crate::translation::project::create_translation_project_from_file(root, &input).await {
         Ok(result) => {
-            let manifest_json =
-                serde_json::to_value(&result.manifest).unwrap_or(Value::Null);
+            let manifest_json = serde_json::to_value(&result.manifest).unwrap_or(Value::Null);
             let mut payload = json!({
                 "projectDir": result.project_dir,
                 "manifestPath": result.manifest_path,
@@ -300,9 +313,10 @@ pub async fn get_translation_detail(
         Ok(manifest) => manifest,
         Err(e) => return load_error(&id, e),
     };
-    let report = tokio::fs::read_to_string(translation_project_dir(root, &id).join("review-report.md"))
-        .await
-        .unwrap_or_default();
+    let report =
+        tokio::fs::read_to_string(translation_project_dir(root, &id).join("review-report.md"))
+            .await
+            .unwrap_or_default();
     let mut chapters: Vec<Value> = Vec::new();
     // 967 号：已译段数按译文文件现场计（旧 manifest 无该字段/早于本轮落盘也即时正确）；
     // manifest 章节与 chapters 双处补 TS 2.0 三字段（UI 读 manifest.chapters[] 计数）。
@@ -348,9 +362,15 @@ pub async fn get_translation_detail(
         chapters.push(chapter_json);
     }
     let mut manifest_json = serde_json::to_value(&manifest).unwrap_or(Value::Null);
-    if let Some(items) = manifest_json.get_mut("chapters").and_then(Value::as_array_mut) {
+    if let Some(items) = manifest_json
+        .get_mut("chapters")
+        .and_then(Value::as_array_mut)
+    {
         for item in items {
-            let number = item.get("number").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok());
+            let number = item
+                .get("number")
+                .and_then(Value::as_u64)
+                .and_then(|n| u32::try_from(n).ok());
             if let Some(count) = number.and_then(|n| live_counts.get(&n)) {
                 item["translatedSegments"] = json!(count);
             }
@@ -404,7 +424,10 @@ fn creation_source_error(message: &str) -> (String, StatusCode) {
         | "CREATION_SOURCE_PATH_INVALID"
         | "SOURCE_NOT_TEXT" => (code, StatusCode::BAD_REQUEST),
         "SOURCE_ARTIFACT_REQUIRED" | "WORK_RESOURCE_ID_INVALID" => (code, StatusCode::NOT_FOUND),
-        _ => ("TRANSLATION_CREATE_FAILED".into(), StatusCode::INTERNAL_SERVER_ERROR),
+        _ => (
+            "TRANSLATION_CREATE_FAILED".into(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     }
 }
 
@@ -421,8 +444,14 @@ pub(crate) async fn translation_skill_activations(
     .await;
     let registry = crate::harness::profile_registry::create_built_in_work_profile_registry(root)
         .map_err(|error| error.to_string())?;
-    let profile = registry.require("translation").map_err(|error| error.to_string())?;
-    crate::skills::production_bindings::resolve_profile_skill_activations(&available.skills, profile, false)
+    let profile = registry
+        .require("translation")
+        .map_err(|error| error.to_string())?;
+    crate::skills::production_bindings::resolve_profile_skill_activations(
+        &available.skills,
+        profile,
+        false,
+    )
 }
 
 pub async fn run_translation(
@@ -449,7 +478,13 @@ pub async fn run_translation(
     //（TranslationManager 回执「Skill：…」读此字段——此前 Rust 后端恒缺且链上无技能指导）。
     let activations = match translation_skill_activations(root).await {
         Ok(activations) => activations,
-        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, TRANSLATION_ACTION_FAILED, message),
+        Err(message) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                TRANSLATION_ACTION_FAILED,
+                message,
+            )
+        }
     };
     let skill_ids = crate::skills::production_bindings::activated_skill_ids(&activations);
     let model = crate::translation::llm_model::LlmTranslationModel {
@@ -517,8 +552,7 @@ pub async fn export_translation(
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty());
     let root: &Path = runtime.state.project_root();
-    match crate::translation::export::write_translation_export(root, &id, format, output_path)
-        .await
+    match crate::translation::export::write_translation_export(root, &id, format, output_path).await
     {
         Ok(result) => (
             StatusCode::OK,
@@ -542,28 +576,53 @@ pub async fn revise_translation(
         return invalid_id(&id);
     }
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
-    let chapter_number = payload.get("chapterNumber").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok());
+    let chapter_number = payload
+        .get("chapterNumber")
+        .and_then(Value::as_u64)
+        .and_then(|v| u32::try_from(v).ok());
     let paragraph = match payload.get("paragraph") {
         Some(Value::String(text)) if text == "last" => None,
         Some(Value::Number(number)) => number.as_u64().and_then(|v| u32::try_from(v).ok()),
         _ => None,
     };
-    let instruction = payload.get("instruction").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let instruction = payload
+        .get("instruction")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     if chapter_number.is_none() {
-        return api_error(StatusCode::BAD_REQUEST, "TRANSLATION_CHAPTER_REQUIRED", "chapterNumber is required");
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "TRANSLATION_CHAPTER_REQUIRED",
+            "chapterNumber is required",
+        );
     }
     if instruction.is_empty() {
-        return api_error(StatusCode::BAD_REQUEST, "TRANSLATION_INSTRUCTION_REQUIRED", "instruction is required");
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "TRANSLATION_INSTRUCTION_REQUIRED",
+            "instruction is required",
+        );
     }
     let root = runtime.state.project_root();
     // 960/968/969 号同款技能装配（修订=翻译技能域）。
     let activations = match translation_skill_activations(root).await {
         Ok(activations) => activations,
-        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, TRANSLATION_ACTION_FAILED, message),
+        Err(message) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                TRANSLATION_ACTION_FAILED,
+                message,
+            )
+        }
     };
     let model = crate::translation::llm_model::LlmTranslationModel {
         router: std::sync::Arc::clone(&runtime.effective_router().await),
-        max_tokens: payload.get("maxTokens").and_then(Value::as_u64).map(|v| v as u32),
+        max_tokens: payload
+            .get("maxTokens")
+            .and_then(Value::as_u64)
+            .map(|v| v as u32),
     };
     match crate::skills::production_bindings::scope_operation_skills(
         Some(std::sync::Arc::new(activations)),
@@ -593,8 +652,13 @@ fn coded_error(message: &str) -> (String, StatusCode) {
         "TRANSLATION_PARAGRAPH_REQUIRED"
         | "TRANSLATION_TARGET_EMPTY"
         | "TRANSLATION_TARGET_MISSING" => (code, StatusCode::BAD_REQUEST),
-        "TRANSLATION_CHAPTER_NOT_FOUND" | "TRANSLATION_SEGMENT_NOT_FOUND" => (code, StatusCode::NOT_FOUND),
+        "TRANSLATION_CHAPTER_NOT_FOUND" | "TRANSLATION_SEGMENT_NOT_FOUND" => {
+            (code, StatusCode::NOT_FOUND)
+        }
         "TRANSLATION_REVISION_UNAVAILABLE" => (code, StatusCode::NOT_IMPLEMENTED),
-        _ => ("TRANSLATION_REVISION_FAILED".into(), StatusCode::INTERNAL_SERVER_ERROR),
+        _ => (
+            "TRANSLATION_REVISION_FAILED".into(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     }
 }

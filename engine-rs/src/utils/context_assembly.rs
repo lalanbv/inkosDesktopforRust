@@ -19,7 +19,10 @@ fn truncate_for_override_reason(value: &str) -> String {
     let collapsed = whitespace_re().replace_all(value, " ").trim().to_string();
     if collapsed.chars().count() > MAX_OVERRIDE_REASON_CHARS {
         // TS slice(0, 79) + "…"：按 UTF-16 码元取 79 个（BMP 与 chars 等价）。
-        let head: String = collapsed.chars().take(MAX_OVERRIDE_REASON_CHARS - 1).collect();
+        let head: String = collapsed
+            .chars()
+            .take(MAX_OVERRIDE_REASON_CHARS - 1)
+            .collect();
         format!("{head}…")
     } else {
         collapsed
@@ -58,10 +61,30 @@ pub fn build_governed_rule_stack(
 
     RuleStack {
         layers: vec![
-            RuleLayer { id: "L1".to_string(), name: "hard_facts".to_string(), precedence: 100, scope: RuleLayerScope::Global },
-            RuleLayer { id: "L2".to_string(), name: "author_intent".to_string(), precedence: 80, scope: RuleLayerScope::Book },
-            RuleLayer { id: "L3".to_string(), name: "planning".to_string(), precedence: 60, scope: RuleLayerScope::Arc },
-            RuleLayer { id: "L4".to_string(), name: "current_task".to_string(), precedence: 70, scope: RuleLayerScope::Local },
+            RuleLayer {
+                id: "L1".to_string(),
+                name: "hard_facts".to_string(),
+                precedence: 100,
+                scope: RuleLayerScope::Global,
+            },
+            RuleLayer {
+                id: "L2".to_string(),
+                name: "author_intent".to_string(),
+                precedence: 80,
+                scope: RuleLayerScope::Book,
+            },
+            RuleLayer {
+                id: "L3".to_string(),
+                name: "planning".to_string(),
+                precedence: 60,
+                scope: RuleLayerScope::Arc,
+            },
+            RuleLayer {
+                id: "L4".to_string(),
+                name: "current_task".to_string(),
+                precedence: 70,
+                scope: RuleLayerScope::Local,
+            },
         ],
         sections: RuleStackSections {
             // Phase 5 权威源名（旧名 story_bible/volume_outline 已废弃）。
@@ -83,9 +106,24 @@ pub fn build_governed_rule_stack(
             ],
         },
         override_edges: vec![
-            OverrideEdge { from: "L4".to_string(), to: "L3".to_string(), allowed: true, scope: "current_chapter".to_string() },
-            OverrideEdge { from: "L4".to_string(), to: "L2".to_string(), allowed: false, scope: "current_chapter".to_string() },
-            OverrideEdge { from: "L4".to_string(), to: "L1".to_string(), allowed: false, scope: "current_chapter".to_string() },
+            OverrideEdge {
+                from: "L4".to_string(),
+                to: "L3".to_string(),
+                allowed: true,
+                scope: "current_chapter".to_string(),
+            },
+            OverrideEdge {
+                from: "L4".to_string(),
+                to: "L2".to_string(),
+                allowed: false,
+                scope: "current_chapter".to_string(),
+            },
+            OverrideEdge {
+                from: "L4".to_string(),
+                to: "L1".to_string(),
+                allowed: false,
+                scope: "current_chapter".to_string(),
+            },
         ],
         active_overrides,
     }
@@ -182,10 +220,14 @@ pub fn is_protected_context_source(source: &str) -> bool {
 /// R21/391 号起 pub：Context Lens 投影复用同一估算口径（367 号留痕面）。
 pub fn estimate_context_source_tokens(entry: &ContextSource) -> u32 {
     // TS filter(Boolean)：excerpt 为 null/空串均剔除。
-    let parts: Vec<&str> = [&entry.source, &entry.reason, entry.excerpt.as_deref().unwrap_or("")]
-        .into_iter()
-        .filter(|part| !part.is_empty())
-        .collect();
+    let parts: Vec<&str> = [
+        &entry.source,
+        &entry.reason,
+        entry.excerpt.as_deref().unwrap_or(""),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect();
     estimate_text_tokens(&parts.join("\n"))
 }
 
@@ -229,16 +271,24 @@ mod tests {
     #[test]
     fn protected_source_matrix() {
         assert!(is_protected_context_source("runtime/chapter_memo"));
-        assert!(is_protected_context_source("story/outline/volume_map.md#卷一"));
+        assert!(is_protected_context_source(
+            "story/outline/volume_map.md#卷一"
+        ));
         assert!(is_protected_context_source("story/current_state.md#主角"));
         assert!(is_protected_context_source("runtime/hook_debt#H01"));
         assert!(is_protected_context_source("story/pending_hooks.md#H01"));
         // G2/330 号：旧版文件名章纲段（含锚点）与新版同等保护。
         assert!(is_protected_context_source("story/story_bible.md#玉印"));
-        assert!(is_protected_context_source("story/volume_outline.md#chapter-4"));
+        assert!(is_protected_context_source(
+            "story/volume_outline.md#chapter-4"
+        ));
         assert!(!is_protected_context_source("story/chapter_summaries.md#3"));
-        assert!(!is_protected_context_source("story/volume_summaries.md#arc"));
-        assert!(!is_protected_context_source("story/chapters#recent_endings"));
+        assert!(!is_protected_context_source(
+            "story/volume_summaries.md#arc"
+        ));
+        assert!(!is_protected_context_source(
+            "story/chapters#recent_endings"
+        ));
         assert!(!is_protected_context_source("reference/mat-01#开场"));
     }
 
@@ -270,7 +320,10 @@ mod tests {
             prompt_packs: None,
             compression: None,
         });
-        assert_eq!(trace.context_tiers.protected_sources, vec!["runtime/chapter_memo"]);
+        assert_eq!(
+            trace.context_tiers.protected_sources,
+            vec!["runtime/chapter_memo"]
+        );
         assert_eq!(trace.context_tiers.compressible_sources.len(), 1);
         assert_eq!(
             trace.token_budget.total_selected_tokens,

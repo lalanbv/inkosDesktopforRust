@@ -47,7 +47,10 @@ pub fn should_spill(name: &str, res: &ToolResult) -> bool {
 pub fn session_dir_name(session_id: Option<&str>) -> String {
     match session_id {
         Some(id) if !id.is_empty() => {
-            let hex: String = Sha256::digest(id.as_bytes())[..6].iter().map(|b| format!("{b:02x}")).collect();
+            let hex: String = Sha256::digest(id.as_bytes())[..6]
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
             format!("session-{hex}")
         }
         _ => "session-adhoc".to_string(),
@@ -83,8 +86,16 @@ pub fn split_head_tail(text: &str, head_bytes: usize, tail_bytes: usize) -> (Str
 
 /// 落盘并返回通知文本（项目相对路径，read 工具前缀放行通道）。
 /// 目录 0700、文件 wx+0600（独占写防碰撞；unix 权限面，windows 走缺省）。
-async fn save_spill(root: &std::path::Path, session_id: Option<&str>, tool: &str, text: &str) -> Result<String, String> {
-    let dir = root.join(".inkos").join("spills").join(session_dir_name(session_id));
+async fn save_spill(
+    root: &std::path::Path,
+    session_id: Option<&str>,
+    tool: &str,
+    text: &str,
+) -> Result<String, String> {
+    let dir = root
+        .join(".inkos")
+        .join("spills")
+        .join(session_dir_name(session_id));
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| format!("create spill dir failed: {e}"))?;
@@ -97,7 +108,13 @@ async fn save_spill(root: &std::path::Path, session_id: Option<&str>, tool: &str
     let random = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
     let safe_tool: String = tool
         .chars()
-        .map(|c| if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let file_name = format!("{random}-{safe_tool}.txt");
     let path = dir.join(&file_name);
@@ -110,7 +127,9 @@ async fn save_spill(root: &std::path::Path, session_id: Option<&str>, tool: &str
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600)).await;
+        let _ = file
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .await;
     }
     tokio::io::AsyncWriteExt::write_all(&mut tokio::io::BufWriter::new(file), text.as_bytes())
         .await
@@ -122,7 +141,12 @@ async fn save_spill(root: &std::path::Path, session_id: Option<&str>, tool: &str
 }
 
 /// spill 后的模型可见结果：头 + GAP + 尾 + 省略通知（可恢复引用）。
-pub async fn spill_result(root: &std::path::Path, session_id: Option<&str>, tool: &str, res: ToolResult) -> ToolResult {
+pub async fn spill_result(
+    root: &std::path::Path,
+    session_id: Option<&str>,
+    tool: &str,
+    res: ToolResult,
+) -> ToolResult {
     let total = res.text.len();
     let (head, tail) = split_head_tail(&res.text, SPILL_HEAD_BYTES, SPILL_TAIL_BYTES);
     match save_spill(root, session_id, tool, &res.text).await {
@@ -172,7 +196,11 @@ mod tests {
     use crate::interaction::pipeline::PostHook;
 
     fn text_result(text: &str) -> ToolResult {
-        ToolResult { text: text.to_string(), details: None, is_error: false }
+        ToolResult {
+            text: text.to_string(),
+            details: None,
+            is_error: false,
+        }
     }
 
     #[test]
@@ -196,7 +224,11 @@ mod tests {
     fn session_dir_name_hashes_and_falls_back() {
         let name = session_dir_name(Some("sess-abc"));
         assert_eq!(name.len(), "session-0123456789ab".len());
-        assert_eq!(name, session_dir_name(Some("sess-abc")), "同 id 同目录（确定性）");
+        assert_eq!(
+            name,
+            session_dir_name(Some("sess-abc")),
+            "同 id 同目录（确定性）"
+        );
         assert_ne!(name, session_dir_name(Some("sess-other")));
         assert_eq!(session_dir_name(None), "session-adhoc");
         assert_eq!(session_dir_name(Some("")), "session-adhoc");
@@ -206,7 +238,11 @@ mod tests {
     fn split_head_tail_respects_char_boundaries() {
         let text = "汉".repeat(3000); // 每字 3 字节 = 9000 字节
         let (head, tail) = split_head_tail(&text, SPILL_HEAD_BYTES, SPILL_TAIL_BYTES);
-        assert_eq!(head.chars().count(), SPILL_HEAD_BYTES / 3, "2800 字节 → 933 汉字（字符边界回退）");
+        assert_eq!(
+            head.chars().count(),
+            SPILL_HEAD_BYTES / 3,
+            "2800 字节 → 933 汉字（字符边界回退）"
+        );
         assert_eq!(tail.chars().count(), SPILL_TAIL_BYTES / 3);
         assert!(text.starts_with(&head));
         assert!(text.ends_with(&tail));
@@ -221,13 +257,21 @@ mod tests {
     async fn spill_result_writes_file_and_replaces_text() {
         let dir = tempfile::tempdir().unwrap();
         let big = "汉".repeat(3000); // 9000 字节 > 6000 阈值
-        let spilled = spill_result(dir.path(), Some("sess-abc"), "research_web", text_result(&big)).await;
+        let spilled = spill_result(
+            dir.path(),
+            Some("sess-abc"),
+            "research_web",
+            text_result(&big),
+        )
+        .await;
         assert!(!spilled.is_error);
         // 头尾保留 + GAP + 通知。
         assert!(spilled.text.starts_with("汉"));
         assert!(spilled.text.contains(GAP));
         assert!(spilled.text.contains("(Omitted "));
-        assert!(spilled.text.contains("bytes. Full result stored at: .inkos/spills/"));
+        assert!(spilled
+            .text
+            .contains("bytes. Full result stored at: .inkos/spills/"));
         assert!(spilled.text.contains("Use the read tool on this path"));
         // 文件存在且全文一致；相对路径可解析回真实文件。
         let anchored = spilled.text.find(".inkos/spills/").unwrap();
@@ -236,7 +280,9 @@ mod tests {
             .next()
             .unwrap();
         assert!(relative.ends_with("-research_web.txt"), "{relative}");
-        let full = tokio::fs::read_to_string(dir.path().join(relative)).await.unwrap();
+        let full = tokio::fs::read_to_string(dir.path().join(relative))
+            .await
+            .unwrap();
         assert_eq!(full, big, "spill 文件存全文（逐字）");
     }
 

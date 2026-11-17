@@ -32,10 +32,12 @@ use crate::skills::AgentSkill;
 use crate::utils::language::WritingLanguage;
 
 /// TS `compileStyleGuide` 必需技能（声明序=注入序）。
-pub const STYLE_GUIDE_SKILL_IDS: [&str; 2] = ["inkos-long-story-analysis", "inkos-imitation-writing"];
+pub const STYLE_GUIDE_SKILL_IDS: [&str; 2] =
+    ["inkos-long-story-analysis", "inkos-imitation-writing"];
 
 /// 编译 system 提示（TS 双语逐字）。
-pub const STYLE_GUIDE_SYSTEM_ZH: &str = "把参考文本编译为有证据、可执行的文风指南，只返回 Markdown。";
+pub const STYLE_GUIDE_SYSTEM_ZH: &str =
+    "把参考文本编译为有证据、可执行的文风指南，只返回 Markdown。";
 pub const STYLE_GUIDE_SYSTEM_EN: &str =
     "Compile the reference into an evidence-backed operational style guide. Return Markdown only.";
 
@@ -49,25 +51,46 @@ pub fn style_guide_messages(
 ) -> Vec<LLMMessage> {
     let source = source_name.map(str::trim).filter(|name| !name.is_empty());
     let (system, user) = if language == WritingLanguage::En {
-        (STYLE_GUIDE_SYSTEM_EN, format!("Source: {}\n\n{sample}", source.unwrap_or("reference")))
+        (
+            STYLE_GUIDE_SYSTEM_EN,
+            format!("Source: {}\n\n{sample}", source.unwrap_or("reference")),
+        )
     } else {
-        (STYLE_GUIDE_SYSTEM_ZH, format!("来源：{}\n\n{sample}", source.unwrap_or("参考文本")))
+        (
+            STYLE_GUIDE_SYSTEM_ZH,
+            format!("来源：{}\n\n{sample}", source.unwrap_or("参考文本")),
+        )
     };
     vec![
-        LLMMessage { role: LLMRole::System, content: system.to_string(), tool_calls: None, tool_call_id: None },
-        LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+        LLMMessage {
+            role: LLMRole::System,
+            content: system.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        LLMMessage {
+            role: LLMRole::User,
+            content: user,
+            tool_calls: None,
+            tool_call_id: None,
+        },
     ]
 }
 
 /// 必需技能解析：按声明序逐个取可用集首个同 id 技能，缺任一即错。
-pub fn resolve_style_guide_skills(available: &[AgentSkill]) -> Result<Vec<ActivatedSkillGuidance>, String> {
+pub fn resolve_style_guide_skills(
+    available: &[AgentSkill],
+) -> Result<Vec<ActivatedSkillGuidance>, String> {
     STYLE_GUIDE_SKILL_IDS
         .iter()
         .map(|id| {
             available
                 .iter()
                 .find(|skill| skill.id == *id)
-                .map(|skill| ActivatedSkillGuidance { skill: skill.clone(), resources: Vec::new() })
+                .map(|skill| ActivatedSkillGuidance {
+                    skill: skill.clone(),
+                    resources: Vec::new(),
+                })
                 .ok_or_else(|| format!("Style extraction requires unavailable skill: {id}"))
         })
         .collect()
@@ -126,12 +149,21 @@ mod tests {
     fn messages_mirror_ts_literals_and_source_fallbacks() {
         let zh = style_guide_messages("样本正文", Some("  斗破  "), WritingLanguage::Zh);
         assert_eq!(zh[0].role, LLMRole::System);
-        assert_eq!(zh[0].content, "把参考文本编译为有证据、可执行的文风指南，只返回 Markdown。");
+        assert_eq!(
+            zh[0].content,
+            "把参考文本编译为有证据、可执行的文风指南，只返回 Markdown。"
+        );
         assert_eq!(zh[1].role, LLMRole::User);
         assert_eq!(zh[1].content, "来源：斗破\n\n样本正文");
         // 空白/缺省来源 → 双语兜底标签（TS `sourceName?.trim() || "参考文本"`）。
-        assert_eq!(style_guide_messages("x", Some("   "), WritingLanguage::Zh)[1].content, "来源：参考文本\n\nx");
-        assert_eq!(style_guide_messages("x", None, WritingLanguage::Zh)[1].content, "来源：参考文本\n\nx");
+        assert_eq!(
+            style_guide_messages("x", Some("   "), WritingLanguage::Zh)[1].content,
+            "来源：参考文本\n\nx"
+        );
+        assert_eq!(
+            style_guide_messages("x", None, WritingLanguage::Zh)[1].content,
+            "来源：参考文本\n\nx"
+        );
         let en = style_guide_messages("sample", None, WritingLanguage::En);
         assert_eq!(
             en[0].content,
@@ -151,7 +183,10 @@ mod tests {
         ];
         let resolved = resolve_style_guide_skills(&available).unwrap();
         let ids: Vec<&str> = resolved.iter().map(|a| a.skill.id.as_str()).collect();
-        assert_eq!(ids, ["inkos-long-story-analysis", "inkos-imitation-writing"]);
+        assert_eq!(
+            ids,
+            ["inkos-long-story-analysis", "inkos-imitation-writing"]
+        );
         // TS `available.skills.find` 取首个（builtin 在前）——后列同名不覆盖。
         assert_eq!(resolved[1].skill.body, "inkos-imitation-writing 正文");
         assert!(resolved.iter().all(|a| a.resources.is_empty()));
@@ -160,8 +195,14 @@ mod tests {
     #[test]
     fn missing_skill_reports_first_absent_id() {
         let err = resolve_style_guide_skills(&[skill("inkos-imitation-writing")]).unwrap_err();
-        assert_eq!(err, "Style extraction requires unavailable skill: inkos-long-story-analysis");
+        assert_eq!(
+            err,
+            "Style extraction requires unavailable skill: inkos-long-story-analysis"
+        );
         let err = resolve_style_guide_skills(&[skill("inkos-long-story-analysis")]).unwrap_err();
-        assert_eq!(err, "Style extraction requires unavailable skill: inkos-imitation-writing");
+        assert_eq!(
+            err,
+            "Style extraction requires unavailable skill: inkos-imitation-writing"
+        );
     }
 }

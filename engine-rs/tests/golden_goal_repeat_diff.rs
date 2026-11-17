@@ -7,9 +7,8 @@
 
 use serde_json::Value;
 
-const VECTORS: &str = include_str!(
-    "../../packages/core/src/__tests__/golden/goal-repeat-vectors.json"
-);
+const VECTORS: &str =
+    include_str!("../../packages/core/src/__tests__/golden/goal-repeat-vectors.json");
 
 #[test]
 fn input_shape_matches_expected_hierarchy() {
@@ -53,7 +52,8 @@ fn similarity_matches_shared_vectors() {
         );
         let expected = vector["expected"].as_f64().expect("expected f64");
         assert_eq!(
-            got, expected,
+            got,
+            expected,
             "similarity vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

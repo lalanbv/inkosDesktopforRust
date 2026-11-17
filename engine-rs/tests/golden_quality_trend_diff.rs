@@ -5,9 +5,7 @@
 //! 三组差分：趋势聚合（升序/缺分不进均值/一位小数）、幂等指纹
 //!（已知 FNV 锚定值 + 重放去重）、紧迫度（WNW 映射/置信度/目标章窗）。
 
-use inkos_engine::utils::promise_ledger::{
-    resolve_promise_urgency, PromiseHookInput,
-};
+use inkos_engine::utils::promise_ledger::{resolve_promise_urgency, PromiseHookInput};
 use inkos_engine::utils::quality_trend::{
     build_quality_trend, dedupe_replay_rows, review_metric_content_hash, ReviewMetricRow,
 };
@@ -25,7 +23,8 @@ fn trend_matches_shared_vectors() {
         let got = build_quality_trend(&rows);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "trend vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -60,7 +59,10 @@ fn replay_hashes_match_shared_vectors() {
             .iter()
             .map(|value| value.as_i64().unwrap())
             .collect();
-        assert_eq!(fresh_chapters, expected_chapters, "replay vector '{name}' fresh drifted");
+        assert_eq!(
+            fresh_chapters, expected_chapters,
+            "replay vector '{name}' fresh drifted"
+        );
         assert_eq!(
             got.skipped as u64,
             vector["expected"]["skipped"].as_u64().unwrap(),
@@ -80,7 +82,8 @@ fn urgency_matches_shared_vectors() {
         let got = resolve_promise_urgency(&hook, current_chapter, target_chapters);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "urgency vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

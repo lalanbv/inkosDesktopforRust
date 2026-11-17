@@ -7,7 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::atomic_file_set::{commit_atomic_file_set, AtomicFileSet, AtomicFileWrite, FileContent};
+use crate::utils::atomic_file_set::{
+    commit_atomic_file_set, AtomicFileSet, AtomicFileWrite, FileContent,
+};
 
 // 887 号 M3a：短篇生产 2.0 形态纯函数层（旧 agents/short_fiction.rs 78 号
 // tagged 链已于 895 号 duel 绿后退役——处置关系见 production/short_fiction.rs 模块头）。
@@ -28,8 +30,8 @@ pub mod chapter_document;
 
 // 890 号 M3c 下：作者授权范围 + 源定位 + 权限解析。
 pub mod author_edit_scope;
-pub mod source_locator;
 pub mod author_text_permission;
+pub mod source_locator;
 
 // 891 号 M3c 终：长度合同 2.0 形态 + 叙事控制渲染 + ReviserAgent + 短篇修订链。
 pub mod length_contract;
@@ -246,7 +248,12 @@ pub async fn commit_production_artifacts(
         relative_path: run_path.to_string(),
         content: FileContent::Text(format!("{snapshot_json}\n")),
     });
-    commit_atomic_file_set(&AtomicFileSet { root_dir, writes, deletes }).await
+    commit_atomic_file_set(&AtomicFileSet {
+        root_dir,
+        writes,
+        deletes,
+    })
+    .await
 }
 
 /// TS `writeProductionRunSnapshot`：commitProductionArtifacts 的空集薄包装。
@@ -319,26 +326,30 @@ mod tests {
         let out = create_range_observation_helper(100, 1500, 4500);
         assert_eq!(out.severity, ProductionObservationSeverity::Blocking);
         assert!(out.repairable);
-        let soft = create_range_observation(
-            "m",
-            100,
-            3000,
-            1500,
-            4500,
-            "zh_chars",
-            None,
-            Some(false),
-        );
+        let soft =
+            create_range_observation("m", 100, 3000, 1500, 4500, "zh_chars", None, Some(false));
         assert_eq!(soft.severity, ProductionObservationSeverity::Warning);
         assert_eq!(
             soft.expected,
             serde_json::json!({ "target": 3000, "min": 1500, "max": 4500, "unit": "zh_chars" })
         );
-        assert_eq!(soft.actual, serde_json::json!({ "value": 100, "unit": "zh_chars" }));
+        assert_eq!(
+            soft.actual,
+            serde_json::json!({ "value": 100, "unit": "zh_chars" })
+        );
     }
 
     fn create_range_observation_helper(actual: u32, min: u32, max: u32) -> ProductionObservation {
-        create_range_observation("chapter-length", actual, 3000, min, max, "zh_chars", None, None)
+        create_range_observation(
+            "chapter-length",
+            actual,
+            3000,
+            min,
+            max,
+            "zh_chars",
+            None,
+            None,
+        )
     }
 
     #[tokio::test]
@@ -350,27 +361,52 @@ mod tests {
         for n in 1..=5u32 {
             let padded = format!("{n:04}");
             for suffix in ["run.json", "trace.json", "context.json", "rule-stack.yaml"] {
-                tokio::fs::write(runtime.join(format!("chapter-{padded}.{suffix}")), "x").await.unwrap();
+                tokio::fs::write(runtime.join(format!("chapter-{padded}.{suffix}")), "x")
+                    .await
+                    .unwrap();
             }
-            tokio::fs::write(runtime.join(format!("chapter-{padded}.plan.md")), "plan").await.unwrap();
-            tokio::fs::write(runtime.join(format!("chapter-{padded}.intent.md")), "intent").await.unwrap();
+            tokio::fs::write(runtime.join(format!("chapter-{padded}.plan.md")), "plan")
+                .await
+                .unwrap();
+            tokio::fs::write(
+                runtime.join(format!("chapter-{padded}.intent.md")),
+                "intent",
+            )
+            .await
+            .unwrap();
         }
         prune_runtime_artifacts(dir.path(), 5, 2).await;
         // 章号 <= 3 的观测工件被清；最近 2 章 + 治理产物全保留。
         for n in 1..=3u32 {
             let padded = format!("{n:04}");
-            assert!(!runtime.join(format!("chapter-{padded}.run.json")).exists(), "chapter {n} run.json 应被清理");
-            assert!(!runtime.join(format!("chapter-{padded}.trace.json")).exists(), "chapter {n} trace.json 应被清理");
+            assert!(
+                !runtime.join(format!("chapter-{padded}.run.json")).exists(),
+                "chapter {n} run.json 应被清理"
+            );
+            assert!(
+                !runtime
+                    .join(format!("chapter-{padded}.trace.json"))
+                    .exists(),
+                "chapter {n} trace.json 应被清理"
+            );
         }
         for n in 4..=5u32 {
             let padded = format!("{n:04}");
             assert!(runtime.join(format!("chapter-{padded}.run.json")).exists());
-            assert!(runtime.join(format!("chapter-{padded}.trace.json")).exists());
+            assert!(runtime
+                .join(format!("chapter-{padded}.trace.json"))
+                .exists());
         }
         for n in 1..=5u32 {
             let padded = format!("{n:04}");
-            assert!(runtime.join(format!("chapter-{padded}.plan.md")).exists(), "plan.md 应保留");
-            assert!(runtime.join(format!("chapter-{padded}.intent.md")).exists(), "intent.md 应保留");
+            assert!(
+                runtime.join(format!("chapter-{padded}.plan.md")).exists(),
+                "plan.md 应保留"
+            );
+            assert!(
+                runtime.join(format!("chapter-{padded}.intent.md")).exists(),
+                "intent.md 应保留"
+            );
         }
     }
 
@@ -379,7 +415,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let runtime = dir.path().join("story").join("runtime");
         tokio::fs::create_dir_all(&runtime).await.unwrap();
-        tokio::fs::write(runtime.join("chapter-0001.run.json"), "x").await.unwrap();
+        tokio::fs::write(runtime.join("chapter-0001.run.json"), "x")
+            .await
+            .unwrap();
         // keep=0 = 关闭清理。
         prune_runtime_artifacts(dir.path(), 5, 0).await;
         assert!(runtime.join("chapter-0001.run.json").exists());
@@ -422,7 +460,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(validated.load(std::sync::atomic::Ordering::SeqCst), 1, "validate 先行");
+        assert_eq!(
+            validated.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "validate 先行"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.path().join("script.md")).unwrap(),
             "# Night Shift"
@@ -491,7 +533,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(!dir.path().join("stale").join("old.md").exists(), "deletes 生效");
+        assert!(
+            !dir.path().join("stale").join("old.md").exists(),
+            "deletes 生效"
+        );
         assert!(dir.path().join("status.json").exists());
     }
 

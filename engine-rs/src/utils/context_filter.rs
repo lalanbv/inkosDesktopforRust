@@ -38,7 +38,9 @@ fn en_name_re() -> &'static Regex {
 }
 fn header_row_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"(?i)^\|\s*(章节|角色|支线|hook_id|Chapter|Character|Subplot)").unwrap())
+    R.get_or_init(|| {
+        Regex::new(r"(?i)^\|\s*(章节|角色|支线|hook_id|Chapter|Character|Subplot)").unwrap()
+    })
 }
 
 fn is_cjk(c: char) -> bool {
@@ -77,7 +79,9 @@ pub fn cap_context_block(content: &str, opts: ContextCapOptions) -> String {
     let tail: String = if tail_chars >= content_chars.len() {
         content_chars.iter().collect()
     } else {
-        content_chars[content_chars.len() - tail_chars..].iter().collect()
+        content_chars[content_chars.len() - tail_chars..]
+            .iter()
+            .collect()
     };
     format!("{head}{note}{tail}")
 }
@@ -101,7 +105,9 @@ pub fn filter_summaries(summaries: &str, current_chapter: u32, keep_recent: Opti
     let keep = keep_recent.unwrap_or(DEFAULT_CHAPTER_CADENCE_WINDOW);
     filter_table_rows(summaries, |row| {
         match table_chapter_num_re().captures(row) {
-            Some(caps) => caps[1].parse::<u32>().unwrap_or(0) > current_chapter.saturating_sub(keep),
+            Some(caps) => {
+                caps[1].parse::<u32>().unwrap_or(0) > current_chapter.saturating_sub(keep)
+            }
             None => true,
         }
     })
@@ -114,7 +120,10 @@ pub fn filter_subplots(board: &str) -> String {
     }
     filter_table_rows(board, |row| {
         let lower = row.to_lowercase();
-        !lower.contains("已回收") && !lower.contains("closed") && !lower.contains("resolved") && !lower.contains("已完结")
+        !lower.contains("已回收")
+            && !lower.contains("closed")
+            && !lower.contains("resolved")
+            && !lower.contains("已完结")
     })
 }
 
@@ -124,16 +133,18 @@ pub fn filter_emotional_arcs(arcs: &str, current_chapter: u32, keep_recent: Opti
         return arcs.to_string();
     }
     let keep = keep_recent.unwrap_or(DEFAULT_CHAPTER_CADENCE_WINDOW);
-    filter_table_rows(arcs, |row| {
-        match table_chapter_num_re().captures(row) {
-            Some(caps) => caps[1].parse::<u32>().unwrap_or(0) > current_chapter.saturating_sub(keep),
-            None => true,
-        }
+    filter_table_rows(arcs, |row| match table_chapter_num_re().captures(row) {
+        Some(caps) => caps[1].parse::<u32>().unwrap_or(0) > current_chapter.saturating_sub(keep),
+        None => true,
     })
 }
 
 /// 过滤 character_matrix：仅保留卷大纲当前段落提及的角色 + 主角。
-pub fn filter_character_matrix(matrix: &str, volume_outline: &str, protagonist_name: Option<&str>) -> String {
+pub fn filter_character_matrix(
+    matrix: &str,
+    volume_outline: &str,
+    protagonist_name: Option<&str>,
+) -> String {
     if matrix.is_empty() || matrix == "(文件尚未创建)" {
         return matrix.to_string();
     }
@@ -147,9 +158,7 @@ pub fn filter_character_matrix(matrix: &str, volume_outline: &str, protagonist_n
     let sections = split_before_h3(matrix);
     let filtered: Vec<String> = sections
         .iter()
-        .map(|section| {
-            filter_table_rows(section, |row| names.iter().any(|n| row.contains(n)))
-        })
+        .map(|section| filter_table_rows(section, |row| names.iter().any(|n| row.contains(n))))
         .collect();
     let result = filtered.join("\n");
     // 回退：过滤后无数据行则返回原文
@@ -250,13 +259,30 @@ mod tests {
 
     #[test]
     fn cap_passes_through_uncreated() {
-        assert_eq!(cap_context_block("(文件尚未创建)", ContextCapOptions { label: "x", max_chars: 100, head_ratio: None }), "(文件尚未创建)");
+        assert_eq!(
+            cap_context_block(
+                "(文件尚未创建)",
+                ContextCapOptions {
+                    label: "x",
+                    max_chars: 100,
+                    head_ratio: None
+                }
+            ),
+            "(文件尚未创建)"
+        );
     }
 
     #[test]
     fn cap_inserts_omission_note() {
         let content = "A".repeat(300);
-        let out = cap_context_block(&content, ContextCapOptions { label: "test", max_chars: 150, head_ratio: Some(0.5) });
+        let out = cap_context_block(
+            &content,
+            ContextCapOptions {
+                label: "test",
+                max_chars: 150,
+                head_ratio: Some(0.5),
+            },
+        );
         assert!(out.contains("[InkOS context budget: omitted about"));
         assert!(out.contains("from test"));
         assert!(out.starts_with("AAAA"));
@@ -298,7 +324,8 @@ mod tests {
 
     #[test]
     fn filter_character_matrix_keeps_named() {
-        let matrix = "### 角色档案\n| 角色 | 描述 |\n| --- | --- |\n| 林动 | 主角 |\n| 王胖 | 配角 |\n";
+        let matrix =
+            "### 角色档案\n| 角色 | 描述 |\n| --- | --- |\n| 林动 | 主角 |\n| 王胖 | 配角 |\n";
         let out = filter_character_matrix(matrix, "林动登场", Some("林动"));
         assert!(out.contains("林动"));
         assert!(!out.contains("王胖"));

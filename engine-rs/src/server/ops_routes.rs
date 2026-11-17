@@ -180,22 +180,21 @@ async fn write_one_chapter(
     .await;
     let activations =
         crate::skills::production_bindings::writing_chain_activations(&available.skills);
-    let result =
-        crate::skills::production_bindings::scope_operation_skills(activations, async {
-            write_next_chapter(
-                &runtime.state,
-                &agents,
-                &ctx,
-                &config,
-                book_id,
-                None,
-                temperature,
-                None,
-            )
-            .await
-        })
+    let result = crate::skills::production_bindings::scope_operation_skills(activations, async {
+        write_next_chapter(
+            &runtime.state,
+            &agents,
+            &ctx,
+            &config,
+            book_id,
+            None,
+            temperature,
+            None,
+        )
         .await
-        .map_err(|e| e.to_string())?;
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     let success = result.status == "ready-for-review";
     // 失败维度聚类原料（TS auditResult.issues.map(category)）。
     let issue_categories: Vec<String> = result
@@ -204,13 +203,24 @@ async fn write_one_chapter(
         .iter()
         .map(|issue| issue.category.clone())
         .collect();
-    Ok((success, result.chapter_number, result.status.to_string(), issue_categories))
+    Ok((
+        success,
+        result.chapter_number,
+        result.status.to_string(),
+        issue_categories,
+    ))
 }
 
 async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
     let (cap_reached, max_per_day) = {
-        let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        (state.daily_counts.get(&today_key()).copied().unwrap_or(0) >= config.max_chapters_per_day, config.max_chapters_per_day)
+        let state = write_cycle_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            state.daily_counts.get(&today_key()).copied().unwrap_or(0)
+                >= config.max_chapters_per_day,
+            config.max_chapters_per_day,
+        )
     };
     if cap_reached {
         return;
@@ -219,14 +229,19 @@ async fn run_write_cycle(runtime: &BooksRuntime, config: &DaemonConfig) {
     let mut active_books = Vec::new();
     for book_id in book_ids {
         let paused = write_cycle_state()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .paused_books
             .contains(&book_id);
         if paused {
             continue;
         }
         if let Ok(config) = runtime.state.load_book_config(&book_id).await {
-            if matches!(config.status, crate::models::book::BookStatus::Active | crate::models::book::BookStatus::Outlining) {
+            if matches!(
+                config.status,
+                crate::models::book::BookStatus::Active
+                    | crate::models::book::BookStatus::Outlining
+            ) {
                 active_books.push(book_id);
             }
         }
@@ -284,8 +299,12 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
             return;
         }
         {
-            let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if state.daily_counts.get(&today_key()).copied().unwrap_or(0) >= config.max_chapters_per_day {
+            let state = write_cycle_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if state.daily_counts.get(&today_key()).copied().unwrap_or(0)
+                >= config.max_chapters_per_day
+            {
                 return;
             }
             if state.paused_books.contains(book_id) {
@@ -299,7 +318,8 @@ async fn process_book(runtime: &BooksRuntime, config: &DaemonConfig, book_id: &s
         // TS writeOneChapter：返回值 = 是否继续写下一章（成功或 defer-and-continue）。
         if !write_one_chapter_governed(runtime, config, book_id, book_governance.as_ref()).await {
             let failures = write_cycle_state()
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .consecutive_failures
                 .get(book_id)
                 .copied()
@@ -330,7 +350,8 @@ async fn write_one_chapter_governed(
     book_governance: Option<&crate::models::quality_governance::GovernanceConfig>,
 ) -> bool {
     let failures = write_cycle_state()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .consecutive_failures
         .get(book_id)
         .copied()
@@ -346,7 +367,9 @@ async fn write_one_chapter_governed(
     match write_one_chapter(runtime, book_id, temperature).await {
         Ok((true, chapter_number, status, _categories)) => {
             {
-                let mut state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = write_cycle_state()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 state.consecutive_failures.remove(book_id);
                 let today = today_key();
                 let count = state.daily_counts.get(&today).copied().unwrap_or(0) + 1;
@@ -414,7 +437,9 @@ async fn handle_audit_failure(
     book_governance: Option<&crate::models::quality_governance::GovernanceConfig>,
 ) -> bool {
     let failures = {
-        let mut state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut state = write_cycle_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let failures = state
             .consecutive_failures
             .entry(book_id.to_string())
@@ -428,7 +453,9 @@ async fn handle_audit_failure(
     // 失败维度聚类（111 号：任一维度 ≥3 → diagnostic-alert webhook）。
     if !issue_categories.is_empty() {
         let clustered: Vec<(String, u32)> = {
-            let mut state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut state = write_cycle_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let dimensions = state
                 .failure_dimensions
                 .entry(book_id.to_string())
@@ -494,8 +521,7 @@ async fn handle_audit_failure(
                 .cloned()
                 .unwrap_or_else(|| "audit-failure".to_string()),
             severity: "critical".to_string(),
-            status: if verdict
-                == crate::models::quality_governance::QualityVerdict::ReplanRequired
+            status: if verdict == crate::models::quality_governance::QualityVerdict::ReplanRequired
             {
                 "open"
             } else {
@@ -543,7 +569,8 @@ async fn handle_audit_failure(
     if verdict.continues_pipeline() {
         // defer-and-continue：降债继续——清空失败计数，本书写下一章不中断。
         write_cycle_state()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .remove(book_id);
         return true;
@@ -555,7 +582,8 @@ async fn handle_audit_failure(
         verdict.as_str()
     );
     write_cycle_state()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .paused_books
         .insert(book_id.to_string());
     // pipeline-error webhook（111 号；540 号起 data 带 verdict 字段，对齐 TS）。
@@ -588,19 +616,29 @@ async fn run_detection(
     let book_dir = runtime.state.book_dir(book_id);
     // readChapterContent：687 号数值等值定位（TS findChapterFileByNumber 镜像）。
     let chapters_dir = book_dir.join("chapters");
-    let chapter_file = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number)
-        .await
-        .ok_or_else(|| format!("chapter {chapter_number} file not found"))?;
-    let chapter_content =
-        tokio::fs::read_to_string(chapters_dir.join(&chapter_file))
+    let chapter_file =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number)
             .await
-            .map_err(|e| e.to_string())?;
+            .ok_or_else(|| format!("chapter {chapter_number} file not found"))?;
+    let chapter_content = tokio::fs::read_to_string(chapters_dir.join(&chapter_file))
+        .await
+        .map_err(|e| e.to_string())?;
     // 925 号：检测链换有界客户端（零超时 Client::new() 为无界请求族漏网
     // 面——检测端点挂起=写作任务检测段无限挂死）。
     let client = crate::pipeline::detection_runner::detection_http_client();
-    let det = crate::pipeline::detection_runner::detect_chapter(&client, config, &chapter_content, chapter_number).await?;
+    let det = crate::pipeline::detection_runner::detect_chapter(
+        &client,
+        config,
+        &chapter_content,
+        chapter_number,
+    )
+    .await?;
     if !det.passed && config.auto_rewrite {
-        let book = runtime.state.load_book_config(book_id).await.map_err(|e| e.to_string())?;
+        let book = runtime
+            .state
+            .load_book_config(book_id)
+            .await
+            .map_err(|e| e.to_string())?;
         let router = runtime.effective_router().await;
         let reviser_chat = crate::llm::agent_router::RoutedAgent {
             router: router.clone(),
@@ -624,7 +662,8 @@ async fn run_detection(
 
 fn scheduler_running() -> bool {
     scheduler_slot()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .as_ref()
         .is_some_and(|handle| handle.running.load(std::sync::atomic::Ordering::SeqCst))
 }
@@ -642,9 +681,7 @@ pub async fn get_daemon(State(_runtime): State<BooksRuntime>) -> impl IntoRespon
     Json(json!({ "running": scheduler_running() }))
 }
 
-pub async fn post_daemon_start(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn post_daemon_start(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     if scheduler_running() {
         return flat_error(StatusCode::BAD_REQUEST, "Daemon already running");
     }
@@ -695,28 +732,30 @@ pub async fn post_daemon_start(
                 elapsed += step;
             }
             if let Err(error) = run_radar_scan_and_save(&radar_runtime).await {
-                radar_runtime
-                    .hub
-                    .broadcast("daemon:error", &json!({ "bookId": "radar", "error": error }));
+                radar_runtime.hub.broadcast(
+                    "daemon:error",
+                    &json!({ "bookId": "radar", "error": error }),
+                );
             }
         }
     });
 
-    scheduler_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).replace(SchedulerHandle {
-        running: flag,
-        tasks: vec![write_task, radar_task],
-    });
+    scheduler_slot()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .replace(SchedulerHandle {
+            running: flag,
+            tasks: vec![write_task, radar_task],
+        });
     runtime.hub.broadcast("daemon:started", &json!({}));
-    (
-        StatusCode::OK,
-        Json(json!({ "ok": true, "running": true })),
-    )
-        .into_response()
+    (StatusCode::OK, Json(json!({ "ok": true, "running": true }))).into_response()
 }
 
 pub async fn post_daemon_stop(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let stopped = {
-        let mut slot = scheduler_slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut slot = scheduler_slot()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match slot.as_ref() {
             Some(handle) if handle.running.load(std::sync::atomic::Ordering::SeqCst) => {
                 handle
@@ -779,14 +818,19 @@ fn radar_timestamp_for_filename(value: &str) -> String {
 
 pub async fn save_radar_scan(root: &Path, result: &Value) -> Result<String, String> {
     let radar_dir = root.join("radar");
-    tokio::fs::create_dir_all(&radar_dir).await.map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&radar_dir)
+        .await
+        .map_err(|e| e.to_string())?;
     let timestamp = result
         .get("timestamp")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let file_name = format!("scan-{}.json", radar_timestamp_for_filename(timestamp));
     let file_path = radar_dir.join(&file_name);
-    let payload = format!("{}\n", serde_json::to_string_pretty(result).unwrap_or_default());
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(result).unwrap_or_default()
+    );
     crate::utils::atomic_file_set::write_file_atomic(&file_path, &payload)
         .await
         .map_err(|e| e.to_string())?;
@@ -848,26 +892,26 @@ pub async fn load_radar_history(root: &Path) -> Result<Vec<Value>, String> {
     Ok(scans)
 }
 
-pub async fn post_radar_scan(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn post_radar_scan(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     runtime.hub.broadcast("radar:start", &json!({}));
     match run_radar_scan_and_save(&runtime).await {
         Ok(result) => {
-            runtime.hub.broadcast("radar:complete", &json!({ "result": result }));
+            runtime
+                .hub
+                .broadcast("radar:complete", &json!({ "result": result }));
             (StatusCode::OK, Json(result)).into_response()
         }
         Err(message) => {
-            runtime.hub.broadcast("radar:error", &json!({ "error": message }));
+            runtime
+                .hub
+                .broadcast("radar:error", &json!({ "error": message }));
             flat_error(StatusCode::INTERNAL_SERVER_ERROR, message)
         }
     }
 }
 
 /// G14a/335 号"选后再析"第一步：免费扫榜，不调 LLM、不落历史。
-pub async fn post_radar_rankings(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn post_radar_rankings(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let _ = runtime;
     let rankings = crate::agents::radar::fetch_rankings().await;
     Json(json!({ "rankings": rankings })).into_response()
@@ -899,24 +943,26 @@ pub async fn post_radar_analyze(
     match result {
         Ok(result) => {
             let value = serde_json::to_value(&result).unwrap_or(json!({}));
-            if let Err(error) =
-                save_radar_scan(runtime.state.project_root(), &value).await
-            {
-                runtime.hub.broadcast("radar:error", &json!({ "error": error }));
+            if let Err(error) = save_radar_scan(runtime.state.project_root(), &value).await {
+                runtime
+                    .hub
+                    .broadcast("radar:error", &json!({ "error": error }));
             }
-            runtime.hub.broadcast("radar:complete", &json!({ "result": value }));
+            runtime
+                .hub
+                .broadcast("radar:complete", &json!({ "result": value }));
             (StatusCode::OK, Json(value)).into_response()
         }
         Err(message) => {
-            runtime.hub.broadcast("radar:error", &json!({ "error": message }));
+            runtime
+                .hub
+                .broadcast("radar:error", &json!({ "error": message }));
             flat_error(StatusCode::INTERNAL_SERVER_ERROR, message)
         }
     }
 }
 
-pub async fn get_radar_history(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn get_radar_history(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     match load_radar_history(runtime.state.project_root()).await {
         Ok(items) => (StatusCode::OK, Json(json!({ "items": items }))).into_response(),
         Err(message) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, message),
@@ -949,7 +995,10 @@ pub async fn post_deconstruct(
     Json(body): Json<DeconstructBody>,
 ) -> impl IntoResponse {
     if body.chapters.is_empty() {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("chapters is required"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("chapters is required"),
+        );
     }
     // 957 号：与 TS 对齐 trim（`.filter(|n| !n.trim().is_empty())` 保留原串导致
     // Rust 腿文件名可带首尾空白——名字直拼 `{name}.md`，含空白名写盘即与 TS 产物
@@ -983,7 +1032,9 @@ pub async fn post_deconstruct(
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let out_path = story_dir.join(format!("{name}.md"));
-    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&out_path, &result.markdown).await {
+    if let Err(error) =
+        crate::utils::atomic_file_set::write_file_atomic(&out_path, &result.markdown).await
+    {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
 
@@ -998,9 +1049,17 @@ pub async fn post_deconstruct(
             "-",
         );
         let trimmed: String = material_id.chars().take(64).collect();
-        let materials_dir = runtime.state.project_root().join(".inkos").join("materials");
+        let materials_dir = runtime
+            .state
+            .project_root()
+            .join(".inkos")
+            .join("materials");
         let _ = tokio::fs::create_dir_all(&materials_dir).await;
-        let _ = crate::utils::atomic_file_set::write_file_atomic(&materials_dir.join(format!("{trimmed}.md")), &result.markdown).await;
+        let _ = crate::utils::atomic_file_set::write_file_atomic(
+            &materials_dir.join(format!("{trimmed}.md")),
+            &result.markdown,
+        )
+        .await;
         let manifest = json!({
             "id": trimmed,
             "title": name,
@@ -1069,14 +1128,18 @@ pub async fn post_direction_candidates(
         let language = crate::utils::language::infer_language(body.language.as_deref());
         let mut matched: Vec<crate::utils::asset_library::LibraryAsset> = Vec::new();
         for reference in body.asset_refs.iter().take(6) {
-            let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else { continue };
-            let (assets, _) = crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
-                .unwrap_or_else(|_| (Vec::new(), false));
+            let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else {
+                continue;
+            };
+            let (assets, _) =
+                crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
+                    .unwrap_or_else(|_| (Vec::new(), false));
             if let Some(hit) = assets.iter().find(|asset| asset.id == reference.id) {
                 matched.push(hit.clone());
             }
         }
-        asset_guidance = crate::utils::asset_library::render_asset_guidance_block(&matched, language);
+        asset_guidance =
+            crate::utils::asset_library::render_asset_guidance_block(&matched, language);
     }
     let prompt = crate::models::director::build_direction_candidates_prompt(
         &body.inspiration,
@@ -1197,13 +1260,17 @@ pub async fn put_director(
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_else(|| json!({ "bookId": book_id }));
-    if let (Some(session_obj), Some(patch_obj)) = (session.as_object_mut(), body.patch.as_object()) {
+    if let (Some(session_obj), Some(patch_obj)) = (session.as_object_mut(), body.patch.as_object())
+    {
         for (key, value) in patch_obj {
             if ALLOWED.contains(&key.as_str()) {
                 session_obj.insert(key.clone(), value.clone());
             }
         }
-        session_obj.insert("updatedAt".into(), json!(crate::interaction::session::utc_now_ms()));
+        session_obj.insert(
+            "updatedAt".into(),
+            json!(crate::interaction::session::utc_now_ms()),
+        );
         session_obj
             .entry("bookId".to_string())
             .or_insert_with(|| json!(book_id));
@@ -1212,7 +1279,11 @@ pub async fn put_director(
     if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &serialized).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
-    (StatusCode::OK, Json(json!({ "ok": true, "session": session }))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "session": session })),
+    )
+        .into_response()
 }
 
 /// G1/349 号：混合检索（FTS5 + 可选向量 RRF 融合；无 embedding 配置 → 纯 FTS5）。
@@ -1256,8 +1327,9 @@ pub async fn post_hybrid_search(
         let db_path = db_path.clone();
         let query = query.clone();
         move || -> Result<Vec<crate::utils::local_search::SearchHit>, String> {
-            let index = crate::utils::local_search::LocalSearchIndex::new(db_path.to_str().unwrap_or(""))
-                .map_err(|error| error.to_string())?;
+            let index =
+                crate::utils::local_search::LocalSearchIndex::new(db_path.to_str().unwrap_or(""))
+                    .map_err(|error| error.to_string())?;
             Ok(index.search(
                 &query,
                 &crate::utils::local_search::SearchOptions {
@@ -1294,9 +1366,12 @@ pub async fn post_hybrid_search(
                 .as_ref()
                 .and_then(|env| std::env::var(env).ok())
                 .unwrap_or_default();
-            let query_vectors =
-                crate::utils::semantic_retrieval::embed_batch(embedding, std::slice::from_ref(&query), Some(&api_key))
-                    .await?;
+            let query_vectors = crate::utils::semantic_retrieval::embed_batch(
+                embedding,
+                std::slice::from_ref(&query),
+                Some(&api_key),
+            )
+            .await?;
             let query_vector = query_vectors.first().ok_or("empty embedding")?;
             // 764 号：chunk 向量全量读移出 runtime 线程。
             let chunks = tokio::task::spawn_blocking({
@@ -1321,11 +1396,13 @@ pub async fn post_hybrid_search(
                 &chunk_inputs,
                 k * 2,
             );
-            Ok::<Vec<Value>, String>(scored
-                .iter()
-                .enumerate()
-                .map(|(i, hit)| json!({ "id": hit.id, "rank": i + 1 }))
-                .collect())
+            Ok::<Vec<Value>, String>(
+                scored
+                    .iter()
+                    .enumerate()
+                    .map(|(i, hit)| json!({ "id": hit.id, "rank": i + 1 }))
+                    .collect(),
+            )
         };
         match semantic.await {
             Ok(ranked) => {
@@ -1355,7 +1432,11 @@ pub async fn post_hybrid_search(
     // 959 号：RRF 签名为 (semantic_ranking, fts_ranking, k)——349 号起本调用面实参
     // 倒置（TS 端同患），纯词法命中被标 sources=["semantic"]：召回测试面板在
     //「词法降级」模式下把词法命中显示为「·语义」。分数对称（1/(k+rank) 累加）不变。
-    let fused = crate::utils::semantic_retrieval::reciprocal_rank_fusion(&semantic_for_rrf, &fts_for_rrf, 60);
+    let fused = crate::utils::semantic_retrieval::reciprocal_rank_fusion(
+        &semantic_for_rrf,
+        &fts_for_rrf,
+        60,
+    );
 
     (
         StatusCode::OK,
@@ -1371,7 +1452,11 @@ pub async fn post_hybrid_search(
 
 /// G16/346 号：读项目级任务路由（.inkos/task-routing.json；缺省 null）。
 pub async fn get_task_routing(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
-    let path = runtime.state.project_root().join(".inkos").join("task-routing.json");
+    let path = runtime
+        .state
+        .project_root()
+        .join(".inkos")
+        .join("task-routing.json");
     match tokio::fs::read_to_string(&path).await {
         Ok(raw) => match serde_json::from_str::<Value>(&raw) {
             Ok(routing) => (StatusCode::OK, Json(json!({ "routing": routing }))).into_response(),
@@ -1390,7 +1475,10 @@ pub async fn put_task_routing(
         return flat_error(StatusCode::BAD_REQUEST, String::from("routing is required"));
     };
     if !routing.is_object() {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("routing must be an object"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("routing must be an object"),
+        );
     }
     let dir = runtime.state.project_root().join(".inkos");
     if let Err(error) = tokio::fs::create_dir_all(&dir).await {
@@ -1400,8 +1488,14 @@ pub async fn put_task_routing(
         Ok(raw) => raw,
         Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
-    match crate::utils::atomic_file_set::write_file_atomic(&dir.join("task-routing.json"), &raw).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "routing": routing }))).into_response(),
+    match crate::utils::atomic_file_set::write_file_atomic(&dir.join("task-routing.json"), &raw)
+        .await
+    {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "routing": routing })),
+        )
+            .into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -1427,25 +1521,32 @@ pub async fn get_roster_candidates(
         Ok(raw) => (crate::utils::entity_roster::parse_entity_roster(&raw), true),
         Err(_) => (Vec::new(), false),
     };
-    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, crate::EngineError> {
-        let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
-        let summaries = db.get_summaries(1, 100_000)?;
-        let current_chapter = summaries.iter().map(|s| s.chapter).max().map(|last| last + 1).unwrap_or(1);
-        let candidates = crate::utils::entity_roster::extract_character_candidates(
-            &summaries
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<serde_json::Value, crate::EngineError> {
+            let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+            let summaries = db.get_summaries(1, 100_000)?;
+            let current_chapter = summaries
                 .iter()
-                .map(|s| (s.chapter, s.characters.clone()))
-                .collect::<Vec<_>>(),
-        );
-        let cards = crate::utils::entity_roster::resolve_roster_candidates(&candidates, &roster);
-        Ok(serde_json::json!({
-            "cards": cards,
-            "candidates": candidates,
-            "rosterExists": roster_exists,
-            "currentChapter": current_chapter
-        }))
-    })
-    .await;
+                .map(|s| s.chapter)
+                .max()
+                .map(|last| last + 1)
+                .unwrap_or(1);
+            let candidates = crate::utils::entity_roster::extract_character_candidates(
+                &summaries
+                    .iter()
+                    .map(|s| (s.chapter, s.characters.clone()))
+                    .collect::<Vec<_>>(),
+            );
+            let cards =
+                crate::utils::entity_roster::resolve_roster_candidates(&candidates, &roster);
+            Ok(serde_json::json!({
+                "cards": cards,
+                "candidates": candidates,
+                "rosterExists": roster_exists,
+                "currentChapter": current_chapter
+            }))
+        })
+        .await;
     match result {
         Ok(Ok(payload)) => (StatusCode::OK, Json(payload)).into_response(),
         Ok(Err(error)) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -1495,21 +1596,32 @@ pub async fn post_roster_confirm(
         target_name: body.target_name.clone(),
         chapter: body.chapter,
     };
-    let (roster, applied) = crate::utils::entity_roster::apply_roster_confirmation(&roster, &confirmation);
+    let (roster, applied) =
+        crate::utils::entity_roster::apply_roster_confirmation(&roster, &confirmation);
     if let Err(error) = tokio::fs::create_dir_all(&story_dir).await {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let rendered = crate::utils::entity_roster::render_entity_roster(&roster);
-    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&roster_path, &rendered).await {
+    if let Err(error) =
+        crate::utils::atomic_file_set::write_file_atomic(&roster_path, &rendered).await
+    {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     let applied_value = serde_json::to_value(&applied).unwrap_or(json!(null));
-    (StatusCode::OK, Json(json!({ "ok": true, "applied": applied_value }))).into_response()
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "applied": applied_value })),
+    )
+        .into_response()
 }
 
 /// G4/340 号：写法档案池列表（项目级 .inkos/style-profiles/）。
 pub async fn list_style_profiles(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
-    let dir = runtime.state.project_root().join(".inkos").join("style-profiles");
+    let dir = runtime
+        .state
+        .project_root()
+        .join(".inkos")
+        .join("style-profiles");
     let _ = tokio::fs::create_dir_all(&dir).await;
     let mut profiles: Vec<Value> = Vec::new();
     if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
@@ -1524,7 +1636,9 @@ pub async fn list_style_profiles(State(runtime): State<BooksRuntime>) -> impl In
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
             if let Ok(raw) = tokio::fs::read_to_string(&path).await {
                 if let Ok(profile) = serde_json::from_str::<Value>(&raw) {
                     profiles.push(json!({ "name": name, "profile": profile }));
@@ -1554,17 +1668,34 @@ pub async fn save_style_profile(
         Err(status) => return flat_error(status, String::from("request body too large")),
     };
     let body: Value = serde_json::from_slice(&raw).unwrap_or_else(|_| json!({}));
-    let name = body.get("name").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
-    let profile = body.get("profile").filter(|value| value.is_object() || value.is_array());
-    let text = body.get("text").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+    let name = body
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let profile = body
+        .get("profile")
+        .filter(|value| value.is_object() || value.is_array());
+    let text = body
+        .get("text")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
     if name.is_empty() || (profile.is_none() && text.is_empty()) {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("name and profile (or text) are required"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("name and profile (or text) are required"),
+        );
     }
     // 957 号：档案名直拼 `{name}.json` 落盘——`../../books/b1/book` 即覆写项目内任意
     // .json（secrets/inkos.json/他书 book.json），更深的 `../` 写出项目根。复用 201 号
     // 规范段判据（books/projects id 段同一真源；TS 同端点同判据同消息）。
     if !crate::utils::is_safe_book_id(&name) {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid profile name"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("invalid profile name"),
+        );
     }
     let root = runtime.state.project_root();
     let saved = match profile {
@@ -1572,10 +1703,12 @@ pub async fn save_style_profile(
         None => {
             use crate::utils::language::WritingLanguage;
             let language = match body.get("language") {
-                None | Some(Value::Null) => match crate::server::agent_production::current_project_language(root).await {
-                    crate::server::agent_production::StudioLang::En => WritingLanguage::En,
-                    crate::server::agent_production::StudioLang::Zh => WritingLanguage::Zh,
-                },
+                None | Some(Value::Null) => {
+                    match crate::server::agent_production::current_project_language(root).await {
+                        crate::server::agent_production::StudioLang::En => WritingLanguage::En,
+                        crate::server::agent_production::StudioLang::Zh => WritingLanguage::Zh,
+                    }
+                }
                 Some(Value::String(language)) if language == "en" => WritingLanguage::En,
                 Some(_) => WritingLanguage::Zh,
             };
@@ -1593,7 +1726,11 @@ pub async fn save_style_profile(
     let path = dir.join(format!("{name}.json"));
     match serde_json::to_string_pretty(&saved) {
         Ok(raw) => match crate::utils::atomic_file_set::write_file_atomic(&path, &raw).await {
-            Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "name": name, "profile": saved }))).into_response(),
+            Ok(()) => (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "name": name, "profile": saved })),
+            )
+                .into_response(),
             Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         },
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -1641,13 +1778,19 @@ pub async fn save_style_binding(
 ) -> impl IntoResponse {
     let profile_name = body.profile_name.trim().to_string();
     if profile_name.is_empty() {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("profileName is required"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("profileName is required"),
+        );
     }
     // 957 号：档案名直拼存在性探针路径——穿越名=盘外文件存在性预言机（200/404 区分），
     // 且名字落盘进 style_binding.json 由 composer 读面二次拼路径（存储型穿越）。存在性
     // 探针之前先过规范段判据（与保存端点同判据同消息——合法档案名必然可绑定）。
     if !crate::utils::is_safe_book_id(&profile_name) {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid profile name"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("invalid profile name"),
+        );
     }
     let profile_path = runtime
         .state
@@ -1680,7 +1823,11 @@ pub async fn save_style_binding(
     let path = story_dir.join("style_binding.json");
     let raw = serde_json::to_string_pretty(&binding).unwrap_or_default();
     match crate::utils::atomic_file_set::write_file_atomic(&path, &raw).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "binding": binding }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "binding": binding })),
+        )
+            .into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -1744,8 +1891,15 @@ pub async fn get_quality_trend(
                     // 与 TS quality-trend TERMINAL_HOOK_STATUS 同集）。
                     !matches!(
                         hook.status.trim().to_lowercase().as_str(),
-                        "resolved" | "closed" | "done" | "已回收" | "已解决"
-                            | "superseded" | "withdrawn" | "已撤回" | "撤回"
+                        "resolved"
+                            | "closed"
+                            | "done"
+                            | "已回收"
+                            | "已解决"
+                            | "superseded"
+                            | "withdrawn"
+                            | "已撤回"
+                            | "撤回"
                     )
                 })
                 .map(|hook| {
@@ -1770,7 +1924,9 @@ pub async fn get_quality_trend(
                 })
                 .collect();
             urgency.sort_by(|a, b| {
-                b.urgency.cmp(&a.urgency).then_with(|| a.hook_id.cmp(&b.hook_id))
+                b.urgency
+                    .cmp(&a.urgency)
+                    .then_with(|| a.hook_id.cmp(&b.hook_id))
             });
             Ok(serde_json::json!({
                 "trend": trend,
@@ -1858,56 +2014,65 @@ pub async fn get_promises(
     let hooks_markdown = tokio::fs::read_to_string(book_dir.join("story").join("pending_hooks.md"))
         .await
         .unwrap_or_default();
-    let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, crate::EngineError> {
-        let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
-        let hooks = db.get_all_hooks()?;
-        // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
-        // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
-        let mut kind_by_id: std::collections::HashMap<String, crate::models::runtime_state::HookKind> =
-            std::collections::HashMap::new();
-        for hook in crate::utils::story_markdown::parse_pending_hooks_markdown(&hooks_markdown) {
-            if let Some(kind) = hook.kind {
-                kind_by_id.insert(hook.hook_id.clone(), kind);
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<serde_json::Value, crate::EngineError> {
+            let db = crate::state::memory_db::MemoryDb::open(&book_dir)?;
+            let hooks = db.get_all_hooks()?;
+            // R23/396 号：sqlite 投影不落 kind（358 号真相源单点），分类从
+            // pending_hooks.md 台账第 14 列补齐——缺文件/缺列优雅降级为无 kind。
+            let mut kind_by_id: std::collections::HashMap<
+                String,
+                crate::models::runtime_state::HookKind,
+            > = std::collections::HashMap::new();
+            for hook in crate::utils::story_markdown::parse_pending_hooks_markdown(&hooks_markdown)
+            {
+                if let Some(kind) = hook.kind {
+                    kind_by_id.insert(hook.hook_id.clone(), kind);
+                }
             }
-        }
-        let summaries = db.get_summaries(1, 100_000)?;
-        let hook_inputs: Vec<crate::utils::promise_ledger::PromiseHookInput> = hooks
-            .iter()
-            .map(|hook| crate::utils::promise_ledger::PromiseHookInput {
-                hook_id: hook.hook_id.clone(),
-                start_chapter: hook.start_chapter,
-                status: hook.status.clone(),
-                last_advanced_chapter: hook.last_advanced_chapter,
-                expected_payoff: hook.expected_payoff.clone(),
-                notes: hook.notes.clone(),
-                core_hook: false,
-                kind: kind_by_id.get(&hook.hook_id).copied(),
-            })
-            .collect();
-        let current_chapter = summaries
-            .iter()
-            .map(|summary| summary.chapter)
-            .max()
-            .map(|last| last + 1)
-            .unwrap_or(1);
-        let timeline = crate::utils::promise_ledger::build_promise_timeline(&hook_inputs, current_chapter);
-        let pacing_debts = crate::utils::promise_ledger::detect_pacing_debts(&hook_inputs, current_chapter, None);
-        let weak_rows: Vec<crate::utils::promise_ledger::WeakHookSummaryRow> = summaries
-            .iter()
-            .map(|summary| crate::utils::promise_ledger::WeakHookSummaryRow {
-                chapter: summary.chapter,
-                hook_activity: summary.hook_activity.clone(),
-            })
-            .collect();
-        let weak_runs = crate::utils::promise_ledger::detect_weak_hook_runs(&weak_rows, None);
-        Ok(serde_json::json!({
-            "timeline": timeline,
-            "pacingDebts": pacing_debts,
-            "weakRuns": weak_runs,
-            "currentChapter": current_chapter
-        }))
-    })
-    .await;
+            let summaries = db.get_summaries(1, 100_000)?;
+            let hook_inputs: Vec<crate::utils::promise_ledger::PromiseHookInput> = hooks
+                .iter()
+                .map(|hook| crate::utils::promise_ledger::PromiseHookInput {
+                    hook_id: hook.hook_id.clone(),
+                    start_chapter: hook.start_chapter,
+                    status: hook.status.clone(),
+                    last_advanced_chapter: hook.last_advanced_chapter,
+                    expected_payoff: hook.expected_payoff.clone(),
+                    notes: hook.notes.clone(),
+                    core_hook: false,
+                    kind: kind_by_id.get(&hook.hook_id).copied(),
+                })
+                .collect();
+            let current_chapter = summaries
+                .iter()
+                .map(|summary| summary.chapter)
+                .max()
+                .map(|last| last + 1)
+                .unwrap_or(1);
+            let timeline =
+                crate::utils::promise_ledger::build_promise_timeline(&hook_inputs, current_chapter);
+            let pacing_debts = crate::utils::promise_ledger::detect_pacing_debts(
+                &hook_inputs,
+                current_chapter,
+                None,
+            );
+            let weak_rows: Vec<crate::utils::promise_ledger::WeakHookSummaryRow> = summaries
+                .iter()
+                .map(|summary| crate::utils::promise_ledger::WeakHookSummaryRow {
+                    chapter: summary.chapter,
+                    hook_activity: summary.hook_activity.clone(),
+                })
+                .collect();
+            let weak_runs = crate::utils::promise_ledger::detect_weak_hook_runs(&weak_rows, None);
+            Ok(serde_json::json!({
+                "timeline": timeline,
+                "pacingDebts": pacing_debts,
+                "weakRuns": weak_runs,
+                "currentChapter": current_chapter
+            }))
+        })
+        .await;
     match result {
         Ok(Ok(payload)) => (StatusCode::OK, Json(payload)).into_response(),
         Ok(Err(error)) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
@@ -1920,11 +2085,16 @@ pub async fn get_promises(
 pub async fn get_run_log(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let limit = params.get("limit").and_then(|value| value.parse::<i64>().ok());
+    let limit = params
+        .get("limit")
+        .and_then(|value| value.parse::<i64>().ok());
     let snapshot = {
         match crate::utils::run_log::global_run_log().lock() {
             Ok(buffer) => buffer.snapshot(),
-            Err(_) => crate::utils::run_log::RunLogSnapshot { entries: Vec::new(), total_appended: 0 },
+            Err(_) => crate::utils::run_log::RunLogSnapshot {
+                entries: Vec::new(),
+                total_appended: 0,
+            },
         }
     };
     let projection = crate::utils::run_log::project_run_log(&snapshot, limit);
@@ -2034,12 +2204,20 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
         let endpoint = runtime.effective_router().await.resolve("radar");
         let base = endpoint.base_url.trim_end_matches('/').to_string();
         let url = format!("{base}/models");
-        let client = reqwest::Client::builder().no_proxy().build().unwrap_or_default();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap_or_default();
         let mut request = client.get(&url);
         if !endpoint.api_key.is_empty() {
             request = request.bearer_auth(&endpoint.api_key);
         }
-        if request.send().await.map(|response| response.status().is_success()).unwrap_or(false) {
+        if request
+            .send()
+            .await
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
+        {
             return true;
         }
         // 深链回退：候选 = 端点模型；计划 = llm.apiFormat × llm.stream 的
@@ -2051,11 +2229,13 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
             .as_ref()
             .and_then(|llm| llm.get("stream").and_then(serde_json::Value::as_bool));
         let preferred_api_format = llm_config.as_ref().and_then(|llm| {
-            llm.get("apiFormat").and_then(serde_json::Value::as_str).and_then(|value| match value {
-                "responses" => Some(crate::llm::providers::TransportApiFormat::Responses),
-                "chat" => Some(crate::llm::providers::TransportApiFormat::Chat),
-                _ => None,
-            })
+            llm.get("apiFormat")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| match value {
+                    "responses" => Some(crate::llm::providers::TransportApiFormat::Responses),
+                    "chat" => Some(crate::llm::providers::TransportApiFormat::Chat),
+                    _ => None,
+                })
         });
         for (plan_api_format, stream) in
             crate::server::service_routes::build_probe_plans(preferred_api_format, preferred_stream)
@@ -2140,11 +2320,19 @@ mod tests {
             .route("/api/v1/doctor", get(get_doctor))
             .with_state(runtime_for(dir.path()));
         let response = app
-            .oneshot(axum::http::Request::builder().method("GET").uri("/api/v1/doctor").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/doctor")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let issues = parsed["bookIssues"].as_array().unwrap();
         assert_eq!(issues.len(), 1);
@@ -2167,10 +2355,18 @@ mod tests {
             .route("/api/v1/doctor", get(get_doctor))
             .with_state(runtime_for(dir.path()));
         let response = app
-            .oneshot(axum::http::Request::builder().method("GET").uri("/api/v1/doctor").body(axum::body::Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri("/api/v1/doctor")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed["bookIssues"].as_array().unwrap().len(), 0);
     }
@@ -2234,7 +2430,9 @@ mod tests {
         let config = DaemonConfig::default();
         let continues = handle_audit_failure(&runtime, &config, "vr-retry", 1, &[], None).await;
         assert!(!continues);
-        let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let state = write_cycle_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(state.consecutive_failures.get("vr-retry"), Some(&1));
         assert!(!state.paused_books.contains("vr-retry"));
     }
@@ -2251,7 +2449,8 @@ mod tests {
         // 预置 2 次失败 → 本轮第 3 次（默认 maxAuditRetries=2 出窗）：
         // consecutive_debts=2，2+1>=3 → replan-required。
         write_cycle_state()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .insert("vr-replan".to_string(), 2);
         let continues = handle_audit_failure(
@@ -2264,15 +2463,14 @@ mod tests {
         )
         .await;
         assert!(!continues);
-        assert!(
-            write_cycle_state()
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-                .paused_books
-                .contains("vr-replan")
-        );
+        assert!(write_cycle_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .paused_books
+            .contains("vr-replan"));
 
-        let db = crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-replan"))
-            .unwrap();
+        let db =
+            crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-replan")).unwrap();
         let debts = db.list_debts(None, None).unwrap();
         assert_eq!(debts.len(), 1);
         assert_eq!(debts[0].status, "open");
@@ -2300,20 +2498,23 @@ mod tests {
             ..Default::default()
         };
         write_cycle_state()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .insert("vr-defer".to_string(), 2);
         let continues =
             handle_audit_failure(&runtime, &config, "vr-defer", 3, &[], Some(&governance)).await;
         assert!(continues);
         {
-            let state = write_cycle_state().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let state = write_cycle_state()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             assert!(!state.consecutive_failures.contains_key("vr-defer"));
             assert!(!state.paused_books.contains("vr-defer"));
         }
 
-        let db = crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-defer"))
-            .unwrap();
+        let db =
+            crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-defer")).unwrap();
         let debts = db.list_debts(None, None).unwrap();
         assert_eq!(debts.len(), 1);
         assert_eq!(debts[0].status, "deferred");
@@ -2334,20 +2535,20 @@ mod tests {
             ..Default::default()
         };
         write_cycle_state()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .consecutive_failures
             .insert("vr-qfirst".to_string(), 2);
         let continues =
             handle_audit_failure(&runtime, &config, "vr-qfirst", 2, &[], Some(&governance)).await;
         assert!(!continues);
-        assert!(
-            write_cycle_state()
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-                .paused_books
-                .contains("vr-qfirst")
-        );
-        let db = crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-qfirst"))
-            .unwrap();
+        assert!(write_cycle_state()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .paused_books
+            .contains("vr-qfirst"));
+        let db =
+            crate::state::memory_db::MemoryDb::open(root.join("books").join("vr-qfirst")).unwrap();
         assert!(db.list_debts(None, None).unwrap().is_empty());
     }
 
@@ -2361,7 +2562,9 @@ mod tests {
             "recommendations": [ { "platform": "番茄小说" } ]
         });
         save_radar_scan(root, &result).await.unwrap();
-        let file = root.join("radar").join("scan-2026-08-15T01-02-03-000Z.json");
+        let file = root
+            .join("radar")
+            .join("scan-2026-08-15T01-02-03-000Z.json");
         assert!(file.is_file());
 
         let history = load_radar_history(root).await.unwrap();
@@ -2370,9 +2573,12 @@ mod tests {
         assert_eq!(history[0]["summaryPreview"], "都市题材热度高");
 
         // 第二次扫描 + 非扫描文件干扰 → 仍按 file 降序两条。
-        save_radar_scan(root, &json!({ "timestamp": "2026-08-16T00:00:00.000Z", "marketSummary": "次日" }))
-            .await
-            .unwrap();
+        save_radar_scan(
+            root,
+            &json!({ "timestamp": "2026-08-16T00:00:00.000Z", "marketSummary": "次日" }),
+        )
+        .await
+        .unwrap();
         std::fs::write(root.join("radar").join("notes.txt"), "").unwrap();
         let history = load_radar_history(root).await.unwrap();
         assert_eq!(history.len(), 2);
@@ -2408,8 +2614,13 @@ mod tests {
             .await
             .unwrap();
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
     }
 
     /// 959 号：RRF 来源标注——纯词法命中必须标 `["fts5"]`（349 号起调用面实参倒置，
@@ -2435,19 +2646,44 @@ mod tests {
             .replace_scope(
                 "story-memory",
                 &[
-                    doc("chapter_summaries-1", "chapter_summary", "story/chapter_summaries.md", "第1章 镜中醒来", "苏檀在坊市对峙中夺回祖符玉佩，玉符异象初显。"),
-                    doc("current_state-1", "state", "story/current_state.md", "当前状态", "林动修为浅薄，正为七日内应对雷家寻仇做准备。"),
+                    doc(
+                        "chapter_summaries-1",
+                        "chapter_summary",
+                        "story/chapter_summaries.md",
+                        "第1章 镜中醒来",
+                        "苏檀在坊市对峙中夺回祖符玉佩，玉符异象初显。",
+                    ),
+                    doc(
+                        "current_state-1",
+                        "state",
+                        "story/current_state.md",
+                        "当前状态",
+                        "林动修为浅薄，正为七日内应对雷家寻仇做准备。",
+                    ),
                 ],
             )
             .unwrap();
         index.close();
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/hybrid-search", axum::routing::post(post_hybrid_search))
+            .route(
+                "/api/v1/books/:id/hybrid-search",
+                axum::routing::post(post_hybrid_search),
+            )
             .with_state(runtime_for(dir.path()));
-        let (status, body) =
-            post_json(app, "POST", "/api/v1/books/b1/hybrid-search", json!({ "query": "祖符", "k": 5 })).await;
+        let (status, body) = post_json(
+            app,
+            "POST",
+            "/api/v1/books/b1/hybrid-search",
+            json!({ "query": "祖符", "k": 5 }),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        let mut keys: Vec<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
+        let mut keys: Vec<&str> = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
         assert_eq!(keys, ["fts", "fused", "mode", "semantic"]);
         assert_eq!(body["mode"], "fts5-fallback");
@@ -2458,9 +2694,16 @@ mod tests {
         let fused = body["fused"].as_array().unwrap();
         assert!(!fused.is_empty(), "{body}");
         assert_eq!(fused[0]["id"], "chapter_summaries-1");
-        assert!((fused[0]["score"].as_f64().unwrap() - 1.0 / 61.0).abs() < 1e-12, "RRF k=60 名次 1");
+        assert!(
+            (fused[0]["score"].as_f64().unwrap() - 1.0 / 61.0).abs() < 1e-12,
+            "RRF k=60 名次 1"
+        );
         for hit in fused {
-            assert_eq!(hit["sources"], json!(["fts5"]), "纯词法命中不得标 semantic：{hit}");
+            assert_eq!(
+                hit["sources"],
+                json!(["fts5"]),
+                "纯词法命中不得标 semantic：{hit}"
+            );
         }
     }
 
@@ -2469,8 +2712,9 @@ mod tests {
     /// 指纹；profile 形态原样；错误面合并消息（name 空/二者皆缺/空白文本/profile null）。
     #[tokio::test]
     async fn save_style_profile_text_form_matches_fingerprint_golden() {
-        const GOLDEN: &str =
-            include_str!("../../../packages/studio/src/__tests__/golden/style-fingerprint-vectors.json");
+        const GOLDEN: &str = include_str!(
+            "../../../packages/studio/src/__tests__/golden/style-fingerprint-vectors.json"
+        );
         let golden: Value = serde_json::from_str(GOLDEN).unwrap();
         let vector = |id: &str| {
             golden["vectors"]
@@ -2484,9 +2728,12 @@ mod tests {
         fn same(a: &Value, b: &Value) -> bool {
             match (a, b) {
                 (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
-                (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(l, r)| same(l, r)),
+                (Value::Array(x), Value::Array(y)) => {
+                    x.len() == y.len() && x.iter().zip(y).all(|(l, r)| same(l, r))
+                }
                 (Value::Object(x), Value::Object(y)) => {
-                    x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
+                    x.len() == y.len()
+                        && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w)))
                 }
                 _ => a == b,
             }
@@ -2495,11 +2742,17 @@ mod tests {
         book_fixture(dir.path(), "[]");
         let app = || {
             axum::Router::new()
-                .route("/api/v1/style-profiles", axum::routing::post(save_style_profile))
+                .route(
+                    "/api/v1/style-profiles",
+                    axum::routing::post(save_style_profile),
+                )
                 .with_state(runtime_for(dir.path()))
         };
         let pool = dir.path().join(".inkos/style-profiles");
-        for (name, id, language) in [("热血少年", "zh-dialogue-rhetoric", None), ("Noir", "en-prose", Some("en"))] {
+        for (name, id, language) in [
+            ("热血少年", "zh-dialogue-rhetoric", None),
+            ("Noir", "en-prose", Some("en")),
+        ] {
             let v = vector(id);
             let mut payload = json!({ "name": name, "text": v["text"] });
             if let Some(language) = language {
@@ -2508,21 +2761,36 @@ mod tests {
             let (status, body) = post_json(app(), "POST", "/api/v1/style-profiles", payload).await;
             assert_eq!(status, StatusCode::OK, "{body}");
             assert_eq!(body["name"], name);
-            let saved: Value =
-                serde_json::from_str(&std::fs::read_to_string(pool.join(format!("{name}.json"))).unwrap()).unwrap();
+            let saved: Value = serde_json::from_str(
+                &std::fs::read_to_string(pool.join(format!("{name}.json"))).unwrap(),
+            )
+            .unwrap();
             assert_eq!(saved, body["profile"], "响应 profile = 落盘全文");
-            assert!(saved["analyzedAt"].as_str().is_some_and(|s| s.ends_with('Z')));
+            assert!(saved["analyzedAt"]
+                .as_str()
+                .is_some_and(|s| s.ends_with('Z')));
             let mut fingerprint = saved.clone();
             fingerprint.as_object_mut().unwrap().remove("analyzedAt");
             let mut expected = v["expected"].clone();
             expected["sourceName"] = json!(name);
-            assert!(same(&fingerprint, &expected), "{id}: saved={fingerprint} golden={expected}");
+            assert!(
+                same(&fingerprint, &expected),
+                "{id}: saved={fingerprint} golden={expected}"
+            );
         }
-        let (status, _) =
-            post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": "原形态", "profile": { "a": 1 } })).await;
+        let (status, _) = post_json(
+            app(),
+            "POST",
+            "/api/v1/style-profiles",
+            json!({ "name": "原形态", "profile": { "a": 1 } }),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            serde_json::from_str::<Value>(&std::fs::read_to_string(pool.join("原形态.json")).unwrap()).unwrap(),
+            serde_json::from_str::<Value>(
+                &std::fs::read_to_string(pool.join("原形态.json")).unwrap()
+            )
+            .unwrap(),
             json!({ "a": 1 })
         );
         for payload in [
@@ -2532,12 +2800,21 @@ mod tests {
             json!({ "name": "x", "profile": null }),
             json!({ "name": "  ", "text": "有正文。" }),
         ] {
-            let (status, body) = post_json(app(), "POST", "/api/v1/style-profiles", payload.clone()).await;
+            let (status, body) =
+                post_json(app(), "POST", "/api/v1/style-profiles", payload.clone()).await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{payload}");
-            assert_eq!(body["error"], "name and profile (or text) are required", "{payload}");
+            assert_eq!(
+                body["error"], "name and profile (or text) are required",
+                "{payload}"
+            );
         }
-        let (status, body) =
-            post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": "../evil", "text": "有正文。" })).await;
+        let (status, body) = post_json(
+            app(),
+            "POST",
+            "/api/v1/style-profiles",
+            json!({ "name": "../evil", "text": "有正文。" }),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid profile name");
     }
@@ -2552,20 +2829,42 @@ mod tests {
         let before = std::fs::read(&book_json).unwrap();
         let app = || {
             axum::Router::new()
-                .route("/api/v1/style-profiles", axum::routing::post(save_style_profile))
+                .route(
+                    "/api/v1/style-profiles",
+                    axum::routing::post(save_style_profile),
+                )
                 .with_state(runtime_for(dir.path()))
         };
-        for evil in ["../../books/b1/book", "../../../outside", "a/b", "a\\b", "x:y"] {
-            let (status, body) =
-                post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": evil, "profile": {} })).await;
+        for evil in [
+            "../../books/b1/book",
+            "../../../outside",
+            "a/b",
+            "a\\b",
+            "x:y",
+        ] {
+            let (status, body) = post_json(
+                app(),
+                "POST",
+                "/api/v1/style-profiles",
+                json!({ "name": evil, "profile": {} }),
+            )
+            .await;
             assert_eq!(status, StatusCode::BAD_REQUEST, "{evil}");
             assert_eq!(body["error"], "invalid profile name", "{evil}");
         }
         assert_eq!(std::fs::read(&book_json).unwrap(), before);
-        let (status, _) =
-            post_json(app(), "POST", "/api/v1/style-profiles", json!({ "name": "古风·诗意", "profile": {} })).await;
+        let (status, _) = post_json(
+            app(),
+            "POST",
+            "/api/v1/style-profiles",
+            json!({ "name": "古风·诗意", "profile": {} }),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(dir.path().join(".inkos/style-profiles/古风·诗意.json").is_file());
+        assert!(dir
+            .path()
+            .join(".inkos/style-profiles/古风·诗意.json")
+            .is_file());
     }
 
     /// 957 号：绑定名穿越=盘外存在性预言机（inkos.json 在根 → 修复前 200 并落盘绑定）
@@ -2576,7 +2875,10 @@ mod tests {
         book_fixture(dir.path(), "[]");
         std::fs::write(dir.path().join("inkos.json"), "{}").unwrap();
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/style-binding", axum::routing::put(save_style_binding))
+            .route(
+                "/api/v1/books/:id/style-binding",
+                axum::routing::put(save_style_binding),
+            )
             .with_state(runtime_for(dir.path()));
         let (status, body) = post_json(
             app,
@@ -2587,7 +2889,10 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "invalid profile name");
-        assert!(!dir.path().join("books/b1/story/style_binding.json").exists());
+        assert!(!dir
+            .path()
+            .join("books/b1/story/style_binding.json")
+            .exists());
     }
 
     /// 957 号：拆书产物名穿越写出项目根→400；首尾空白与 TS 同 trim 落盘；chapters
@@ -2598,7 +2903,10 @@ mod tests {
         book_fixture(dir.path(), "[]");
         let app = || {
             axum::Router::new()
-                .route("/api/v1/books/:id/deconstruct", axum::routing::post(post_deconstruct))
+                .route(
+                    "/api/v1/books/:id/deconstruct",
+                    axum::routing::post(post_deconstruct),
+                )
                 .with_state(runtime_for(dir.path()))
         };
         let chapters = json!([{ "chapter": 1, "characters": ["林昭"], "events": "事件" }]);
@@ -2613,8 +2921,13 @@ mod tests {
         assert_eq!(body["error"], "invalid export name");
         assert!(!dir.path().join("escaped.md").exists());
         // chapters 守卫在前：空 chapters + 坏名 → chapters is required（TS 同次序）。
-        let (status, body) =
-            post_json(app(), "POST", "/api/v1/books/b1/deconstruct", json!({ "name": "../x", "chapters": [] })).await;
+        let (status, body) = post_json(
+            app(),
+            "POST",
+            "/api/v1/books/b1/deconstruct",
+            json!({ "name": "../x", "chapters": [] }),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error"], "chapters is required");
         // 首尾空白 trim 后落盘（957 前 Rust 腿保留原串：文件名带空白与 TS 不同源）。
@@ -2626,7 +2939,10 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::OK);
-        assert!(dir.path().join("books/b1/story/deconstruction/拆书·卷二.md").is_file());
+        assert!(dir
+            .path()
+            .join("books/b1/story/deconstruction/拆书·卷二.md")
+            .is_file());
     }
 }
 
@@ -2666,15 +2982,20 @@ pub async fn put_asset_library_asset(
     let Some(kind) = parse_library_kind(&kind_raw) else {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
     };
-    let outcome = crate::utils::asset_library::upsert_asset(
-        runtime.state.project_root(),
-        kind,
-        &body.asset,
-    );
+    let outcome =
+        crate::utils::asset_library::upsert_asset(runtime.state.project_root(), kind, &body.asset);
     if !outcome.errors.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "errors": outcome.errors }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": outcome.errors })),
+        )
+            .into_response();
     }
-    (StatusCode::OK, Json(serde_json::to_value(&outcome).unwrap_or_default())).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::to_value(&outcome).unwrap_or_default()),
+    )
+        .into_response()
 }
 
 pub async fn delete_asset_library_asset(
@@ -2685,9 +3006,17 @@ pub async fn delete_asset_library_asset(
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
     };
     match crate::utils::asset_library::delete_asset(runtime.state.project_root(), kind, &id) {
-        Ok((true, _, assets)) => (StatusCode::OK, Json(json!({ "ok": true, "assets": assets }))).into_response(),
+        Ok((true, _, assets)) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "assets": assets })),
+        )
+            .into_response(),
         Ok((false, Some(reason), _)) => {
-            let status = if reason.contains("builtin seeds") { StatusCode::BAD_REQUEST } else { StatusCode::NOT_FOUND };
+            let status = if reason.contains("builtin seeds") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::NOT_FOUND
+            };
             flat_error(status, reason)
         }
         Ok((false, None, _)) => flat_error(StatusCode::NOT_FOUND, String::from("asset not found")),
@@ -2702,16 +3031,23 @@ pub async fn export_asset_library(
     let Some(kind) = parse_library_kind(&kind_raw) else {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid kind"));
     };
-    let (assets, _) = match crate::utils::asset_library::list_assets(runtime.state.project_root(), kind) {
-        Ok(snapshot) => snapshot,
-        Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
+    let (assets, _) =
+        match crate::utils::asset_library::list_assets(runtime.state.project_root(), kind) {
+            Ok(snapshot) => snapshot,
+            Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        };
     let body = crate::utils::asset_library::build_asset_library_export(&assets);
     (
         StatusCode::OK,
         [
             ("Content-Type", "application/json; charset=utf-8"),
-            ("Content-Disposition", Box::leak(format!("attachment; filename=\"asset-library-{kind_raw}.json\"").into_boxed_str())),
+            (
+                "Content-Disposition",
+                Box::leak(
+                    format!("attachment; filename=\"asset-library-{kind_raw}.json\"")
+                        .into_boxed_str(),
+                ),
+            ),
         ],
         body,
     )
@@ -2728,14 +3064,21 @@ pub async fn import_asset_library(
     };
     let parsed = crate::utils::asset_library::parse_asset_library_import(&body);
     if parsed.assets.is_empty() && !parsed.errors.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "errors": parsed.errors }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": parsed.errors })),
+        )
+            .into_response();
     }
-    let (existing, _) = match crate::utils::asset_library::list_assets(runtime.state.project_root(), kind) {
-        Ok(snapshot) => snapshot,
-        Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
-    };
+    let (existing, _) =
+        match crate::utils::asset_library::list_assets(runtime.state.project_root(), kind) {
+            Ok(snapshot) => snapshot,
+            Err(error) => return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        };
     let merged = crate::utils::asset_library::merge_asset_library(&existing, &parsed.assets);
-    if let Err(error) = crate::utils::asset_library::save_assets(runtime.state.project_root(), kind, &merged.merged) {
+    if let Err(error) =
+        crate::utils::asset_library::save_assets(runtime.state.project_root(), kind, &merged.merged)
+    {
         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
     }
     (
@@ -2770,29 +3113,50 @@ pub async fn adopt_library_assets(
         return flat_error(StatusCode::BAD_REQUEST, String::from("refs are required"));
     }
     let language = crate::utils::language::infer_language(body.language.as_deref());
-    let materials_dir = runtime.state.project_root().join(".inkos").join("materials");
+    let materials_dir = runtime
+        .state
+        .project_root()
+        .join(".inkos")
+        .join("materials");
     let _ = std::fs::create_dir_all(&materials_dir);
     let mut published: Vec<Value> = Vec::new();
     for reference in body.refs.iter().take(12) {
-        let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else { continue };
-        let (assets, _) = crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
-            .unwrap_or_else(|_| (Vec::new(), false));
-        let Some(asset) = assets.iter().find(|asset| asset.id == reference.id) else { continue };
+        let Some(kind) = crate::utils::asset_library::AssetKind::parse(&reference.kind) else {
+            continue;
+        };
+        let (assets, _) =
+            crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
+                .unwrap_or_else(|_| (Vec::new(), false));
+        let Some(asset) = assets.iter().find(|asset| asset.id == reference.id) else {
+            continue;
+        };
         let header = crate::utils::asset_library::render_adoption_header(asset, &book_id, language);
         let samples_block = if asset.samples.is_empty() {
             String::new()
         } else {
-            let items: Vec<String> = asset.samples.iter().map(|sample| format!("- {sample}")).collect();
+            let items: Vec<String> = asset
+                .samples
+                .iter()
+                .map(|sample| format!("- {sample}"))
+                .collect();
             format!("\n## Samples\n\n{}\n", items.join("\n"))
         };
         let markdown = format!("{header}\n{}\n{samples_block}", asset.body);
         let safe: String = format!("lib-{}-{}-{}", reference.kind, asset.id, book_id)
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .take(80)
             .collect();
         let material_id = safe;
-        if let Err(error) = std::fs::write(materials_dir.join(format!("{material_id}.md")), &markdown) {
+        if let Err(error) =
+            std::fs::write(materials_dir.join(format!("{material_id}.md")), &markdown)
+        {
             return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
         }
         let manifest = json!({
@@ -2810,7 +3174,8 @@ pub async fn adopt_library_assets(
         ) {
             return flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string());
         }
-        published.push(json!({ "materialId": material_id, "kind": reference.kind, "id": asset.id }));
+        published
+            .push(json!({ "materialId": material_id, "kind": reference.kind, "id": asset.id }));
     }
     (StatusCode::OK, Json(json!({ "published": published }))).into_response()
 }
@@ -2820,7 +3185,11 @@ pub async fn adopt_library_assets(
 fn read_rules_file(book_dir: &Path, file: &str, key: &str) -> Value {
     let raw = std::fs::read_to_string(book_dir.join("story").join(file)).unwrap_or_default();
     let parsed: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
-    let items = parsed.get(key).and_then(Value::as_array).cloned().unwrap_or_default();
+    let items = parsed
+        .get(key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let mut map = serde_json::Map::new();
     map.insert(key.to_string(), Value::Array(items));
     Value::Object(map)
@@ -2880,7 +3249,12 @@ pub async fn put_anti_ai_rules(
     if !errors.is_empty() {
         return (StatusCode::BAD_REQUEST, Json(json!({ "errors": errors }))).into_response();
     }
-    let story_dir = runtime.state.project_root().join("books").join(&book_id).join("story");
+    let story_dir = runtime
+        .state
+        .project_root()
+        .join("books")
+        .join(&book_id)
+        .join("story");
     let _ = std::fs::create_dir_all(&story_dir);
     match std::fs::write(
         story_dir.join("anti_ai_rules.json"),
@@ -2896,7 +3270,11 @@ pub async fn get_experience_entries(
     axum::extract::Path(book_id): axum::extract::Path<String>,
 ) -> impl IntoResponse {
     let book_dir = runtime.state.project_root().join("books").join(&book_id);
-    (StatusCode::OK, Json(read_rules_file(&book_dir, "experience.json", "entries"))).into_response()
+    (
+        StatusCode::OK,
+        Json(read_rules_file(&book_dir, "experience.json", "entries")),
+    )
+        .into_response()
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -2932,14 +3310,20 @@ pub async fn put_experience_entries(
                     })
             })
             .unwrap_or_default();
-    let merged = crate::utils::rule_experience_engine::merge_experience_entries(&existing, &body.entries);
+    let merged =
+        crate::utils::rule_experience_engine::merge_experience_entries(&existing, &body.entries);
     let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
     match std::fs::write(
         &path,
-        serde_json::to_string_pretty(&json!({ "version": 1, "entries": merged.merged })).unwrap_or_default(),
+        serde_json::to_string_pretty(&json!({ "version": 1, "entries": merged.merged }))
+            .unwrap_or_default(),
     ) {
         // 705 号：响应镜像 fork TS（{ok, entries}；added 计数键无消费方无测试锁定，省键）。
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "entries": merged.merged }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "entries": merged.merged })),
+        )
+            .into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -2977,13 +3361,21 @@ pub async fn delete_experience_entry(
         .cloned()
         .collect();
     if remaining.len() == entries.len() {
-        return flat_error(StatusCode::NOT_FOUND, format!("entry not found: {entry_id}"));
+        return flat_error(
+            StatusCode::NOT_FOUND,
+            format!("entry not found: {entry_id}"),
+        );
     }
     match std::fs::write(
         &path,
-        serde_json::to_string_pretty(&json!({ "version": 1, "entries": remaining })).unwrap_or_default(),
+        serde_json::to_string_pretty(&json!({ "version": 1, "entries": remaining }))
+            .unwrap_or_default(),
     ) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "entries": remaining }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "entries": remaining })),
+        )
+            .into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -3000,10 +3392,15 @@ pub async fn preview_asset_library_import(
     };
     let parsed = crate::utils::asset_library::parse_asset_library_import(&body);
     if parsed.assets.is_empty() && !parsed.errors.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "errors": parsed.errors }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": parsed.errors })),
+        )
+            .into_response();
     }
-    let (existing, _) = crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
-        .unwrap_or_else(|_| (Vec::new(), false));
+    let (existing, _) =
+        crate::utils::asset_library::list_assets(runtime.state.project_root(), kind)
+            .unwrap_or_else(|_| (Vec::new(), false));
     let merged = crate::utils::asset_library::merge_asset_library(&existing, &parsed.assets);
     let samples: Vec<serde_json::Value> = parsed
         .assets
@@ -3032,12 +3429,13 @@ pub async fn get_series_canon(
     if !crate::utils::series_canon::is_valid_series_id(&series_id) {
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series id"));
     }
-    let file = crate::utils::series_canon::load_series_canon(runtime.state.project_root(), &series_id)
-        .unwrap_or(crate::utils::series_canon::SeriesCanonFile {
-            version: crate::utils::series_canon::SERIES_CANON_VERSION,
-            series_id: series_id.clone(),
-            entries: Vec::new(),
-        });
+    let file =
+        crate::utils::series_canon::load_series_canon(runtime.state.project_root(), &series_id)
+            .unwrap_or(crate::utils::series_canon::SeriesCanonFile {
+                version: crate::utils::series_canon::SERIES_CANON_VERSION,
+                series_id: series_id.clone(),
+                entries: Vec::new(),
+            });
     (
         StatusCode::OK,
         Json(serde_json::to_value(&file).unwrap_or_default()),
@@ -3059,7 +3457,10 @@ pub async fn put_series_canon(
         return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series id"));
     }
     if !body.entries.is_array() {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("entries array required"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("entries array required"),
+        );
     }
     let parsed = crate::utils::series_canon::parse_series_canon_file(&json!({
         "version": crate::utils::series_canon::SERIES_CANON_VERSION,
@@ -3067,11 +3468,18 @@ pub async fn put_series_canon(
         "entries": body.entries,
     }));
     let Some(parsed) = parsed else {
-        return flat_error(StatusCode::BAD_REQUEST, String::from("invalid series canon payload"));
+        return flat_error(
+            StatusCode::BAD_REQUEST,
+            String::from("invalid series canon payload"),
+        );
     };
     let entry_count = parsed.entries.len();
     match crate::utils::series_canon::save_series_canon(runtime.state.project_root(), &parsed) {
-        Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "entries": entry_count }))).into_response(),
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "entries": entry_count })),
+        )
+            .into_response(),
         Err(error) => flat_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     }
 }
@@ -3080,9 +3488,7 @@ pub async fn put_series_canon(
 /// chapter index）。对齐 382 号双端异构声明——TS /writing-stats 服务端聚合，
 /// Rust 返回 rows 行数据由前端同一纯函数（aggregateWritingStats）聚合。
 /// 单书索引缺失跳过（对齐 TS catch 语义）。
-pub async fn get_writing_stats_rows(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn get_writing_stats_rows(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let mut rows: Vec<serde_json::Value> = Vec::new();
     let book_ids = runtime.state.list_books().await;
     for book_id in book_ids {

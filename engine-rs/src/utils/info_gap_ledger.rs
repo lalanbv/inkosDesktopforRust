@@ -40,10 +40,19 @@ pub fn parse_info_gaps_markdown(markdown: &str) -> Vec<InfoGapEntry> {
     macro_rules! flush {
         () => {
             if has_current {
-                let secret = fields.get("secret").map(|s| s.trim().to_string()).unwrap_or_default();
+                let secret = fields
+                    .get("secret")
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
                 let knows = split_list(fields.get("knows").map(String::as_str).unwrap_or(""));
                 let reader_knows = matches!(
-                    fields.get("readerKnows").map(String::as_str).unwrap_or("").trim().to_lowercase().as_str(),
+                    fields
+                        .get("readerKnows")
+                        .map(String::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_lowercase()
+                        .as_str(),
                     "true" | "是" | "yes" | "1"
                 );
                 let registered_at = fields
@@ -228,10 +237,7 @@ pub struct ReaderRedundancyHit {
 }
 
 /// 废笔机检：读者已知的秘密关键词再次出现——向读者复述已知信息。
-pub fn detect_reader_redundancy(
-    content: &str,
-    gaps: &[InfoGapEntry],
-) -> Vec<ReaderRedundancyHit> {
+pub fn detect_reader_redundancy(content: &str, gaps: &[InfoGapEntry]) -> Vec<ReaderRedundancyHit> {
     let mut hits: Vec<ReaderRedundancyHit> = Vec::new();
     for gap in gaps {
         if !gap.reader_knows {
@@ -282,7 +288,11 @@ pub fn render_info_gap_audit_notes(
         );
         for hit in leaks {
             let dialogue_note = if hit.in_dialogue {
-                if is_en { " (in dialogue)".to_string() } else { "（对白内）".to_string() }
+                if is_en {
+                    " (in dialogue)".to_string()
+                } else {
+                    "（对白内）".to_string()
+                }
             } else {
                 String::new()
             };
@@ -309,7 +319,10 @@ pub fn render_info_gap_audit_notes(
             .to_string(),
         );
         for hit in redundancies {
-            lines.push(format!("- [{}] \"{}\" ×{}", hit.gap_id, hit.keyword, hit.occurrences));
+            lines.push(format!(
+                "- [{}] \"{}\" ×{}",
+                hit.gap_id, hit.keyword, hit.occurrences
+            ));
         }
     }
     Some(lines.join("\n"))
@@ -334,8 +347,16 @@ pub struct InfoGapDimension {
 pub fn info_gap_contract() -> InfoGapContract {
     InfoGapContract {
         dimensions: vec![
-            InfoGapDimension { id: 38, zh: "泄密机检".into(), en: "Secret Leak Check".into() },
-            InfoGapDimension { id: 39, zh: "废笔机检".into(), en: "Reader Redundancy Check".into() },
+            InfoGapDimension {
+                id: 38,
+                zh: "泄密机检".into(),
+                en: "Secret Leak Check".into(),
+            },
+            InfoGapDimension {
+                id: 39,
+                zh: "废笔机检".into(),
+                en: "Reader Redundancy Check".into(),
+            },
         ],
         truth_file: "story/info_gaps.md",
         dialogue_window: DIALOGUE_WINDOW_CHARS,

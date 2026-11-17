@@ -27,8 +27,7 @@ use crate::agents::ai_tells::analyze_ai_tells;
 use crate::agents::chapter_analyzer::{ChapterAnalyzerChat, ChapterAnalyzerCtx};
 use crate::agents::composer::{
     compose_governed_chapter, ComposeChapterError, ComposeChapterInput, ComposeChapterOutput,
-    ComposerChat, ContextBudget, LlmContextCompiler,
-    LlmOutlineSelector,
+    ComposerChat, ContextBudget, LlmContextCompiler, LlmOutlineSelector,
 };
 use crate::agents::continuity::{AuditIssue, AuditResult, AuditSeverity};
 use crate::agents::planner::{plan_chapter, PlanChapterError, PlanChapterInput, PlannerChat};
@@ -36,15 +35,18 @@ use crate::agents::post_write_validator::{
     detect_paragraph_length_drift, normalize_post_write_surface, resolve_duplicate_title,
     validate_post_write, PostWriteViolation, ViolationSeverity,
 };
-use crate::agents::reviser::{revise_chapter as reviser_revise_chapter, ReviseChapterError, ReviseMode, ReviseOptions, ReviseOutput, ReviserChat, ReviserCtx};
+use crate::agents::reviser::{
+    revise_chapter as reviser_revise_chapter, ReviseChapterError, ReviseMode, ReviseOptions,
+    ReviseOutput, ReviserChat, ReviserCtx,
+};
 use crate::agents::rules_reader::read_book_rules;
 use crate::agents::sensitive_words::analyze_sensitive_words;
 use crate::agents::state_validator::{StateValidationAuthorityContext, StateValidatorChat};
-use crate::interaction::agent_loop::AbortHandle;
 use crate::agents::writer::{
-    save_chapter, save_new_truth_files, write_chapter, WriteChapterError, WriteChapterInput, WriteChapterOutput, WriterChat,
-    WriterCtx,
+    save_chapter, save_new_truth_files, write_chapter, WriteChapterError, WriteChapterInput,
+    WriteChapterOutput, WriterChat, WriterCtx,
 };
+use crate::interaction::agent_loop::AbortHandle;
 use crate::models::book::BookConfig;
 use crate::models::input_governance::{ChapterIntent, ChapterMemo, ContextPackage, RuleStack};
 use crate::models::length_governance::{LengthCountingMode, LengthSpec};
@@ -54,14 +56,15 @@ use crate::pipeline::build_persistence_output::{
 use crate::pipeline::chapter_persistence::{
     persist_chapter_artifacts, PersistChapterArtifactsParams, PersistenceHooks,
 };
-use crate::pipeline::chapter_review_cycle::{run_chapter_review_cycle, ChapterReviewCycleControlInput, CycleAuditor, CycleReviser, ReviewCycleCallbacks, ReviewCycleError, ReviewCycleParams, SensitiveScanResult, };
+use crate::pipeline::chapter_review_cycle::{
+    run_chapter_review_cycle, ChapterReviewCycleControlInput, CycleAuditor, CycleReviser,
+    ReviewCycleCallbacks, ReviewCycleError, ReviewCycleParams, SensitiveScanResult,
+};
 use crate::pipeline::chapter_state_recovery::{ControlInput, SettlePort, ValidatePort};
 use crate::pipeline::chapter_truth_validation::{
     validate_chapter_truth_persistence, TruthValidationParams,
 };
-use crate::pipeline::persisted_governed_plan::{
-    load_persisted_plan, save_persisted_plan,
-};
+use crate::pipeline::persisted_governed_plan::{load_persisted_plan, save_persisted_plan};
 use crate::state::manager::StateManager;
 use crate::state::store::StateStore;
 use crate::utils::hook_ledger_validator::validate_hook_ledger;
@@ -352,10 +355,17 @@ pub async fn write_next_chapter(
     .await
     .map_err(|e| WriteNextError::Persistence(e.to_string()))?;
 
-
-    let outcome =
-        write_next_chapter_locked(state, agents, ctx, config, book_id, word_count, temperature_override, external_context)
-            .await;
+    let outcome = write_next_chapter_locked(
+        state,
+        agents,
+        ctx,
+        config,
+        book_id,
+        word_count,
+        temperature_override,
+        external_context,
+    )
+    .await;
     match outcome {
         Ok(result) => {
             let chapter_file = find_persisted_chapter_file(&book_dir, &padded_chapter).await;
@@ -365,35 +375,41 @@ pub async fn write_next_chapter(
                     result.chapter_number
                 ));
                 publish_failed_run_snapshot(
-                    &book_dir, &run_path, &run_id, &base_stage, config, &error,
+                    &book_dir,
+                    &run_path,
+                    &run_id,
+                    &base_stage,
+                    config,
+                    &error,
                 )
                 .await;
                 return Err(error);
             };
             // TS：lengthTelemetry ?? buildLengthSpec(wordCount ?? book 基准)。
             let book = state.load_book_config(book_id).await.ok();
-            let spec = result.length_telemetry.as_ref().map(|telemetry| {
-                crate::models::length_governance::LengthSpec {
+            let spec = result
+                .length_telemetry
+                .as_ref()
+                .map(|telemetry| crate::models::length_governance::LengthSpec {
                     target: telemetry.target,
                     soft_min: telemetry.soft_min,
                     soft_max: telemetry.soft_max,
                     hard_min: telemetry.hard_min,
                     hard_max: telemetry.hard_max,
                     counting_mode: telemetry.counting_mode,
-                }
-            }).unwrap_or_else(|| {
-                let language = match book
-                    .as_ref()
-                    .and_then(|b| b.language.as_deref())
-                {
-                    Some("en") => crate::utils::language::WritingLanguage::En,
-                    _ => crate::utils::language::WritingLanguage::Zh,
-                };
-                crate::utils::length_metrics::build_length_spec(
-                    word_count.unwrap_or_else(|| book.as_ref().map(|b| b.chapter_word_count).unwrap_or(3000)),
-                    language,
-                )
-            });
+                })
+                .unwrap_or_else(|| {
+                    let language = match book.as_ref().and_then(|b| b.language.as_deref()) {
+                        Some("en") => crate::utils::language::WritingLanguage::En,
+                        _ => crate::utils::language::WritingLanguage::Zh,
+                    };
+                    crate::utils::length_metrics::build_length_spec(
+                        word_count.unwrap_or_else(|| {
+                            book.as_ref().map(|b| b.chapter_word_count).unwrap_or(3000)
+                        }),
+                        language,
+                    )
+                });
             let chapter_path = format!("chapters/{chapter_file}");
             let artifacts = vec![
                 chapter_path.clone(),
@@ -424,18 +440,20 @@ pub async fn write_next_chapter(
             crate::production::write_production_run_snapshot(
                 &book_dir,
                 &run_path,
-                &crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
-                    kind: crate::production::ProductionKind::LongFiction,
-                    id: run_id,
-                    status,
-                    stage: base_stage,
-                    artifacts,
-                    observations: vec![observation],
-                    model: None,
-                    skill_ids: snapshot_skill_ids(),
-                    resume_cursor: Some(result.chapter_number.to_string()),
-                    error: None,
-                }),
+                &crate::production::ProductionRunSnapshot::create(
+                    crate::production::CreateRunInput {
+                        kind: crate::production::ProductionKind::LongFiction,
+                        id: run_id,
+                        status,
+                        stage: base_stage,
+                        artifacts,
+                        observations: vec![observation],
+                        model: None,
+                        skill_ids: snapshot_skill_ids(),
+                        resume_cursor: Some(result.chapter_number.to_string()),
+                        error: None,
+                    },
+                ),
             )
             .await
             .map_err(|e| WriteNextError::Persistence(e.to_string()))?;
@@ -476,22 +494,23 @@ async fn publish_failed_run_snapshot(
         .abort
         .as_ref()
         .is_some_and(|flag| *flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
-    let snapshot = crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
-        kind: crate::production::ProductionKind::LongFiction,
-        id: run_id.to_string(),
-        status: if cancelled {
-            crate::production::ProductionRunStatus::Cancelled
-        } else {
-            crate::production::ProductionRunStatus::Failed
-        },
-        stage: stage.to_string(),
-        artifacts: Vec::new(),
-        observations: Vec::new(),
-        model: None,
-        skill_ids: snapshot_skill_ids(),
-        resume_cursor: None,
-        error: Some(error.to_string()),
-    });
+    let snapshot =
+        crate::production::ProductionRunSnapshot::create(crate::production::CreateRunInput {
+            kind: crate::production::ProductionKind::LongFiction,
+            id: run_id.to_string(),
+            status: if cancelled {
+                crate::production::ProductionRunStatus::Cancelled
+            } else {
+                crate::production::ProductionRunStatus::Failed
+            },
+            stage: stage.to_string(),
+            artifacts: Vec::new(),
+            observations: Vec::new(),
+            model: None,
+            skill_ids: snapshot_skill_ids(),
+            resume_cursor: None,
+            error: Some(error.to_string()),
+        });
     let _ = crate::production::write_production_run_snapshot(book_dir, run_path, &snapshot).await;
 }
 
@@ -538,14 +557,31 @@ async fn write_next_chapter_locked(
         pipeline_language,
     );
 
-    stage_log(config, pipeline_language, "规划与上下文编排", "plan & context composition");
+    stage_log(
+        config,
+        pipeline_language,
+        "规划与上下文编排",
+        "plan & context composition",
+    );
     let write_input = prepare_write_input(
-        state, agents, ctx, config, &book, &book_dir, chapter_number, external_context,
+        state,
+        agents,
+        ctx,
+        config,
+        &book,
+        &book_dir,
+        chapter_number,
+        external_context,
     )
     .await?;
 
     // ── 1. 撰写草稿 ──
-    stage_log(config, pipeline_language, "撰写章节草稿", "write chapter draft");
+    stage_log(
+        config,
+        pipeline_language,
+        "撰写章节草稿",
+        "write chapter draft",
+    );
     tracing::info!(target: "write-next", "撰写章节草稿");
     let writer_ctx = WriterCtx {
         project_root: ctx.project_root,
@@ -676,12 +712,17 @@ async fn write_next_chapter_locked(
             );
             output = versions.remove(winner);
             // usage 以各版累加近似（多版成本计入本章）。
-            if let Some(usage) = versions.into_iter().map(|v| v.token_usage).reduce(|mut acc, usage| {
-                acc.prompt_tokens += usage.prompt_tokens;
-                acc.completion_tokens += usage.completion_tokens;
-                acc.total_tokens += usage.total_tokens;
-                acc
-            }) {
+            if let Some(usage) =
+                versions
+                    .into_iter()
+                    .map(|v| v.token_usage)
+                    .reduce(|mut acc, usage| {
+                        acc.prompt_tokens += usage.prompt_tokens;
+                        acc.completion_tokens += usage.completion_tokens;
+                        acc.total_tokens += usage.total_tokens;
+                        acc
+                    })
+            {
                 output.token_usage.prompt_tokens += usage.prompt_tokens;
                 output.token_usage.completion_tokens += usage.completion_tokens;
                 output.token_usage.total_tokens += usage.total_tokens;
@@ -701,8 +742,7 @@ async fn write_next_chapter_locked(
     if config.chapter_review_mode == ChapterReviewMode::Manual {
         // C4a：写完即停——跳过自动审核环（避免静默翻倍章节耗时）。
         tracing::info!(target: "write-next", "写完即停（手动审查模式）");
-        let normalized =
-            normalize_post_write_surface(&output.content, Some(pipeline_language));
+        let normalized = normalize_post_write_surface(&output.content, Some(pipeline_language));
         if let Err(message) = assert_chapter_content_not_empty(&normalized, "manual write") {
             return Err(WriteNextError::EmptyChapterContent { stage: message });
         }
@@ -714,7 +754,8 @@ async fn write_next_chapter_locked(
             passed: false,
             issues: Vec::new(),
             summary: if pipeline_language == WritingLanguage::En {
-                "Not reviewed yet (manual mode: stopped after writing — run review when ready).".to_string()
+                "Not reviewed yet (manual mode: stopped after writing — run review when ready)."
+                    .to_string()
             } else {
                 "尚未审查（手动模式：写完即停，需要时点“审查”）。".to_string()
             },
@@ -741,7 +782,6 @@ async fn write_next_chapter_locked(
             }),
             _ => None,
         };
-
 
         // 确定性后写检查（每轮重跑）：post-write error 级 + hook 账本校验。
         let parsed_rules = read_book_rules(&book_dir).await;
@@ -771,21 +811,21 @@ async fn write_next_chapter_locked(
             .collect();
             // Phase 9-3：草稿必须兑现 memo 承诺的每个 hook。
             if !memo_body.is_empty() {
-                issues.extend(
-                    validate_hook_ledger(&memo_body, content)
-                        .into_iter()
-                        .map(|violation| AuditIssue {
-                            severity: if violation.severity == crate::utils::hook_ledger_validator::ViolationSeverity::Critical {
-                                AuditSeverity::Critical
-                            } else {
-                                AuditSeverity::Warning
-                            },
-                            category: violation.category,
-                            description: violation.description,
-                            suggestion: violation.suggestion,
-                            repair_scope: None,
-                        }),
-                );
+                issues.extend(validate_hook_ledger(&memo_body, content).into_iter().map(
+                    |violation| AuditIssue {
+                        severity: if violation.severity
+                            == crate::utils::hook_ledger_validator::ViolationSeverity::Critical
+                        {
+                            AuditSeverity::Critical
+                        } else {
+                            AuditSeverity::Warning
+                        },
+                        category: violation.category,
+                        description: violation.description,
+                        suggestion: violation.suggestion,
+                        repair_scope: None,
+                    },
+                ));
             }
             issues
         };
@@ -879,10 +919,9 @@ async fn write_next_chapter_locked(
             analyze_sensitive_words: Arc::new(move |content| {
                 let result = analyze_sensitive_words(content, None, pipeline_language);
                 SensitiveScanResult {
-                    blocked: result
-                        .found
-                        .iter()
-                        .any(|m| m.severity == crate::agents::sensitive_words::SensitiveWordSeverity::Block),
+                    blocked: result.found.iter().any(|m| {
+                        m.severity == crate::agents::sensitive_words::SensitiveWordSeverity::Block
+                    }),
                     issues: result.issues,
                 }
             }),
@@ -1013,7 +1052,8 @@ async fn write_next_chapter_locked(
                 category: "title-dedup".to_string(),
                 description,
                 suggestion: if pipeline_language == WritingLanguage::En {
-                    "If the auto-renamed title is weak, revise the chapter title manually.".to_string()
+                    "If the auto-renamed title is weak, revise the chapter title manually."
+                        .to_string()
                 } else {
                     "如果自动改名不理想，可以在后续手动修订章节标题。".to_string()
                 },
@@ -1049,9 +1089,10 @@ async fn write_next_chapter_locked(
     // R2/359 号：张力曲线启发式告警——只报涉及当前章的告警（区间扩展中），
     // 避免同一平坦段/弱钩段在连续各章重复入账；无分曲线不产告警。
     {
-        let summaries_for_tension = tokio::fs::read_to_string(book_dir.join("story/chapter_summaries.md"))
-            .await
-            .unwrap_or_default();
+        let summaries_for_tension =
+            tokio::fs::read_to_string(book_dir.join("story/chapter_summaries.md"))
+                .await
+                .unwrap_or_default();
         let tension_rows =
             crate::utils::story_markdown::parse_chapter_summaries_markdown(&summaries_for_tension);
         let tension_rows: Vec<crate::utils::tension_curve::TensionRow> = tension_rows
@@ -1158,9 +1199,16 @@ async fn write_next_chapter_locked(
             .map_err(|e| e.to_string())
         }
     }
-    let validator = ValidatorAdapter { chat: agents.state_validator };
+    let validator = ValidatorAdapter {
+        chat: agents.state_validator,
+    };
 
-    stage_log(config, pipeline_language, "真相结算与校验", "settle & truth validation");
+    stage_log(
+        config,
+        pipeline_language,
+        "真相结算与校验",
+        "settle & truth validation",
+    );
     let truth = validate_chapter_truth_persistence(TruthValidationParams {
         writer: agents.settler,
         validator: &validator,
@@ -1195,9 +1243,14 @@ async fn write_next_chapter_locked(
     .await
     .map_err(WriteNextError::TruthValidation)?;
 
-    let chapter_status: &'static str = truth
-        .chapter_status
-        .unwrap_or(if truth.audit_result.passed { "ready-for-review" } else { "audit-failed" });
+    let chapter_status: &'static str =
+        truth
+            .chapter_status
+            .unwrap_or(if truth.audit_result.passed {
+                "ready-for-review"
+            } else {
+                "audit-failed"
+            });
     persistence_output = truth.persistence_output;
     audit_result = truth.audit_result;
     let degraded_issues = truth.degraded_issues;
@@ -1222,23 +1275,25 @@ async fn write_next_chapter_locked(
             recent_content.push_str("\n\n");
         }
     }
-    let paragraph_issues: Vec<AuditIssue> = detect_paragraph_shape_warnings_pub(
-        &final_content,
-        pipeline_language,
-    )
-    .into_iter()
-    .chain(detect_paragraph_length_drift(&final_content, &recent_content, pipeline_language))
-    .map(|violation: PostWriteViolation| {
-        tracing::warn!(target: "write-next", "[paragraph] {}", violation.description);
-        AuditIssue {
-            severity: AuditSeverity::Warning,
-            category: "paragraph-shape".to_string(),
-            description: violation.description,
-            suggestion: violation.suggestion,
-            repair_scope: None,
-        }
-    })
-    .collect();
+    let paragraph_issues: Vec<AuditIssue> =
+        detect_paragraph_shape_warnings_pub(&final_content, pipeline_language)
+            .into_iter()
+            .chain(detect_paragraph_length_drift(
+                &final_content,
+                &recent_content,
+                pipeline_language,
+            ))
+            .map(|violation: PostWriteViolation| {
+                tracing::warn!(target: "write-next", "[paragraph] {}", violation.description);
+                AuditIssue {
+                    severity: AuditSeverity::Warning,
+                    category: "paragraph-shape".to_string(),
+                    description: violation.description,
+                    suggestion: violation.suggestion,
+                    repair_scope: None,
+                }
+            })
+            .collect();
     audit_result.issues.extend(paragraph_issues);
 
     // ── R3/361 号：审查指标沉淀（overallScore + severity 计数；contentHash 幂等——
@@ -1262,26 +1317,39 @@ async fn write_next_chapter_locked(
                         rules
                             .iter()
                             .filter_map(|rule| {
-                                crate::utils::rule_experience_engine::validate_anti_ai_rule(rule).rule
+                                crate::utils::rule_experience_engine::validate_anti_ai_rule(rule)
+                                    .rule
                             })
                             .collect(),
                     )
                 });
-        let resolved = crate::utils::rule_experience_engine::resolve_anti_ai_rules_with_seeds(user_rules);
+        let resolved =
+            crate::utils::rule_experience_engine::resolve_anti_ai_rules_with_seeds(user_rules);
         if !resolved.rules.is_empty() {
-            let hits = crate::utils::rule_experience_engine::scan_anti_ai_rules(&final_content, &resolved.rules);
+            let hits = crate::utils::rule_experience_engine::scan_anti_ai_rules(
+                &final_content,
+                &resolved.rules,
+            );
             if !hits.is_empty() {
                 tracing::warn!(target: "write-next", "[anti-ai] {} hit(s) in ch{chapter_number}", hits.len());
                 for hit in hits {
                     audit_result.issues.push(AuditIssue {
                         severity: match hit.severity {
-                            crate::utils::rule_experience_engine::AntiAiSeverity::Critical => AuditSeverity::Critical,
-                            crate::utils::rule_experience_engine::AntiAiSeverity::Warning => AuditSeverity::Warning,
-                            crate::utils::rule_experience_engine::AntiAiSeverity::Info => AuditSeverity::Info,
+                            crate::utils::rule_experience_engine::AntiAiSeverity::Critical => {
+                                AuditSeverity::Critical
+                            }
+                            crate::utils::rule_experience_engine::AntiAiSeverity::Warning => {
+                                AuditSeverity::Warning
+                            }
+                            crate::utils::rule_experience_engine::AntiAiSeverity::Info => {
+                                AuditSeverity::Info
+                            }
                         },
                         category: "anti-ai-rule".to_string(),
                         description: format!("{}（×{}）", hit.message, hit.count),
-                        suggestion: hit.replacement.unwrap_or_else(|| "按本书反AI规则改写".to_string()),
+                        suggestion: hit
+                            .replacement
+                            .unwrap_or_else(|| "按本书反AI规则改写".to_string()),
                         repair_scope: None,
                     });
                 }
@@ -1409,15 +1477,28 @@ async fn write_next_chapter_locked(
             } else {
                 "⚠️"
             };
-            let chapter_length =
-                crate::utils::length_metrics::format_length_count(final_word_count, length_spec.counting_mode);
+            let chapter_length = crate::utils::length_metrics::format_length_count(
+                final_word_count,
+                length_spec.counting_mode,
+            );
             let mut body_lines: Vec<String> = vec![
                 format!("**{}** | {}", persistence_output.title, chapter_length),
-                if revised { "📝 已自动修正".to_string() } else { String::new() },
+                if revised {
+                    "📝 已自动修正".to_string()
+                } else {
+                    String::new()
+                },
                 if chapter_status == "state-degraded" {
                     "状态结算: 已降级保存，需先修复 state 再继续".to_string()
                 } else {
-                    format!("审稿: {}", if audit_result.passed { "通过" } else { "需人工审核" })
+                    format!(
+                        "审稿: {}",
+                        if audit_result.passed {
+                            "通过"
+                        } else {
+                            "需人工审核"
+                        }
+                    )
                 },
             ];
             body_lines.extend(
@@ -1425,7 +1506,13 @@ async fn write_next_chapter_locked(
                     .issues
                     .iter()
                     .filter(|issue| issue.severity != AuditSeverity::Info)
-                    .map(|issue| format!("- [{}] {}", severity_text(issue.severity), issue.description)),
+                    .map(|issue| {
+                        format!(
+                            "- [{}] {}",
+                            severity_text(issue.severity),
+                            issue.description
+                        )
+                    }),
             );
             let body = body_lines
                 .into_iter()
@@ -1471,9 +1558,19 @@ async fn write_next_chapter_locked(
     }
 
     // ── 6c. 时间线节拍自动沉淀（189 号：书籍级开关默认关；失败不阻断） ──
-    if book.writing.as_ref().and_then(|w| w.auto_timeline_beats).unwrap_or(false) {
+    if book
+        .writing
+        .as_ref()
+        .and_then(|w| w.auto_timeline_beats)
+        .unwrap_or(false)
+    {
         if let Some(beats_chat) = ctx.timeline_beats {
-            stage_log(config, pipeline_language, "时间线节拍沉淀", "timeline beat settle");
+            stage_log(
+                config,
+                pipeline_language,
+                "时间线节拍沉淀",
+                "timeline beat settle",
+            );
             match crate::pipeline::timeline_settle::settle_beats_for_chapter(
                 &book_dir,
                 beats_chat,
@@ -1487,7 +1584,9 @@ async fn write_next_chapter_locked(
                 Ok(Some(applied)) if applied > 0 => {
                     tracing::info!(target: "write-next", "[timeline] 已自动沉淀第{chapter_number}章节拍（{applied} 条情节线）");
                 }
-                Ok(_) => tracing::info!(target: "write-next", "[timeline] 本章无线条被推进，跳过节拍落盘"),
+                Ok(_) => {
+                    tracing::info!(target: "write-next", "[timeline] 本章无线条被推进，跳过节拍落盘")
+                }
                 Err(error) => {
                     tracing::warn!(target: "write-next", "[timeline] 节拍自动沉淀失败（不影响章节产物）: {error}");
                 }
@@ -1513,19 +1612,29 @@ struct RunnerPersistenceHooks<'a> {
 #[async_trait]
 impl PersistenceHooks for RunnerPersistenceHooks<'_> {
     async fn load_chapter_index(&self) -> Result<Vec<crate::models::chapter::ChapterMeta>, String> {
-        self.state.load_chapter_index(self.book_id).await.map_err(|e| e.to_string())
-    }
-    async fn save_chapter(&self) -> Result<(), String> {
-        save_chapter(self.writer_ctx, self.book_dir, self.output, self.numerical_system, self.language)
+        self.state
+            .load_chapter_index(self.book_id)
             .await
             .map_err(|e| e.to_string())
+    }
+    async fn save_chapter(&self) -> Result<(), String> {
+        save_chapter(
+            self.writer_ctx,
+            self.book_dir,
+            self.output,
+            self.numerical_system,
+            self.language,
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
     async fn save_truth_files(&self) -> Result<(), String> {
         save_new_truth_files(self.book_dir, self.output, self.language)
             .await
             .map_err(|e| e.to_string())?;
         // syncLegacyStructuredStateFromMarkdown：无结构化 delta 时重写 state。
-        if self.output.runtime_state_delta.is_none() && self.output.runtime_state_snapshot.is_none() {
+        if self.output.runtime_state_delta.is_none() && self.output.runtime_state_snapshot.is_none()
+        {
             let _ = crate::state::state_bootstrap::bootstrap_structured_state_from_markdown(
                 self.writer_ctx.state_store,
                 &self.book_dir.to_string_lossy(),
@@ -1557,9 +1666,14 @@ impl PersistenceHooks for RunnerPersistenceHooks<'_> {
         Ok(())
     }
     async fn persist_audit_drift_guidance(&self, issues: &[AuditIssue]) -> Result<(), String> {
-        persist_audit_drift_guidance(self.book_dir, self.output.chapter_number, issues, self.language)
-            .await
-            .map_err(|e| e.to_string())
+        persist_audit_drift_guidance(
+            self.book_dir,
+            self.output.chapter_number,
+            issues,
+            self.language,
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
     async fn snapshot_state(&self) -> Result<(), String> {
         self.state
@@ -1584,7 +1698,9 @@ pub(crate) async fn persist_audit_drift_guidance(
     let story_dir = book_dir.join("story");
     let drift_path = story_dir.join("audit_drift.md");
     let state_path = story_dir.join("current_state.md");
-    let current_state = tokio::fs::read_to_string(&state_path).await.unwrap_or_default();
+    let current_state = tokio::fs::read_to_string(&state_path)
+        .await
+        .unwrap_or_default();
     let sanitized_state = strip_audit_drift_correction_block(&current_state)
         .trim_end()
         .to_string();
@@ -1597,7 +1713,11 @@ pub(crate) async fn persist_audit_drift_guidance(
         return Ok(());
     }
 
-    let header = if language == WritingLanguage::En { "# Audit Drift" } else { "# 审计纠偏" };
+    let header = if language == WritingLanguage::En {
+        "# Audit Drift"
+    } else {
+        "# 审计纠偏"
+    };
     let section = if language == WritingLanguage::En {
         "## Audit Drift Correction"
     } else {
@@ -1608,12 +1728,21 @@ pub(crate) async fn persist_audit_drift_guidance(
     } else {
         format!("> 第{chapter_number}章审计发现以下问题，下一章写作时必须避免：")
     };
-    let mut lines = vec![header.to_string(), String::new(), section.to_string(), String::new(), intro];
-    lines.extend(
-        issues
-            .iter()
-            .map(|issue| format!("> - [{}] {}: {}", severity_text(issue.severity), issue.category, issue.description)),
-    );
+    let mut lines = vec![
+        header.to_string(),
+        String::new(),
+        section.to_string(),
+        String::new(),
+        intro,
+    ];
+    lines.extend(issues.iter().map(|issue| {
+        format!(
+            "> - [{}] {}: {}",
+            severity_text(issue.severity),
+            issue.category,
+            issue.description
+        )
+    }));
     lines.push(String::new());
     crate::utils::atomic_file_set::write_file_atomic(&drift_path, &lines.join("\n")).await
 }
@@ -1684,7 +1813,10 @@ fn assert_chapter_content_not_empty(content: &str, stage: &str) -> Result<(), St
     Ok(())
 }
 
-async fn assert_no_pending_state_repair(state: &StateManager, book_id: &str) -> Result<(), WriteNextError> {
+async fn assert_no_pending_state_repair(
+    state: &StateManager,
+    book_id: &str,
+) -> Result<(), WriteNextError> {
     let index = state.load_chapter_index(book_id).await?;
     let latest = index.iter().max_by_key(|meta| meta.number);
     if let Some(meta) = latest {
@@ -1714,10 +1846,19 @@ async fn run_promotion_pass(book_dir: &Path, chapter_number: u32) {
         .unwrap_or_default();
     let promotion = rerun_promotion_pass(&hooks, &summaries_raw);
     if promotion.updated {
-        let contains_cjk = ledger_raw.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
-        let ledger_language = if contains_cjk { WritingLanguage::Zh } else { WritingLanguage::En };
+        let contains_cjk = ledger_raw
+            .chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+        let ledger_language = if contains_cjk {
+            WritingLanguage::Zh
+        } else {
+            WritingLanguage::En
+        };
         let rendered = render_hook_snapshot(&promotion.hooks, ledger_language);
-        if crate::utils::atomic_file_set::write_file_atomic(&ledger_path, &rendered).await.is_ok() {
+        if crate::utils::atomic_file_set::write_file_atomic(&ledger_path, &rendered)
+            .await
+            .is_ok()
+        {
             tracing::info!(
                 "[promotion] {} hook(s) promoted after chapter {chapter_number}",
                 promotion.flipped_count
@@ -1761,10 +1902,16 @@ pub(crate) async fn prepare_write_input(
     };
 
     // composeGovernedChapter。
-    let selector = LlmOutlineSelector { chat: agents.composer };
-    let compiler = LlmContextCompiler { chat: agents.composer };
+    let selector = LlmOutlineSelector {
+        chat: agents.composer,
+    };
+    let compiler = LlmContextCompiler {
+        chat: agents.composer,
+    };
     // 216 号：绑定素材引用选段注入（TS runner referenceContextProvider 同款）。
-    let reference_selector = crate::agents::composer::LlmReferenceSelector { chat: agents.composer };
+    let reference_selector = crate::agents::composer::LlmReferenceSelector {
+        chat: agents.composer,
+    };
     let reference_provider = crate::references::ProductionReferenceContextProvider {
         project_root: ctx.project_root,
         book_id: &book.id,
@@ -1774,7 +1921,9 @@ pub(crate) async fn prepare_write_input(
     // 545 号：llm.embedding 配置存在且缓存库可开 → 切换 G1/350a hybrid 向量
     // 重排（指纹增量缓存写 retrieval_chunks）；否则维持 LLM 精选。hybrid 内部
     // 任何 embedding 失败 → 空精选（347 号降级契约，回退 BM25 排序）。
-    let llm_memory_selector = crate::agents::composer::LlmMemorySelector { chat: agents.composer };
+    let llm_memory_selector = crate::agents::composer::LlmMemorySelector {
+        chat: agents.composer,
+    };
     // 765 号：缓存库打开移出 runtime 线程；不可开 → 维持 LLM 精选
     //（原 match (…, Ok(cache)) 的 None 臂语义逐字保留）。
     let hybrid_selector = match &config.embedding {
@@ -1791,16 +1940,18 @@ pub(crate) async fn prepare_write_input(
                         .as_ref()
                         .and_then(|env| std::env::var(env).ok())
                         .unwrap_or_default();
-                    Some(crate::utils::hybrid_memory_selector::HybridMemorySelector::new(
-                        std::sync::Arc::new(
-                            crate::utils::hybrid_memory_selector::ProductionEmbedder {
-                                config: embedding.clone(),
-                                api_key,
-                            },
+                    Some(
+                        crate::utils::hybrid_memory_selector::HybridMemorySelector::new(
+                            std::sync::Arc::new(
+                                crate::utils::hybrid_memory_selector::ProductionEmbedder {
+                                    config: embedding.clone(),
+                                    api_key,
+                                },
+                            ),
+                            cache,
+                            crate::utils::hybrid_memory_selector::HYBRID_SELECT_LIMIT,
                         ),
-                        cache,
-                        crate::utils::hybrid_memory_selector::HYBRID_SELECT_LIMIT,
-                    ))
+                    )
                 }
                 _ => None,
             }
@@ -1921,7 +2072,9 @@ pub(crate) async fn record_chapter_review_metric(
     .await
     .unwrap_or_else(|error| Err(crate::EngineError::Constraint(error.to_string())));
     match recorded {
-        Ok(false) => tracing::info!(target: "review-metrics", "[write-next/resync] ch{chapter_number} 同内容重放，幂等跳过"),
+        Ok(false) => {
+            tracing::info!(target: "review-metrics", "[write-next/resync] ch{chapter_number} 同内容重放，幂等跳过")
+        }
         Ok(true) => {}
         Err(error) => tracing::warn!(target: "review-metrics", "[write-next/resync] {error}"),
     }
@@ -1932,8 +2085,8 @@ mod tests {
     use super::*;
     use crate::agents::composer::ComposerChatOptions;
     use crate::agents::continuity::AuditTokenUsage;
-    use crate::agents::writer::WriterChat;
     use crate::agents::continuity::ChatOutcome;
+    use crate::agents::writer::WriterChat;
     use crate::llm::provider::LLMMessage;
     use crate::state::store::InMemoryStateStore;
     use std::sync::Mutex as StdMutex;
@@ -1945,7 +2098,9 @@ mod tests {
         use crate::agents::continuity::{AuditIssue, AuditSeverity};
         let dir = tempfile::tempdir().unwrap();
         let book_dir = dir.path().join("book");
-        tokio::fs::create_dir_all(book_dir.join("story")).await.unwrap();
+        tokio::fs::create_dir_all(book_dir.join("story"))
+            .await
+            .unwrap();
         let issue = |severity: AuditSeverity| AuditIssue {
             severity,
             category: "c".into(),
@@ -1955,7 +2110,11 @@ mod tests {
         };
         let audit = AuditResult {
             passed: true,
-            issues: vec![issue(AuditSeverity::Critical), issue(AuditSeverity::Warning), issue(AuditSeverity::Warning)],
+            issues: vec![
+                issue(AuditSeverity::Critical),
+                issue(AuditSeverity::Warning),
+                issue(AuditSeverity::Warning),
+            ],
             overall_score: Some(88),
             ..Default::default()
         };
@@ -1966,10 +2125,23 @@ mod tests {
             memory.list_review_metrics().unwrap()
         };
         assert_eq!(rows.len(), 1);
-        assert_eq!((rows[0].chapter, rows[0].overall_score, rows[0].passed), (1, Some(88), true));
-        assert_eq!((rows[0].critical_count, rows[0].warning_count, rows[0].info_count), (1, 2, 0));
+        assert_eq!(
+            (rows[0].chapter, rows[0].overall_score, rows[0].passed),
+            (1, Some(88), true)
+        );
+        assert_eq!(
+            (
+                rows[0].critical_count,
+                rows[0].warning_count,
+                rows[0].info_count
+            ),
+            (1, 2, 0)
+        );
 
-        let revised = AuditResult { overall_score: Some(92), ..audit.clone() };
+        let revised = AuditResult {
+            overall_score: Some(92),
+            ..audit.clone()
+        };
         record_chapter_review_metric(&book_dir, 1, &revised).await;
         let rows = {
             let memory = crate::state::memory_db::MemoryDb::open(&book_dir).unwrap();
@@ -1991,19 +2163,21 @@ mod tests {
             body: "正文".into(),
             source: crate::skills::SkillSource::Builtin,
             base_dir: None,
-        disable_model_invocation: None,
-        user_invocable: None,
-        rank: None,
+            disable_model_invocation: None,
+            user_invocable: None,
+            rank: None,
         };
-        let activations = std::sync::Arc::new(vec![crate::skills::production_bindings::ActivatedSkillGuidance {
-            skill,
-            resources: vec![],
-        }]);
-        let inside = crate::skills::production_bindings::scope_operation_skills(
-            Some(activations),
-            async { snapshot_skill_ids() },
-        )
-        .await;
+        let activations = std::sync::Arc::new(vec![
+            crate::skills::production_bindings::ActivatedSkillGuidance {
+                skill,
+                resources: vec![],
+            },
+        ]);
+        let inside =
+            crate::skills::production_bindings::scope_operation_skills(Some(activations), async {
+                snapshot_skill_ids()
+            })
+            .await;
         assert_eq!(inside, Some(vec!["inkos-long-writing".to_string()]));
     }
 
@@ -2022,7 +2196,10 @@ mod tests {
                 .unwrap_or_default();
             for (marker, content) in &self.responses {
                 if system_head.contains(marker.as_str()) {
-                    self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(marker.clone());
+                    self.calls
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(marker.clone());
                     return content.clone();
                 }
             }
@@ -2118,32 +2295,67 @@ mod tests {
 
     #[async_trait]
     impl PlannerChat for ScriptChat {
-        async fn chat(&self, messages: Vec<LLMMessage>, _temperature: f64) -> Result<ChatOutcome, String> {
-            Ok(ChatOutcome { content: self.dispatch(&messages), usage: Some(AuditTokenUsage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }) })
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            _temperature: f64,
+        ) -> Result<ChatOutcome, String> {
+            Ok(ChatOutcome {
+                content: self.dispatch(&messages),
+                usage: Some(AuditTokenUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+            })
         }
     }
 
     #[async_trait]
     impl ReviserChat for ScriptChat {
-        async fn chat(&self, messages: Vec<LLMMessage>, _temperature: f64) -> Result<ChatOutcome, String> {
-            Ok(ChatOutcome { content: self.dispatch(&messages), usage: Some(AuditTokenUsage { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }) })
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            _temperature: f64,
+        ) -> Result<ChatOutcome, String> {
+            Ok(ChatOutcome {
+                content: self.dispatch(&messages),
+                usage: Some(AuditTokenUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+            })
         }
     }
 
-
     #[async_trait]
     impl ChapterAnalyzerChat for ScriptChat {
-        async fn chat(&self, messages: Vec<LLMMessage>, _temperature: f64) -> Result<ChatOutcome, String> {
-            Ok(ChatOutcome { content: self.dispatch(&messages), usage: None })
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            _temperature: f64,
+        ) -> Result<ChatOutcome, String> {
+            Ok(ChatOutcome {
+                content: self.dispatch(&messages),
+                usage: None,
+            })
         }
     }
 
     #[async_trait]
     impl StateValidatorChat for ScriptChat {
-        async fn chat(&self, messages: Vec<LLMMessage>, _temperature: f64) -> Result<ChatOutcome, String> {
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            _temperature: f64,
+        ) -> Result<ChatOutcome, String> {
             // 首行协议：直接 PASS（零警告）。
             let _ = &messages;
-            Ok(ChatOutcome { content: "PASS".to_string(), usage: None })
+            Ok(ChatOutcome {
+                content: "PASS".to_string(),
+                usage: None,
+            })
         }
     }
 
@@ -2154,9 +2366,15 @@ mod tests {
         let builtin = dir.path().join("builtin");
         let books = project.join("books");
         let book = books.join("b1");
-        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(project.join("genres")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("story").join("runtime"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(project.join("genres"))
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(&builtin).await.unwrap();
         tokio::fs::write(
             builtin.join("xianxia.md"),
@@ -2210,11 +2428,9 @@ mod tests {
             on_log: None,
         };
 
-        let result = write_next_chapter(
-            &state, &agents, &ctx, &config, "b1", None, None, None,
-        )
-        .await
-        .expect("write-next 应成功");
+        let result = write_next_chapter(&state, &agents, &ctx, &config, "b1", None, None, None)
+            .await
+            .expect("write-next 应成功");
 
         assert_eq!(result.chapter_number, 1);
         assert_eq!(result.title, "风起");
@@ -2228,11 +2444,16 @@ mod tests {
         let index = state.load_chapter_index("b1").await.unwrap();
         assert_eq!(index.len(), 1);
         assert_eq!(index[0].title, "风起");
-        assert_eq!(index[0].status, crate::models::chapter::ChapterStatus::AuditFailed);
-        assert!(book.join("chapters").join("0001_风起.md").exists()
-            || std::fs::read_dir(book.join("chapters")).unwrap().any(|e| {
-                e.unwrap().file_name().to_string_lossy().starts_with("0001")
-            }));
+        assert_eq!(
+            index[0].status,
+            crate::models::chapter::ChapterStatus::AuditFailed
+        );
+        assert!(
+            book.join("chapters").join("0001_风起.md").exists()
+                || std::fs::read_dir(book.join("chapters"))
+                    .unwrap()
+                    .any(|e| { e.unwrap().file_name().to_string_lossy().starts_with("0001") })
+        );
 
         // plan 持久化 + intent 工件。
         assert!(book
@@ -2248,8 +2469,15 @@ mod tests {
 
         // 真相面（settler delta 落盘：state/*.json 或 markdown 投影）。
         let summaries_md = book.join("story").join("chapter_summaries.md").exists();
-        let state_json = book.join("story").join("state").join("chapter_summaries.json").exists();
-        assert!(summaries_md || state_json, "章节摘要真相面应落盘（markdown 或结构化）");
+        let state_json = book
+            .join("story")
+            .join("state")
+            .join("chapter_summaries.json")
+            .exists();
+        assert!(
+            summaries_md || state_json,
+            "章节摘要真相面应落盘（markdown 或结构化）"
+        );
 
         // 二次 write-next：降级守卫不触发；下一章号推进（durable 链）。
         let next = state.get_next_chapter_number("b1").await.unwrap();
@@ -2263,9 +2491,15 @@ mod tests {
         let project = dir.path().join("project");
         let builtin = dir.path().join("builtin");
         let book = project.join("books").join("b1");
-        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(project.join("genres")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("story").join("runtime"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(project.join("genres"))
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(&builtin).await.unwrap();
         tokio::fs::write(
             builtin.join("xianxia.md"),
@@ -2318,7 +2552,9 @@ mod tests {
             notify_channels: None,
             on_context_compression: None,
             on_log: Some(std::sync::Arc::new(move |level: &str, message: &str| {
-                sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((level.to_string(), message.to_string()));
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((level.to_string(), message.to_string()));
             })),
         };
 
@@ -2352,7 +2588,10 @@ mod tests {
 
     impl<'a> FlakyEmptyWriter<'a> {
         fn new(inner: &'a ScriptChat) -> Self {
-            Self { inner, calls: StdMutex::new(0) }
+            Self {
+                inner,
+                calls: StdMutex::new(0),
+            }
         }
     }
 
@@ -2364,13 +2603,19 @@ mod tests {
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
             let is_first = {
-                let mut calls = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut calls = self
+                    .calls
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 *calls += 1;
                 *calls == 1
             };
             if is_first {
                 // 第一次：空正文（LLM 抖动）。
-                return Ok(ChatOutcome { content: String::new(), usage: None });
+                return Ok(ChatOutcome {
+                    content: String::new(),
+                    usage: None,
+                });
             }
             WriterChat::chat(self.inner, messages, temperature).await
         }
@@ -2411,7 +2656,13 @@ mod tests {
             .await
             .expect("重试后应成功");
         // 重试恰好一次后成功：writer 链上多处复用端口，调用数 ≥ 2（原 + 重试）。
-        assert!(*flaky.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) >= 2);
+        assert!(
+            *flaky
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                >= 2
+        );
         assert_eq!(chapters_md_count(&project.join("books").join("b1")), 1);
     }
 
@@ -2422,9 +2673,15 @@ mod tests {
         let project = dir.join("project");
         let builtin = dir.join("builtin");
         let book = project.join("books").join("b1");
-        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(project.join("genres")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("story").join("runtime"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(project.join("genres"))
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(&builtin).await.unwrap();
         tokio::fs::write(
             builtin.join("xianxia.md"),
@@ -2455,7 +2712,10 @@ mod tests {
             messages: Vec<LLMMessage>,
             _temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            *self.flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+            *self
+                .flag
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             Ok(ChatOutcome {
                 content: self.script.dispatch(&messages),
                 usage: Some(AuditTokenUsage {
@@ -2472,11 +2732,7 @@ mod tests {
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .ends_with(".md")
-                    })
+                    .filter(|e| e.file_name().to_string_lossy().ends_with(".md"))
                     .count()
             })
             .unwrap_or(0)
@@ -2521,7 +2777,13 @@ mod tests {
 
         assert!(matches!(error, WriteNextError::Aborted));
         // 入口即停：零 LLM 调用、零章节落盘。
-        assert!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty(), "不应发起任何 LLM 调用");
+        assert!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty(),
+            "不应发起任何 LLM 调用"
+        );
         assert_eq!(chapters_md_count(&project.join("books").join("b1")), 0);
         assert_eq!(state.get_next_chapter_number("b1").await.unwrap(), 1);
     }
@@ -2533,7 +2795,10 @@ mod tests {
         let state = StateManager::new(&project);
         let chat = script();
         let flag: AbortHandle = std::sync::Arc::new(StdMutex::new(false));
-        let aborting = AbortingWriter { script: &chat, flag: flag.clone() };
+        let aborting = AbortingWriter {
+            script: &chat,
+            flag: flag.clone(),
+        };
         let agents = WriteNextAgents {
             writer: &aborting,
             planner: &chat,
@@ -2567,7 +2832,11 @@ mod tests {
         assert!(matches!(error, WriteNextError::Aborted));
         // 草稿已生成（planner/composer/writer 均被调用）但零落盘——安全点
         // 语义：检查点之间不存在部分写盘，中止即全书保持原样。
-        let calls = chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        let calls = chat
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         assert!(
             calls.iter().any(|c| c.contains("作家")),
             "草稿调用应已发生：{calls:?}"
@@ -2585,7 +2854,9 @@ mod tests {
         let project = dir.path();
         let state = StateManager::new(project);
         let book = state.book_dir("b1");
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
         // ensureControlDocuments 需要 book.json（语言判定）。
         tokio::fs::write(
             book.join("book.json"),
@@ -2609,10 +2880,7 @@ mod tests {
             length_telemetry: None,
             token_usage: None,
         };
-        state
-            .save_chapter_index("b1", &[degraded])
-            .await
-            .unwrap();
+        state.save_chapter_index("b1", &[degraded]).await.unwrap();
 
         let chat = script();
         let agents = WriteNextAgents {
@@ -2717,7 +2985,10 @@ mod tests {
             &self,
             req: crate::agents::timeline_settler::BeatsRequest<'_>,
         ) -> Result<Vec<crate::models::timeline::PlotlineBeat>, String> {
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(req.chapter_title.to_string());
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(req.chapter_title.to_string());
             self.result.clone()
         }
     }
@@ -2726,13 +2997,24 @@ mod tests {
     async fn setup_timeline_beats_env(
         dir: &tempfile::TempDir,
         writing: serde_json::Value,
-    ) -> (StateManager, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    ) -> (
+        StateManager,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
         let project = dir.path().join("project");
         let builtin = dir.path().join("builtin");
         let book = project.join("books").join("b1");
-        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(project.join("genres")).await.unwrap();
+        tokio::fs::create_dir_all(book.join("story").join("runtime"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(project.join("genres"))
+            .await
+            .unwrap();
         tokio::fs::create_dir_all(&builtin).await.unwrap();
         tokio::fs::write(
             builtin.join("xianxia.md"),
@@ -2746,7 +3028,9 @@ mod tests {
             "language": "zh", "createdAt": "", "updatedAt": "",
         });
         book_json["writing"] = writing;
-        tokio::fs::write(book.join("book.json"), book_json.to_string()).await.unwrap();
+        tokio::fs::write(book.join("book.json"), book_json.to_string())
+            .await
+            .unwrap();
         (StateManager::new(&project), project, builtin, book)
     }
 
@@ -2791,9 +3075,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (state, project, builtin, book) =
             setup_timeline_beats_env(&dir, serde_json::json!({ "autoTimelineBeats": true })).await;
-        tokio::fs::write(book.join("story").join("timeline.json"), seeded_timeline_json())
-            .await
-            .unwrap();
+        tokio::fs::write(
+            book.join("story").join("timeline.json"),
+            seeded_timeline_json(),
+        )
+        .await
+        .unwrap();
 
         let chat = script();
         let agents = beats_agents(&chat);
@@ -2816,19 +3103,40 @@ mod tests {
             timeline_beats: Some(&beats),
         };
 
-        let result = write_next_chapter(&state, &agents, &ctx, &beats_config(), "b1", None, None, None)
-            .await
-            .expect("write-next 应成功");
+        let result = write_next_chapter(
+            &state,
+            &agents,
+            &ctx,
+            &beats_config(),
+            "b1",
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("write-next 应成功");
         assert_eq!(result.chapter_number, 1);
         // 端口拿到落盘后的章节标题（传参 = 生产语义）。
-        assert_eq!(beats.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_slice(), ["风起"]);
+        assert_eq!(
+            beats
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_slice(),
+            ["风起"]
+        );
 
         // 节拍合并进时间线并落盘。
-        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
+        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json"))
+            .await
+            .unwrap();
         let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
         assert_eq!(timeline.plotlines[0].cells.len(), 1);
         assert_eq!(timeline.plotlines[0].cells[0].chapter, 1);
-        assert_eq!(timeline.plotlines[0].cells[0].title.as_deref(), Some("风起·沉淀"));
+        assert_eq!(
+            timeline.plotlines[0].cells[0].title.as_deref(),
+            Some("风起·沉淀")
+        );
     }
 
     #[tokio::test]
@@ -2836,14 +3144,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (state, project, builtin, book) =
             setup_timeline_beats_env(&dir, serde_json::json!({ "autoTimelineBeats": true })).await;
-        tokio::fs::write(book.join("story").join("timeline.json"), seeded_timeline_json())
-            .await
-            .unwrap();
+        tokio::fs::write(
+            book.join("story").join("timeline.json"),
+            seeded_timeline_json(),
+        )
+        .await
+        .unwrap();
 
         let chat = script();
         let agents = beats_agents(&chat);
         let prompt_store = InMemoryStateStore::default();
-        let beats = FixedBeats { result: Err("llm down".into()), calls: StdMutex::new(Vec::new()) };
+        let beats = FixedBeats {
+            result: Err("llm down".into()),
+            calls: StdMutex::new(Vec::new()),
+        };
         let ctx = WriteNextCtx {
             project_root: &project,
             builtin_genres_dir: &builtin,
@@ -2854,12 +3168,23 @@ mod tests {
             timeline_beats: Some(&beats),
         };
 
-        let result = write_next_chapter(&state, &agents, &ctx, &beats_config(), "b1", None, None, None)
-            .await
-            .expect("沉淀失败不应拖垮管线");
+        let result = write_next_chapter(
+            &state,
+            &agents,
+            &ctx,
+            &beats_config(),
+            "b1",
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("沉淀失败不应拖垮管线");
         assert_eq!(result.chapter_number, 1);
         // 时间线保持原样（空 cells）。
-        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
+        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json"))
+            .await
+            .unwrap();
         let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
         assert!(timeline.plotlines[0].cells.is_empty());
     }
@@ -2869,14 +3194,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (state, project, builtin, book) =
             setup_timeline_beats_env(&dir, serde_json::json!({})).await;
-        tokio::fs::write(book.join("story").join("timeline.json"), seeded_timeline_json())
-            .await
-            .unwrap();
+        tokio::fs::write(
+            book.join("story").join("timeline.json"),
+            seeded_timeline_json(),
+        )
+        .await
+        .unwrap();
 
         let chat = script();
         let agents = beats_agents(&chat);
         let prompt_store = InMemoryStateStore::default();
-        let beats = FixedBeats { result: Ok(vec![]), calls: StdMutex::new(Vec::new()) };
+        let beats = FixedBeats {
+            result: Ok(vec![]),
+            calls: StdMutex::new(Vec::new()),
+        };
         let ctx = WriteNextCtx {
             project_root: &project,
             builtin_genres_dir: &builtin,
@@ -2887,13 +3218,28 @@ mod tests {
             timeline_beats: Some(&beats),
         };
 
-        let result = write_next_chapter(&state, &agents, &ctx, &beats_config(), "b1", None, None, None)
-            .await
-            .expect("write-next 应成功");
+        let result = write_next_chapter(
+            &state,
+            &agents,
+            &ctx,
+            &beats_config(),
+            "b1",
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("write-next 应成功");
         assert_eq!(result.chapter_number, 1);
         // 默认关：端口从未被调用，时间线未被改写。
-        assert!(beats.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
-        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json")).await.unwrap();
+        assert!(beats
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
+        let raw = tokio::fs::read_to_string(book.join("story").join("timeline.json"))
+            .await
+            .unwrap();
         let timeline: crate::models::timeline::Timeline = serde_json::from_str(&raw).unwrap();
         assert!(timeline.plotlines[0].cells.is_empty());
     }
@@ -2926,4 +3272,3 @@ mod tests {
         assert!(config.embedding.is_none());
     }
 }
-

@@ -75,13 +75,22 @@ pub struct ChapterLengthMeasurements {
 }
 
 /// TS `chapterLengthDelivery`：无显式 bounds → undefined（宿主不做近似目标判定）。
-pub fn chapter_length_delivery(count: u32, spec: &ShortLengthSpec) -> Option<ChapterLengthDelivery> {
+pub fn chapter_length_delivery(
+    count: u32,
+    spec: &ShortLengthSpec,
+) -> Option<ChapterLengthDelivery> {
     if spec.min_chapter_length.is_none() && spec.max_chapter_length.is_none() {
         return None;
     }
     let mut issues = Vec::new();
-    let below = spec.min_chapter_length.map(|min| count < min).unwrap_or(false);
-    let above = spec.max_chapter_length.map(|max| count > max).unwrap_or(false);
+    let below = spec
+        .min_chapter_length
+        .map(|min| count < min)
+        .unwrap_or(false);
+    let above = spec
+        .max_chapter_length
+        .map(|max| count > max)
+        .unwrap_or(false);
     if below || above {
         issues.push(ChapterLengthIssue {
             code: "CHAPTER_LENGTH_OUT_OF_RANGE".into(),
@@ -96,7 +105,10 @@ pub fn chapter_length_delivery(count: u32, spec: &ShortLengthSpec) -> Option<Cha
         } else {
             ChapterLengthStatus::NeedsRevision
         },
-        measurements: ChapterLengthMeasurements { count, counting_mode: spec.counting_mode },
+        measurements: ChapterLengthMeasurements {
+            count,
+            counting_mode: spec.counting_mode,
+        },
         target: spec.clone(),
         issues,
     })

@@ -24,16 +24,16 @@ use crate::agents::continuity::ChatOutcome;
 use crate::agents::planner_context::{
     compose_current_arc_prose, extract_collaborator_rows, extract_opponent_rows,
     extract_protagonist_row, extract_relevant_threads, format_recent_summaries,
-    format_recyclable_hooks, read_book_rules_block, read_character_matrix,
-    read_emotional_arcs, read_pending_hooks, read_subplot_board,
+    format_recyclable_hooks, read_book_rules_block, read_character_matrix, read_emotional_arcs,
+    read_pending_hooks, read_subplot_board,
 };
-use crate::models::length_governance::LengthSpec;
 use crate::agents::planner_prompts::{
     build_planner_user_message, get_planner_memo_system_prompt, PlannerUserMessageInput,
 };
 use crate::agents::rules_reader::read_book_rules;
 use crate::llm::provider::{LLMMessage, LLMRole};
 use crate::models::input_governance::{ChapterIntent, ChapterMemo};
+use crate::models::length_governance::LengthSpec;
 use crate::models::runtime_state::HookRecord;
 use crate::utils::chapter_memo_parser::{parse_memo, PlannerParseError};
 use crate::utils::hook_lifecycle::hook_status_text;
@@ -49,10 +49,7 @@ pub const MEMO_RETRY_LIMIT: usize = 3;
 
 /// R28/399 号：复读门对照文本——近 GOAL_REPEAT_WINDOW 章摘要的
 /// 「章名。事件前 120 字」。仅取当前章之前的章（含上一章）。
-fn build_goal_repeat_references(
-    chapter_summaries_raw: &str,
-    chapter_number: u32,
-) -> Vec<String> {
+fn build_goal_repeat_references(chapter_summaries_raw: &str, chapter_number: u32) -> Vec<String> {
     let mut rows: Vec<crate::state::memory_db::StoredSummary> =
         crate::utils::story_markdown::parse_chapter_summaries_markdown(chapter_summaries_raw)
             .into_iter()
@@ -229,10 +226,7 @@ pub async fn plan_chapter(
     // 使下游 composer/检索拿到具体任务陈述而非大纲推导的兜底句。
     intent.goal = memo.goal.clone();
 
-    let runtime_path = runtime_dir.join(format!(
-        "chapter-{:04}.intent.md",
-        input.chapter_number
-    ));
+    let runtime_path = runtime_dir.join(format!("chapter-{:04}.intent.md", input.chapter_number));
     let language = lang_from_str(input.book_language);
     let intent_markdown = render_intent_markdown(
         &intent,
@@ -399,7 +393,11 @@ pub async fn plan_chapter_memo(
                 soft_max: spec.soft_max,
                 hard_min: spec.hard_min,
                 hard_max: spec.hard_max,
-                unit: if input.language == WritingLanguage::En { "words" } else { "字" },
+                unit: if input.language == WritingLanguage::En {
+                    "words"
+                } else {
+                    "字"
+                },
             }
         },
         book_rules_relevant: &{
@@ -421,10 +419,8 @@ pub async fn plan_chapter_memo(
     let mut last_error: Option<PlannerParseError> = None;
     // R28/399 号：复读门只重规划一次（v5 风险表——防误杀合法回环章节）。
     let mut goal_repeat_retried = false;
-    let recent_goal_references = build_goal_repeat_references(
-        input.chapter_summaries_raw,
-        input.chapter_number,
-    );
+    let recent_goal_references =
+        build_goal_repeat_references(input.chapter_summaries_raw, input.chapter_number);
 
     for attempt in 0..MEMO_RETRY_LIMIT {
         let response = chat
@@ -433,12 +429,14 @@ pub async fn plan_chapter_memo(
                     LLMMessage {
                         role: LLMRole::System,
                         content: system_prompt.to_string(),
-                        tool_calls: None, tool_call_id: None,
+                        tool_calls: None,
+                        tool_call_id: None,
                     },
                     LLMMessage {
                         role: LLMRole::User,
                         content: current_user_message.clone(),
-                        tool_calls: None, tool_call_id: None,
+                        tool_calls: None,
+                        tool_call_id: None,
                     },
                 ],
                 0.7,
@@ -446,7 +444,11 @@ pub async fn plan_chapter_memo(
             .await
             .map_err(PlanChapterError::Chat)?;
 
-        match parse_memo(&response.content, input.chapter_number, input.is_golden_opening) {
+        match parse_memo(
+            &response.content,
+            input.chapter_number,
+            input.is_golden_opening,
+        ) {
             Ok(memo) => {
                 // R28/399 号：目标防复读门——goal 与近 N 章摘要（章名+事件）重合时
                 // 带反馈重规划一次；仍犯降级告警保留 memo（不阻断、不进 fallback）。
@@ -493,19 +495,16 @@ pub async fn plan_chapter_memo(
         }
     }
 
-    let fallback_error = last_error
-        .unwrap_or_else(|| PlannerParseError(
-            "memo planner exhausted retries without a specific error".to_string(),
-        ));
+    let fallback_error = last_error.unwrap_or_else(|| {
+        PlannerParseError("memo planner exhausted retries without a specific error".to_string())
+    });
     tracing::warn!(
         "[planner] memo planner fell back after {} attempts: {}",
         MEMO_RETRY_LIMIT,
         fallback_error.0
     );
-    let fallback_spec = crate::utils::length_metrics::build_length_spec(
-        input.chapter_word_count,
-        input.language,
-    );
+    let fallback_spec =
+        crate::utils::length_metrics::build_length_spec(input.chapter_word_count, input.language);
     let fallback_markdown = build_fallback_memo_markdown(&FallbackMemoInput {
         chapter_number: input.chapter_number,
         is_golden_opening: input.is_golden_opening,
@@ -738,9 +737,7 @@ pub fn collect_must_avoid(current_focus: &str, prohibitions: &[String]) -> Vec<S
         None => current_focus
             .split('\n')
             .map(|line| line.trim())
-            .filter(|line| {
-                line.starts_with('-') && avoid_directive_re().is_match(line)
-            })
+            .filter(|line| line.starts_with('-') && avoid_directive_re().is_match(line))
             .filter_map(clean_list_item)
             .collect(),
     };
@@ -937,7 +934,9 @@ fn is_template_placeholder(line: &str) -> bool {
 }
 
 fn contains_chinese(content: &str) -> bool {
-    content.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    content
+        .chars()
+        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
 }
 
 // ---- 卷纲节点匹配（lookahead 手动等价还原） ----
@@ -1144,7 +1143,12 @@ fn match_range_outline_line(line: &str, chapter_number: u32) -> Option<(i64, i64
 }
 
 fn match_any_range_outline_line(line: &str) -> Option<(i64, i64, String)> {
-    for regex in [range_zh_label_re(), range_en_label_re(), range_zh_re(), range_en_re()] {
+    for regex in [
+        range_zh_label_re(),
+        range_en_label_re(),
+        range_zh_re(),
+        range_en_re(),
+    ] {
         if let Some(captures) = regex.captures(line) {
             let start: i64 = captures.get(1)?.as_str().parse().ok()?;
             let end: i64 = captures.get(2)?.as_str().parse().ok()?;
@@ -1223,10 +1227,16 @@ pub fn render_intent_markdown(
         intent.goal.clone(),
         String::new(),
         "## Outline Node".to_string(),
-        intent.outline_node.clone().unwrap_or_else(|| "(not found)".to_string()),
+        intent
+            .outline_node
+            .clone()
+            .unwrap_or_else(|| "(not found)".to_string()),
         String::new(),
         "## Arc Context".to_string(),
-        intent.arc_context.clone().unwrap_or_else(|| "(none)".to_string()),
+        intent
+            .arc_context
+            .clone()
+            .unwrap_or_else(|| "(none)".to_string()),
         String::new(),
         "## Must Keep".to_string(),
         must_keep,
@@ -1240,7 +1250,11 @@ pub fn render_intent_markdown(
         "## Chapter Memo".to_string(),
         format!(
             "- isGoldenOpening: {}",
-            if memo.is_golden_opening { "true" } else { "false" }
+            if memo.is_golden_opening {
+                "true"
+            } else {
+                "false"
+            }
         ),
         String::new(),
         "### Thread Refs".to_string(),
@@ -1345,7 +1359,8 @@ fn exact_zh_re() -> &'static Regex {
 fn range_zh_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"^(?:#+\s*)?(?:[-*]\s+)?(?:\*\*)?第\s*(\d+)\s*[-~–—]\s*(\d+)\s*章(.*)$").unwrap()
+        Regex::new(r"^(?:#+\s*)?(?:[-*]\s+)?(?:\*\*)?第\s*(\d+)\s*[-~–—]\s*(\d+)\s*章(.*)$")
+            .unwrap()
     })
 }
 
@@ -1360,8 +1375,10 @@ fn range_en_re() -> &'static Regex {
 fn range_zh_label_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"^(?:[-*]\s+)?(?:\*\*)?章节范围(?:\*\*)?[：:]\s*(\d+)\s*[-~–—]\s*(\d+)\s*章\s*(.*)$")
-            .unwrap()
+        Regex::new(
+            r"^(?:[-*]\s+)?(?:\*\*)?章节范围(?:\*\*)?[：:]\s*(\d+)\s*[-~–—]\s*(\d+)\s*章\s*(.*)$",
+        )
+        .unwrap()
     })
 }
 
@@ -1422,8 +1439,16 @@ mod tests {
             messages: Vec<LLMMessage>,
             temperature: f64,
         ) -> Result<ChatOutcome, String> {
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((messages, temperature));
-            let index = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len() - 1;
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((messages, temperature));
+            let index = self
+                .calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+                - 1;
             let content = self
                 .responses
                 .get(index)
@@ -1446,7 +1471,13 @@ mod tests {
     #[test]
     fn derive_goal_priority_chain() {
         assert_eq!(
-            derive_goal(Some("先夺回玉符\n其他"), "## Focus\n- 聚焦甲", "作者意图", None, 3),
+            derive_goal(
+                Some("先夺回玉符\n其他"),
+                "## Focus\n- 聚焦甲",
+                "作者意图",
+                None,
+                3
+            ),
             "先夺回玉符"
         );
         // current_focus 局部覆盖段。
@@ -1472,7 +1503,10 @@ mod tests {
     #[test]
     fn extract_section_finds_target_and_stops_at_level() {
         let content = "## avoid\n- 降智\n- 圣母\n\n## 其他\n- 无关";
-        assert_eq!(extract_section(content, &["avoid", "禁止", "避免", "避雷"]).as_deref(), Some("- 降智\n- 圣母"));
+        assert_eq!(
+            extract_section(content, &["avoid", "禁止", "避免", "避雷"]).as_deref(),
+            Some("- 降智\n- 圣母")
+        );
         assert_eq!(extract_section("无标题内容", &["avoid"]), None);
     }
 
@@ -1488,7 +1522,10 @@ mod tests {
         let range = "## 卷一 试炼\n第 1-5 章\n1. 觉醒\n2. 夺符\n3. 结怨";
         assert_eq!(find_outline_node(range, 3).as_deref(), Some("结怨"));
         // 超出节拍数回退整个小节。
-        assert_eq!(find_outline_node(range, 5).as_deref(), Some("## 卷一 试炼\n第 1-5 章\n1. 觉醒\n2. 夺符\n3. 结怨"));
+        assert_eq!(
+            find_outline_node(range, 5).as_deref(),
+            Some("## 卷一 试炼\n第 1-5 章\n1. 觉醒\n2. 夺符\n3. 结怨")
+        );
 
         // 范围行不被误配为精确行（123 vs 12、12-15）。
         let tricky = "- Chapter 12: mid clash\n- Chapter 123: later\n- Chapter 12-15: span";
@@ -1502,7 +1539,10 @@ mod tests {
 
     #[test]
     fn arc_context_placeholder_guard() {
-        assert_eq!(build_arc_context(Some("zh"), "(文件尚未创建)", Some("节点")), None);
+        assert_eq!(
+            build_arc_context(Some("zh"), "(文件尚未创建)", Some("节点")),
+            None
+        );
         assert_eq!(
             build_arc_context(Some("zh"), "有大纲", Some("节点")).as_deref(),
             Some("卷纲节点：节点")
@@ -1524,7 +1564,9 @@ mod tests {
 
     #[test]
     fn hook_budget_thresholds() {
-        assert!(render_hook_budget(9, WritingLanguage::Zh).contains("当前 9 条活跃伏笔（容量：12）"));
+        assert!(
+            render_hook_budget(9, WritingLanguage::Zh).contains("当前 9 条活跃伏笔（容量：12）")
+        );
         let warn = render_hook_budget(11, WritingLanguage::Zh);
         assert!(warn.contains("接近容量上限") && warn.contains("仅剩 1 个新坑位"));
         assert!(render_hook_budget(11, WritingLanguage::En).contains("Only 1 new hook(s) allowed"));
@@ -1549,7 +1591,8 @@ mod tests {
             thread_refs: vec!["H01".into()],
             reader_experience: None,
         };
-        let got = render_intent_markdown(&intent, &memo, WritingLanguage::Zh, "- none", "- none", 2);
+        let got =
+            render_intent_markdown(&intent, &memo, WritingLanguage::Zh, "- none", "- none", 2);
         assert!(got.starts_with("# Chapter Intent\n"));
         assert!(got.contains("## Goal\n目标句"));
         assert!(got.contains("## Arc Context\n(none)"));
@@ -1564,18 +1607,28 @@ mod tests {
     async fn plan_chapter_full_flow_with_mock_chat() {
         let dir = tempfile::tempdir().unwrap();
         let story = dir.path().join("story");
-        tokio::fs::create_dir_all(story.join("runtime")).await.unwrap();
+        tokio::fs::create_dir_all(story.join("runtime"))
+            .await
+            .unwrap();
 
         // 卷纲：第 2 章精确行。
         let outline_dir = story.join("outline");
         tokio::fs::create_dir_all(&outline_dir).await.unwrap();
-        tokio::fs::write(outline_dir.join("volume_map.md"), "- 第 2 章：夜探藏书阁\n").await.unwrap();
+        tokio::fs::write(outline_dir.join("volume_map.md"), "- 第 2 章：夜探藏书阁\n")
+            .await
+            .unwrap();
         // 前章正文（末屏节选来源）。
         let chapters = dir.path().join("chapters");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
-        tokio::fs::write(chapters.join("0001-x.md"), "# 一\n林动初醒。").await.unwrap();
-        tokio::fs::write(story.join("author_intent.md"), "- 节奏快\n").await.unwrap();
-        tokio::fs::write(story.join("current_focus.md"), "## 当前聚焦\n- 聚焦夺符\n").await.unwrap();
+        tokio::fs::write(chapters.join("0001-x.md"), "# 一\n林动初醒。")
+            .await
+            .unwrap();
+        tokio::fs::write(story.join("author_intent.md"), "- 节奏快\n")
+            .await
+            .unwrap();
+        tokio::fs::write(story.join("current_focus.md"), "## 当前聚焦\n- 聚焦夺符\n")
+            .await
+            .unwrap();
 
         let chat = MockChat::new(vec![valid_memo(2)]);
         let out = plan_chapter(
@@ -1585,9 +1638,10 @@ mod tests {
                 book_dir: dir.path(),
                 chapter_number: 2,
                 external_context: Some("本章加入新导师"),
-                    chapter_word_count: 3000,
-            
-                book_writing: None,},
+                chapter_word_count: 3000,
+
+                book_writing: None,
+            },
         )
         .await
         .unwrap();
@@ -1602,12 +1656,20 @@ mod tests {
         assert_eq!(written, out.intent_markdown);
         assert!(out.runtime_path.ends_with("chapter-0002.intent.md"));
         // planner_inputs 含 story 真相文件清单。
-        assert!(out.planner_inputs.iter().any(|p| p.ends_with("pending_hooks.md")));
+        assert!(out
+            .planner_inputs
+            .iter()
+            .any(|p| p.ends_with("pending_hooks.md")));
         // user prompt 含外部指令块与卷纲节点。
-        let (messages, temperature) = &chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0];
+        let (messages, temperature) = &chat
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())[0];
         assert_eq!(*temperature, 0.7);
         assert_eq!(messages[0].role, LLMRole::System);
-        assert!(messages[1].content.contains("## 本章用户指令（本章最高优先级）\n本章加入新导师"));
+        assert!(messages[1]
+            .content
+            .contains("## 本章用户指令（本章最高优先级）\n本章加入新导师"));
         // 前章末屏节选进入 user prompt。
         assert!(messages[1].content.contains("林动初醒。"));
         // outline 节点（夜探藏书阁）不直接进 user prompt——它只经 goal 推导链
@@ -1620,10 +1682,7 @@ mod tests {
         let story = dir.path().join("story");
         tokio::fs::create_dir_all(&story).await.unwrap();
 
-        let chat = MockChat::new(vec![
-            "垃圾输出".to_string(),
-            valid_memo(1),
-        ]);
+        let chat = MockChat::new(vec!["垃圾输出".to_string(), valid_memo(1)]);
         let memo = plan_chapter_memo(
             &chat,
             &PlanChapterMemoInput {
@@ -1645,7 +1704,10 @@ mod tests {
         .unwrap();
         assert_eq!(memo.goal, "推进主线，兑现玉符第一步");
         // 第二次调用的 user message 含错误反馈块。
-        let calls = chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let calls = chat
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 2);
         assert!(calls[1].0[1].content.contains("## 上次输出的错误"));
     }
@@ -1678,7 +1740,13 @@ mod tests {
         .unwrap();
         assert_eq!(memo.goal, "兜底目标");
         assert!(memo.body.contains("## Planner warning"));
-        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), MEMO_RETRY_LIMIT);
+        assert_eq!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            MEMO_RETRY_LIMIT
+        );
 
         // en 版 fallback。
         let chat_en = MockChat::new(vec!["junk".to_string()]);
@@ -1702,15 +1770,21 @@ mod tests {
         .await
         .unwrap();
         // 兜底 goal 51 字，超 50 上限 → make_display_goal 截 47 码元 + "..."。
-        assert_eq!(memo_en.goal, "Continue chapter 1 according to the current out...");
-        assert!(memo_en.body.contains("The model failed to produce a valid chapter memo"));
+        assert_eq!(
+            memo_en.goal,
+            "Continue chapter 1 according to the current out..."
+        );
+        assert!(memo_en
+            .body
+            .contains("The model failed to produce a valid chapter memo"));
     }
 
     fn memo_with_goal(chapter: u32, goal: &str) -> String {
         valid_memo(chapter).replace("推进主线，兑现玉符第一步", goal)
     }
 
-    const SUMMARY_WITH_GATE_TARGET: &str = "| 章 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n\
+    const SUMMARY_WITH_GATE_TARGET: &str =
+        "| 章 | 标题 | 出场人物 | 关键事件 | 状态变化 | 伏笔动态 | 情绪基调 | 章节类型 |\n\
 | --- | --- | --- | --- | --- | --- | --- | --- |\n\
 | 4 | 追查七号门异常 | 阿泽 |  |  |  | 紧绷 | 调查 |";
 
@@ -1746,7 +1820,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(memo.goal, "潜入厂主办公室拍下账本内页");
-        let calls = chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let calls = chat
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 2);
         assert!(calls[1].0[1].content.contains("本章目标复读门"));
     }
@@ -1783,7 +1860,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(memo.goal, "追查七号门异常");
-        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 2);
+        assert_eq!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            2
+        );
     }
 
     #[test]

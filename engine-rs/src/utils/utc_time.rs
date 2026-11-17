@@ -52,7 +52,10 @@ mod tests {
         assert_eq!(civil_from_unix(1_786_752_000), (2026, 8, 15, 0, 0, 0));
         assert_eq!(civil_from_unix(0), (1970, 1, 1, 0, 0, 0));
         assert_eq!(civil_from_unix(951_827_696), (2000, 2, 29, 12, 34, 56));
-        assert_eq!(unix_to_utc_iso(1_786_752_000, 123), "2026-08-15T00:00:00.123Z");
+        assert_eq!(
+            unix_to_utc_iso(1_786_752_000, 123),
+            "2026-08-15T00:00:00.123Z"
+        );
         let now = utc_now_iso();
         assert!(now.ends_with('Z') && now.len() == 24);
     }

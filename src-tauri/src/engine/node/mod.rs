@@ -46,8 +46,8 @@ pub type ProgressFn = Arc<dyn Fn(&str) + Send + Sync>;
 /// 目标平台 + 架构 + 归档扩展（决定 tarball 名与解压方式）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformArch {
-    pub os: &'static str,    // darwin / linux / win
-    pub arch: &'static str,  // x64 / arm64
+    pub os: &'static str,          // darwin / linux / win
+    pub arch: &'static str,        // x64 / arm64
     pub archive_ext: &'static str, // tar.gz / zip
 }
 
@@ -72,7 +72,11 @@ impl PlatformArch {
         } else {
             "tar.gz"
         };
-        Self { os, arch, archive_ext }
+        Self {
+            os,
+            arch,
+            archive_ext,
+        }
     }
 
     /// 缓存目录键：`{ver}-{os}-{arch}`。
@@ -195,7 +199,12 @@ impl BootstrappingResolver {
             .timeout(std::time::Duration::from_secs(300))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
-        Self { cache_dir, selector, progress: None, client }
+        Self {
+            cache_dir,
+            selector,
+            progress: None,
+            client,
+        }
     }
 
     pub fn with_progress(mut self, progress: ProgressFn) -> Self {
@@ -248,9 +257,9 @@ impl BootstrappingResolver {
             .await
             .context("读取 SHASUMS256 体失败")?;
         let sums = parse_shasums(&shasums_text);
-        let expected = sums.get(&tarball).with_context(|| {
-            format!("SHASUMS256 未含 {tarball}（ver={ver} 不存在或非 LTS？）")
-        })?;
+        let expected = sums
+            .get(&tarball)
+            .with_context(|| format!("SHASUMS256 未含 {tarball}（ver={ver} 不存在或非 LTS？）"))?;
 
         // 2) 从 mirror 列表逐个下载，校验通过即用。
         std::fs::create_dir_all(&key_dir)
@@ -386,14 +395,10 @@ pub fn extract_archive(tarball: &Path, dest_dir: &Path) -> Result<()> {
             let mut entry = entry.context("读 tar 条目失败")?;
             total = total.saturating_add(entry.header().size().unwrap_or(0));
             if total > MAX_EXTRACTED_BYTES {
-                anyhow::bail!(
-                    "解压产物超上限 {MAX_EXTRACTED_BYTES} 字节（疑似压缩炸弹），已中止"
-                );
+                anyhow::bail!("解压产物超上限 {MAX_EXTRACTED_BYTES} 字节（疑似压缩炸弹），已中止");
             }
             // unpack_in 校验条目路径不逃出 dest_dir（防路径穿越）。
-            entry
-                .unpack_in(dest_dir)
-                .context("解压 tar.gz 条目失败")?;
+            entry.unpack_in(dest_dir).context("解压 tar.gz 条目失败")?;
         }
         Ok(())
     } else {
@@ -411,7 +416,9 @@ fn extract_zip(zip_path: &Path, dest_dir: &Path) -> Result<()> {
         let mut entry = archive
             .by_index(i)
             .with_context(|| format!("读 zip entry {i} 失败"))?;
-        let Some(enclosed) = entry.enclosed_name() else { continue }; // 防 zip slip
+        let Some(enclosed) = entry.enclosed_name() else {
+            continue;
+        }; // 防 zip slip
         total = total.saturating_add(entry.size());
         if total > MAX_EXTRACTED_BYTES {
             anyhow::bail!("解压产物超上限 {MAX_EXTRACTED_BYTES} 字节（疑似压缩炸弹），已中止");
@@ -444,7 +451,6 @@ fn short_host(base: &str) -> &str {
         .next()
         .unwrap_or(base)
 }
-
 
 #[cfg(test)]
 #[path = "tests.rs"]

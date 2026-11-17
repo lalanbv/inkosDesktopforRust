@@ -13,21 +13,21 @@
 
 pub mod book;
 pub mod book_rules;
-pub mod director;
 pub mod chapter;
 pub mod context_compression;
 pub mod detection;
+pub mod director;
 pub mod genre_profile;
-pub mod observation;
 pub mod input_governance;
 pub mod length_governance;
+pub mod observation;
+pub mod play;
 pub mod project;
 pub mod quality_governance;
 pub mod runtime_state;
 pub mod state;
 pub mod style_profile;
 pub mod task_routing;
-pub mod play;
 
 // PoC 占位类型（后续迁到各自文件）——保留以维持 ts-rs 导出测试不破坏。
 pub use self::placeholders::{BookMeta, ChapterStatus};
@@ -63,5 +63,5 @@ pub mod placeholders {
         pub target_words: u32,
     }
 }
-pub mod timeline;
 pub mod series_backfill;
+pub mod timeline;

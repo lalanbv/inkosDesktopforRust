@@ -78,7 +78,9 @@ fn valid_string_list(value: Option<&Vec<String>>, max_items: usize, max_chars: u
         None => true,
         Some(items) => {
             items.len() <= max_items
-                && items.iter().all(|item| !item.is_empty() && item.chars().count() <= max_chars)
+                && items
+                    .iter()
+                    .all(|item| !item.is_empty() && item.chars().count() <= max_chars)
         }
     }
 }
@@ -88,7 +90,12 @@ pub fn validate_library_asset(raw: &Value) -> AssetValidateResult {
     let mut errors: Vec<String> = Vec::new();
     let obj = match raw.as_object() {
         Some(obj) => obj,
-        None => return AssetValidateResult { asset: None, errors: vec!["(root): expected object".to_string()] },
+        None => {
+            return AssetValidateResult {
+                asset: None,
+                errors: vec!["(root): expected object".to_string()],
+            }
+        }
     };
 
     let id = obj.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -138,7 +145,10 @@ pub fn validate_library_asset(raw: &Value) -> AssetValidateResult {
         }
     }
     if !errors.is_empty() {
-        return AssetValidateResult { asset: None, errors };
+        return AssetValidateResult {
+            asset: None,
+            errors,
+        };
     }
 
     let strings = |field: &str| -> Vec<String> {
@@ -202,7 +212,12 @@ pub fn asset_content_hash(asset: &LibraryAsset) -> String {
 
 /// 库稳定排序：kind 升序 → id 升序（纯码元比较）。
 pub fn sort_assets(assets: &mut [LibraryAsset]) {
-    assets.sort_by(|a, b| a.kind.as_str().cmp(b.kind.as_str()).then_with(|| a.id.cmp(&b.id)));
+    assets.sort_by(|a, b| {
+        a.kind
+            .as_str()
+            .cmp(b.kind.as_str())
+            .then_with(|| a.id.cmp(&b.id))
+    });
 }
 
 /// 导出便携 JSON 包：稳定排序 + 固定键序（version 前置）。
@@ -228,7 +243,10 @@ pub fn parse_asset_library_import(json: &str) -> AssetImportResult {
     let pkg: Value = match serde_json::from_str(json) {
         Ok(value) => value,
         Err(error) => {
-            return AssetImportResult { assets: Vec::new(), errors: vec![format!("(json): {error}")] };
+            return AssetImportResult {
+                assets: Vec::new(),
+                errors: vec![format!("(json): {error}")],
+            };
         }
     };
     if pkg.get("version").and_then(Value::as_i64) != Some(ASSET_LIBRARY_VERSION) {
@@ -240,7 +258,10 @@ pub fn parse_asset_library_import(json: &str) -> AssetImportResult {
     let items = match pkg.get("assets").and_then(Value::as_array) {
         Some(items) => items,
         None => {
-            return AssetImportResult { assets: Vec::new(), errors: vec!["(assets): expected array".to_string()] };
+            return AssetImportResult {
+                assets: Vec::new(),
+                errors: vec!["(assets): expected array".to_string()],
+            };
         }
     };
     let mut assets: Vec<LibraryAsset> = Vec::new();
@@ -272,10 +293,18 @@ pub struct AssetMergeResult {
 }
 
 /// 幂等合并：同 kind+id 同 hash 跳过；异 hash 覆盖（incoming 赢）；新 id 追加。
-pub fn merge_asset_library(existing: &[LibraryAsset], incoming: &[LibraryAsset]) -> AssetMergeResult {
+pub fn merge_asset_library(
+    existing: &[LibraryAsset],
+    incoming: &[LibraryAsset],
+) -> AssetMergeResult {
     let mut by_key: std::collections::BTreeMap<String, LibraryAsset> = existing
         .iter()
-        .map(|asset| (format!("{}:{}", asset.kind.as_str(), asset.id), asset.clone()))
+        .map(|asset| {
+            (
+                format!("{}:{}", asset.kind.as_str(), asset.id),
+                asset.clone(),
+            )
+        })
         .collect();
     let mut skipped = 0usize;
     let mut overwritten = 0usize;
@@ -299,7 +328,12 @@ pub fn merge_asset_library(existing: &[LibraryAsset], incoming: &[LibraryAsset])
     }
     let mut merged: Vec<LibraryAsset> = by_key.into_values().collect();
     sort_assets(&mut merged);
-    AssetMergeResult { merged, skipped, overwritten, added }
+    AssetMergeResult {
+        merged,
+        skipped,
+        overwritten,
+        added,
+    }
 }
 
 /// 内置精选题材基底种子（首批 3 个，随包分发；355 号空库冷启动对策）。
@@ -472,7 +506,10 @@ pub fn library_file_path(project_root: &std::path::Path, kind: AssetKind) -> std
 
 /// 读取库快照：文件缺失/损坏/版本或 kind 不符 → 内置种子兜底（`seeded=true`，
 /// 不自动落盘——用户数据文件只在首次写入时创建）。
-pub fn list_assets(project_root: &std::path::Path, kind: AssetKind) -> std::io::Result<(Vec<LibraryAsset>, bool)> {
+pub fn list_assets(
+    project_root: &std::path::Path,
+    kind: AssetKind,
+) -> std::io::Result<(Vec<LibraryAsset>, bool)> {
     // 696 号：种子兜底与 TS store `sortAssets([...seedsFor(kind)])` 同序镜像——
     // genre_base_seeds 源码序（urban→xuanhuan→mystery）≠ TS 排序（id 序，
     // mystery 最先），兜底面不排序则 /assets/0 双端错位（contract-diff 共享面
@@ -528,7 +565,10 @@ pub fn save_assets(
         "kind": kind.as_str(),
         "assets": sorted,
     });
-    std::fs::write(&path, serde_json::to_string_pretty(&payload).unwrap_or_default())
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -562,7 +602,8 @@ pub fn upsert_asset(
             errors: validation.errors,
         };
     };
-    let (existing, seeded) = list_assets(project_root, kind).unwrap_or_else(|_| (Vec::new(), false));
+    let (existing, seeded) =
+        list_assets(project_root, kind).unwrap_or_else(|_| (Vec::new(), false));
     let merged = merge_asset_library(&existing, &[asset]);
     let outcome = AssetUpsertOutcome {
         kind,
@@ -595,7 +636,11 @@ pub fn delete_asset(
 ) -> Result<(bool, Option<String>, Vec<LibraryAsset>), String> {
     let (existing, seeded) = list_assets(project_root, kind).map_err(|error| error.to_string())?;
     if seeded {
-        return Ok((false, Some("builtin seeds cannot be deleted; save the library first".to_string()), existing));
+        return Ok((
+            false,
+            Some("builtin seeds cannot be deleted; save the library first".to_string()),
+            existing,
+        ));
     }
     let remaining: Vec<LibraryAsset> = existing
         .iter()
@@ -634,7 +679,14 @@ mod store_tests {
         assert_eq!(outcome.overwritten, 1, "{outcome:?}");
         let (assets, seeded) = list_assets(root, AssetKind::GenreBase).unwrap();
         assert!(!seeded);
-        assert_eq!(assets.iter().find(|a| a.id == "urban_supernatural").unwrap().body, "修订后的正文。");
+        assert_eq!(
+            assets
+                .iter()
+                .find(|a| a.id == "urban_supernatural")
+                .unwrap()
+                .body,
+            "修订后的正文。"
+        );
 
         // 幂等重放。
         let outcome = upsert_asset(root, AssetKind::GenreBase, &raw);
@@ -647,7 +699,8 @@ mod store_tests {
         let (ok, reason, _) = delete_asset(root, AssetKind::GenreBase, "missing_id").unwrap();
         assert!(!ok);
         assert!(reason.unwrap().contains("not found"));
-        let (ok, _, remaining) = delete_asset(root, AssetKind::GenreBase, "urban_supernatural").unwrap();
+        let (ok, _, remaining) =
+            delete_asset(root, AssetKind::GenreBase, "urban_supernatural").unwrap();
         assert!(ok);
         assert!(!remaining.iter().any(|a| a.id == "urban_supernatural"));
     }
@@ -685,13 +738,21 @@ pub fn render_asset_guidance_block(
                 clip(&asset.body),
             ];
             if !asset.expectations.is_empty() {
-                lines.push(if is_en { "Expectations:".to_string() } else { "读者期待：".to_string() });
+                lines.push(if is_en {
+                    "Expectations:".to_string()
+                } else {
+                    "读者期待：".to_string()
+                });
                 for item in asset.expectations.iter().take(GUIDANCE_LIST_MAX_ITEMS) {
                     lines.push(format!("- {item}"));
                 }
             }
             if !asset.taboos.is_empty() {
-                lines.push(if is_en { "Taboos:".to_string() } else { "禁忌：".to_string() });
+                lines.push(if is_en {
+                    "Taboos:".to_string()
+                } else {
+                    "禁忌：".to_string()
+                });
                 for item in asset.taboos.iter().take(GUIDANCE_LIST_MAX_ITEMS) {
                     lines.push(format!("- {item}"));
                 }
@@ -737,10 +798,7 @@ pub fn render_adoption_header(
 
 /// R15/384 号：导入预览（零落盘）——解析包并对照现有库给出
 /// 新增/覆盖/跳过预估，供「预览 → 确认」两段式导入 UI。
-pub fn preview_asset_library_import(
-    existing: &[LibraryAsset],
-    json: &str,
-) -> Value {
+pub fn preview_asset_library_import(existing: &[LibraryAsset], json: &str) -> Value {
     let parsed = parse_asset_library_import(json);
     let merged = merge_asset_library(existing, &parsed.assets);
     let samples: Vec<&LibraryAsset> = parsed.assets.iter().collect();

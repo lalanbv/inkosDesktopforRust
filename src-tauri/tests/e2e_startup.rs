@@ -41,7 +41,10 @@ fn test_startup_logs_version() {
     // 死分支。对齐后三分支结构保留：目录在 → 验文件名格式；无文件/无目录
     // → 宽容通过（本机首启/日志清理后形态）。
     let log_dir = dirs::data_dir()
-        .map(|d| d.join(inkos_desktop::config::APP_DATA_DIR_NAME).join("logs"))
+        .map(|d| {
+            d.join(inkos_desktop::config::APP_DATA_DIR_NAME)
+                .join("logs")
+        })
         .unwrap_or_else(|| {
             std::env::temp_dir()
                 .join(inkos_desktop::config::APP_DATA_DIR_NAME)
@@ -76,9 +79,7 @@ fn test_startup_logs_version() {
     // 1431 号勘误：原断言验 `inkos-`（连字符）系死分支期手打形态，与生产
     // 实现自始漂移——分支激活后首次执行现形，按生产派生修正。
     let has_valid_log = log_files.iter().any(|e| {
-        e.file_name()
-            .to_string_lossy()
-            .starts_with("inkos.")
+        e.file_name().to_string_lossy().starts_with("inkos.")
             && e.file_name().to_string_lossy().ends_with(".log")
     });
 

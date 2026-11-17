@@ -93,7 +93,11 @@ pub async fn validate(
 
     // 无变化跳过校验。
     if state_diff.is_none() && hooks_diff.is_none() {
-        return Ok(ValidationResult { warnings: Vec::new(), passed: true, repair_required: false });
+        return Ok(ValidationResult {
+            warnings: Vec::new(),
+            passed: true,
+            repair_required: false,
+        });
     }
 
     let lang_instruction = if params.language == WritingLanguage::En {
@@ -114,8 +118,18 @@ pub async fn validate(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.1,
         )
@@ -154,8 +168,14 @@ pub fn compute_diff(old_text: &str, new_text: &str, label: &str) -> Option<Strin
         return None;
     }
 
-    let old_lines: Vec<&str> = old_text.split('\n').filter(|l| !l.trim().is_empty()).collect();
-    let new_lines: Vec<&str> = new_text.split('\n').filter(|l| !l.trim().is_empty()).collect();
+    let old_lines: Vec<&str> = old_text
+        .split('\n')
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    let new_lines: Vec<&str> = new_text
+        .split('\n')
+        .filter(|l| !l.trim().is_empty())
+        .collect();
 
     let added: Vec<&str> = new_lines
         .iter()
@@ -176,13 +196,21 @@ pub fn compute_diff(old_text: &str, new_text: &str, label: &str) -> Option<Strin
     if !removed.is_empty() {
         parts.push(format!(
             "Removed:\n{}",
-            removed.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n")
+            removed
+                .iter()
+                .map(|l| format!("- {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
         ));
     }
     if !added.is_empty() {
         parts.push(format!(
             "Added:\n{}",
-            added.iter().map(|l| format!("+ {l}")).collect::<Vec<_>>().join("\n")
+            added
+                .iter()
+                .map(|l| format!("+ {l}"))
+                .collect::<Vec<_>>()
+                .join("\n")
         ));
     }
     Some(parts.join("\n"))
@@ -250,8 +278,16 @@ pub fn parse_result(content: &str) -> Result<ValidationResult, StateValidationEr
         }
         if let Some(captures) = category_re().captures(line) {
             warnings.push(ValidationWarning {
-                category: captures.get(1).map(|m| m.as_str().trim()).unwrap_or("").to_string(),
-                description: captures.get(2).map(|m| m.as_str().trim()).unwrap_or("").to_string(),
+                category: captures
+                    .get(1)
+                    .map(|m| m.as_str().trim())
+                    .unwrap_or("")
+                    .to_string(),
+                description: captures
+                    .get(2)
+                    .map(|m| m.as_str().trim())
+                    .unwrap_or("")
+                    .to_string(),
             });
         } else if line.starts_with("- ") || line.starts_with("* ") {
             warnings.push(ValidationWarning {
@@ -266,7 +302,11 @@ pub fn parse_result(content: &str) -> Result<ValidationResult, StateValidationEr
         }
     }
 
-    Ok(ValidationResult { warnings, passed, repair_required })
+    Ok(ValidationResult {
+        warnings,
+        passed,
+        repair_required,
+    })
 }
 
 fn try_parse_json_result(text: &str) -> Option<ValidationResult> {
@@ -280,7 +320,10 @@ fn try_parse_json_result(text: &str) -> Option<ValidationResult> {
 fn try_parse_exact_json_result(text: &str) -> Option<ValidationResult> {
     let parsed: serde_json::Value = serde_json::from_str(text).ok()?;
     let passed = parsed.get("passed")?.as_bool()?;
-    let repair_required = parsed.get("repairRequired").and_then(|v| v.as_bool()).unwrap_or(false);
+    let repair_required = parsed
+        .get("repairRequired")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let warnings: Vec<ValidationWarning> = parsed
         .get("warnings")
         .and_then(|value| value.as_array().cloned())
@@ -302,7 +345,11 @@ fn try_parse_exact_json_result(text: &str) -> Option<ValidationResult> {
                 .collect()
         })
         .unwrap_or_default();
-    Some(ValidationResult { warnings, passed, repair_required })
+    Some(ValidationResult {
+        warnings,
+        passed,
+        repair_required,
+    })
 }
 
 /// 字符串感知的平衡 JSON 对象提取；闭合括号后仅允许空白/结构终结符
@@ -398,17 +445,28 @@ mod tests {
 
     #[async_trait]
     impl StateValidatorChat for MockChat {
-        async fn chat(&self, messages: Vec<LLMMessage>, temperature: f64) -> Result<ChatOutcome, String> {
+        async fn chat(
+            &self,
+            messages: Vec<LLMMessage>,
+            temperature: f64,
+        ) -> Result<ChatOutcome, String> {
             self.calls
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push((messages[1].content.clone(), temperature));
-            Ok(ChatOutcome { content: self.content.clone(), usage: None })
+            Ok(ChatOutcome {
+                content: self.content.clone(),
+                usage: None,
+            })
         }
     }
 
     #[tokio::test]
     async fn no_diff_skips_llm_and_passes() {
-        let chat = MockChat { content: "FAIL".into(), calls: std::sync::Mutex::new(Vec::new()) };
+        let chat = MockChat {
+            content: "FAIL".into(),
+            calls: std::sync::Mutex::new(Vec::new()),
+        };
         let result = validate(
             &chat,
             &ValidateParams {
@@ -426,7 +484,11 @@ mod tests {
         .unwrap();
         assert!(result.passed);
         assert!(result.warnings.is_empty());
-        assert!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty());
+        assert!(chat
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty());
     }
 
     #[tokio::test]
@@ -455,12 +517,21 @@ mod tests {
         assert_eq!(result.warnings[0].category, "unsupported_change");
         assert_eq!(result.warnings[1].category, "general");
         // 温度 0.1。
-        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].1, 0.1);
+        assert_eq!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())[0]
+                .1,
+            0.1
+        );
     }
 
     #[tokio::test]
     async fn invalid_verdict_errors() {
-        let chat = MockChat { content: "MAYBE".into(), calls: std::sync::Mutex::new(Vec::new()) };
+        let chat = MockChat {
+            content: "MAYBE".into(),
+            calls: std::sync::Mutex::new(Vec::new()),
+        };
         let error = validate(
             &chat,
             &ValidateParams {
@@ -494,7 +565,10 @@ mod tests {
 
     #[test]
     fn parse_json_variants() {
-        let json = parse_result("{\"passed\":false,\"warnings\":[{\"category\":\"c1\",\"description\":\"d1\"}]}").unwrap();
+        let json = parse_result(
+            "{\"passed\":false,\"warnings\":[{\"category\":\"c1\",\"description\":\"d1\"}]}",
+        )
+        .unwrap();
         assert!(!json.passed);
         assert_eq!(json.warnings[0].category, "c1");
 
@@ -524,7 +598,8 @@ mod tests {
             build_authority_context_block(None),
             "## Authority / Cross-Truth Context\n(no authority context provided)"
         );
-        let block = build_authority_context_block(Some(&StateValidationAuthorityContext::default()));
+        let block =
+            build_authority_context_block(Some(&StateValidationAuthorityContext::default()));
         assert!(block.contains("(empty)"));
         assert!(block.contains("Authority priority: current chapter text"));
         let block = build_authority_context_block(Some(&StateValidationAuthorityContext {

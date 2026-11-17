@@ -26,7 +26,11 @@ pub struct BookEditDeps<'a> {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
@@ -50,7 +54,11 @@ pub async fn tool_write_truth_file(deps: &BookEditDeps<'_>, args: &Value) -> Too
 }
 
 async fn write_truth_file_inner(deps: &BookEditDeps<'_>, args: &Value) -> Result<String, String> {
-    let book_id = resolve_tool_book_id("write_truth_file", field_str(args, "bookId"), Some(deps.active_book_id))?;
+    let book_id = resolve_tool_book_id(
+        "write_truth_file",
+        field_str(args, "bookId"),
+        Some(deps.active_book_id),
+    )?;
     let raw = args.get("fileName").and_then(Value::as_str);
     let Some(raw) = raw else {
         return Err("Invalid truth file name: undefined".to_string());
@@ -72,7 +80,9 @@ async fn write_truth_file_inner(deps: &BookEditDeps<'_>, args: &Value) -> Result
             .await
             .map_err(|e| e.to_string())?;
     }
-    crate::utils::atomic_file_set::write_file_atomic(&target, content).await.map_err(|e| e.to_string())?;
+    crate::utils::atomic_file_set::write_file_atomic(&target, content)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(format!("Updated \"{safe}\" for \"{book_id}\"."))
 }
 
@@ -148,7 +158,11 @@ fn safe_role_truth_file_re() -> &'static regex::Regex {
 /// `rename_entity`：entity-rename 事务（全库替换 + 文件重命名），文本 =
 /// 事务 summary。
 pub async fn tool_rename_entity(deps: &BookEditDeps<'_>, args: &Value) -> ToolResult {
-    let book_id = match resolve_tool_book_id("rename_entity", field_str(args, "bookId"), Some(deps.active_book_id)) {
+    let book_id = match resolve_tool_book_id(
+        "rename_entity",
+        field_str(args, "bookId"),
+        Some(deps.active_book_id),
+    ) {
         Ok(book_id) => book_id,
         Err(message) => return error_result(message),
     };
@@ -157,8 +171,13 @@ pub async fn tool_rename_entity(deps: &BookEditDeps<'_>, args: &Value) -> ToolRe
     let (Some(old_value), Some(new_value)) = (old_value, new_value) else {
         return error_result("rename_entity requires oldValue and newValue.".to_string());
     };
-    match crate::interaction::edit_controller::execute_entity_rename(&deps.runtime.state, &book_id, old_value, new_value)
-        .await
+    match crate::interaction::edit_controller::execute_entity_rename(
+        &deps.runtime.state,
+        &book_id,
+        old_value,
+        new_value,
+    )
+    .await
     {
         Ok(result) => text_result(result.summary, None),
         Err(message) => error_result(message),
@@ -168,15 +187,25 @@ pub async fn tool_rename_entity(deps: &BookEditDeps<'_>, args: &Value) -> ToolRe
 /// `patch_chapter_text`：chapter-local-edit 事务（三级替换 + 复核标记），
 /// 文本 = 事务 summary。
 pub async fn tool_patch_chapter_text(deps: &BookEditDeps<'_>, args: &Value) -> ToolResult {
-    let book_id = match resolve_tool_book_id("patch_chapter_text", field_str(args, "bookId"), Some(deps.active_book_id)) {
+    let book_id = match resolve_tool_book_id(
+        "patch_chapter_text",
+        field_str(args, "bookId"),
+        Some(deps.active_book_id),
+    ) {
         Ok(book_id) => book_id,
         Err(message) => return error_result(message),
     };
     let Some(chapter) = parse_chapter_number(args) else {
         return error_result("Chapter NaN not found.".to_string());
     };
-    let target_text = args.get("targetText").and_then(Value::as_str).unwrap_or_default();
-    let replacement_text = args.get("replacementText").and_then(Value::as_str).unwrap_or_default();
+    let target_text = args
+        .get("targetText")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let replacement_text = args
+        .get("replacementText")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     match crate::interaction::edit_controller::execute_chapter_local_edit(
         &deps.runtime.state,
         &book_id,
@@ -196,14 +225,21 @@ pub async fn tool_patch_chapter_text(deps: &BookEditDeps<'_>, args: &Value) -> T
 /// `replace_chapter_text`：chapter-replace 事务（用户全量替换 + 复核标记），
 /// 文本 = 事务 summary；版本源 Agent（TS 工具路径缺省）。
 pub async fn tool_replace_chapter_text(deps: &BookEditDeps<'_>, args: &Value) -> ToolResult {
-    let book_id = match resolve_tool_book_id("replace_chapter_text", field_str(args, "bookId"), Some(deps.active_book_id)) {
+    let book_id = match resolve_tool_book_id(
+        "replace_chapter_text",
+        field_str(args, "bookId"),
+        Some(deps.active_book_id),
+    ) {
         Ok(book_id) => book_id,
         Err(message) => return error_result(message),
     };
     let Some(chapter) = parse_chapter_number(args) else {
         return error_result("Chapter NaN not found.".to_string());
     };
-    let full_text = args.get("fullText").and_then(Value::as_str).unwrap_or_default();
+    let full_text = args
+        .get("fullText")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     match crate::interaction::edit_controller::execute_chapter_replace(
         &deps.runtime.state,
         &book_id,
@@ -265,8 +301,9 @@ pub async fn tool_generate_cover(deps: &BookEditDeps<'_>, args: &Value) -> ToolR
         return error_result("title is required for cover generation.".to_string());
     };
     let intro = field_str(args, "intro").unwrap_or_default();
-    let selling_points =
-        crate::llm::cover::normalize_selling_points(args.get("sellingPoints").and_then(Value::as_str));
+    let selling_points = crate::llm::cover::normalize_selling_points(
+        args.get("sellingPoints").and_then(Value::as_str),
+    );
     let cover_prompt = field_str(args, "coverPrompt").unwrap_or_default();
     let output_dir = field_str(args, "outputDir").unwrap_or_default();
     match crate::server::agent_production::execute_generate_cover(
@@ -296,7 +333,11 @@ pub async fn tool_generate_cover(deps: &BookEditDeps<'_>, args: &Value) -> ToolR
 /// 本就限定最新章）。
 #[allow(clippy::too_many_lines)]
 pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) -> ToolResult {
-    let book_id = match resolve_tool_book_id("resync_chapter_state", field_str(args, "bookId"), Some(deps.active_book_id)) {
+    let book_id = match resolve_tool_book_id(
+        "resync_chapter_state",
+        field_str(args, "bookId"),
+        Some(deps.active_book_id),
+    ) {
         Ok(book_id) => book_id,
         Err(message) => return error_result(message),
     };
@@ -311,10 +352,19 @@ pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) ->
         },
     };
     if chapter_number == 0 {
-        return error_result(format!("Book \"{book_id}\" has no persisted chapters to sync."));
+        return error_result(format!(
+            "Book \"{book_id}\" has no persisted chapters to sync."
+        ));
     }
 
-    let resynced = match crate::server::books_routes::run_resync_chain(runtime, &book_id, chapter_number, allow_new_hooks).await {
+    let resynced = match crate::server::books_routes::run_resync_chain(
+        runtime,
+        &book_id,
+        chapter_number,
+        allow_new_hooks,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(message) => return error_result(message),
     };
@@ -326,7 +376,14 @@ pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) ->
         router: runtime.router.clone(),
         builtin_genres_dir: runtime.builtin_genres_dir.clone(),
     };
-    let audit = match crate::server::audit_route::run_audit_flow(&audit_runtime, &book_id, chapter_number, None).await {
+    let audit = match crate::server::audit_route::run_audit_flow(
+        &audit_runtime,
+        &book_id,
+        chapter_number,
+        None,
+    )
+    .await
+    {
         Ok(result) => result,
         Err(error) => return error_result(format!("audit failed: {error}")),
     };
@@ -343,7 +400,13 @@ pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) ->
                 slot.audit_issues = audit
                     .issues
                     .iter()
-                    .map(|issue| format!("[{}] {}", audit_severity_str(issue.severity), issue.description))
+                    .map(|issue| {
+                        format!(
+                            "[{}] {}",
+                            audit_severity_str(issue.severity),
+                            issue.description
+                        )
+                    })
                     .collect();
                 slot.updated_at = crate::utils::utc_time::utc_now_iso();
             }
@@ -366,7 +429,8 @@ pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) ->
         .filter(|issue| {
             matches!(
                 issue.severity,
-                crate::agents::continuity::AuditSeverity::Critical | crate::agents::continuity::AuditSeverity::Warning
+                crate::agents::continuity::AuditSeverity::Critical
+                    | crate::agents::continuity::AuditSeverity::Warning
             )
         })
         .cloned()
@@ -383,7 +447,10 @@ pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) ->
     let zh = deps.language != "en";
     let text = if audit.passed {
         if zh {
-            format!("第 {} 章正文未改动；状态、摘要与伏笔已从上一章快照重建，重新审稿通过。", chapter_number)
+            format!(
+                "第 {} 章正文未改动；状态、摘要与伏笔已从上一章快照重建，重新审稿通过。",
+                chapter_number
+            )
         } else {
             format!(
                 "Chapter {chapter_number} prose was unchanged; state, summaries, and hooks were rebuilt from the previous snapshot, and the fresh audit passed."
@@ -407,7 +474,10 @@ pub async fn tool_resync_chapter_state(deps: &BookEditDeps<'_>, args: &Value) ->
             if issue.suggestion.is_empty() {
                 lines.push_str(&format!("\n- [{severity}] {}", issue.description));
             } else {
-                lines.push_str(&format!("\n- [{severity}] {} ({})", issue.description, issue.suggestion));
+                lines.push_str(&format!(
+                    "\n- [{severity}] {} ({})",
+                    issue.description, issue.suggestion
+                ));
             }
         }
         lines
@@ -571,7 +641,6 @@ pub fn resync_chapter_state_schema() -> Value {
     })
 }
 
-
 // ── 注册模块（R38b）：编辑工具族七件——全部生产变更面（TS
 //    PRODUCTION_MUTATION_TOOL_NAMES 可注册子集主体，后台生产剔除）；
 //    schema 经同文件 deterministic_tool_schemas / generate_cover_schema /
@@ -581,15 +650,20 @@ crate::interaction::registry::tool_def!(
     BookWriteTruthFile,
     "write_truth_file",
     MutationKind::ProductionMutation,
-    ctx, args,
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_description(&schemas, "write_truth_file")
-    } },
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_parameters(&schemas, "write_truth_file")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_description(&schemas, "write_truth_file")
+        }
+    },
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_parameters(&schemas, "write_truth_file")
+        }
+    },
     ctx.book_edit_deps.is_some(),
     tool_write_truth_file(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
 );
@@ -598,15 +672,20 @@ crate::interaction::registry::tool_def!(
     BookRenameEntity,
     "rename_entity",
     MutationKind::ProductionMutation,
-    ctx, args,
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_description(&schemas, "rename_entity")
-    } },
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_parameters(&schemas, "rename_entity")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_description(&schemas, "rename_entity")
+        }
+    },
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_parameters(&schemas, "rename_entity")
+        }
+    },
     ctx.book_edit_deps.is_some(),
     tool_rename_entity(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
 );
@@ -615,15 +694,20 @@ crate::interaction::registry::tool_def!(
     BookPatchChapterText,
     "patch_chapter_text",
     MutationKind::ProductionMutation,
-    ctx, args,
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_description(&schemas, "patch_chapter_text")
-    } },
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_parameters(&schemas, "patch_chapter_text")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_description(&schemas, "patch_chapter_text")
+        }
+    },
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_parameters(&schemas, "patch_chapter_text")
+        }
+    },
     ctx.book_edit_deps.is_some(),
     tool_patch_chapter_text(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
 );
@@ -632,15 +716,20 @@ crate::interaction::registry::tool_def!(
     BookReplaceChapterText,
     "replace_chapter_text",
     MutationKind::ProductionMutation,
-    ctx, args,
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_description(&schemas, "replace_chapter_text")
-    } },
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_parameters(&schemas, "replace_chapter_text")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_description(&schemas, "replace_chapter_text")
+        }
+    },
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_parameters(&schemas, "replace_chapter_text")
+        }
+    },
     ctx.book_edit_deps.is_some(),
     tool_replace_chapter_text(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
 );
@@ -649,15 +738,20 @@ crate::interaction::registry::tool_def!(
     BookDeleteLatestChapter,
     "delete_latest_chapter",
     MutationKind::ProductionMutation,
-    ctx, args,
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_description(&schemas, "delete_latest_chapter")
-    } },
-    { {
-        let schemas = deterministic_tool_schemas();
-        schema_parameters(&schemas, "delete_latest_chapter")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_description(&schemas, "delete_latest_chapter")
+        }
+    },
+    {
+        {
+            let schemas = deterministic_tool_schemas();
+            schema_parameters(&schemas, "delete_latest_chapter")
+        }
+    },
     ctx.book_edit_deps.is_some(),
     tool_delete_latest_chapter(ctx.book_edit_deps.as_ref().expect("available 门控"), args).await
 );
@@ -666,7 +760,8 @@ crate::interaction::registry::tool_def!(
     BookGenerateCover,
     "generate_cover",
     MutationKind::ProductionMutation,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[generate_cover_schema()], "generate_cover") },
     schema_parameters(&[generate_cover_schema()], "generate_cover"),
     ctx.book_edit_deps.is_some(),
@@ -677,7 +772,8 @@ crate::interaction::registry::tool_def!(
     BookResyncChapterState,
     "resync_chapter_state",
     MutationKind::ProductionMutation,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[resync_chapter_state_schema()], "resync_chapter_state") },
     schema_parameters(&[resync_chapter_state_schema()], "resync_chapter_state"),
     ctx.book_edit_deps.is_some(),
@@ -703,7 +799,10 @@ mod tests {
 
     #[test]
     fn safe_truth_file_name_whitelist() {
-        assert_eq!(assert_safe_truth_file_name("current_focus").unwrap(), "current_focus.md");
+        assert_eq!(
+            assert_safe_truth_file_name("current_focus").unwrap(),
+            "current_focus.md"
+        );
         assert_eq!(
             assert_safe_truth_file_name("outline/story_frame.md").unwrap(),
             "outline/story_frame.md"
@@ -718,7 +817,15 @@ mod tests {
             assert_safe_truth_file_name("roles/major/Lin-Dong.MD").unwrap(),
             "roles/major/Lin-Dong.MD.md"
         );
-        for bad in ["", "  ", "/abs/path.md", "a\\b.md", "a..b.md", "../escape.md", "notes.md"] {
+        for bad in [
+            "",
+            "  ",
+            "/abs/path.md",
+            "a\\b.md",
+            "a..b.md",
+            "../escape.md",
+            "notes.md",
+        ] {
             assert!(assert_safe_truth_file_name(bad).is_err(), "{bad:?}");
         }
         assert_eq!(
@@ -758,13 +865,17 @@ mod tests {
                 "delete_latest_chapter"
             ]
         );
-        assert_eq!(generate_cover_schema()["function"]["name"], "generate_cover");
+        assert_eq!(
+            generate_cover_schema()["function"]["name"],
+            "generate_cover"
+        );
         assert_eq!(
             resync_chapter_state_schema()["function"]["name"],
             "resync_chapter_state"
         );
         assert_eq!(
-            resync_chapter_state_schema()["function"]["parameters"]["properties"]["allowNewHooks"]["type"],
+            resync_chapter_state_schema()["function"]["parameters"]["properties"]["allowNewHooks"]
+                ["type"],
             "boolean"
         );
         // 分发面覆盖（其余分支走真链，单测只验名单面）。

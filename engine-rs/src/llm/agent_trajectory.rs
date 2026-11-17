@@ -128,13 +128,31 @@ pub fn agent_trajectory_headers(
     let mut headers: Vec<(String, String)> = vec![
         ("X-InkOS-Trace-Version".to_string(), "1".to_string()),
         ("X-InkOS-Scaffold".to_string(), "pi-inkos".to_string()),
-        ("X-InkOS-Conversation-ID".to_string(), trace.conversation_id.clone()),
+        (
+            "X-InkOS-Conversation-ID".to_string(),
+            trace.conversation_id.clone(),
+        ),
         ("X-InkOS-Run-ID".to_string(), trace.run_id.clone()),
-        ("X-InkOS-Model-Call-ID".to_string(), trace.model_call_id.clone()),
-        ("X-InkOS-Agent-Role".to_string(), trace.agent_role.to_string()),
-        ("X-InkOS-Pi-Turn-Index".to_string(), trace.pi_turn_index.to_string()),
-        ("X-InkOS-Client-Attempt".to_string(), client_attempt.to_string()),
-        ("X-InkOS-Thinking-Effort".to_string(), thinking.effort.to_string()),
+        (
+            "X-InkOS-Model-Call-ID".to_string(),
+            trace.model_call_id.clone(),
+        ),
+        (
+            "X-InkOS-Agent-Role".to_string(),
+            trace.agent_role.to_string(),
+        ),
+        (
+            "X-InkOS-Pi-Turn-Index".to_string(),
+            trace.pi_turn_index.to_string(),
+        ),
+        (
+            "X-InkOS-Client-Attempt".to_string(),
+            client_attempt.to_string(),
+        ),
+        (
+            "X-InkOS-Thinking-Effort".to_string(),
+            thinking.effort.to_string(),
+        ),
     ];
     if let Some(budget) = thinking.budget_tokens {
         headers.push((
@@ -143,10 +161,7 @@ pub fn agent_trajectory_headers(
         ));
     }
     if let Some(parent) = &trace.parent_tool_call_id {
-        headers.push((
-            "X-InkOS-Parent-Tool-Call-ID".to_string(),
-            parent.clone(),
-        ));
+        headers.push(("X-InkOS-Parent-Tool-Call-ID".to_string(), parent.clone()));
     }
     headers
 }
@@ -160,7 +175,10 @@ tokio::task_local! {
 /// 读取当前作用域（无 task-local 或未 set → None——TS storage.getStore()
 /// undefined 语义）。
 pub fn current_scope() -> Option<std::sync::Arc<AgentTrajectoryScope>> {
-    TRAJECTORY_SCOPE.try_with(|scope| scope.clone()).ok().flatten()
+    TRAJECTORY_SCOPE
+        .try_with(|scope| scope.clone())
+        .ok()
+        .flatten()
 }
 
 /// TS `runWithAgentTrajectoryRole("subagent", task)` 的 Rust 对应：
@@ -196,7 +214,10 @@ mod tests {
         assert!(is_kkaiapi_endpoint("https://kkaiapi.com/v1"));
         assert!(is_kkaiapi_endpoint("https://api.kkaiapi.com/v1"));
         assert!(!is_kkaiapi_endpoint("https://api.openai.com/v1"));
-        assert!(!is_kkaiapi_endpoint("https://notkkaiapi.com/v1"), "后缀须为 .kkaiapi.com");
+        assert!(
+            !is_kkaiapi_endpoint("https://notkkaiapi.com/v1"),
+            "后缀须为 .kkaiapi.com"
+        );
         assert!(!is_kkaiapi_endpoint("http://127.0.0.1:8080"));
         assert!(!is_kkaiapi_endpoint("not a url"));
     }
@@ -215,7 +236,10 @@ mod tests {
             "https://api.kkaiapi.com/v1",
             Some(&trace),
             1,
-            ThinkingTrace { effort: "disabled", budget_tokens: None },
+            ThinkingTrace {
+                effort: "disabled",
+                budget_tokens: None,
+            },
         );
         let pairs: Vec<(&str, &str)> = headers
             .iter()
@@ -241,14 +265,20 @@ mod tests {
             "https://api.openai.com/v1",
             Some(&trace),
             1,
-            ThinkingTrace { effort: "disabled", budget_tokens: None },
+            ThinkingTrace {
+                effort: "disabled",
+                budget_tokens: None
+            },
         )
         .is_empty());
         assert!(agent_trajectory_headers(
             "https://api.kkaiapi.com/v1",
             None,
             1,
-            ThinkingTrace { effort: "disabled", budget_tokens: None },
+            ThinkingTrace {
+                effort: "disabled",
+                budget_tokens: None
+            },
         )
         .is_empty());
         let with_budget = agent_trajectory_headers(
@@ -258,7 +288,10 @@ mod tests {
                 ..trace
             }),
             1,
-            ThinkingTrace { effort: "enabled", budget_tokens: Some(4096) },
+            ThinkingTrace {
+                effort: "enabled",
+                budget_tokens: Some(4096),
+            },
         );
         assert!(with_budget.contains(&(
             "X-InkOS-Thinking-Budget-Tokens".to_string(),
@@ -278,7 +311,10 @@ mod tests {
         assert_eq!(sub.conversation_id, "inkos-x");
         assert_eq!(sub.run_id, "run");
         assert_eq!(sub.agent_role, "subagent");
-        assert!(sub.parent_tool_call_id.is_none(), "TS agent-tools 未传 parentToolCallId");
+        assert!(
+            sub.parent_tool_call_id.is_none(),
+            "TS agent-tools 未传 parentToolCallId"
+        );
         let call = sub.begin_model_call();
         assert_eq!(call.pi_turn_index, 1, "subagent 读当前值不递增");
         assert_eq!(call.model_call_id.len(), 36, "每次调用新 uuid");
@@ -288,23 +324,24 @@ mod tests {
 
     #[tokio::test]
     async fn task_local_channel_propagates_and_subagent_wraps() {
-        let main = std::sync::Arc::new(AgentTrajectoryScope::main("inkos-s".into(), "run-s".into()));
+        let main =
+            std::sync::Arc::new(AgentTrajectoryScope::main("inkos-s".into(), "run-s".into()));
         assert!(current_scope().is_none(), "无 set 时 None");
-        TRAJECTORY_SCOPE.scope(Some(main), async {
-            assert_eq!(current_scope().unwrap().agent_role, "main");
-            // subagent 包装：链内读到派生作用域；计数器共享。
-            with_subagent_scope(async {
-                let scope = current_scope().expect("包装内应有作用域");
-                assert_eq!(scope.agent_role, "subagent");
-                assert_eq!(scope.conversation_id, "inkos-s");
+        TRAJECTORY_SCOPE
+            .scope(Some(main), async {
+                assert_eq!(current_scope().unwrap().agent_role, "main");
+                // subagent 包装：链内读到派生作用域；计数器共享。
+                with_subagent_scope(async {
+                    let scope = current_scope().expect("包装内应有作用域");
+                    assert_eq!(scope.agent_role, "subagent");
+                    assert_eq!(scope.conversation_id, "inkos-s");
+                })
+                .await;
+                // 包装外回 main。
+                assert_eq!(current_scope().unwrap().agent_role, "main");
             })
             .await;
-            // 包装外回 main。
-            assert_eq!(current_scope().unwrap().agent_role, "main");
-        })
-        .await;
         // 无外层作用域时 with_subagent_scope 原样执行（不 panic）。
         with_subagent_scope(async {}).await;
     }
-
 }

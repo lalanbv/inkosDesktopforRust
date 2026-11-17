@@ -158,7 +158,9 @@ pub fn create_book_session(
         .unwrap_or_else(|| format!("{now}-{}", random_suffix()));
     BookSession {
         session_id,
-        book_id: book_id.filter(|id| is_safe_book_id(id)).map(|s| s.to_string()),
+        book_id: book_id
+            .filter(|id| is_safe_book_id(id))
+            .map(|s| s.to_string()),
         session_kind,
         play_mode,
         title: None,

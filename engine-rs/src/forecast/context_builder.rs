@@ -58,12 +58,20 @@ pub async fn build_forecast_context(book_dir: &Path, book_id: &str) -> ForecastC
     let recent_chapter_summaries = if chapter_summaries_raw.trim().is_empty() {
         String::new()
     } else {
-        format_recent_summaries(&chapter_summaries_raw, base_chapter + 1, RECENT_SUMMARY_LIMIT)
+        format_recent_summaries(
+            &chapter_summaries_raw,
+            base_chapter + 1,
+            RECENT_SUMMARY_LIMIT,
+        )
     };
 
     ForecastContext {
         book_id: book_id.to_string(),
-        book_title: if book_config.0.is_empty() { book_id.to_string() } else { book_config.0 },
+        book_title: if book_config.0.is_empty() {
+            book_id.to_string()
+        } else {
+            book_config.0
+        },
         language: book_config.1,
         base_chapter,
         context_fingerprint,
@@ -169,21 +177,54 @@ async fn read_if_exists(path: &Path) -> Option<String> {
 pub fn render_forecast_context_markdown(context: &ForecastContext) -> String {
     let zh = context.language == "zh";
     let sections: Vec<(&str, &str)> = vec![
-        (if zh { "作者意图" } else { "Author intent" }, &context.sections.author_intent),
-        (if zh { "当前聚焦" } else { "Current focus" }, &context.sections.current_focus),
-        (if zh { "当前状态" } else { "Current state" }, &context.sections.current_state),
-        (if zh { "伏笔与钩子" } else { "Pending hooks" }, &context.sections.pending_hooks),
-        (if zh { "故事框架" } else { "Story frame" }, &context.sections.story_frame),
-        (if zh { "卷映射" } else { "Volume map" }, &context.sections.volume_map),
         (
-            if zh { "近期章节摘要" } else { "Recent chapter summaries" },
+            if zh { "作者意图" } else { "Author intent" },
+            &context.sections.author_intent,
+        ),
+        (
+            if zh { "当前聚焦" } else { "Current focus" },
+            &context.sections.current_focus,
+        ),
+        (
+            if zh { "当前状态" } else { "Current state" },
+            &context.sections.current_state,
+        ),
+        (
+            if zh {
+                "伏笔与钩子"
+            } else {
+                "Pending hooks"
+            },
+            &context.sections.pending_hooks,
+        ),
+        (
+            if zh { "故事框架" } else { "Story frame" },
+            &context.sections.story_frame,
+        ),
+        (
+            if zh { "卷映射" } else { "Volume map" },
+            &context.sections.volume_map,
+        ),
+        (
+            if zh {
+                "近期章节摘要"
+            } else {
+                "Recent chapter summaries"
+            },
             &context.sections.recent_chapter_summaries,
         ),
         (
-            if zh { "人物与关系" } else { "Characters and relationships" },
+            if zh {
+                "人物与关系"
+            } else {
+                "Characters and relationships"
+            },
             &context.sections.character_context,
         ),
-        (if zh { "支线看板" } else { "Subplot board" }, &context.sections.subplot_board),
+        (
+            if zh { "支线看板" } else { "Subplot board" },
+            &context.sections.subplot_board,
+        ),
     ];
 
     let mut blocks = vec![if zh {
@@ -212,7 +253,11 @@ async fn read_book_config(book_dir: &Path) -> (String, String) {
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
         return (String::new(), "zh".to_string());
     };
-    let title = parsed.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+    let title = parsed
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
     let language = if parsed.get("language").and_then(serde_json::Value::as_str) == Some("en") {
         "en"
     } else {
@@ -227,8 +272,7 @@ async fn resolve_base_chapter(book_dir: &Path) -> u32 {
         return 0;
     };
     static CHAPTER_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let chapter_re = CHAPTER_RE
-        .get_or_init(|| regex::Regex::new(r"^(\d+)[_-]?.*\.md$").unwrap());
+    let chapter_re = CHAPTER_RE.get_or_init(|| regex::Regex::new(r"^(\d+)[_-]?.*\.md$").unwrap());
     let mut max = 0u32;
     while let Ok(Some(entry)) = entries.next_entry().await {
         let name = entry.file_name().to_string_lossy().into_owned();

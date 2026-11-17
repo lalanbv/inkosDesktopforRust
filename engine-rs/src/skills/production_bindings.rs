@@ -108,7 +108,12 @@ pub fn resolve_production_skill_activations(
     let by_id = |id: &str| available_skills.iter().find(|skill| skill.id == id);
     production_skill_ids(capability)
         .iter()
-        .filter_map(|id| by_id(id).map(|skill| ActivatedSkillGuidance { skill: skill.clone(), resources: Vec::new() }))
+        .filter_map(|id| {
+            by_id(id).map(|skill| ActivatedSkillGuidance {
+                skill: skill.clone(),
+                resources: Vec::new(),
+            })
+        })
         .collect()
 }
 
@@ -127,7 +132,10 @@ pub fn merge_activated_skill_guidance(
             merged.insert(id, activation.clone());
         }
     }
-    order.into_iter().filter_map(|id| merged.remove(id)).collect()
+    order
+        .into_iter()
+        .filter_map(|id| merged.remove(id))
+        .collect()
 }
 
 /// TS `activatedSkillIds`。
@@ -144,8 +152,10 @@ pub fn resolve_profile_skill_activations(
     profile: &crate::harness::contracts::WorkProfile,
     include_recommended: bool,
 ) -> Result<Vec<ActivatedSkillGuidance>, String> {
-    let by_id: HashMap<&str, &AgentSkill> =
-        available_skills.iter().map(|skill| (skill.id.as_str(), skill)).collect();
+    let by_id: HashMap<&str, &AgentSkill> = available_skills
+        .iter()
+        .map(|skill| (skill.id.as_str(), skill))
+        .collect();
     let missing: Vec<&str> = profile
         .required_skill_ids
         .iter()
@@ -159,7 +169,11 @@ pub fn resolve_profile_skill_activations(
             missing.join(", ")
         ));
     }
-    let recommended: &[String] = if include_recommended { &profile.recommended_skill_ids } else { &[] };
+    let recommended: &[String] = if include_recommended {
+        &profile.recommended_skill_ids
+    } else {
+        &[]
+    };
     let mut seen = std::collections::HashSet::new();
     Ok(profile
         .required_skill_ids
@@ -167,7 +181,10 @@ pub fn resolve_profile_skill_activations(
         .chain(recommended)
         .filter(|id| seen.insert(id.as_str()))
         .filter_map(|id| by_id.get(id.as_str()))
-        .map(|skill| ActivatedSkillGuidance { skill: (*skill).clone(), resources: Vec::new() })
+        .map(|skill| ActivatedSkillGuidance {
+            skill: (*skill).clone(),
+            resources: Vec::new(),
+        })
         .collect())
 }
 
@@ -178,16 +195,17 @@ pub fn worker_skills_for_agent(
     agent: &str,
 ) -> Vec<ActivatedSkillGuidance> {
     match agent {
-        "architect" | "writer" => {
-            resolve_production_skill_activations(available_skills, ProductionSkillCapability::LongWriting)
-        }
-        "auditor" | "reviser" => {
-            resolve_production_skill_activations(available_skills, ProductionSkillCapability::LongReview)
-        }
+        "architect" | "writer" => resolve_production_skill_activations(
+            available_skills,
+            ProductionSkillCapability::LongWriting,
+        ),
+        "auditor" | "reviser" => resolve_production_skill_activations(
+            available_skills,
+            ProductionSkillCapability::LongReview,
+        ),
         _ => Vec::new(),
     }
 }
-
 
 tokio::task_local! {
     /// 当前生产操作的激活技能（139 号：TS runner `operationContext.activatedSkills`
@@ -200,7 +218,10 @@ tokio::task_local! {
 
 /// 读取当前操作激活技能（无 set → None——TS storage.getStore() 语义）。
 pub fn current_operation_skills() -> Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>> {
-    OPERATION_SKILLS.try_with(|skills| skills.clone()).ok().flatten()
+    OPERATION_SKILLS
+        .try_with(|skills| skills.clone())
+        .ok()
+        .flatten()
 }
 
 /// 写作链 craft 激活解析（530 号）：longWriting 绑定 ∩ 可用技能；
@@ -208,8 +229,10 @@ pub fn current_operation_skills() -> Option<std::sync::Arc<Vec<ActivatedSkillGui
 pub fn writing_chain_activations(
     available_skills: &[AgentSkill],
 ) -> Option<std::sync::Arc<Vec<ActivatedSkillGuidance>>> {
-    let activations =
-        resolve_production_skill_activations(available_skills, ProductionSkillCapability::LongWriting);
+    let activations = resolve_production_skill_activations(
+        available_skills,
+        ProductionSkillCapability::LongWriting,
+    );
     if activations.is_empty() {
         None
     } else {
@@ -280,7 +303,11 @@ pub fn turn_skill_activations() -> Vec<ActivatedSkillGuidance> {
     TURN_SKILLS
         .try_with(|turn| {
             turn.as_ref()
-                .map(|turn| turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone())
+                .map(|turn| {
+                    turn.lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .clone()
+                })
                 .unwrap_or_default()
         })
         .unwrap_or_default()
@@ -336,21 +363,30 @@ mod tests {
             body: "正文".into(),
             source: crate::skills::SkillSource::Builtin,
             base_dir: None,
-        disable_model_invocation: None,
-        user_invocable: None,
-        rank: None,
+            disable_model_invocation: None,
+            user_invocable: None,
+            rank: None,
         }
     }
 
     #[test]
     fn production_skill_ids_table_matches_ts() {
-        assert_eq!(production_skill_ids(ProductionSkillCapability::LongWriting), ["inkos-long-writing"]);
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::LongWriting),
+            ["inkos-long-writing"]
+        );
         assert_eq!(
             production_skill_ids(ProductionSkillCapability::LongReview),
             ["inkos-long-writing", "inkos-story-review"]
         );
-        assert_eq!(production_skill_ids(ProductionSkillCapability::Play), ["inkos-play-world"]);
-        assert_eq!(production_skill_ids(ProductionSkillCapability::Translation), ["inkos-translation"]);
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::Play),
+            ["inkos-play-world"]
+        );
+        assert_eq!(
+            production_skill_ids(ProductionSkillCapability::Translation),
+            ["inkos-translation"]
+        );
         assert_eq!(NON_LONG_PRODUCTION_CAPABILITIES.len(), 6);
     }
 
@@ -358,12 +394,17 @@ mod tests {
     fn activations_intersect_available_skills() {
         let available = vec![skill("inkos-long-writing"), skill("inkos-short-writing")];
         // longReview 绑定两条但只可用一条 → 静默跳过缺失项。
-        let long_review = resolve_production_skill_activations(&available, ProductionSkillCapability::LongReview);
+        let long_review =
+            resolve_production_skill_activations(&available, ProductionSkillCapability::LongReview);
         assert_eq!(activated_skill_ids(&long_review), ["inkos-long-writing"]);
         // 全缺失 → 空。
-        let play = resolve_production_skill_activations(&available, ProductionSkillCapability::Play);
+        let play =
+            resolve_production_skill_activations(&available, ProductionSkillCapability::Play);
         assert!(play.is_empty());
-        assert!(play.iter().all(|a| a.resources.is_empty()), "resources 恒空");
+        assert!(
+            play.iter().all(|a| a.resources.is_empty()),
+            "resources 恒空"
+        );
     }
 
     /// 960 号：TS `resolveProfileSkillActivations` 三语义——缺必需即错（消息逐字）/
@@ -372,42 +413,70 @@ mod tests {
     fn profile_skill_activations_mirror_ts() {
         let profiles = crate::harness::profile_registry::built_in_work_profiles();
         let profile = |id: &str| profiles.iter().find(|p| p.id == id).unwrap();
-        let err = resolve_profile_skill_activations(&[skill("inkos-story-review")], profile("translation"), false)
-            .unwrap_err();
-        assert_eq!(err, "Profile \"translation\" requires unavailable skill(s): inkos-translation");
+        let err = resolve_profile_skill_activations(
+            &[skill("inkos-story-review")],
+            profile("translation"),
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "Profile \"translation\" requires unavailable skill(s): inkos-translation"
+        );
 
         let mut configured = skill("inkos-translation");
         configured.body = "项目同名覆盖".into();
-        let resolved =
-            resolve_profile_skill_activations(&[skill("inkos-translation"), configured], profile("translation"), false)
-                .unwrap();
+        let resolved = resolve_profile_skill_activations(
+            &[skill("inkos-translation"), configured],
+            profile("translation"),
+            false,
+        )
+        .unwrap();
         assert_eq!(activated_skill_ids(&resolved), ["inkos-translation"]);
         assert_eq!(resolved[0].skill.body, "项目同名覆盖", "后写胜");
         assert!(resolved[0].resources.is_empty());
 
         let available = vec![skill("inkos-long-writing"), skill("inkos-story-review")];
-        let required_only = resolve_profile_skill_activations(&available, profile("longform-novel"), false).unwrap();
+        let required_only =
+            resolve_profile_skill_activations(&available, profile("longform-novel"), false)
+                .unwrap();
         assert_eq!(activated_skill_ids(&required_only), ["inkos-long-writing"]);
-        let with_recommended = resolve_profile_skill_activations(&available, profile("longform-novel"), true).unwrap();
-        assert_eq!(activated_skill_ids(&with_recommended), ["inkos-long-writing", "inkos-story-review"]);
+        let with_recommended =
+            resolve_profile_skill_activations(&available, profile("longform-novel"), true).unwrap();
+        assert_eq!(
+            activated_skill_ids(&with_recommended),
+            ["inkos-long-writing", "inkos-story-review"]
+        );
         // 推荐技能缺失不报错（TS 只校验 required）。
-        let partial =
-            resolve_profile_skill_activations(&[skill("inkos-long-writing")], profile("longform-novel"), true).unwrap();
+        let partial = resolve_profile_skill_activations(
+            &[skill("inkos-long-writing")],
+            profile("longform-novel"),
+            true,
+        )
+        .unwrap();
         assert_eq!(activated_skill_ids(&partial), ["inkos-long-writing"]);
     }
 
     #[test]
     fn merge_dedupes_by_skill_id_last_write_wins() {
-        let a = vec![ActivatedSkillGuidance { skill: skill("x"), resources: vec![] }];
+        let a = vec![ActivatedSkillGuidance {
+            skill: skill("x"),
+            resources: vec![],
+        }];
         let mut b_variant = skill("x");
         b_variant.body = "更新版".into();
-        let b = vec![ActivatedSkillGuidance { skill: b_variant, resources: vec![] }];
-        let c = vec![ActivatedSkillGuidance { skill: skill("y"), resources: vec![] }];
+        let b = vec![ActivatedSkillGuidance {
+            skill: b_variant,
+            resources: vec![],
+        }];
+        let c = vec![ActivatedSkillGuidance {
+            skill: skill("y"),
+            resources: vec![],
+        }];
         let merged = merge_activated_skill_guidance(&[&a, &b, &c]);
         assert_eq!(activated_skill_ids(&merged), ["x", "y"]);
         assert_eq!(merged[0].skill.body, "更新版", "后写胜");
     }
-
 
     #[test]
     fn append_guidance_targets_system_message() {
@@ -426,23 +495,46 @@ mod tests {
             }],
         };
         // 无 system → 前置一条。
-        let mut messages = vec![LLMMessage { role: LLMRole::User, content: "写一章".into(), tool_calls: None, tool_call_id: None }];
+        let mut messages = vec![LLMMessage {
+            role: LLMRole::User,
+            content: "写一章".into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
         append_activated_skill_guidance(&mut messages, std::slice::from_ref(&activation));
         assert_eq!(messages[0].role, LLMRole::System);
-        assert!(messages[0].content.contains("## Activated professional skills"));
-        assert!(messages[0].content.contains("### inkos-long-writing — inkos-long-writing"));
+        assert!(messages[0]
+            .content
+            .contains("## Activated professional skills"));
+        assert!(messages[0]
+            .content
+            .contains("### inkos-long-writing — inkos-long-writing"));
         assert!(messages[0].content.contains("长篇方法正文"));
-        assert!(messages[0].content.contains("#### Reference: references/craft.md:12-88 · 节奏"));
+        assert!(messages[0]
+            .content
+            .contains("#### Reference: references/craft.md:12-88 · 节奏"));
         assert!(messages[0].content.contains("参考正文"));
         // 有 system → 追加不替换；空激活零改动。
         let mut with_system = vec![
-            LLMMessage { role: LLMRole::System, content: "你是写手".into(), tool_calls: None, tool_call_id: None },
-            LLMMessage { role: LLMRole::User, content: "继续".into(), tool_calls: None, tool_call_id: None },
+            LLMMessage {
+                role: LLMRole::System,
+                content: "你是写手".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: LLMRole::User,
+                content: "继续".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
         ];
         append_activated_skill_guidance(&mut with_system, &[]);
         assert_eq!(with_system[0].content, "你是写手");
         append_activated_skill_guidance(&mut with_system, &[activation]);
-        assert!(with_system[0].content.starts_with("你是写手\n\n## Activated professional skills"));
+        assert!(with_system[0]
+            .content
+            .starts_with("你是写手\n\n## Activated professional skills"));
         assert_eq!(with_system[1].content, "继续");
     }
 
@@ -470,7 +562,10 @@ mod tests {
             ["inkos-long-writing", "inkos-story-review"]
         );
         assert!(worker_skills_for_agent(&available, "exporter").is_empty());
-        assert!(worker_skills_for_agent(&[], "writer").is_empty(), "无可用技能 → 空");
+        assert!(
+            worker_skills_for_agent(&[], "writer").is_empty(),
+            "无可用技能 → 空"
+        );
     }
 
     /// 530 号：写作链激活解析——有交集 Some、无交集 None。
@@ -509,28 +604,51 @@ mod tests {
     #[tokio::test]
     async fn turn_skills_round_scope_semantics() {
         assert!(turn_skill_activations().is_empty(), "scope 外读 → 空");
-        activate_turn_skill(ActivatedSkillGuidance { skill: skill("inkos-long-writing"), resources: vec![] });
+        activate_turn_skill(ActivatedSkillGuidance {
+            skill: skill("inkos-long-writing"),
+            resources: vec![],
+        });
         assert!(turn_skill_activations().is_empty(), "scope 外写被忽略");
 
         let inside = scope_turn_skills(
             vec![
-                ActivatedSkillGuidance { skill: skill("inkos-seed-a"), resources: vec![] },
-                ActivatedSkillGuidance { skill: skill("inkos-seed-b"), resources: vec![] },
+                ActivatedSkillGuidance {
+                    skill: skill("inkos-seed-a"),
+                    resources: vec![],
+                },
+                ActivatedSkillGuidance {
+                    skill: skill("inkos-seed-b"),
+                    resources: vec![],
+                },
             ],
             async {
-                activate_turn_skill(ActivatedSkillGuidance { skill: skill("inkos-long-writing"), resources: vec![] });
-                activate_turn_skill(ActivatedSkillGuidance { skill: skill("inkos-story-review"), resources: vec![] });
+                activate_turn_skill(ActivatedSkillGuidance {
+                    skill: skill("inkos-long-writing"),
+                    resources: vec![],
+                });
+                activate_turn_skill(ActivatedSkillGuidance {
+                    skill: skill("inkos-story-review"),
+                    resources: vec![],
+                });
                 // 同 id 后写胜且保持首插位置（TS Map.set 语义）。
                 let mut updated = skill("inkos-seed-a");
                 updated.body = "预置版更新".into();
-                activate_turn_skill(ActivatedSkillGuidance { skill: updated, resources: vec![] });
+                activate_turn_skill(ActivatedSkillGuidance {
+                    skill: updated,
+                    resources: vec![],
+                });
                 activated_skill_ids(&turn_skill_activations())
             },
         )
         .await;
         assert_eq!(
             inside,
-            ["inkos-seed-a", "inkos-seed-b", "inkos-long-writing", "inkos-story-review"]
+            [
+                "inkos-seed-a",
+                "inkos-seed-b",
+                "inkos-long-writing",
+                "inkos-story-review"
+            ]
         );
         assert!(turn_skill_activations().is_empty(), "轮末丢弃");
     }

@@ -20,7 +20,8 @@ fn plan_matches_shared_vectors() {
         let got = resolve_best_of_n_plan(Some(&config), first_score);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "plan vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

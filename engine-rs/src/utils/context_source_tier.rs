@@ -52,7 +52,10 @@ impl ContextSourceTier {
     /// 须与 [`crate::utils::context_assembly::is_protected_context_source`] 一致
     /// （golden 差分锁死，单侧漂移即红）。
     pub fn is_protected(self) -> bool {
-        matches!(self, ContextSourceTier::BookFact | ContextSourceTier::BookPlanning)
+        matches!(
+            self,
+            ContextSourceTier::BookFact | ContextSourceTier::BookPlanning
+        )
     }
 
     pub fn label_zh(self) -> &'static str {
@@ -137,7 +140,7 @@ pub fn context_source_tier(source: &str) -> ContextSourceTier {
     if source == "story/chapters#opening_hint" {
         return ContextSourceTier::BookMemory;
     }
-        if source == "story/chapters#recent_endings" {
+    if source == "story/chapters#recent_endings" {
         return ContextSourceTier::BookMemory;
     }
     // R10/376 号：实体卡注入与参考资料同层（40，正典事实参考可压缩）。
@@ -245,14 +248,38 @@ mod tests {
 
     #[test]
     fn classifies_registered_families() {
-        assert_eq!(context_source_tier("story/current_state.md#主角"), ContextSourceTier::BookFact);
-        assert_eq!(context_source_tier("story/outline/story_frame.md#力量体系"), ContextSourceTier::BookFact);
-        assert_eq!(context_source_tier("story/story_bible.md#玉印"), ContextSourceTier::BookFact);
-        assert_eq!(context_source_tier("runtime/chapter_memo"), ContextSourceTier::BookPlanning);
-        assert_eq!(context_source_tier("story/volume_outline.md#卷一"), ContextSourceTier::BookPlanning);
-        assert_eq!(context_source_tier("story/chapter_summaries.md#3"), ContextSourceTier::BookMemory);
-        assert_eq!(context_source_tier("reference/mat-01#开场"), ContextSourceTier::UserReference);
-        assert_eq!(context_source_tier("story/unknown_new.md"), ContextSourceTier::Ephemeral);
+        assert_eq!(
+            context_source_tier("story/current_state.md#主角"),
+            ContextSourceTier::BookFact
+        );
+        assert_eq!(
+            context_source_tier("story/outline/story_frame.md#力量体系"),
+            ContextSourceTier::BookFact
+        );
+        assert_eq!(
+            context_source_tier("story/story_bible.md#玉印"),
+            ContextSourceTier::BookFact
+        );
+        assert_eq!(
+            context_source_tier("runtime/chapter_memo"),
+            ContextSourceTier::BookPlanning
+        );
+        assert_eq!(
+            context_source_tier("story/volume_outline.md#卷一"),
+            ContextSourceTier::BookPlanning
+        );
+        assert_eq!(
+            context_source_tier("story/chapter_summaries.md#3"),
+            ContextSourceTier::BookMemory
+        );
+        assert_eq!(
+            context_source_tier("reference/mat-01#开场"),
+            ContextSourceTier::UserReference
+        );
+        assert_eq!(
+            context_source_tier("story/unknown_new.md"),
+            ContextSourceTier::Ephemeral
+        );
     }
 
     #[test]

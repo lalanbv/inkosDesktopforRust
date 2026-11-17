@@ -119,7 +119,11 @@ pub fn build_settler_system_prompt(
 /// 结算输出格式段。逐字移植 TS `buildSettlerOutputFormat`：
 /// `chapterTypes[0]` 缺省回退 `"主线推进"`。
 fn build_settler_output_format(gp: &GenreProfile) -> String {
-    let chapter_type_example = gp.chapter_types.first().map(String::as_str).unwrap_or("主线推进");
+    let chapter_type_example = gp
+        .chapter_types
+        .first()
+        .map(String::as_str)
+        .unwrap_or("主线推进");
 
     format!(
         "=== POST_SETTLEMENT ===
@@ -397,7 +401,10 @@ mod tests {
         let mut gp = profile(false, &[]);
         gp.language = "en".to_string();
         let out = build_settler_system_prompt(&book(), &gp, None, Some(WritingLanguage::Zh));
-        assert!(out.starts_with("你是状态追踪分析师。"), "显式 zh 压过 genre en");
+        assert!(
+            out.starts_with("你是状态追踪分析师。"),
+            "显式 zh 压过 genre en"
+        );
     }
 
     #[test]
@@ -405,7 +412,10 @@ mod tests {
         let mut gp = profile(false, &[]);
         gp.language = "en".to_string();
         let out = build_settler_system_prompt(&book(), &gp, None, None);
-        assert!(out.starts_with("【LANGUAGE OVERRIDE】"), "未传语言时回退 genre 画像");
+        assert!(
+            out.starts_with("【LANGUAGE OVERRIDE】"),
+            "未传语言时回退 genre 画像"
+        );
     }
 
     #[test]
@@ -444,7 +454,10 @@ mod tests {
         assert!(out.contains("## 本章正文\n\n正文内容。\n\n"));
         assert!(out.contains("## 当前状态卡\n状态卡内容\n"));
         assert!(out.contains("## 当前伏笔池（含活跃伏笔与本章语义相关的休眠种子）\n伏笔池内容\n"));
-        assert!(out.contains("## 卷纲\n第一卷：开局\n"), "无 control block 时输出卷纲");
+        assert!(
+            out.contains("## 卷纲\n第一卷：开局\n"),
+            "无 control block 时输出卷纲"
+        );
         assert!(!out.contains("## 当前资源账本"), "空 ledger 无账本块");
         assert!(!out.contains("## 已有章节摘要"), "占位文案不输出摘要块");
         assert!(out.ends_with("请严格按照 === TAG === 格式输出结算结果。"));
@@ -479,7 +492,10 @@ mod tests {
         assert!(out.contains("## 当前情感弧线\n弧线"));
         assert!(out.contains("## 当前角色交互矩阵\n矩阵"));
         assert!(out.contains("## 本章控制输入\nintent"));
-        assert!(!out.contains("不该出现的卷纲"), "有 control block 时卷纲块让位");
+        assert!(
+            !out.contains("不该出现的卷纲"),
+            "有 control block 时卷纲块让位"
+        );
     }
 
     #[test]

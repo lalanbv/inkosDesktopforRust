@@ -12,7 +12,9 @@ use std::collections::HashSet;
 
 use crate::agents::continuity::{AuditIssue, AuditSeverity};
 use crate::models::runtime_state::{HookPayoffTiming, HookRecord, HookStatus, RuntimeStateDelta};
-use crate::utils::hook_governance::{classify_hook_disposition, collect_stale_hook_debt, HookDisposition};
+use crate::utils::hook_governance::{
+    classify_hook_disposition, collect_stale_hook_debt, HookDisposition,
+};
 use crate::utils::hook_lifecycle::{describe_hook_lifecycle, HookLifecycleDescription};
 use crate::utils::hook_policy::HOOK_HEALTH_DEFAULTS;
 use crate::utils::language::WritingLanguage;
@@ -35,9 +37,15 @@ pub struct HookHealthParams<'a> {
 pub fn analyze_hook_health(params: &HookHealthParams<'_>) -> Vec<AuditIssue> {
     let defaults = HOOK_HEALTH_DEFAULTS;
     let max_active_hooks = params.max_active_hooks.unwrap_or(defaults.max_active_hooks);
-    let stale_after = params.stale_after_chapters.unwrap_or(defaults.stale_after_chapters);
-    let no_advance_window = params.no_advance_window.unwrap_or(defaults.no_advance_window);
-    let new_hook_burst = params.new_hook_burst_threshold.unwrap_or(defaults.new_hook_burst_threshold);
+    let stale_after = params
+        .stale_after_chapters
+        .unwrap_or(defaults.stale_after_chapters);
+    let no_advance_window = params
+        .no_advance_window
+        .unwrap_or(defaults.no_advance_window);
+    let new_hook_burst = params
+        .new_hook_burst_threshold
+        .unwrap_or(defaults.new_hook_burst_threshold);
 
     let mut issues: Vec<AuditIssue> = Vec::new();
 
@@ -48,7 +56,10 @@ pub fn analyze_hook_health(params: &HookHealthParams<'_>) -> Vec<AuditIssue> {
         .filter(|h| {
             let st = hook_status_str(h.status);
             let normalized = crate::utils::hook_lifecycle::normalize_stored_hook_status(&st);
-            !matches!(normalized, HookStatus::Resolved | HookStatus::Deferred | HookStatus::Superseded)
+            !matches!(
+                normalized,
+                HookStatus::Resolved | HookStatus::Deferred | HookStatus::Superseded
+            )
         })
         .collect();
 
@@ -74,12 +85,21 @@ pub fn analyze_hook_health(params: &HookHealthParams<'_>) -> Vec<AuditIssue> {
         issues.push(warning(
             params.language,
             if params.language == WritingLanguage::En {
-                format!("There are {} active hooks, above the recommended cap of {}.", active_hooks.len(), max_active_hooks)
+                format!(
+                    "There are {} active hooks, above the recommended cap of {}.",
+                    active_hooks.len(),
+                    max_active_hooks
+                )
             } else {
-                format!("当前有 {} 个活跃伏笔，已经高于建议上限 {} 个。", active_hooks.len(), max_active_hooks)
+                format!(
+                    "当前有 {} 个活跃伏笔，已经高于建议上限 {} 个。",
+                    active_hooks.len(),
+                    max_active_hooks
+                )
             },
             if params.language == WritingLanguage::En {
-                "Prefer advancing, resolving, or deferring existing debt before opening more hooks.".to_string()
+                "Prefer advancing, resolving, or deferring existing debt before opening more hooks."
+                    .to_string()
             } else {
                 "优先推进、回收或延后已有伏笔，再继续开新伏笔。".to_string()
             },
@@ -131,7 +151,11 @@ pub fn analyze_hook_health(params: &HookHealthParams<'_>) -> Vec<AuditIssue> {
     } else if let Some(_window) = params.no_advance_window {
         // 无压力区未处理时，检查连续无推进。
         if !active_hooks.is_empty() {
-            let latest_real_advance = active_hooks.iter().map(|h| h.last_advanced_chapter).max().unwrap_or(0);
+            let latest_real_advance = active_hooks
+                .iter()
+                .map(|h| h.last_advanced_chapter)
+                .max()
+                .unwrap_or(0);
             let gap = params.chapter_number.saturating_sub(latest_real_advance);
             if gap >= no_advance_window {
                 issues.push(warning(
@@ -153,13 +177,18 @@ pub fn analyze_hook_health(params: &HookHealthParams<'_>) -> Vec<AuditIssue> {
 
     // 新伏笔爆发但无回收。
     if let Some(delta) = params.delta {
-        let existing: HashSet<&str> = params.existing_hook_ids.map(|ids| ids.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
+        let existing: HashSet<&str> = params
+            .existing_hook_ids
+            .map(|ids| ids.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
         let resulting: HashSet<&str> = params.hooks.iter().map(|h| h.hook_id.as_str()).collect();
         let new_count = delta
             .hook_ops
             .upsert
             .iter()
-            .filter(|h| !existing.contains(h.hook_id.as_str()) && resulting.contains(h.hook_id.as_str()))
+            .filter(|h| {
+                !existing.contains(h.hook_id.as_str()) && resulting.contains(h.hook_id.as_str())
+            })
             .count();
         if new_count as u32 >= new_hook_burst && delta.hook_ops.resolve.is_empty() {
             issues.push(warning(
@@ -170,7 +199,8 @@ pub fn analyze_hook_health(params: &HookHealthParams<'_>) -> Vec<AuditIssue> {
                     format!("本章新开了 {new_count} 个伏笔，但没有回收任何旧债。")
                 },
                 if params.language == WritingLanguage::En {
-                    "Keep the hook table from ballooning by pairing new openings with old payoffs.".to_string()
+                    "Keep the hook table from ballooning by pairing new openings with old payoffs."
+                        .to_string()
                 } else {
                     "控制伏笔膨胀，新开伏笔时尽量配套回收旧伏笔。".to_string()
                 },
@@ -193,7 +223,8 @@ fn build_pressure_description(
         .iter()
         .take(3)
         .map(|(hook, lc)| {
-            let timing = crate::utils::hook_lifecycle::localize_hook_payoff_timing(lc.timing, language);
+            let timing =
+                crate::utils::hook_lifecycle::localize_hook_payoff_timing(lc.timing, language);
             let pressure = localize_pressure_label(lc, language);
             if en {
                 format!("{} ({}, {})", hook.hook_id, timing, pressure)
@@ -204,7 +235,11 @@ fn build_pressure_description(
         .collect();
     let suffix = if entries.len() > summarized.len() {
         let more = entries.len() - summarized.len();
-        if en { format!(", +{more} more") } else { format!("，另有 {more} 条") }
+        if en {
+            format!(", +{more} more")
+        } else {
+            format!("，另有 {more} 条")
+        }
     } else {
         String::new()
     };
@@ -213,7 +248,9 @@ fn build_pressure_description(
         if mentions_current_chapter {
             format!("Hooks are already under payoff pressure but this chapter left them untouched: {list}{suffix}.")
         } else {
-            format!("Hooks are already under payoff pressure without recent movement: {list}{suffix}.")
+            format!(
+                "Hooks are already under payoff pressure without recent movement: {list}{suffix}."
+            )
         }
     } else if mentions_current_chapter {
         format!("这些伏笔已经进入回收/推进压力，但本章没有真正处理：{list}{suffix}。")
@@ -223,20 +260,40 @@ fn build_pressure_description(
 }
 
 /// 压力标签本地化。对齐 TS `localizePressureLabel`。
-fn localize_pressure_label(lc: &HookLifecycleDescription, language: WritingLanguage) -> &'static str {
+fn localize_pressure_label(
+    lc: &HookLifecycleDescription,
+    language: WritingLanguage,
+) -> &'static str {
     if lc.overdue {
-        return if language == WritingLanguage::En { "overdue" } else { "已逾期" };
+        return if language == WritingLanguage::En {
+            "overdue"
+        } else {
+            "已逾期"
+        };
     }
     if lc.ready_to_resolve {
-        return if language == WritingLanguage::En { "ready to pay off" } else { "可回收" };
+        return if language == WritingLanguage::En {
+            "ready to pay off"
+        } else {
+            "可回收"
+        };
     }
-    if language == WritingLanguage::En { "stale" } else { "陈旧" }
+    if language == WritingLanguage::En {
+        "stale"
+    } else {
+        "陈旧"
+    }
 }
 
 fn warning(language: WritingLanguage, description: String, suggestion: String) -> AuditIssue {
     AuditIssue {
         severity: AuditSeverity::Warning,
-        category: if language == WritingLanguage::En { "Hook Debt" } else { "伏笔债务" }.to_string(),
+        category: if language == WritingLanguage::En {
+            "Hook Debt"
+        } else {
+            "伏笔债务"
+        }
+        .to_string(),
         description,
         suggestion,
         repair_scope: None,
@@ -291,7 +348,11 @@ mod tests {
         }
     }
 
-    fn params<'a>(language: WritingLanguage, chapter: u32, hooks: &'a [HookRecord]) -> HookHealthParams<'a> {
+    fn params<'a>(
+        language: WritingLanguage,
+        chapter: u32,
+        hooks: &'a [HookRecord],
+    ) -> HookHealthParams<'a> {
         HookHealthParams {
             language,
             chapter_number: chapter,
@@ -317,9 +378,13 @@ mod tests {
     #[test]
     fn warns_when_active_hooks_exceed_cap() {
         // 13 个活跃 > max 12。
-        let hooks: Vec<HookRecord> = (1..=13).map(|i| hook(&format!("h{i:03}"), 1, 1, Some(HookPayoffTiming::SlowBurn))).collect();
+        let hooks: Vec<HookRecord> = (1..=13)
+            .map(|i| hook(&format!("h{i:03}"), 1, 1, Some(HookPayoffTiming::SlowBurn)))
+            .collect();
         let issues = analyze_hook_health(&params(WritingLanguage::Zh, 5, &hooks));
-        assert!(issues.iter().any(|i| i.description.contains("高于建议上限")));
+        assert!(issues
+            .iter()
+            .any(|i| i.description.contains("高于建议上限")));
     }
 
     #[test]
@@ -329,14 +394,20 @@ mod tests {
         let mut p = params(WritingLanguage::Zh, 10, &hooks);
         p.no_advance_window = Some(5);
         let issues = analyze_hook_health(&p);
-        assert!(issues.iter().any(|i| i.description.contains("连续 9 章没有真实伏笔推进")));
+        assert!(issues
+            .iter()
+            .any(|i| i.description.contains("连续 9 章没有真实伏笔推进")));
     }
 
     #[test]
     fn english_language_emits_english_messages() {
-        let hooks: Vec<HookRecord> = (1..=13).map(|i| hook(&format!("h{i:03}"), 1, 1, Some(HookPayoffTiming::SlowBurn))).collect();
+        let hooks: Vec<HookRecord> = (1..=13)
+            .map(|i| hook(&format!("h{i:03}"), 1, 1, Some(HookPayoffTiming::SlowBurn)))
+            .collect();
         let issues = analyze_hook_health(&params(WritingLanguage::En, 5, &hooks));
-        assert!(issues.iter().any(|i| i.description.contains("above the recommended cap")));
+        assert!(issues
+            .iter()
+            .any(|i| i.description.contains("above the recommended cap")));
         assert!(issues.iter().all(|i| i.category == "Hook Debt"));
     }
 
@@ -348,11 +419,19 @@ mod tests {
         let mut resulting = existing.clone();
         resulting.push(hook("h002", 5, 5, Some(HookPayoffTiming::MidArc)));
         resulting.push(hook("h003", 5, 5, Some(HookPayoffTiming::MidArc)));
-        let upsert_new = vec![hook("h002", 5, 5, Some(HookPayoffTiming::MidArc)), hook("h003", 5, 5, Some(HookPayoffTiming::MidArc))];
+        let upsert_new = vec![
+            hook("h002", 5, 5, Some(HookPayoffTiming::MidArc)),
+            hook("h003", 5, 5, Some(HookPayoffTiming::MidArc)),
+        ];
         let delta = RuntimeStateDelta {
             chapter: 5,
             current_state_patch: None,
-            hook_ops: HookOps { upsert: upsert_new, mention: vec![], resolve: vec![], defer: vec![] },
+            hook_ops: HookOps {
+                upsert: upsert_new,
+                mention: vec![],
+                resolve: vec![],
+                defer: vec![],
+            },
             new_hook_candidates: vec![],
             chapter_summary: None,
             notes: vec![],
@@ -371,7 +450,9 @@ mod tests {
             new_hook_burst_threshold: None,
         };
         let issues = analyze_hook_health(&p);
-        assert!(issues.iter().any(|i| i.description.contains("本章新开了 2 个伏笔，但没有回收任何旧债")));
+        assert!(issues.iter().any(|i| i
+            .description
+            .contains("本章新开了 2 个伏笔，但没有回收任何旧债")));
     }
 
     #[test]
@@ -389,7 +470,9 @@ mod tests {
     #[test]
     fn pressure_description_truncates_to_three_with_suffix() {
         // 构造 4 个 overdue hook（lastAdvanced=1, chapter=20, slow-burn overdue_age=12）。
-        let hooks: Vec<HookRecord> = (1..=4).map(|i| hook(&format!("h{i:03}"), 1, 1, Some(HookPayoffTiming::SlowBurn))).collect();
+        let hooks: Vec<HookRecord> = (1..=4)
+            .map(|i| hook(&format!("h{i:03}"), 1, 1, Some(HookPayoffTiming::SlowBurn)))
+            .collect();
         let lifecycle_pairs: Vec<(&HookRecord, HookLifecycleDescription)> = hooks
             .iter()
             .map(|h| {
@@ -406,7 +489,8 @@ mod tests {
                 (h, lc)
             })
             .collect();
-        let unresolved: Vec<(&HookRecord, &HookLifecycleDescription)> = lifecycle_pairs.iter().map(|(h, lc)| (*h, lc)).collect();
+        let unresolved: Vec<(&HookRecord, &HookLifecycleDescription)> =
+            lifecycle_pairs.iter().map(|(h, lc)| (*h, lc)).collect();
         let desc = build_pressure_description(WritingLanguage::Zh, &unresolved, false);
         assert!(desc.contains("另有 1 条"), "应显示剩余计数: {desc}");
         assert!(desc.contains("h001"));

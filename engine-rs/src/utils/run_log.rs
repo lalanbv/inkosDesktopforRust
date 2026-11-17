@@ -48,7 +48,11 @@ pub struct RunLogBuffer {
 
 impl RunLogBuffer {
     pub fn new(capacity: usize) -> Self {
-        Self { items: Vec::new(), total_appended: 0, capacity: capacity.max(1) }
+        Self {
+            items: Vec::new(),
+            total_appended: 0,
+            capacity: capacity.max(1),
+        }
     }
 
     pub fn append(&mut self, entry: RunLogEntry) {
@@ -61,7 +65,10 @@ impl RunLogBuffer {
     }
 
     pub fn snapshot(&self) -> RunLogSnapshot {
-        RunLogSnapshot { entries: self.items.clone(), total_appended: self.total_appended }
+        RunLogSnapshot {
+            entries: self.items.clone(),
+            total_appended: self.total_appended,
+        }
     }
 }
 
@@ -93,7 +100,11 @@ pub fn project_run_log(snapshot: &RunLogSnapshot, limit: Option<i64>) -> RunLogP
     RunLogProjection {
         total: snapshot.total_appended,
         kept: snapshot.entries.len() as i64,
-        took_over_count: snapshot.entries.iter().filter(|entry| entry.took_over).count() as i64,
+        took_over_count: snapshot
+            .entries
+            .iter()
+            .filter(|entry| entry.took_over)
+            .count() as i64,
         failure_count: snapshot.entries.iter().filter(|entry| !entry.ok).count() as i64,
         entries,
     }

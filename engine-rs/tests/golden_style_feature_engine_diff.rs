@@ -7,8 +7,8 @@
 
 use inkos_engine::models::style_profile::StyleProfile;
 use inkos_engine::utils::style_feature_engine::{
-    apply_feature_selection, build_trial_write_prompt, compose_style_guidance,
-    derive_feature_pool, detect_proper_noun_leak, style_feature_engine_contract,
+    apply_feature_selection, build_trial_write_prompt, compose_style_guidance, derive_feature_pool,
+    detect_proper_noun_leak, style_feature_engine_contract,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -114,7 +114,8 @@ fn trial_prompts_match_shared_vectors() {
             &case.language,
         );
         assert_eq!(
-            got, expected,
+            got,
+            expected,
             "trial vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -126,7 +127,8 @@ fn leak_detection_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
     for vector in vectors["leak"].as_array().expect("leak array") {
         let case: LeakCase = serde_json::from_value(vector["input"].clone()).unwrap();
-        let got = detect_proper_noun_leak(&case.content, &case.protected_names, case.min_occurrences);
+        let got =
+            detect_proper_noun_leak(&case.content, &case.protected_names, case.min_occurrences);
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
             expected,

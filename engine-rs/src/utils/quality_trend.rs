@@ -69,10 +69,7 @@ pub fn build_quality_trend(rows: &[ReviewMetricRow]) -> QualityTrend {
             issue_count: row.critical_count + row.warning_count + row.info_count,
         })
         .collect();
-    let scored: Vec<i64> = sorted
-        .iter()
-        .filter_map(|row| row.overall_score)
-        .collect();
+    let scored: Vec<i64> = sorted.iter().filter_map(|row| row.overall_score).collect();
     let average_score = if scored.is_empty() {
         None
     } else {
@@ -162,7 +159,11 @@ mod tests {
 
     #[test]
     fn average_is_one_decimal_and_unscored_rows_kept() {
-        let rows = vec![row(3, Some(82), true), row(1, Some(70), false), row(2, None, true)];
+        let rows = vec![
+            row(3, Some(82), true),
+            row(1, Some(70), false),
+            row(2, None, true),
+        ];
         let trend = build_quality_trend(&rows);
         assert_eq!(trend.scored_chapters, 2);
         assert_eq!(trend.average_score, Some(76.0));
@@ -178,6 +179,9 @@ mod tests {
         let mut a = row(7, Some(82), true);
         let b = row(7, Some(82), true);
         a.recorded_at = "2020-01-01T00:00:00.000Z".to_string();
-        assert_eq!(review_metric_content_hash(&a), review_metric_content_hash(&b));
+        assert_eq!(
+            review_metric_content_hash(&a),
+            review_metric_content_hash(&b)
+        );
     }
 }

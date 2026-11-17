@@ -6,8 +6,9 @@
 //! + [`validate_runtime_state`]（state/validator）+ [`RuntimeStateDelta`] 等模型。
 
 use crate::models::runtime_state::{
-    ChapterSummariesState, ChapterSummaryRow, CurrentStateFact, CurrentStatePatch, CurrentStateState,
-    HookPayoffTiming, HookRecord, HookStatus, HooksState, RuntimeStateDelta, StateManifest,
+    ChapterSummariesState, ChapterSummaryRow, CurrentStateFact, CurrentStatePatch,
+    CurrentStateState, HookPayoffTiming, HookRecord, HookStatus, HooksState, RuntimeStateDelta,
+    StateManifest,
 };
 use crate::state::validator::{validate_runtime_state, ValidationInput};
 use crate::utils::hook_governance::{
@@ -71,16 +72,24 @@ pub fn apply_runtime_state_delta(
     // chapterSummary 章节一致性
     if let Some(summary) = &delta.chapter_summary {
         if summary.chapter != delta.chapter {
-            return Err(StateReducerError::SummaryChapterMismatch(summary.chapter, delta.chapter));
+            return Err(StateReducerError::SummaryChapterMismatch(
+                summary.chapter,
+                delta.chapter,
+            ));
         }
-        let already = snapshot.chapter_summaries.rows.iter().any(|r| r.chapter == summary.chapter);
+        let already = snapshot
+            .chapter_summaries
+            .rows
+            .iter()
+            .any(|r| r.chapter == summary.chapter);
         if already && !allow_reapply {
             return Err(StateReducerError::DuplicateSummaryRow(summary.chapter));
         }
     }
 
     let hooks = apply_hook_ops(&snapshot.hooks, delta)?;
-    let current_state = apply_current_state_patch(&snapshot.current_state, &snapshot.manifest.language, delta);
+    let current_state =
+        apply_current_state_patch(&snapshot.current_state, &snapshot.manifest.language, delta);
     let chapter_summaries = apply_summary_delta(&snapshot.chapter_summaries, delta, allow_reapply);
 
     let next = RuntimeStateSnapshot {
@@ -98,7 +107,8 @@ pub fn apply_runtime_state_delta(
         manifest: serde_json::to_value(&next.manifest).unwrap_or(serde_json::Value::Null),
         current_state: serde_json::to_value(&next.current_state).unwrap_or(serde_json::Value::Null),
         hooks: serde_json::to_value(&next.hooks).unwrap_or(serde_json::Value::Null),
-        chapter_summaries: serde_json::to_value(&next.chapter_summaries).unwrap_or(serde_json::Value::Null),
+        chapter_summaries: serde_json::to_value(&next.chapter_summaries)
+            .unwrap_or(serde_json::Value::Null),
     });
     if !issues.is_empty() {
         let msg = issues
@@ -112,7 +122,10 @@ pub fn apply_runtime_state_delta(
     Ok(next)
 }
 
-fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result<HooksState, StateReducerError> {
+fn apply_hook_ops(
+    hooks_state: &HooksState,
+    delta: &RuntimeStateDelta,
+) -> Result<HooksState, StateReducerError> {
     // TS 用 Map(hookId → record)；这里用 Vec + 按 id 定位。最终排序保证输出稳定。
     let mut hooks: Vec<HookRecord> = hooks_state.hooks.to_vec();
 
@@ -161,7 +174,10 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
     for hook_id in &delta.hook_ops.resolve {
         if let Some(idx) = hooks.iter().position(|h| &h.hook_id == hook_id) {
             if hooks[idx].status == HookStatus::Superseded {
-                return Err(StateReducerError::HookSuperseded { op: "resolve", hook_id: hook_id.clone() });
+                return Err(StateReducerError::HookSuperseded {
+                    op: "resolve",
+                    hook_id: hook_id.clone(),
+                });
             }
             let advanced = hooks[idx].last_advanced_chapter.max(delta.chapter);
             hooks[idx].status = HookStatus::Resolved;
@@ -173,7 +189,10 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
     for hook_id in &delta.hook_ops.defer {
         if let Some(idx) = hooks.iter().position(|h| &h.hook_id == hook_id) {
             if hooks[idx].status == HookStatus::Superseded {
-                return Err(StateReducerError::HookSuperseded { op: "defer", hook_id: hook_id.clone() });
+                return Err(StateReducerError::HookSuperseded {
+                    op: "defer",
+                    hook_id: hook_id.clone(),
+                });
             }
             // 805 号：延后不是叙事推进的证据——保持既有 last_advanced_chapter
             //（对齐 TS 2.0 7e60e13f；移植当时 TS 曾推进，后改为不推进）。
@@ -207,25 +226,42 @@ fn apply_hook_ops(hooks_state: &HooksState, delta: &RuntimeStateDelta) -> Result
 /// 805 号：撤回生命周期（TS 同函数前两分支逐字移植）——existing superseded 为终态
 /// 原样返回（后续 upsert 不可复活）；incoming superseded 为撤回：resolved 历史不可撤、
 /// 撤回须携带依据 notes、通过后 notes = 既有 + 换行 + 依据（保留原内容供历史查证）。
-fn merge_hook_record(existing: &HookRecord, incoming: &HookRecord) -> Result<HookRecord, StateReducerError> {
+fn merge_hook_record(
+    existing: &HookRecord,
+    incoming: &HookRecord,
+) -> Result<HookRecord, StateReducerError> {
     if existing.status == HookStatus::Superseded {
         return Ok(existing.clone());
     }
     if incoming.status == HookStatus::Superseded {
         if existing.status == HookStatus::Resolved {
-            return Err(StateReducerError::HookResolvedHistory(existing.hook_id.clone()));
+            return Err(StateReducerError::HookResolvedHistory(
+                existing.hook_id.clone(),
+            ));
         }
         let authority = incoming.notes.trim();
         if authority.is_empty() {
-            return Err(StateReducerError::HookWithdrawalReasonRequired(existing.hook_id.clone()));
+            return Err(StateReducerError::HookWithdrawalReasonRequired(
+                existing.hook_id.clone(),
+            ));
         }
-        let notes = format!("{}\n{}", existing.notes, authority).trim().to_string();
-        return Ok(HookRecord { status: HookStatus::Superseded, status_raw: String::new(), notes, ..existing.clone() });
+        let notes = format!("{}\n{}", existing.notes, authority)
+            .trim()
+            .to_string();
+        return Ok(HookRecord {
+            status: HookStatus::Superseded,
+            status_raw: String::new(),
+            notes,
+            ..existing.clone()
+        });
     }
 
-    let expected_payoff = prefer_incoming_text(&existing.expected_payoff, &incoming.expected_payoff);
+    let expected_payoff =
+        prefer_incoming_text(&existing.expected_payoff, &incoming.expected_payoff);
     let notes = prefer_incoming_text(&existing.notes, &incoming.notes);
-    let advanced = existing.last_advanced_chapter.max(incoming.last_advanced_chapter);
+    let advanced = existing
+        .last_advanced_chapter
+        .max(incoming.last_advanced_chapter);
 
     let merged_timing = incoming.payoff_timing.or(existing.payoff_timing);
     let resolved_timing = resolve_hook_payoff_timing(
@@ -289,7 +325,10 @@ fn apply_current_state_patch(
 
     let patch = match &delta.current_state_patch {
         None => {
-            return CurrentStateState { chapter: delta.chapter, facts: next_facts };
+            return CurrentStateState {
+                chapter: delta.chapter,
+                facts: next_facts,
+            };
         }
         Some(p) => p,
     };
@@ -297,12 +336,54 @@ fn apply_current_state_patch(
     // 标签别名表（语言决定首选标签 + 顺序）
     let en = language == "en";
     let entries: [(&CurrentStatePatchField, &[&str]); 6] = [
-        (&CurrentStatePatchField::CurrentLocation, if en { &["Current Location", "当前位置"] } else { &["当前位置", "Current Location"] }),
-        (&CurrentStatePatchField::ProtagonistState, if en { &["Protagonist State", "主角状态"] } else { &["主角状态", "Protagonist State"] }),
-        (&CurrentStatePatchField::CurrentGoal, if en { &["Current Goal", "当前目标"] } else { &["当前目标", "Current Goal"] }),
-        (&CurrentStatePatchField::CurrentConstraint, if en { &["Current Constraint", "当前限制"] } else { &["当前限制", "Current Constraint"] }),
-        (&CurrentStatePatchField::CurrentAlliances, if en { &["Current Alliances", "Current Relationships", "当前敌我"] } else { &["当前敌我", "Current Alliances", "Current Relationships"] }),
-        (&CurrentStatePatchField::CurrentConflict, if en { &["Current Conflict", "当前冲突"] } else { &["当前冲突", "Current Conflict"] }),
+        (
+            &CurrentStatePatchField::CurrentLocation,
+            if en {
+                &["Current Location", "当前位置"]
+            } else {
+                &["当前位置", "Current Location"]
+            },
+        ),
+        (
+            &CurrentStatePatchField::ProtagonistState,
+            if en {
+                &["Protagonist State", "主角状态"]
+            } else {
+                &["主角状态", "Protagonist State"]
+            },
+        ),
+        (
+            &CurrentStatePatchField::CurrentGoal,
+            if en {
+                &["Current Goal", "当前目标"]
+            } else {
+                &["当前目标", "Current Goal"]
+            },
+        ),
+        (
+            &CurrentStatePatchField::CurrentConstraint,
+            if en {
+                &["Current Constraint", "当前限制"]
+            } else {
+                &["当前限制", "Current Constraint"]
+            },
+        ),
+        (
+            &CurrentStatePatchField::CurrentAlliances,
+            if en {
+                &["Current Alliances", "Current Relationships", "当前敌我"]
+            } else {
+                &["当前敌我", "Current Alliances", "Current Relationships"]
+            },
+        ),
+        (
+            &CurrentStatePatchField::CurrentConflict,
+            if en {
+                &["Current Conflict", "当前冲突"]
+            } else {
+                &["当前冲突", "Current Conflict"]
+            },
+        ),
     ];
 
     for (field, aliases) in entries {
@@ -336,7 +417,10 @@ fn apply_current_state_patch(
             .then_with(|| a.object.cmp(&b.object))
     });
 
-    CurrentStateState { chapter: delta.chapter, facts: next_facts }
+    CurrentStateState {
+        chapter: delta.chapter,
+        facts: next_facts,
+    }
 }
 
 fn apply_summary_delta(
@@ -401,7 +485,10 @@ mod tests {
     fn empty_snapshot(last: u32) -> RuntimeStateSnapshot {
         RuntimeStateSnapshot {
             manifest: manifest(last),
-            current_state: CurrentStateState { chapter: last, facts: vec![] },
+            current_state: CurrentStateState {
+                chapter: last,
+                facts: vec![],
+            },
             hooks: HooksState { hooks: vec![] },
             chapter_summaries: ChapterSummariesState { rows: vec![] },
         }
@@ -431,29 +518,52 @@ mod tests {
     #[test]
     fn rejects_backwards_chapter() {
         let snap = empty_snapshot(5);
-        let delta = RuntimeStateDelta { chapter: 4, ..Default::default() };
-        assert_eq!(apply_runtime_state_delta(&snap, &delta, None), Err(StateReducerError::BackwardsChapter(4)));
+        let delta = RuntimeStateDelta {
+            chapter: 4,
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_runtime_state_delta(&snap, &delta, None),
+            Err(StateReducerError::BackwardsChapter(4))
+        );
     }
 
     #[test]
     fn rejects_equal_chapter_without_reapply() {
         let snap = empty_snapshot(5);
-        let delta = RuntimeStateDelta { chapter: 5, ..Default::default() };
-        assert_eq!(apply_runtime_state_delta(&snap, &delta, None), Err(StateReducerError::BackwardsChapter(5)));
+        let delta = RuntimeStateDelta {
+            chapter: 5,
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_runtime_state_delta(&snap, &delta, None),
+            Err(StateReducerError::BackwardsChapter(5))
+        );
     }
 
     #[test]
     fn allow_reapply_accepts_equal_chapter() {
         let snap = empty_snapshot(5);
-        let delta = RuntimeStateDelta { chapter: 5, ..Default::default() };
+        let delta = RuntimeStateDelta {
+            chapter: 5,
+            ..Default::default()
+        };
         assert!(apply_runtime_state_delta(&snap, &delta, Some(true)).is_ok());
     }
 
     #[test]
     fn rejects_summary_chapter_mismatch() {
         let snap = empty_snapshot(5);
-        let summary = ChapterSummaryRow { chapter: 7, title: "t".into(), ..Default::default() };
-        let delta = RuntimeStateDelta { chapter: 6, chapter_summary: Some(summary), ..Default::default() };
+        let summary = ChapterSummaryRow {
+            chapter: 7,
+            title: "t".into(),
+            ..Default::default()
+        };
+        let delta = RuntimeStateDelta {
+            chapter: 6,
+            chapter_summary: Some(summary),
+            ..Default::default()
+        };
         assert_eq!(
             apply_runtime_state_delta(&snap, &delta, None),
             Err(StateReducerError::SummaryChapterMismatch(7, 6))
@@ -463,10 +573,22 @@ mod tests {
     #[test]
     fn rejects_duplicate_summary_row() {
         let mut snap = empty_snapshot(5);
-        let row = ChapterSummaryRow { chapter: 6, title: "old".into(), ..Default::default() };
+        let row = ChapterSummaryRow {
+            chapter: 6,
+            title: "old".into(),
+            ..Default::default()
+        };
         snap.chapter_summaries.rows.push(row);
-        let summary = ChapterSummaryRow { chapter: 6, title: "new".into(), ..Default::default() };
-        let delta = RuntimeStateDelta { chapter: 6, chapter_summary: Some(summary), ..Default::default() };
+        let summary = ChapterSummaryRow {
+            chapter: 6,
+            title: "new".into(),
+            ..Default::default()
+        };
+        let delta = RuntimeStateDelta {
+            chapter: 6,
+            chapter_summary: Some(summary),
+            ..Default::default()
+        };
         assert_eq!(
             apply_runtime_state_delta(&snap, &delta, None),
             Err(StateReducerError::DuplicateSummaryRow(6))
@@ -481,7 +603,10 @@ mod tests {
         let new_hook = hook("h1", 6, 0);
         let delta = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { upsert: vec![new_hook], ..Default::default() },
+            hook_ops: HookOps {
+                upsert: vec![new_hook],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
@@ -499,7 +624,10 @@ mod tests {
         advancing.status = HookStatus::Progressing;
         let delta = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { upsert: vec![advancing], ..Default::default() },
+            hook_ops: HookOps {
+                upsert: vec![advancing],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
@@ -554,16 +682,36 @@ mod tests {
             h
         };
         // incoming 直赢（旧 merge_hook_status 会因 existing progressing 而保持 progressing）
-        assert_eq!(merge_hook_record(&with(Progressing, 3), &with(Open, 3)).unwrap().status, Open);
+        assert_eq!(
+            merge_hook_record(&with(Progressing, 3), &with(Open, 3))
+                .unwrap()
+                .status,
+            Open
+        );
         // incoming deferred 直赢（旧语义返回 existing open）
-        assert_eq!(merge_hook_record(&with(Open, 3), &with(Deferred, 3)).unwrap().status, Deferred);
+        assert_eq!(
+            merge_hook_record(&with(Open, 3), &with(Deferred, 3))
+                .unwrap()
+                .status,
+            Deferred
+        );
         // 进展不自动升级（旧语义 progressed → progressing）
         let advanced = merge_hook_record(&with(Open, 3), &with(Open, 6)).unwrap();
         assert_eq!(advanced.status, Open);
         assert_eq!(advanced.last_advanced_chapter, 6);
         // resolved 粘滞（双向）
-        assert_eq!(merge_hook_record(&with(Resolved, 3), &with(Open, 6)).unwrap().status, Resolved);
-        assert_eq!(merge_hook_record(&with(Open, 3), &with(Resolved, 6)).unwrap().status, Resolved);
+        assert_eq!(
+            merge_hook_record(&with(Resolved, 3), &with(Open, 6))
+                .unwrap()
+                .status,
+            Resolved
+        );
+        assert_eq!(
+            merge_hook_record(&with(Open, 3), &with(Resolved, 6))
+                .unwrap()
+                .status,
+            Resolved
+        );
     }
 
     /// 805 号：撤回生命周期——TS superseded-hooks.flow.test 五场景 + reducer 守卫逐条移植。
@@ -580,13 +728,24 @@ mod tests {
         withdrawal.notes = "Current book rules explicitly withdraw the workshop prohibition".into();
         let delta = RuntimeStateDelta {
             chapter: 1,
-            hook_ops: HookOps { upsert: vec![withdrawal], ..Default::default() },
+            hook_ops: HookOps {
+                upsert: vec![withdrawal],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
-        let plan = next.hooks.hooks.iter().find(|h| h.hook_id == "plan").unwrap();
+        let plan = next
+            .hooks
+            .hooks
+            .iter()
+            .find(|h| h.hook_id == "plan")
+            .unwrap();
         assert_eq!(plan.status, HookStatus::Superseded);
-        assert_eq!(plan.notes, "Original plan\nCurrent book rules explicitly withdraw the workshop prohibition");
+        assert_eq!(
+            plan.notes,
+            "Original plan\nCurrent book rules explicitly withdraw the workshop prohibition"
+        );
         // 原内容保留供历史查证
         assert_eq!(plan.expected_payoff, "Discover the workshop prohibition");
         assert_eq!(plan.start_chapter, 0);
@@ -622,7 +781,9 @@ mod tests {
         withdraw_blank.notes = "  \n".into();
         assert_eq!(
             merge_hook_record(&open, &withdraw_blank),
-            Err(StateReducerError::HookWithdrawalReasonRequired("plan".into()))
+            Err(StateReducerError::HookWithdrawalReasonRequired(
+                "plan".into()
+            ))
         );
     }
 
@@ -634,21 +795,33 @@ mod tests {
         snap.hooks.hooks.push(gone);
         let resolve = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { resolve: vec!["plan".into()], ..Default::default() },
+            hook_ops: HookOps {
+                resolve: vec!["plan".into()],
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(
             apply_runtime_state_delta(&snap, &resolve, None),
-            Err(StateReducerError::HookSuperseded { op: "resolve", hook_id: "plan".into() })
+            Err(StateReducerError::HookSuperseded {
+                op: "resolve",
+                hook_id: "plan".into()
+            })
         );
         let defer = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { defer: vec!["plan".into()], ..Default::default() },
+            hook_ops: HookOps {
+                defer: vec!["plan".into()],
+                ..Default::default()
+            },
             ..Default::default()
         };
         assert_eq!(
             apply_runtime_state_delta(&snap, &defer, None),
-            Err(StateReducerError::HookSuperseded { op: "defer", hook_id: "plan".into() })
+            Err(StateReducerError::HookSuperseded {
+                op: "defer",
+                hook_id: "plan".into()
+            })
         );
     }
 
@@ -659,7 +832,10 @@ mod tests {
         snap.hooks.hooks.push(hook("h1", 1, 3));
         let delta = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { defer: vec!["h1".into()], ..Default::default() },
+            hook_ops: HookOps {
+                defer: vec!["h1".into()],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
@@ -679,13 +855,29 @@ mod tests {
         fresh.expected_payoff = "终局摊牌".into(); // 与已撤回记录同 type+payoff
         let delta = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { upsert: vec![fresh], ..Default::default() },
+            hook_ops: HookOps {
+                upsert: vec![fresh],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
-        let ids: Vec<_> = next.hooks.hooks.iter().map(|h| h.hook_id.as_str()).collect();
+        let ids: Vec<_> = next
+            .hooks
+            .hooks
+            .iter()
+            .map(|h| h.hook_id.as_str())
+            .collect();
         assert!(ids.contains(&"h1") && ids.contains(&"h2"), "ids={ids:?}");
-        assert_eq!(next.hooks.hooks.iter().find(|h| h.hook_id == "h1").unwrap().status, HookStatus::Superseded);
+        assert_eq!(
+            next.hooks
+                .hooks
+                .iter()
+                .find(|h| h.hook_id == "h1")
+                .unwrap()
+                .status,
+            HookStatus::Superseded
+        );
     }
 
     #[test]
@@ -694,7 +886,10 @@ mod tests {
         snap.hooks.hooks.push(hook("h1", 1, 3));
         let delta = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { resolve: vec!["h1".into()], ..Default::default() },
+            hook_ops: HookOps {
+                resolve: vec!["h1".into()],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
@@ -708,7 +903,10 @@ mod tests {
         snap.hooks.hooks.push(hook("h1", 1, 3));
         let delta = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { defer: vec!["h1".into()], ..Default::default() },
+            hook_ops: HookOps {
+                defer: vec!["h1".into()],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
@@ -735,7 +933,12 @@ mod tests {
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
-        let locs: Vec<_> = next.current_state.facts.iter().filter(|f| f.predicate == "当前位置").collect();
+        let locs: Vec<_> = next
+            .current_state
+            .facts
+            .iter()
+            .filter(|f| f.predicate == "当前位置")
+            .collect();
         assert_eq!(locs.len(), 1);
         assert_eq!(locs[0].object, "新位置");
         assert_eq!(locs[0].valid_from_chapter, 6);
@@ -752,12 +955,20 @@ mod tests {
         dup.expected_payoff = "终局摊牌".into();
         let delta = RuntimeStateDelta {
             chapter: 6,
-            hook_ops: HookOps { upsert: vec![dup], ..Default::default() },
+            hook_ops: HookOps {
+                upsert: vec![dup],
+                ..Default::default()
+            },
             ..Default::default()
         };
         let next = apply_runtime_state_delta(&snap, &delta, None).unwrap();
         // 应合并进 h1，不新增 h2
-        let ids: Vec<_> = next.hooks.hooks.iter().map(|h| h.hook_id.as_str()).collect();
+        let ids: Vec<_> = next
+            .hooks
+            .hooks
+            .iter()
+            .map(|h| h.hook_id.as_str())
+            .collect();
         assert!(ids.contains(&"h1"));
         assert!(!ids.contains(&"h2"));
     }

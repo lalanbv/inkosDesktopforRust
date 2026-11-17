@@ -131,7 +131,10 @@ pub fn build_direction_candidates_prompt(
     }
     let exclude_block = if !exclude_titles.is_empty() {
         if is_en {
-            format!("\nExcluded titles (do not reuse): {}\n", exclude_titles.join(", "))
+            format!(
+                "\nExcluded titles (do not reuse): {}\n",
+                exclude_titles.join(", ")
+            )
         } else {
             format!("\n已排除标题（不得复用）：{}\n", exclude_titles.join("、"))
         }
@@ -187,7 +190,12 @@ pub fn parse_direction_candidates(
         .collect();
     let mut out: Vec<DirectionCandidate> = Vec::new();
     for (index, row) in rows.iter().enumerate() {
-        let title = row.get("title").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let title = row
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if title.is_empty() {
             continue;
         }
@@ -203,9 +211,21 @@ pub fn parse_direction_candidates(
                 .unwrap_or(&default_id)
                 .to_string(),
             title,
-            hook: row.get("hook").and_then(Value::as_str).unwrap_or("").to_string(),
-            genre: row.get("genre").and_then(Value::as_str).unwrap_or("").to_string(),
-            synopsis: row.get("synopsis").and_then(Value::as_str).unwrap_or("").to_string(),
+            hook: row
+                .get("hook")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            genre: row
+                .get("genre")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            synopsis: row
+                .get("synopsis")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
             differentiator: row
                 .get("differentiator")
                 .and_then(Value::as_str)
@@ -236,7 +256,9 @@ pub fn resolve_director_run_plan(
     match mode {
         DirectorRunMode::ReadyStop => (mode, from, None, true),
         DirectorRunMode::Range => {
-            let to = to_chapter.unwrap_or(target_chapters).clamp(from, target_chapters);
+            let to = to_chapter
+                .unwrap_or(target_chapters)
+                .clamp(from, target_chapters);
             (mode, from, Some(to), false)
         }
         DirectorRunMode::FullBook => {
@@ -290,8 +312,14 @@ pub struct DirectorContract {
 
 pub fn director_contract() -> DirectorContract {
     DirectorContract {
-        run_modes: DIRECTOR_RUN_MODES.iter().map(|mode| mode.to_string()).collect(),
-        stages: DIRECTOR_STAGES.iter().map(|stage| stage.to_string()).collect(),
+        run_modes: DIRECTOR_RUN_MODES
+            .iter()
+            .map(|mode| mode.to_string())
+            .collect(),
+        stages: DIRECTOR_STAGES
+            .iter()
+            .map(|stage| stage.to_string())
+            .collect(),
         ready_stop_stops_after_directions: true,
         manual_edit_never_auto_overwritten: true,
     }

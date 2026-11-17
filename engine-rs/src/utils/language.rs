@@ -71,7 +71,10 @@ mod tests {
 
     #[test]
     fn latin_only_is_en() {
-        assert_eq!(infer_language(Some("A dark fantasy novel")), WritingLanguage::En);
+        assert_eq!(
+            infer_language(Some("A dark fantasy novel")),
+            WritingLanguage::En
+        );
         assert_eq!(infer_language(Some("hello world")), WritingLanguage::En);
     }
 
@@ -84,7 +87,10 @@ mod tests {
     #[test]
     fn cjk_with_incidental_english_stays_zh() {
         // 含英文专名/术语的中文简介仍判 Zh
-        assert_eq!(infer_language(Some("主角觉醒了 System 面板")), WritingLanguage::Zh);
+        assert_eq!(
+            infer_language(Some("主角觉醒了 System 面板")),
+            WritingLanguage::Zh
+        );
     }
 
     #[test]
@@ -107,8 +113,14 @@ mod tests {
 
     #[test]
     fn serializes_to_lowercase_string() {
-        assert_eq!(serde_json::to_string(&WritingLanguage::Zh).unwrap(), "\"zh\"");
-        assert_eq!(serde_json::to_string(&WritingLanguage::En).unwrap(), "\"en\"");
+        assert_eq!(
+            serde_json::to_string(&WritingLanguage::Zh).unwrap(),
+            "\"zh\""
+        );
+        assert_eq!(
+            serde_json::to_string(&WritingLanguage::En).unwrap(),
+            "\"en\""
+        );
         // 反序列化往返
         let zh: WritingLanguage = serde_json::from_str("\"zh\"").unwrap();
         assert_eq!(zh, WritingLanguage::Zh);

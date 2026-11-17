@@ -29,8 +29,7 @@ fn tokenizer_matches_shared_vectors() {
             .collect();
         let got = tokenize_search_text(input);
         assert_eq!(
-            got,
-            expected,
+            got, expected,
             "分词序列漂移 input={input:?} got={got:?} expected={expected:?}"
         );
     }

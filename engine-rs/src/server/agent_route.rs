@@ -15,9 +15,7 @@ use axum::Json;
 use serde_json::{json, Map, Value};
 
 use crate::interaction::agent_loop::{run_agent_loop, LoopChat, LoopEvents, LoopToolExecution};
-use crate::interaction::book_session_store::{
-    create_and_persist_book_session, load_book_session,
-};
+use crate::interaction::book_session_store::{create_and_persist_book_session, load_book_session};
 use crate::interaction::session::{utc_now_ms, SessionKind};
 use crate::interaction::session_transcript::{append_transcript_events, TranscriptEvent};
 use crate::llm::provider::LLMMessage;
@@ -40,13 +38,19 @@ pub struct AgentSessionHandle {
 }
 
 /// abort 注册表（sessionId → handle；64 号 abort 端点的消费面）。
-pub fn running_agent_sessions() -> &'static Mutex<std::collections::HashMap<String, Arc<Mutex<AgentSessionHandle>>>> {
-    static REGISTRY: OnceLock<Mutex<std::collections::HashMap<String, Arc<Mutex<AgentSessionHandle>>>>> =
-        OnceLock::new();
+pub fn running_agent_sessions(
+) -> &'static Mutex<std::collections::HashMap<String, Arc<Mutex<AgentSessionHandle>>>> {
+    static REGISTRY: OnceLock<
+        Mutex<std::collections::HashMap<String, Arc<Mutex<AgentSessionHandle>>>>,
+    > = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
-fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> (StatusCode, Json<Value>) {
+fn api_error(
+    status: StatusCode,
+    code: &str,
+    message: impl Into<String>,
+) -> (StatusCode, Json<Value>) {
     (
         status,
         Json(json!({ "error": { "code": code, "message": message.into() } })),
@@ -70,7 +74,9 @@ fn store_context_meter_snapshot(
     session_id: &str,
     snapshot: crate::utils::token_meter::TokenMeterSnapshot,
 ) {
-    let mut registry = context_meter_registry().lock().unwrap_or_else(|e| e.into_inner());
+    let mut registry = context_meter_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if let Some(slot) = registry.iter_mut().find(|(id, _)| id == session_id) {
         slot.1 = snapshot;
         return;
@@ -88,7 +94,10 @@ pub async fn get_context_meter(
     query: axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> axum::response::Response {
     let params = query.0;
-    let Some(session_id) = params.get("sessionId").map(String::as_str).filter(|s| !s.is_empty())
+    let Some(session_id) = params
+        .get("sessionId")
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
     else {
         return api_error(
             StatusCode::BAD_REQUEST,
@@ -97,7 +106,9 @@ pub async fn get_context_meter(
         )
         .into_response();
     };
-    let registry = context_meter_registry().lock().unwrap_or_else(|e| e.into_inner());
+    let registry = context_meter_registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     match registry.iter().find(|(id, _)| id == session_id) {
         Some((_, snapshot)) => Json(snapshot.clone()).into_response(),
         None => api_error(
@@ -171,9 +182,7 @@ async fn production_provider_model_labels(
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .map(String::from)
-        .or_else(|| {
-            llm.and_then(|llm| llm.get("model").and_then(Value::as_str).map(String::from))
-        })
+        .or_else(|| llm.and_then(|llm| llm.get("model").and_then(Value::as_str).map(String::from)))
         .unwrap_or_else(|| "studio-agent".to_string());
     (provider, model)
 }
@@ -209,7 +218,9 @@ async fn maybe_broadcast_session_title(
 /// 返回本轮 request_id；删除守卫拦截时 None（commit/fail 随之跳过）。
 /// R44/566 号 skills:change 发射判定（584 号抽纯函数供单测）：本轮存在
 /// 成功执行的 author_skill（status != "error"）即广播失效事件。
-fn turn_authored_skill(tool_executions: &[crate::interaction::agent_loop::LoopToolExecution]) -> bool {
+fn turn_authored_skill(
+    tool_executions: &[crate::interaction::agent_loop::LoopToolExecution],
+) -> bool {
     tool_executions
         .iter()
         .any(|execution| execution.tool == "author_skill" && execution.status != "error")
@@ -223,7 +234,11 @@ async fn begin_chat_turn(
 ) -> Option<String> {
     // 220 号：删除守卫（TS appendSessionMessagesUnlessDeleted）——轮进行中
     // 会话被删时跳过追加，防 transcript 复活「已删除」会话。
-    if crate::server::session_routes::deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(session_id) {
+    if crate::server::session_routes::deleted_session_ids()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(session_id)
+    {
         return None;
     }
     let request_id = uuid::Uuid::new_v4().to_string();
@@ -282,7 +297,11 @@ async fn commit_chat_turn(
     tool_executions: &[crate::interaction::agent_loop::LoopToolExecution],
 ) {
     // 220 号：删除守卫（收尾持久化同样不得复活已删除会话）。
-    if crate::server::session_routes::deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(session_id) {
+    if crate::server::session_routes::deleted_session_ids()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(session_id)
+    {
         return;
     }
     let now = utc_now_ms();
@@ -424,9 +443,18 @@ async fn commit_chat_turn(
 
 /// 轮失败收尾（217 号语义保持）：user 消息已由 begin 写前落盘，此处只补
 /// request_failed 终态标记；derive 对未提交轮仍整体排除（与 TS 一致）。
-async fn fail_chat_turn(project_root: &std::path::Path, session_id: &str, request_id: &str, error: &str) {
+async fn fail_chat_turn(
+    project_root: &std::path::Path,
+    session_id: &str,
+    request_id: &str,
+    error: &str,
+) {
     // 同上：删除守卫（失败收尾的持久化同样不得复活已删除会话）。
-    if crate::server::session_routes::deleted_session_ids().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains(session_id) {
+    if crate::server::session_routes::deleted_session_ids()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(session_id)
+    {
         return;
     }
     let now = utc_now_ms();
@@ -484,8 +512,7 @@ async fn debug_assert_model_surface_is_logged(
     )
     .await;
     assert_eq!(
-        rebuilt,
-        loop_input,
+        rebuilt, loop_input,
         "模型可见即已记录：日志重建面与 loop 输入不一致",
     );
 }
@@ -519,7 +546,9 @@ pub fn mark_pending_session_abort(project_root: &std::path::Path, session_id: &s
     const PENDING_ABORTS_CAP: usize = 64;
     let seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let key = format!("{}\0{}", project_root.display(), session_id);
-    let mut map = pending_session_aborts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut map = pending_session_aborts()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if map.len() >= PENDING_ABORTS_CAP && !map.contains_key(&key) {
         if let Some(oldest) = map
             .iter()
@@ -533,9 +562,17 @@ pub fn mark_pending_session_abort(project_root: &std::path::Path, session_id: &s
 }
 
 /// 受理点裁决：取走标记；入队序早于标记序返回 true（本轮受理即中止）。
-fn take_pending_session_abort(project_root: &std::path::Path, session_id: &str, enqueued_seq: u64) -> bool {
+fn take_pending_session_abort(
+    project_root: &std::path::Path,
+    session_id: &str,
+    enqueued_seq: u64,
+) -> bool {
     let key = format!("{}\0{}", project_root.display(), session_id);
-    match pending_session_aborts().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&key) {
+    match pending_session_aborts()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&key)
+    {
         Some(marked_seq) => enqueued_seq < marked_seq,
         None => false,
     }
@@ -547,14 +584,11 @@ pub async fn post_agent(
 ) -> impl IntoResponse {
     // 273 号：聊天消息可携带至多 8×4MB 附件（base64 膨胀后 ~43MB）——
     // `Bytes` 提取器 2MB 默认上限会先行截断，改手工读（64MB 上界）。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_LARGE_TEXT).await
+    {
         Ok(body) => body,
         Err(status) => {
-            return (
-                status,
-                Json(json!({ "error": "request body too large" })),
-            )
-                .into_response()
+            return (status, Json(json!({ "error": "request body too large" }))).into_response()
         }
     };
     let root_owned = runtime.state.project_root().to_path_buf();
@@ -583,18 +617,28 @@ pub async fn post_agent(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     else {
-        return api_error(StatusCode::BAD_REQUEST, "SESSION_ID_REQUIRED", "sessionId is required")
-            .into_response();
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "SESSION_ID_REQUIRED",
+            "sessionId is required",
+        )
+        .into_response();
     };
 
     // ── 参数归一（normalizeStudio* 包装；非法 → 400 INVALID_*） ──
     let action_source = match normalize_action_source(payload.get("actionSource")) {
         Ok(source) => source,
-        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_ACTION_SOURCE", message).into_response(),
+        Err(message) => {
+            return api_error(StatusCode::BAD_REQUEST, "INVALID_ACTION_SOURCE", message)
+                .into_response()
+        }
     };
     let requested_intent = match normalize_requested_intent(payload.get("requestedIntent")) {
         Ok(intent) => intent,
-        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_REQUESTED_INTENT", message).into_response(),
+        Err(message) => {
+            return api_error(StatusCode::BAD_REQUEST, "INVALID_REQUESTED_INTENT", message)
+                .into_response()
+        }
     };
     // actionPayload：zod strict 全量校验（75 号：顶层+子域 unknown 键拒绝 +
     // 字段类型/枚举/区间——ActionPayloadSchema 逐字）。
@@ -616,11 +660,15 @@ pub async fn post_agent(
     // + `^[a-z][a-z0-9-]*$` 校验 + 去重）。
     let requested_skills = match normalize_skill_id_list(payload.get("requestedSkills")) {
         Ok(skills) => skills,
-        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_ID", message).into_response(),
+        Err(message) => {
+            return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_ID", message).into_response()
+        }
     };
     let disabled_skills = match normalize_skill_id_list(payload.get("disabledSkills")) {
         Ok(skills) => skills,
-        Err(message) => return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_ID", message).into_response(),
+        Err(message) => {
+            return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_ID", message).into_response()
+        }
     };
     // model：非文本模型（8 片段子串）→ 400 {error, response} 双语（TS
     // `isTextChatModelId` / `nonTextModelMessage`；空串跳过——TS falsy 语义）。
@@ -640,7 +688,13 @@ pub async fn post_agent(
     // 的全部代理（对齐 TS pipelineClient——子代理同用前端选定的模型）。
     let override_service = payload.get("service").and_then(Value::as_str);
     let override_model = payload.get("model").and_then(Value::as_str);
-    let model_override = match agent_production::resolve_agent_model_override(root, override_service, override_model).await {
+    let model_override = match agent_production::resolve_agent_model_override(
+        root,
+        override_service,
+        override_model,
+    )
+    .await
+    {
         Ok(model_override) => model_override,
         Err(response) => return response.into_response(),
     };
@@ -648,24 +702,26 @@ pub async fn post_agent(
         BooksRuntime {
             hub: runtime.hub.clone(),
             state: runtime.state.clone(),
-            router: std::sync::Arc::new(crate::llm::agent_router::AgentRouter::new(
-                crate::llm::agent_router::LlmEndpointConfig {
-                    base_url: ov.base_url.clone(),
-                    api_key: ov.api_key.clone(),
-                    model: ov.model.clone(),
-                    max_tokens: 8192,
-                    extra_headers: std::collections::HashMap::new(),
-                    // 441 号：覆盖模型的卡窗口（TS 覆盖客户端 _piModel 同口径）。
-                    context_window_tokens: crate::llm::lookup::builtin_context_window(
-                        override_service.unwrap_or("custom"),
-                        &ov.model,
-                    ),
-                },
-                std::collections::HashMap::new(),
-            )
-            // 106/108 号：命中服务项 apiFormat/stream → 覆盖端点传输协议与流式偏好。
-            .with_api_format(ov.api_format)
-            .with_stream(ov.stream)),
+            router: std::sync::Arc::new(
+                crate::llm::agent_router::AgentRouter::new(
+                    crate::llm::agent_router::LlmEndpointConfig {
+                        base_url: ov.base_url.clone(),
+                        api_key: ov.api_key.clone(),
+                        model: ov.model.clone(),
+                        max_tokens: 8192,
+                        extra_headers: std::collections::HashMap::new(),
+                        // 441 号：覆盖模型的卡窗口（TS 覆盖客户端 _piModel 同口径）。
+                        context_window_tokens: crate::llm::lookup::builtin_context_window(
+                            override_service.unwrap_or("custom"),
+                            &ov.model,
+                        ),
+                    },
+                    std::collections::HashMap::new(),
+                )
+                // 106/108 号：命中服务项 apiFormat/stream → 覆盖端点传输协议与流式偏好。
+                .with_api_format(ov.api_format)
+                .with_stream(ov.stream),
+            ),
             builtin_genres_dir: runtime.builtin_genres_dir.clone(),
             revision_gate: runtime.revision_gate,
         }
@@ -674,10 +730,11 @@ pub async fn post_agent(
     };
     // attachments：归一化（数组/数量/大小/文本长度校验 + dataUrl 解析落盘
     // .inkos/uploads/{session}/ + 三类分支）。93 号：注入面（多模态消息）备案。
-    let attachments = match normalize_agent_attachments(root, session_id, payload.get("attachments")).await {
-        Ok(attachments) => attachments,
-        Err(response) => return response.into_response(),
-    };
+    let attachments =
+        match normalize_agent_attachments(root, session_id, payload.get("attachments")).await {
+            Ok(attachments) => attachments,
+            Err(response) => return response.into_response(),
+        };
     // sourceRequestId：clientRequestId trim + 128 码元截断。
     let source_request_id: Option<String> = payload
         .get("clientRequestId")
@@ -720,8 +777,10 @@ pub async fn post_agent(
         .map(|_| SessionKind::Book)
         .unwrap_or(SessionKind::Chat);
     let stored_kind = book_session.session_kind;
-    let session_kind = match normalize_studio_session_kind(payload.get("sessionKind"), stored_kind.unwrap_or(fallback_kind))
-    {
+    let session_kind = match normalize_studio_session_kind(
+        payload.get("sessionKind"),
+        stored_kind.unwrap_or(fallback_kind),
+    ) {
         Ok(kind) => kind,
         Err(response) => return response.into_response(),
     };
@@ -747,7 +806,11 @@ pub async fn post_agent(
     if let Some(book_id) = &agent_book_id {
         if session_kind != SessionKind::InteractiveFilmAuthoring {
             let book_path = root.join("books").join(book_id).join("book.json");
-            if tokio::fs::metadata(&book_path).await.map(|m| !m.is_file()).unwrap_or(true) {
+            if tokio::fs::metadata(&book_path)
+                .await
+                .map(|m| !m.is_file())
+                .unwrap_or(true)
+            {
                 return api_error(
                     StatusCode::NOT_FOUND,
                     "BOOK_NOT_FOUND",
@@ -867,7 +930,9 @@ pub async fn post_agent(
     // 排队拿到锁后刷新注册表句柄与全新 abort flag（前一轮的中止不波及新轮；
     // 轮结束 remove 条目，本轮重插保证 abort 可达）。
     let handle = {
-        let mut registry = running_agent_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut registry = running_agent_sessions()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         registry
             .entry(session_id.to_string())
             .or_insert_with(|| {
@@ -879,14 +944,22 @@ pub async fn post_agent(
             .clone()
     };
     // std guard 不得跨 await（future Send）：先 clone Arc，再取 owned guard。
-    let queue = handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
+    let queue = handle
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .queue
+        .clone();
     // 640 号：入队序在等待点前捕获（受理点据此裁决 pending-abort）。
     let enqueued_seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let _queue_guard = queue.lock_owned().await;
     let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
-    handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).abort_flag = abort_flag.clone();
+    handle
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .abort_flag = abort_flag.clone();
     running_agent_sessions()
-        .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .insert(session_id.to_string(), handle.clone());
 
     // 640 号受理边界：排队等待期间被 abort 的轮（入队序早于标记序）在此裁决
@@ -897,7 +970,10 @@ pub async fn post_agent(
         if let Some(request_id) = &request_id {
             fail_chat_turn(root, session_id, request_id, "aborted").await;
         }
-        running_agent_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(session_id);
+        running_agent_sessions()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(session_id);
         runtime.hub.broadcast(
             "agent:error",
             &json!({
@@ -931,9 +1007,9 @@ pub async fn post_agent(
     // 此前为硬编码中文一句话——en 项目用户的 LLM 收到中文系统提示词。
     // 240 号：skill 目录提示段（TS appendSkillGuidance 的 catalog 部分——
     // free-text 且无强制 skill 时开放 use_skill）。
-    let allow_intent_skill_selection =
-        action_source == crate::server::agent_production::ActionSource::FreeText
-            && requested_skills.is_empty();
+    let allow_intent_skill_selection = action_source
+        == crate::server::agent_production::ActionSource::FreeText
+        && requested_skills.is_empty();
     let mut system_prompt = if play_world_exists {
         crate::interaction::play_tools::play_chat_system_prompt(surface_language == "en")
     } else {
@@ -979,10 +1055,12 @@ pub async fn post_agent(
             )
             .used_skills
             .into_iter()
-            .map(|skill| crate::skills::production_bindings::ActivatedSkillGuidance {
-                skill,
-                resources: Vec::new(),
-            })
+            .map(
+                |skill| crate::skills::production_bindings::ActivatedSkillGuidance {
+                    skill,
+                    resources: Vec::new(),
+                },
+            )
             .collect()
         };
     if let Some(resolution) = &skill_resolution {
@@ -1062,18 +1140,14 @@ pub async fn post_agent(
             if reasoning.is_empty() {
                 return;
             }
-            self.hub.broadcast(
-                "thinking:start",
-                &json!({ "sessionId": self.session_id }),
-            );
+            self.hub
+                .broadcast("thinking:start", &json!({ "sessionId": self.session_id }));
             self.hub.broadcast(
                 "thinking:delta",
                 &json!({ "sessionId": self.session_id, "text": reasoning }),
             );
-            self.hub.broadcast(
-                "thinking:end",
-                &json!({ "sessionId": self.session_id }),
-            );
+            self.hub
+                .broadcast("thinking:end", &json!({ "sessionId": self.session_id }));
         }
     }
 
@@ -1083,7 +1157,14 @@ pub async fn post_agent(
             &self,
             messages: &[LLMMessage],
             tools: Option<&Value>,
-        ) -> Result<(String, Vec<(String, String, String)>, crate::interaction::agent_loop::LoopUsage), String> {
+        ) -> Result<
+            (
+                String,
+                Vec<(String, String, String)>,
+                crate::interaction::agent_loop::LoopUsage,
+            ),
+            String,
+        > {
             let endpoint = self.router.resolve("studio-agent");
             let client = self.router.client_for_public(&endpoint).await;
             let completion = client
@@ -1140,15 +1221,28 @@ pub async fn post_agent(
 
     impl LoopEvents for SseBridge<'_> {
         fn on_delta(&self, text: &str) {
-            self.hub.broadcast("draft:delta", &json!({ "sessionId": self.session_id, "text": text }));
+            self.hub.broadcast(
+                "draft:delta",
+                &json!({ "sessionId": self.session_id, "text": text }),
+            );
         }
         fn on_tool_start(&self, id: &str, tool: &str, args: &Value) {
-            self.hub.broadcast("tool:start", &json!({
-                "sessionId": self.session_id, "id": id, "tool": tool, "args": args,
-                "stages": [],
-            }));
+            self.hub.broadcast(
+                "tool:start",
+                &json!({
+                    "sessionId": self.session_id, "id": id, "tool": tool, "args": args,
+                    "stages": [],
+                }),
+            );
         }
-        fn on_tool_end(&self, id: &str, tool: &str, result_text: &str, details: Option<&Value>, is_error: bool) {
+        fn on_tool_end(
+            &self,
+            id: &str,
+            tool: &str,
+            result_text: &str,
+            details: Option<&Value>,
+            is_error: bool,
+        ) {
             // 114 号（86 号备案闭合）：TS 聊天面 tool:end——result.content 为
             // `[{type:"text",text}]` 数组 + 顶层 details（None 时键缺省，TS 同）。
             let mut payload = json!({
@@ -1213,15 +1307,16 @@ pub async fn post_agent(
                 + crate::llm::provider::estimate_text_tokens(instruction) as u64
                 + runtime.router.default_max_tokens() as u64;
             if context_window > 0 && projected > context_window {
-                let overflow_compacted = crate::interaction::session_compaction::maybe_compact_session(
-                    root,
-                    session_id,
-                    Some(session_kind.as_str()),
-                    &compaction_request_id,
-                    &runtime.router,
-                    "overflow",
-                )
-                .await;
+                let overflow_compacted =
+                    crate::interaction::session_compaction::maybe_compact_session(
+                        root,
+                        session_id,
+                        Some(session_kind.as_str()),
+                        &compaction_request_id,
+                        &runtime.router,
+                        "overflow",
+                    )
+                    .await;
                 if overflow_compacted.is_some() {
                     restored = crate::interaction::session_restore::restore_agent_messages_from_transcript(
                         root,
@@ -1253,16 +1348,23 @@ pub async fn post_agent(
     };
     let instruction: &str = &prompt_instruction;
     let loop_images = attachment_images(&attachments);
-    let thinking_text: std::sync::Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
+    let thinking_text: std::sync::Arc<std::sync::Mutex<String>> =
+        Arc::new(std::sync::Mutex::new(String::new()));
     let loop_chat = RouterLoopChat {
         router: &runtime.router,
         images: loop_images,
-        thinking: Some(ThinkingBridge { hub: runtime.hub.clone(), session_id: session_id.to_string() }),
+        thinking: Some(ThinkingBridge {
+            hub: runtime.hub.clone(),
+            session_id: session_id.to_string(),
+        }),
         thinking_text: thinking_text.clone(),
     };
     // R41/563 号：计量器（每请求新建 = 当前请求面折叠表；窗口 = 路由缺省窗）。
     let meter = crate::utils::token_meter::TokenMeter::new(runtime.router.default_context_window());
-    let bridge = SseBridge { hub: &runtime.hub, session_id: session_id.to_string() };
+    let bridge = SseBridge {
+        hub: &runtime.hub,
+        session_id: session_id.to_string(),
+    };
     // 89 号注册矩阵对齐 TS agent-session 真值表：book/book-create（有书）
     // = bookTools；edit = 确定性五件（TS edit 过滤器去 sub_agent/
     // generate_cover/research/import）；chat/short/script/storyboard/film/
@@ -1286,8 +1388,10 @@ pub async fn post_agent(
     let book_edit_session = book_session || edit_session;
     let propose_registered = !play_world_exists
         && (session_kind == SessionKind::Chat || !has_book || film_authoring_session);
-    let research_registered =
-        matches!(session_kind, SessionKind::Chat | SessionKind::BookCreate | SessionKind::Book);
+    let research_registered = matches!(
+        session_kind,
+        SessionKind::Chat | SessionKind::BookCreate | SessionKind::Book
+    );
     let import_registered = session_kind == SessionKind::Chat || book_session;
     // 工具面（105 号对齐 TS 矩阵）：文件三件（books/ 作用域 read/ls/grep）
     // 仅 book/edit 会话注册（TS bookTools——chat/play/short 等会话无文件工具）
@@ -1358,11 +1462,12 @@ pub async fn post_agent(
     });
     // propose_action：无书会话注册（play 有世界时除外；sameSession =
     // sessionKind !== "chat"）。
-    let propose_deps = propose_registered.then(|| crate::interaction::propose_action_tool::ProposeDeps {
-        language: surface_language,
-        same_session: session_kind != SessionKind::Chat,
-        requested_skills: &requested_skills,
-    });
+    let propose_deps =
+        propose_registered.then(|| crate::interaction::propose_action_tool::ProposeDeps {
+            language: surface_language,
+            same_session: session_kind != SessionKind::Chat,
+            requested_skills: &requested_skills,
+        });
     // research：chat/book-create/book 分支；import：chat 与 book 分支。
     let research_enabled = research_registered;
     let import_deps = import_registered.then_some(crate::interaction::registry::ImportToolDeps {
@@ -1388,31 +1493,42 @@ pub async fn post_agent(
     });
     // 编辑工具族（book/edit 会话；active_book_id 恒有）。
     let book_edit_deps = book_edit_session
-        .then(|| agent_book_id.as_deref().map(|active| crate::interaction::book_edit_tools::BookEditDeps {
-            runtime: &runtime,
-            active_book_id: active,
-            language: surface_language,
-        }))
+        .then(|| {
+            agent_book_id.as_deref().map(|active| {
+                crate::interaction::book_edit_tools::BookEditDeps {
+                    runtime: &runtime,
+                    active_book_id: active,
+                    language: surface_language,
+                }
+            })
+        })
         .flatten();
     // forecast 三件：仅 book/book-create（TS edit 过滤器剔除 forecast）。
     let forecast_deps = book_session
-        .then(|| agent_book_id.as_deref().map(|active| crate::interaction::forecast_tools::ForecastDeps {
-            runtime: &runtime,
-            active_book_id: active,
-        }))
+        .then(|| {
+            agent_book_id.as_deref().map(|active| {
+                crate::interaction::forecast_tools::ForecastDeps {
+                    runtime: &runtime,
+                    active_book_id: active,
+                }
+            })
+        })
         .flatten();
     // 256 号：authoring 工具面依赖——LLM 走 AgentRouter "film-authoring"
     // 角色（TS createAgentContext("film-authoring") 对应物）。
-    let film_llm = crate::interaction::film_authoring_tools::RouterFilmAuthoringLLM(&runtime.router);
+    let film_llm =
+        crate::interaction::film_authoring_tools::RouterFilmAuthoringLLM(&runtime.router);
     let film_authoring_deps = film_authoring_session
-        .then(|| agent_book_id.as_deref().map(|project_id| {
-            crate::interaction::film_authoring_tools::FilmAuthoringDeps {
-                root,
-                project_id,
-                language: surface_language,
-                llm: &film_llm,
-            }
-        }))
+        .then(|| {
+            agent_book_id.as_deref().map(|project_id| {
+                crate::interaction::film_authoring_tools::FilmAuthoringDeps {
+                    root,
+                    project_id,
+                    language: surface_language,
+                    llm: &film_llm,
+                }
+            })
+        })
         .flatten();
     let tool_executor = ChatToolRouter {
         ctx: crate::interaction::registry::ToolCtx {
@@ -1425,7 +1541,11 @@ pub async fn post_agent(
             sub_agent_deps: sub_agent_deps.as_ref(),
             book_edit_deps: book_edit_deps.as_ref(),
             forecast_deps: forecast_deps.as_ref(),
-            reference_book_id: if book_edit_session { agent_book_id.as_deref() } else { None },
+            reference_book_id: if book_edit_session {
+                agent_book_id.as_deref()
+            } else {
+                None
+            },
             skill_deps: skill_registry.as_ref().map(|registry| {
                 (
                     registry as &dyn crate::skills::SkillRegistry,
@@ -1445,8 +1565,7 @@ pub async fn post_agent(
         let project_id = agent_book_id.as_deref().unwrap_or_default();
         match crate::interactive_film::load_story_graph(root, project_id).await {
             Ok(Some(graph)) => {
-                let mut with_context =
-                    Vec::with_capacity(restored.len() + 1);
+                let mut with_context = Vec::with_capacity(restored.len() + 1);
                 with_context.push(
                     crate::interaction::film_authoring_tools::film_graph_context_message(&graph),
                 );
@@ -1461,12 +1580,10 @@ pub async fn post_agent(
     // 135 号：回合作用域（TS runWithAgentTrajectory({main}) 包 agent.prompt
     // 的对应物）——task-local 通道供 RouterLoopChat（聊天增量）与 sub_agent
     // 工具链（派生 subagent）内的所有 LLM 调用读取；对话 id 不透明化。
-    let turn_scope = std::sync::Arc::new(
-        crate::llm::agent_trajectory::AgentTrajectoryScope::main(
-            crate::llm::agent_trajectory::opaque_conversation_id(session_id),
-            uuid::Uuid::new_v4().to_string(),
-        ),
-    );
+    let turn_scope = std::sync::Arc::new(crate::llm::agent_trajectory::AgentTrajectoryScope::main(
+        crate::llm::agent_trajectory::opaque_conversation_id(session_id),
+        uuid::Uuid::new_v4().to_string(),
+    ));
     // R43/565 号：写前落盘——本轮 request_started + user 先于首个 LLM 请求
     // 入日志（崩溃窗口用户输入不丢），随后 debug 编译档断言「模型可见即已
     // 记录」（request_started/user 在场 + 日志重建面 == loop 输入）。
@@ -1497,13 +1614,24 @@ pub async fn post_agent(
                     Some(&meter),
                 )
                 .await;
-                loop_result.map(|outcome| (outcome.response_text, outcome.tool_executions, outcome.aborted, outcome.usage, outcome.timings))
+                loop_result.map(|outcome| {
+                    (
+                        outcome.response_text,
+                        outcome.tool_executions,
+                        outcome.aborted,
+                        outcome.usage,
+                        outcome.timings,
+                    )
+                })
             })
             .await
         })
         .await;
 
-    running_agent_sessions().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(session_id);
+    running_agent_sessions()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(session_id);
 
     // R41/563 号：末轮计量快照留痕（成功/失败/中止路径同点，尽力而为——
     // 观测面不阻断主链）。
@@ -1544,8 +1672,14 @@ pub async fn post_agent(
                 raw_text
             };
             if let Some(request_id) = &turn_request_id {
-                commit_chat_turn(root, session_id, request_id, &response_text, &tool_executions)
-                    .await;
+                commit_chat_turn(
+                    root,
+                    session_id,
+                    request_id,
+                    &response_text,
+                    &tool_executions,
+                )
+                .await;
             }
             // R44/566 号：skills:change 失效事件——本轮成功执行过 author_skill
             // （写面落盘）即广播，UI 打开中的技能面板热刷新（R37 写链的热载
@@ -1581,8 +1715,10 @@ pub async fn post_agent(
                 session_obj.insert("activeBookId".into(), json!(book_id));
             }
             // G8a/333 号：AI 实况——usage/timings 恒带，thinking 非空才进响应面。
-            let aggregated_thinking =
-                thinking_text.lock().map(|text| text.clone()).unwrap_or_default();
+            let aggregated_thinking = thinking_text
+                .lock()
+                .map(|text| text.clone())
+                .unwrap_or_default();
             let mut payload = json!({
                 "response": response_text,
                 "details": { "toolExecutions": tool_execution_cards(&tool_executions) },
@@ -1689,9 +1825,10 @@ fn strip_production_mutation_tools(tools: &mut Value) {
     let registry = crate::interaction::registry::ToolRegistry::global();
     if let Some(entries) = tools.as_array_mut() {
         entries.retain(|entry| {
-            entry["function"]["name"]
-                .as_str()
-                .is_none_or(|name| registry.mutation_kind(name) != Some(crate::interaction::registry::MutationKind::ProductionMutation))
+            entry["function"]["name"].as_str().is_none_or(|name| {
+                registry.mutation_kind(name)
+                    != Some(crate::interaction::registry::MutationKind::ProductionMutation)
+            })
         });
     }
 }
@@ -1708,7 +1845,11 @@ struct ChatToolRouter<'a> {
 
 #[async_trait::async_trait]
 impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
-    async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult {
+    async fn execute(
+        &self,
+        name: &str,
+        args: &Value,
+    ) -> crate::interaction::project_tools::ToolResult {
         let (result, observation) = crate::interaction::pipeline::run_pipeline(
             crate::interaction::registry::ToolRegistry::global(),
             &self.ctx,
@@ -1716,12 +1857,18 @@ impl crate::interaction::agent_loop::LoopToolExecutor for ChatToolRouter<'_> {
             args,
         )
         .await;
-        *self.last_observation.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(observation);
+        *self
+            .last_observation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(observation);
         result
     }
 
     fn last_observation(&self) -> Option<crate::interaction::pipeline::PipelineObservation> {
-        *self.last_observation.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        *self
+            .last_observation
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -1752,12 +1899,20 @@ fn safe_upload_file_name(value: &str) -> String {
     static UNSAFE_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static SYMBOL_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let unsafe_re = UNSAFE_RE.get_or_init(|| regex::Regex::new(r"[/\\\x00]").unwrap());
-    let symbol_re = SYMBOL_RE
-        .get_or_init(|| regex::Regex::new(r"[^\p{L}\p{N}._ -]+").unwrap());
+    let symbol_re = SYMBOL_RE.get_or_init(|| regex::Regex::new(r"[^\p{L}\p{N}._ -]+").unwrap());
     let trimmed = unsafe_re.replace_all(value.trim(), "_");
     let trimmed = symbol_re.replace_all(&trimmed, "_").to_string();
-    let safe: String = trimmed.chars().take(120).collect::<String>().trim().to_string();
-    if safe.is_empty() { "upload".to_string() } else { safe }
+    let safe: String = trimmed
+        .chars()
+        .take(120)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if safe.is_empty() {
+        "upload".to_string()
+    } else {
+        safe
+    }
 }
 
 /// `isTextAttachment`：text/* 或文本扩展名。
@@ -1766,9 +1921,19 @@ fn is_text_attachment(filename: &str, mime_type: &str) -> bool {
         return true;
     }
     let lower = filename.to_lowercase();
-    [".txt", ".md", ".markdown", ".json", ".csv", ".tsv", ".yaml", ".yml", ".log"]
-        .iter()
-        .any(|suffix| lower.ends_with(suffix))
+    [
+        ".txt",
+        ".md",
+        ".markdown",
+        ".json",
+        ".csv",
+        ".tsv",
+        ".yaml",
+        ".yml",
+        ".log",
+    ]
+    .iter()
+    .any(|suffix| lower.ends_with(suffix))
 }
 
 /// `parseDataUrl`：`data:{mime}?;{params}?;base64,{payload}` → (mime, bytes)。
@@ -1829,7 +1994,10 @@ async fn normalize_agent_attachments(
         )
         .into_response());
     }
-    let upload_dir = root.join(".inkos").join("uploads").join(safe_upload_file_name(session_id));
+    let upload_dir = root
+        .join(".inkos")
+        .join("uploads")
+        .join(safe_upload_file_name(session_id));
     let now_ms = crate::utils::utc_time::utc_now_millis();
     let mut out = Vec::new();
     for (index, raw) in items.iter().enumerate() {
@@ -1843,9 +2011,14 @@ async fn normalize_agent_attachments(
         };
         let fallback_name = format!("upload-{}", index + 1);
         let filename = safe_upload_file_name(
-            obj.get("filename").and_then(Value::as_str).unwrap_or(&fallback_name),
+            obj.get("filename")
+                .and_then(Value::as_str)
+                .unwrap_or(&fallback_name),
         );
-        let data_url = obj.get("dataUrl").and_then(Value::as_str).unwrap_or_default();
+        let data_url = obj
+            .get("dataUrl")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if data_url.is_empty() {
             return Err(api_error(
                 StatusCode::BAD_REQUEST,
@@ -1881,7 +2054,13 @@ async fn normalize_agent_attachments(
             return Err(internal().into_response());
         }
         let stored_name = format!("{now_ms}-{}-{filename}", index + 1);
-        if crate::utils::atomic_file_set::write_file_atomic_bytes(&upload_dir.join(&stored_name), &bytes).await.is_err() {
+        if crate::utils::atomic_file_set::write_file_atomic_bytes(
+            &upload_dir.join(&stored_name),
+            &bytes,
+        )
+        .await
+        .is_err()
+        {
             return Err(internal().into_response());
         }
         // 文本附件：注入长度校验（UTF-16 码元 ≤120k）并保留注入内容。
@@ -1944,13 +2123,24 @@ fn build_attachment_user_block(attachments: &[AgentAttachment], language: &str) 
     for attachment in attachments {
         lines.push(format!("\n### {}", attachment.filename));
         lines.push(format!("- id: {}", attachment.id));
-        lines.push(format!("- mime: {}", if attachment.mime_type.is_empty() { "application/octet-stream" } else { &attachment.mime_type }));
+        lines.push(format!(
+            "- mime: {}",
+            if attachment.mime_type.is_empty() {
+                "application/octet-stream"
+            } else {
+                &attachment.mime_type
+            }
+        ));
         lines.push(format!("- size: {}", attachment.size));
         if !attachment.stored_path.is_empty() {
             lines.push(format!("- stored_path: {}", attachment.stored_path));
         }
         if let Some(text) = &attachment.text {
-            lines.push(if is_en { "\nContent:".to_string() } else { "\n内容：".to_string() });
+            lines.push(if is_en {
+                "\nContent:".to_string()
+            } else {
+                "\n内容：".to_string()
+            });
             lines.push("```".to_string());
             lines.push(text.clone());
             lines.push("```".to_string());
@@ -1962,7 +2152,8 @@ fn build_attachment_user_block(attachments: &[AgentAttachment], language: &str) 
             });
         } else {
             lines.push(if is_en {
-                "- content: stored only; no extractor is available for this MIME type yet".to_string()
+                "- content: stored only; no extractor is available for this MIME type yet"
+                    .to_string()
             } else {
                 "- 内容：已保存；当前 MIME 类型暂未配置文本抽取器".to_string()
             });
@@ -1972,17 +2163,18 @@ fn build_attachment_user_block(attachments: &[AgentAttachment], language: &str) 
 }
 
 /// `attachmentImages`：image 附件 → 多模态图片列表。
-fn attachment_images(attachments: &[AgentAttachment]) -> Vec<crate::llm::streaming_client::ChatImage> {
+fn attachment_images(
+    attachments: &[AgentAttachment],
+) -> Vec<crate::llm::streaming_client::ChatImage> {
     attachments
         .iter()
         .filter_map(|attachment| {
-            attachment
-                .image
-                .as_ref()
-                .map(|(data, mime_type)| crate::llm::streaming_client::ChatImage {
+            attachment.image.as_ref().map(|(data, mime_type)| {
+                crate::llm::streaming_client::ChatImage {
                     data: data.clone(),
                     mime_type: mime_type.clone(),
-                })
+                }
+            })
         })
         .collect()
 }
@@ -2010,146 +2202,386 @@ enum PayloadField<'a> {
 }
 
 const PAYLOAD_TOP_LEVEL_KEYS: &[&str] = &[
-    "createBook", "writeNext", "shortRun", "playStart", "generateCover",
-    "scriptCreate", "storyboardCreate", "interactiveFilmCreate", "translationCreate",
-    "fanficCreate", "continuationImport", "spinoffCreate", "imitationCreate",
-    "draftStructure", "connectChoice", "removeNode",
+    "createBook",
+    "writeNext",
+    "shortRun",
+    "playStart",
+    "generateCover",
+    "scriptCreate",
+    "storyboardCreate",
+    "interactiveFilmCreate",
+    "translationCreate",
+    "fanficCreate",
+    "continuationImport",
+    "spinoffCreate",
+    "imitationCreate",
+    "draftStructure",
+    "connectChoice",
+    "removeNode",
 ];
 
-type PayloadSchema = (&'static str, bool, Vec<(&'static str, PayloadField<'static>)>);
+type PayloadSchema = (
+    &'static str,
+    bool,
+    Vec<(&'static str, PayloadField<'static>)>,
+);
 
 fn payload_schemas() -> Vec<PayloadSchema> {
     use PayloadField::*;
     vec![
-        ("createBook", true, vec![
-            ("title", StrNonEmpty), ("genre", StrNonEmpty),
-            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
-            ("language", Enum(&["zh", "en"])),
-            ("targetChapters", IntRange { min: Some(1.0), max: None }),
-            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
-        ]),
-        ("writeNext", true, vec![
-            ("chapterCount", IntRange { min: Some(1.0), max: Some(20.0) }),
-        ]),
-        ("shortRun", true, vec![
-            // TS ShortRunActionPayloadSchema（action-envelope.ts L50-63）对齐——
-            // 章数/篇幅为 min(1)（旧链滑条 12-18/600-1200 残留已清；语言越界
-            // 组合由执行层双语守卫拦截，schema 层只在 language 显式时复核）。
-            ("title", StrNonEmpty), ("direction", StrNonEmpty), ("reference", StrNonEmpty),
-            ("storyId", StrNonEmpty),
-            ("language", Enum(&["zh", "en"])),
-            ("chapters", IntRange { min: Some(1.0), max: None }),
-            ("charsPerChapter", IntRange { min: Some(1.0), max: None }),
-            ("minChapterLength", IntRange { min: Some(1.0), max: None }),
-            ("maxChapterLength", IntRange { min: Some(1.0), max: None }),
-            ("openingHookChars", IntRange { min: Some(1.0), max: None }),
-            ("minChapterLengthRatio", FloatRange { min: Some(0.0), max: Some(1.0) }),
-            ("cover", Bool),
-        ]),
-        ("playStart", true, vec![
-            ("title", StrNonEmpty), ("premise", StrNonEmpty),
-            ("worldContract", StrNonEmpty), ("visualContract", StrNonEmpty),
-            ("mode", Enum(&["open", "guided"])),
-            ("initialScene", StrNonEmpty),
-            ("suggestedActions", StrArray { min: 1, max: 4 }),
-        ]),
-        ("generateCover", true, vec![
-            ("title", StrNonEmpty), ("intro", StrNonEmpty),
-            ("sellingPoints", StrNonEmpty), ("coverPrompt", StrNonEmpty),
-            ("outputDir", StrNonEmpty),
-        ]),
-        ("scriptCreate", true, vec![
-            ("title", StrNonEmpty), ("sourceKind", StrNonEmpty),
-            ("targetFormat", Enum(&[
-                "vertical_short_drama", "screenplay", "audio_drama",
-                "interactive_script", "general_script",
-            ])),
-            ("sourceText", StrNonEmpty), ("sourcePath", StrNonEmpty),
-            ("requirements", StrNonEmpty),
-            ("episodeCount", IntRange { min: Some(1.0), max: None }),
-            ("episodeDuration", StrNonEmpty), ("projectId", StrNonEmpty),
-            ("outDir", StrNonEmpty),
-        ]),
-        ("storyboardCreate", true, vec![
-            ("title", StrNonEmpty), ("sourceKind", StrNonEmpty),
-            ("sourceText", StrNonEmpty), ("sourcePath", StrNonEmpty),
-            ("requirements", StrNonEmpty), ("visualStyle", StrNonEmpty),
-            ("aspectRatio", StrNonEmpty), ("granularity", StrNonEmpty),
-            ("maxShots", IntRange { min: Some(1.0), max: None }),
-            ("projectId", StrNonEmpty), ("outDir", StrNonEmpty),
-        ]),
-        ("interactiveFilmCreate", true, vec![
-            ("title", StrNonEmpty), ("sourceKind", StrNonEmpty),
-            ("sourceText", StrNonEmpty), ("sourcePath", StrNonEmpty),
-            ("requirements", StrNonEmpty), ("targetAudience", StrNonEmpty),
-            ("episodeCount", IntRange { min: Some(1.0), max: None }),
-            ("episodeDuration", StrNonEmpty), ("budget", StrNonEmpty),
-            ("referenceMode", StrNonEmpty), ("projectId", StrNonEmpty),
-            ("outDir", StrNonEmpty),
-        ]),
-        ("translationCreate", true, vec![
-            // 975 号：三输入形态——sources 数组（CreationSourceReference strict，对象
-            // 结构校验由执行器承担同 connectChoice.node）、sourceText、glossary 数组；
-            // filePath 保留（file 形态）。sourceLanguage/targetLanguage/title/
-            // segmentMaxChars 同前。
-            ("filePath", StrNonEmpty),
-            ("sourceText", StrNonEmpty),
-            ("sources", ArrayObj),
-            ("glossary", ArrayObj),
-            ("sourceLanguage", StrNonEmpty), ("targetLanguage", StrNonEmpty),
-            ("title", StrNonEmpty),
-            ("segmentMaxChars", IntRange { min: Some(1.0), max: None }),
-        ]),
+        (
+            "createBook",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("genre", StrNonEmpty),
+                ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+                ("language", Enum(&["zh", "en"])),
+                (
+                    "targetChapters",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "chapterWordCount",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+            ],
+        ),
+        (
+            "writeNext",
+            true,
+            vec![(
+                "chapterCount",
+                IntRange {
+                    min: Some(1.0),
+                    max: Some(20.0),
+                },
+            )],
+        ),
+        (
+            "shortRun",
+            true,
+            vec![
+                // TS ShortRunActionPayloadSchema（action-envelope.ts L50-63）对齐——
+                // 章数/篇幅为 min(1)（旧链滑条 12-18/600-1200 残留已清；语言越界
+                // 组合由执行层双语守卫拦截，schema 层只在 language 显式时复核）。
+                ("title", StrNonEmpty),
+                ("direction", StrNonEmpty),
+                ("reference", StrNonEmpty),
+                ("storyId", StrNonEmpty),
+                ("language", Enum(&["zh", "en"])),
+                (
+                    "chapters",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "charsPerChapter",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "minChapterLength",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "maxChapterLength",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "openingHookChars",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "minChapterLengthRatio",
+                    FloatRange {
+                        min: Some(0.0),
+                        max: Some(1.0),
+                    },
+                ),
+                ("cover", Bool),
+            ],
+        ),
+        (
+            "playStart",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("premise", StrNonEmpty),
+                ("worldContract", StrNonEmpty),
+                ("visualContract", StrNonEmpty),
+                ("mode", Enum(&["open", "guided"])),
+                ("initialScene", StrNonEmpty),
+                ("suggestedActions", StrArray { min: 1, max: 4 }),
+            ],
+        ),
+        (
+            "generateCover",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("intro", StrNonEmpty),
+                ("sellingPoints", StrNonEmpty),
+                ("coverPrompt", StrNonEmpty),
+                ("outputDir", StrNonEmpty),
+            ],
+        ),
+        (
+            "scriptCreate",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("sourceKind", StrNonEmpty),
+                (
+                    "targetFormat",
+                    Enum(&[
+                        "vertical_short_drama",
+                        "screenplay",
+                        "audio_drama",
+                        "interactive_script",
+                        "general_script",
+                    ]),
+                ),
+                ("sourceText", StrNonEmpty),
+                ("sourcePath", StrNonEmpty),
+                ("requirements", StrNonEmpty),
+                (
+                    "episodeCount",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                ("episodeDuration", StrNonEmpty),
+                ("projectId", StrNonEmpty),
+                ("outDir", StrNonEmpty),
+            ],
+        ),
+        (
+            "storyboardCreate",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("sourceKind", StrNonEmpty),
+                ("sourceText", StrNonEmpty),
+                ("sourcePath", StrNonEmpty),
+                ("requirements", StrNonEmpty),
+                ("visualStyle", StrNonEmpty),
+                ("aspectRatio", StrNonEmpty),
+                ("granularity", StrNonEmpty),
+                (
+                    "maxShots",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                ("projectId", StrNonEmpty),
+                ("outDir", StrNonEmpty),
+            ],
+        ),
+        (
+            "interactiveFilmCreate",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("sourceKind", StrNonEmpty),
+                ("sourceText", StrNonEmpty),
+                ("sourcePath", StrNonEmpty),
+                ("requirements", StrNonEmpty),
+                ("targetAudience", StrNonEmpty),
+                (
+                    "episodeCount",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                ("episodeDuration", StrNonEmpty),
+                ("budget", StrNonEmpty),
+                ("referenceMode", StrNonEmpty),
+                ("projectId", StrNonEmpty),
+                ("outDir", StrNonEmpty),
+            ],
+        ),
+        (
+            "translationCreate",
+            true,
+            vec![
+                // 975 号：三输入形态——sources 数组（CreationSourceReference strict，对象
+                // 结构校验由执行器承担同 connectChoice.node）、sourceText、glossary 数组；
+                // filePath 保留（file 形态）。sourceLanguage/targetLanguage/title/
+                // segmentMaxChars 同前。
+                ("filePath", StrNonEmpty),
+                ("sourceText", StrNonEmpty),
+                ("sources", ArrayObj),
+                ("glossary", ArrayObj),
+                ("sourceLanguage", StrNonEmpty),
+                ("targetLanguage", StrNonEmpty),
+                ("title", StrNonEmpty),
+                (
+                    "segmentMaxChars",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+            ],
+        ),
         // 301 号：四件创建域（action-envelope.ts L173-227 同构，全 .strict()；
         // fanfic/imitation 的 sourceText||sourcePath、referenceText||referencePath
         // 跨字段 refine 见 validate_action_payload_strict 尾部）。
-        ("fanficCreate", true, vec![
-            ("title", StrNonEmpty), ("sourceText", StrNonEmpty),
-            ("sourcePath", StrNonEmpty), ("sourceName", StrNonEmpty),
-            ("mode", Enum(&["canon", "au", "ooc", "cp"])),
-            ("genre", StrNonEmpty),
-            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
-            ("language", Enum(&["zh", "en"])),
-            ("targetChapters", IntRange { min: Some(1.0), max: None }),
-            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
-        ]),
-        ("continuationImport", true, vec![
-            ("bookId", StrNonEmpty), ("title", StrNonEmpty),
-            ("sourcePath", StrNonEmpty), ("splitPattern", StrNonEmpty),
-            ("resumeFrom", IntRange { min: Some(1.0), max: None }),
-            ("genre", StrNonEmpty),
-            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
-            ("language", Enum(&["zh", "en"])),
-            ("targetChapters", IntRange { min: Some(1.0), max: None }),
-            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
-        ]),
-        ("spinoffCreate", true, vec![
-            ("title", StrNonEmpty), ("parentBookId", StrNonEmpty),
-            ("direction", StrNonEmpty), ("genre", StrNonEmpty),
-            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
-            ("language", Enum(&["zh", "en"])),
-            ("targetChapters", IntRange { min: Some(1.0), max: None }),
-            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
-        ]),
-        ("imitationCreate", true, vec![
-            ("title", StrNonEmpty), ("referenceText", StrNonEmpty),
-            ("referencePath", StrNonEmpty), ("storyIdea", StrNonEmpty),
-            ("sourceName", StrNonEmpty), ("genre", StrNonEmpty),
-            ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
-            ("language", Enum(&["zh", "en"])),
-            ("targetChapters", IntRange { min: Some(1.0), max: None }),
-            ("chapterWordCount", IntRange { min: Some(1.0), max: None }),
-        ]),
+        (
+            "fanficCreate",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("sourceText", StrNonEmpty),
+                ("sourcePath", StrNonEmpty),
+                ("sourceName", StrNonEmpty),
+                ("mode", Enum(&["canon", "au", "ooc", "cp"])),
+                ("genre", StrNonEmpty),
+                ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+                ("language", Enum(&["zh", "en"])),
+                (
+                    "targetChapters",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "chapterWordCount",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+            ],
+        ),
+        (
+            "continuationImport",
+            true,
+            vec![
+                ("bookId", StrNonEmpty),
+                ("title", StrNonEmpty),
+                ("sourcePath", StrNonEmpty),
+                ("splitPattern", StrNonEmpty),
+                (
+                    "resumeFrom",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                ("genre", StrNonEmpty),
+                ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+                ("language", Enum(&["zh", "en"])),
+                (
+                    "targetChapters",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "chapterWordCount",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+            ],
+        ),
+        (
+            "spinoffCreate",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("parentBookId", StrNonEmpty),
+                ("direction", StrNonEmpty),
+                ("genre", StrNonEmpty),
+                ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+                ("language", Enum(&["zh", "en"])),
+                (
+                    "targetChapters",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "chapterWordCount",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+            ],
+        ),
+        (
+            "imitationCreate",
+            true,
+            vec![
+                ("title", StrNonEmpty),
+                ("referenceText", StrNonEmpty),
+                ("referencePath", StrNonEmpty),
+                ("storyIdea", StrNonEmpty),
+                ("sourceName", StrNonEmpty),
+                ("genre", StrNonEmpty),
+                ("platform", Enum(&["tomato", "qidian", "feilu", "other"])),
+                ("language", Enum(&["zh", "en"])),
+                (
+                    "targetChapters",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+                (
+                    "chapterWordCount",
+                    IntRange {
+                        min: Some(1.0),
+                        max: None,
+                    },
+                ),
+            ],
+        ),
         // 以下三个子域 TS 非 strict（无 .strict()）：只做字段形态校验。
-        ("draftStructure", false, vec![
-            ("projectId", StrNonEmpty), ("instruction", StrNonEmpty),
-        ]),
-        ("connectChoice", false, vec![
-            ("projectId", StrNonEmpty), ("node", Object),
-        ]),
-        ("removeNode", false, vec![
-            ("projectId", StrNonEmpty), ("nodeId", StrNonEmpty),
-        ]),
+        (
+            "draftStructure",
+            false,
+            vec![("projectId", StrNonEmpty), ("instruction", StrNonEmpty)],
+        ),
+        (
+            "connectChoice",
+            false,
+            vec![("projectId", StrNonEmpty), ("node", Object)],
+        ),
+        (
+            "removeNode",
+            false,
+            vec![("projectId", StrNonEmpty), ("nodeId", StrNonEmpty)],
+        ),
     ]
 }
 
@@ -2161,12 +2593,16 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
     };
     for key in object.keys() {
         if !PAYLOAD_TOP_LEVEL_KEYS.contains(&key.as_str()) {
-            return Err(format!("Unrecognized key: {key} — ActionPayloadSchema is strict"));
+            return Err(format!(
+                "Unrecognized key: {key} — ActionPayloadSchema is strict"
+            ));
         }
     }
     let schemas = payload_schemas();
     for (domain, strict, fields) in &schemas {
-        let Some(domain_value) = object.get(*domain) else { continue };
+        let Some(domain_value) = object.get(*domain) else {
+            continue;
+        };
         let Some(domain_object) = domain_value.as_object() else {
             return Err(format!("{domain}: expected object"));
         };
@@ -2178,30 +2614,36 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
             }
         }
         for (field, spec) in fields {
-            let Some(field_value) = domain_object.get(*field) else { continue };
+            let Some(field_value) = domain_object.get(*field) else {
+                continue;
+            };
             let valid = match spec {
-                PayloadField::StrNonEmpty => field_value.as_str().is_some_and(|text| !text.is_empty()),
+                PayloadField::StrNonEmpty => {
+                    field_value.as_str().is_some_and(|text| !text.is_empty())
+                }
                 PayloadField::IntRange { min, max } => field_value.as_f64().is_some_and(|number| {
                     number.fract() == 0.0
                         && min.is_none_or(|min| number >= min)
                         && max.is_none_or(|max| number <= max)
                 }),
-                PayloadField::FloatRange { min, max } => field_value.as_f64().is_some_and(|number| {
-                    min.is_none_or(|min| number >= min) && max.is_none_or(|max| number <= max)
-                }),
+                PayloadField::FloatRange { min, max } => {
+                    field_value.as_f64().is_some_and(|number| {
+                        min.is_none_or(|min| number >= min) && max.is_none_or(|max| number <= max)
+                    })
+                }
                 PayloadField::Enum(values) => field_value
                     .as_str()
                     .is_some_and(|text| values.contains(&text)),
                 PayloadField::Bool => field_value.is_boolean(),
-                PayloadField::StrArray { min, max } => field_value
-                    .as_array()
-                    .is_some_and(|items| {
+                PayloadField::StrArray { min, max } => {
+                    field_value.as_array().is_some_and(|items| {
                         items.len() >= *min
                             && items.len() <= *max
                             && items
                                 .iter()
                                 .all(|item| item.as_str().is_some_and(|s| !s.is_empty()))
-                    }),
+                    })
+                }
                 PayloadField::Object => field_value.is_object(),
                 // 975 号：对象数组（元素结构由执行器承担）。
                 PayloadField::ArrayObj => field_value.is_array(),
@@ -2233,8 +2675,11 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
     // 301 号：fanfic/imitation 的跨字段 refine（action-envelope.ts L184/L224 逐字：
     // sourceText||sourcePath、referenceText||referencePath 至少其一非空）。
     let has_non_empty = |obj: &serde_json::Map<String, Value>, keys: &[&str]| -> bool {
-        keys.iter()
-            .any(|k| obj.get(*k).and_then(Value::as_str).is_some_and(|s| !s.trim().is_empty()))
+        keys.iter().any(|k| {
+            obj.get(*k)
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.trim().is_empty())
+        })
     };
     if let Some(fanfic) = object.get("fanficCreate").and_then(Value::as_object) {
         if !has_non_empty(fanfic, &["sourceText", "sourcePath"]) {
@@ -2249,12 +2694,16 @@ pub(crate) fn validate_action_payload_strict(value: &Value) -> Result<(), String
     Ok(())
 }
 
-
 #[cfg(test)]
 mod attachment_injection_tests {
     use super::*;
 
-    fn attachment(filename: &str, mime: &str, image: Option<(String, String)>, text: Option<String>) -> AgentAttachment {
+    fn attachment(
+        filename: &str,
+        mime: &str,
+        image: Option<(String, String)>,
+        text: Option<String>,
+    ) -> AgentAttachment {
         AgentAttachment {
             id: "att-1".to_string(),
             filename: filename.to_string(),
@@ -2269,18 +2718,34 @@ mod attachment_injection_tests {
     #[test]
     fn attachment_user_block_zh_three_branches() {
         // text 分支：清单 + 内容代码块。
-        let text_att = attachment("notes.md", "text/markdown", None, Some("参考内容".to_string()));
+        let text_att = attachment(
+            "notes.md",
+            "text/markdown",
+            None,
+            Some("参考内容".to_string()),
+        );
         let block = build_attachment_user_block(&[text_att], "zh");
-        assert!(block.starts_with("\n\n## 用户上传文件（宿主已接收，用户授权本轮使用）"), "{block}");
+        assert!(
+            block.starts_with("\n\n## 用户上传文件（宿主已接收，用户授权本轮使用）"),
+            "{block}"
+        );
         assert!(block.contains("\n### notes.md"), "{block}");
         assert!(block.contains("- id: att-1"), "{block}");
         assert!(block.contains("- mime: text/markdown"), "{block}");
         assert!(block.contains("- size: 10"), "{block}");
-        assert!(block.contains("- stored_path: .inkos/uploads/s/1-f"), "{block}");
+        assert!(
+            block.contains("- stored_path: .inkos/uploads/s/1-f"),
+            "{block}"
+        );
         assert!(block.contains("\n内容：\n```\n参考内容\n```"), "{block}");
 
         // image 分支：多模态标记。
-        let image_att = attachment("shot.png", "image/png", Some(("aGk=".to_string(), "image/png".to_string())), None);
+        let image_att = attachment(
+            "shot.png",
+            "image/png",
+            Some(("aGk=".to_string(), "image/png".to_string())),
+            None,
+        );
         let block = build_attachment_user_block(&[image_att], "zh");
         assert!(block.contains("- 图片：已作为多模态输入附加"), "{block}");
         assert!(!block.contains("```"), "{block}");
@@ -2288,7 +2753,10 @@ mod attachment_injection_tests {
         // 仅存分支。
         let bare_att = attachment("a.pdf", "application/pdf", None, None);
         let block = build_attachment_user_block(&[bare_att], "zh");
-        assert!(block.contains("- 内容：已保存；当前 MIME 类型暂未配置文本抽取器"), "{block}");
+        assert!(
+            block.contains("- 内容：已保存；当前 MIME 类型暂未配置文本抽取器"),
+            "{block}"
+        );
 
         // 空清单 → 空串。
         assert_eq!(build_attachment_user_block(&[], "zh"), "");
@@ -2296,13 +2764,29 @@ mod attachment_injection_tests {
 
     #[test]
     fn attachment_user_block_en_and_images() {
-        let image_att = attachment("shot.png", "image/png", Some(("aGk=".to_string(), "image/png".to_string())), None);
+        let image_att = attachment(
+            "shot.png",
+            "image/png",
+            Some(("aGk=".to_string(), "image/png".to_string())),
+            None,
+        );
         let block = build_attachment_user_block(std::slice::from_ref(&image_att), "en");
-        assert!(block.starts_with("\n\n## Uploaded Files (host-provided, user-authorized)"), "{block}");
-        assert!(block.contains("- image: attached as multimodal input"), "{block}");
+        assert!(
+            block.starts_with("\n\n## Uploaded Files (host-provided, user-authorized)"),
+            "{block}"
+        );
+        assert!(
+            block.contains("- image: attached as multimodal input"),
+            "{block}"
+        );
         let bare_att = attachment("a.bin", "application/octet-stream", None, None);
         let block = build_attachment_user_block(std::slice::from_ref(&bare_att), "en");
-        assert!(block.contains("- content: stored only; no extractor is available for this MIME type yet"), "{block}");
+        assert!(
+            block.contains(
+                "- content: stored only; no extractor is available for this MIME type yet"
+            ),
+            "{block}"
+        );
 
         let images = attachment_images(&[image_att.clone(), bare_att.clone()]);
         assert_eq!(images.len(), 1);
@@ -2340,20 +2824,30 @@ mod attachment_tests {
     fn strip_production_mutation_tools_keeps_readonly_set() {
         // 215 号：suppressProductionTools 名单语义——生产变更工具剔除，
         // read/ls/grep、material、research、propose、forecast、play 保留。
-        let schema = |name: &str| serde_json::json!({
-            "type": "function",
-            "function": { "name": name, "parameters": { "type": "object" } }
-        });
+        let schema = |name: &str| {
+            serde_json::json!({
+                "type": "function",
+                "function": { "name": name, "parameters": { "type": "object" } }
+            })
+        };
         let mut tools = serde_json::json!([
-            schema("read"), schema("ls"), schema("grep"),
-            schema("ingest_material"), schema("retrieve_material"),
-            schema("research_web"), schema("propose_action"),
+            schema("read"),
+            schema("ls"),
+            schema("grep"),
+            schema("ingest_material"),
+            schema("retrieve_material"),
+            schema("research_web"),
+            schema("propose_action"),
             schema("create_narrative_forecast"),
             schema("play_step"),
-            schema("sub_agent"), schema("generate_cover"),
-            schema("write_truth_file"), schema("rename_entity"),
-            schema("patch_chapter_text"), schema("replace_chapter_text"),
-            schema("resync_chapter_state"), schema("delete_latest_chapter"),
+            schema("sub_agent"),
+            schema("generate_cover"),
+            schema("write_truth_file"),
+            schema("rename_entity"),
+            schema("patch_chapter_text"),
+            schema("replace_chapter_text"),
+            schema("resync_chapter_state"),
+            schema("delete_latest_chapter"),
             schema("import_chapters"),
         ]);
         strip_production_mutation_tools(&mut tools);
@@ -2366,9 +2860,13 @@ mod attachment_tests {
         assert_eq!(
             names,
             vec![
-                "read", "ls", "grep",
-                "ingest_material", "retrieve_material",
-                "research_web", "propose_action",
+                "read",
+                "ls",
+                "grep",
+                "ingest_material",
+                "retrieve_material",
+                "research_web",
+                "propose_action",
                 "create_narrative_forecast",
                 "play_step",
             ]
@@ -2411,8 +2909,8 @@ mod payload_strict_tests {
     /// author_skill 失败不广播、其他工具不广播、混合轮按成功判定。
     #[test]
     fn turn_authored_skill_judges_success_and_failure() {
-        let execution = |tool: &str, errored: bool| {
-            crate::interaction::agent_loop::LoopToolExecution {
+        let execution =
+            |tool: &str, errored: bool| crate::interaction::agent_loop::LoopToolExecution {
                 id: format!("call-{tool}-{errored}"),
                 tool: tool.into(),
                 args: json!({}),
@@ -2426,18 +2924,19 @@ mod payload_strict_tests {
                 attempt: None,
                 timed_out: None,
                 error_kind: None,
-            }
-        };
+            };
 
         assert!(turn_authored_skill(&[execution("author_skill", false)]));
         assert!(!turn_authored_skill(&[execution("author_skill", true)]));
-        assert!(!turn_authored_skill(&[execution("patch_chapter_text", false)]));
+        assert!(!turn_authored_skill(&[execution(
+            "patch_chapter_text",
+            false
+        )]));
         assert!(!turn_authored_skill(&[
             execution("patch_chapter_text", false),
             execution("author_skill", true),
         ]));
     }
-
 
     #[test]
     fn top_level_strict_and_domain_strict() {
@@ -2461,18 +2960,44 @@ mod payload_strict_tests {
     #[test]
     fn field_type_and_range_rules() {
         // platform 枚举。
-        assert!(validate_action_payload_strict(&json!({ "createBook": { "platform": "tomato" } })).is_ok());
-        assert!(validate_action_payload_strict(&json!({ "createBook": { "platform": "nope" } })).is_err());
+        assert!(
+            validate_action_payload_strict(&json!({ "createBook": { "platform": "tomato" } }))
+                .is_ok()
+        );
+        assert!(
+            validate_action_payload_strict(&json!({ "createBook": { "platform": "nope" } }))
+                .is_err()
+        );
         // writeNext chapterCount 1-20。
-        assert!(validate_action_payload_strict(&json!({ "writeNext": { "chapterCount": 20 } })).is_ok());
-        assert!(validate_action_payload_strict(&json!({ "writeNext": { "chapterCount": 21 } })).is_err());
+        assert!(
+            validate_action_payload_strict(&json!({ "writeNext": { "chapterCount": 20 } })).is_ok()
+        );
+        assert!(
+            validate_action_payload_strict(&json!({ "writeNext": { "chapterCount": 21 } }))
+                .is_err()
+        );
         // min(1) 字符串：空串非法（空白串长度≥1 合法——zod min(1) 不 trim）。
-        assert!(validate_action_payload_strict(&json!({ "translationCreate": { "filePath": "" } })).is_err());
-        assert!(validate_action_payload_strict(&json!({ "translationCreate": { "filePath": "  " } })).is_ok());
+        assert!(validate_action_payload_strict(
+            &json!({ "translationCreate": { "filePath": "" } })
+        )
+        .is_err());
+        assert!(validate_action_payload_strict(
+            &json!({ "translationCreate": { "filePath": "  " } })
+        )
+        .is_ok());
         // playStart suggestedActions 数组 1-4 非空串。
-        assert!(validate_action_payload_strict(&json!({ "playStart": { "suggestedActions": ["a", "b"] } })).is_ok());
-        assert!(validate_action_payload_strict(&json!({ "playStart": { "suggestedActions": [] } })).is_err());
-        assert!(validate_action_payload_strict(&json!({ "playStart": { "suggestedActions": ["a", ""] } })).is_err());
+        assert!(validate_action_payload_strict(
+            &json!({ "playStart": { "suggestedActions": ["a", "b"] } })
+        )
+        .is_ok());
+        assert!(validate_action_payload_strict(
+            &json!({ "playStart": { "suggestedActions": [] } })
+        )
+        .is_err());
+        assert!(validate_action_payload_strict(
+            &json!({ "playStart": { "suggestedActions": ["a", ""] } })
+        )
+        .is_err());
     }
 
     #[test]
@@ -2545,9 +3070,18 @@ mod payload_strict_tests {
         let tool_cards: Vec<&Value> = session
             .messages
             .iter()
-            .filter(|m| m.get("toolExecutions").map(Value::is_array).unwrap_or(false))
+            .filter(|m| {
+                m.get("toolExecutions")
+                    .map(Value::is_array)
+                    .unwrap_or(false)
+            })
             .collect();
-        assert_eq!(tool_cards.len(), 1, "messages: {}", serde_json::to_string(&session.messages).unwrap());
+        assert_eq!(
+            tool_cards.len(),
+            1,
+            "messages: {}",
+            serde_json::to_string(&session.messages).unwrap()
+        );
         let card = &tool_cards[0]["toolExecutions"][0];
         assert_eq!(card["tool"], "patch_chapter_text");
         assert_eq!(card["status"], "completed");
@@ -2568,9 +3102,15 @@ mod payload_strict_tests {
             .iter()
             .find(|m| m.role == LLMRole::System)
             .expect("历史工具摘要");
-        assert!(summary.content.contains("[历史状态摘要]"), "{}", summary.content);
         assert!(
-            summary.content.contains("- patch_chapter_text completed — 已替换 12 处。"),
+            summary.content.contains("[历史状态摘要]"),
+            "{}",
+            summary.content
+        );
+        assert!(
+            summary
+                .content
+                .contains("- patch_chapter_text completed — 已替换 12 处。"),
             "{}",
             summary.content
         );
@@ -2587,18 +3127,21 @@ mod payload_strict_tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         crate::server::session_routes::deleted_session_ids()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert("sess-deleted".to_string());
         let guarded = begin_chat_turn(&root, "sess-deleted", "hi", SessionKind::Chat).await;
         assert!(guarded.is_none(), "删除守卫应拦截写前落盘");
         fail_chat_turn(&root, "sess-deleted", "rid-x", "err").await;
         assert!(
-            !crate::interaction::session_transcript::transcript_path(&root, "sess-deleted").exists(),
+            !crate::interaction::session_transcript::transcript_path(&root, "sess-deleted")
+                .exists(),
             "已删除会话不应被轮收尾复活"
         );
         // 同名重建 → 清除标记 → 追加恢复。
         crate::server::session_routes::deleted_session_ids()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove("sess-deleted");
         let request_id = begin_chat_turn(&root, "sess-deleted", "hi", SessionKind::Chat)
             .await
@@ -2623,11 +3166,19 @@ mod payload_strict_tests {
         let h1 = handle.clone();
         let o1 = order.clone();
         let first = tokio::spawn(async move {
-            let guard = h1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
+            let guard = h1
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .queue
+                .clone();
             let _q = guard.lock_owned().await;
-            o1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push("first-start");
+            o1.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push("first-start");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            o1.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push("first-end");
+            o1.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push("first-end");
         });
         // 首轮先拿锁。
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -2635,16 +3186,25 @@ mod payload_strict_tests {
         let h2 = handle.clone();
         let o2 = order.clone();
         let second = tokio::spawn(async move {
-            let guard = h2.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
+            let guard = h2
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .queue
+                .clone();
             let _q = guard.lock_owned().await;
-            o2.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push("second-start");
+            o2.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push("second-start");
         });
 
         first.await.unwrap();
         // 首轮未结束时第二轮不应进入临界区（first-end 先于 second-start）。
         tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         second.await.unwrap();
-        let sequence = order.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        let sequence = order
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
         assert_eq!(
             sequence,
             vec!["first-start", "first-end", "second-start"],
@@ -2659,12 +3219,21 @@ mod payload_strict_tests {
             abort_flag: Arc::new(Mutex::new(true)), // 模拟前轮被中止
             queue: Arc::new(tokio::sync::Mutex::new(())),
         }));
-        let queue = handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).queue.clone();
+        let queue = handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .queue
+            .clone();
         let _q = queue.lock_owned().await;
         let abort_flag: crate::interaction::agent_loop::AbortHandle = Arc::new(Mutex::new(false));
-        handle.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).abort_flag = abort_flag.clone();
+        handle
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .abort_flag = abort_flag.clone();
         assert!(
-            !*abort_flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+            !*abort_flag
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
             "新轮 flag 必须为未中止"
         );
     }
@@ -2681,16 +3250,29 @@ mod payload_strict_tests {
             .expect("begin");
         fail_chat_turn(&root, "sess-fail", &request_id, "LLM unreachable").await;
 
-        let events = crate::interaction::session_transcript::read_transcript_events(&root, "sess-fail").await;
+        let events =
+            crate::interaction::session_transcript::read_transcript_events(&root, "sess-fail")
+                .await;
         assert!(events.iter().any(|e| matches!(e, TranscriptEvent::RequestFailed { error, .. } if error == "LLM unreachable")));
-        let session = crate::interaction::session_restore::derive_book_session_from_transcript(&root, "sess-fail")
-            .await
-            .expect("session");
+        let session = crate::interaction::session_restore::derive_book_session_from_transcript(
+            &root,
+            "sess-fail",
+        )
+        .await
+        .expect("session");
         // 未提交轮不产生消息（committedMessageEvents 过滤）。
-        assert!(session.messages.is_empty(), "{}", serde_json::to_string(&session.messages).unwrap());
+        assert!(
+            session.messages.is_empty(),
+            "{}",
+            serde_json::to_string(&session.messages).unwrap()
+        );
         // restore：无 committed 消息 → 空历史（边界消息由调用方追加）。
-        let restored =
-            crate::interaction::session_restore::restore_agent_messages_from_transcript(&root, "sess-fail", None).await;
+        let restored = crate::interaction::session_restore::restore_agent_messages_from_transcript(
+            &root,
+            "sess-fail",
+            None,
+        )
+        .await;
         assert!(restored.is_empty());
     }
 }

@@ -6,9 +6,7 @@
 //! （保留旧真相 + 状态标记 state-degraded）。
 
 use crate::agents::continuity::{AuditIssue, AuditResult, AuditSeverity};
-use crate::agents::state_validator::{
-    StateValidationAuthorityContext, ValidationResult,
-};
+use crate::agents::state_validator::{StateValidationAuthorityContext, ValidationResult};
 use crate::agents::writer::WriteChapterOutput;
 use crate::pipeline::chapter_state_recovery::{
     build_state_degraded_persistence_output, retry_settlement_after_validation_failure,
@@ -98,7 +96,11 @@ pub async fn validate_chapter_truth_persistence(
             let mut issues = audit_result.issues.clone();
             issues.push(error_issue.clone());
             return Ok(TruthValidationOutcome {
-                validation: ValidationResult { passed: true, warnings: Vec::new(), repair_required: false },
+                validation: ValidationResult {
+                    passed: true,
+                    warnings: Vec::new(),
+                    repair_required: false,
+                },
                 chapter_status: Some("state-degraded"),
                 degraded_issues: vec![error_issue],
                 persistence_output: build_state_degraded_persistence_output(
@@ -106,7 +108,10 @@ pub async fn validate_chapter_truth_persistence(
                     params.old_state,
                     (params.old_hooks, params.old_ledger),
                 ),
-                audit_result: AuditResult { issues, ..audit_result },
+                audit_result: AuditResult {
+                    issues,
+                    ..audit_result
+                },
             });
         }
     };
@@ -171,7 +176,10 @@ pub async fn validate_chapter_truth_persistence(
             crate::pipeline::chapter_state_recovery::SettlementRetryResult::Degraded { issues } => {
                 let mut merged_issues = audit_result.issues.clone();
                 merged_issues.extend(issues.iter().cloned());
-                audit_result = AuditResult { issues: merged_issues, ..audit_result };
+                audit_result = AuditResult {
+                    issues: merged_issues,
+                    ..audit_result
+                };
                 return Ok(TruthValidationOutcome {
                     validation,
                     chapter_status: Some("state-degraded"),
@@ -270,9 +278,13 @@ mod tests {
     impl ValidatePort for ScriptValidate {
         async fn validate(&self, params: ValidateRequest<'_>) -> Result<ValidationResult, String> {
             self.seen
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .push(params.new_state.to_string());
-            self.results.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0)
+            self.results
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(0)
         }
     }
 
@@ -320,12 +332,15 @@ mod tests {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![Ok(ValidationResult {
                 warnings: vec![],
-                passed: true, repair_required: false,
+                passed: true,
+                repair_required: false,
             })]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let book = test_book();
-        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book))
+            .await
+            .unwrap();
         assert!(outcome.chapter_status.is_none());
         assert_eq!(outcome.persistence_output.updated_state, "new-state");
         assert!(outcome.degraded_issues.is_empty());
@@ -338,10 +353,14 @@ mod tests {
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let book = test_book();
-        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book))
+            .await
+            .unwrap();
         assert_eq!(outcome.chapter_status, Some("state-degraded"));
         assert_eq!(outcome.degraded_issues.len(), 1);
-        assert!(outcome.degraded_issues[0].description.contains("状态校验不可用"));
+        assert!(outcome.degraded_issues[0]
+            .description
+            .contains("状态校验不可用"));
         // 旧真相回退。
         assert_eq!(outcome.persistence_output.updated_state, "old-state");
         // 审计问题注入。
@@ -352,18 +371,31 @@ mod tests {
     async fn fail_then_retry_recovers() {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![
-                Ok(ValidationResult { warnings: vec![], passed: false, repair_required: false }),
-                Ok(ValidationResult { warnings: vec![], passed: true, repair_required: false }),
+                Ok(ValidationResult {
+                    warnings: vec![],
+                    passed: false,
+                    repair_required: false,
+                }),
+                Ok(ValidationResult {
+                    warnings: vec![],
+                    passed: true,
+                    repair_required: false,
+                }),
             ]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let book = test_book();
-        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book))
+            .await
+            .unwrap();
         assert!(outcome.chapter_status.is_none());
         assert_eq!(outcome.persistence_output.updated_state, "retried-state");
         // 两次校验：初始产物 + 重试产物。
         assert_eq!(
-            *validator.seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+            *validator
+                .seen
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
             vec!["new-state".to_string(), "retried-state".to_string()]
         );
     }
@@ -372,13 +404,23 @@ mod tests {
     async fn fail_then_retry_degrades_restoring_old_truth() {
         let validator = ScriptValidate {
             results: std::sync::Mutex::new(vec![
-                Ok(ValidationResult { warnings: vec![], passed: false, repair_required: false }),
-                Ok(ValidationResult { warnings: vec![], passed: false, repair_required: false }),
+                Ok(ValidationResult {
+                    warnings: vec![],
+                    passed: false,
+                    repair_required: false,
+                }),
+                Ok(ValidationResult {
+                    warnings: vec![],
+                    passed: false,
+                    repair_required: false,
+                }),
             ]),
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let book = test_book();
-        let outcome = validate_chapter_truth_persistence(params(&validator, &book)).await.unwrap();
+        let outcome = validate_chapter_truth_persistence(params(&validator, &book))
+            .await
+            .unwrap();
         assert_eq!(outcome.chapter_status, Some("state-degraded"));
         assert_eq!(outcome.persistence_output.updated_state, "old-state");
         assert_eq!(outcome.persistence_output.updated_ledger, "old-ledger");

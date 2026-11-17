@@ -12,10 +12,10 @@
 //! 这些在 SSE 解析器 + 请求构造之上叠加。
 
 use super::provider::{LLMMessage, LLMRole};
-use super::think_tag_stripper::{LeadingThinkTagStripper, strip_leading_think_block};
 use super::providers::TransportApiFormat;
 use super::sse_parser::SseEvent;
 use super::sse_parser::SseStreamParser;
+use super::think_tag_stripper::{strip_leading_think_block, LeadingThinkTagStripper};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -94,17 +94,27 @@ pub struct StreamDeadlineSpec {
 
 impl StreamDeadlineSpec {
     /// 交互聊天面（TS `guardAssistantMessageStream` 默认 120s/90s）。
-    pub const INTERACTIVE: Self =
-        Self { first_event_ms: 120_000, idle_ms: 90_000, request_ms: 300_000 };
+    pub const INTERACTIVE: Self = Self {
+        first_event_ms: 120_000,
+        idle_ms: 90_000,
+        request_ms: 300_000,
+    };
     /// 管线 agent 面（TS `chatCompletion` 流式默认 300s/180s——长文生成
     /// 首 Token 前的长时间思考常见，不套交互面的紧窗）。
-    pub const PIPELINE: Self =
-        Self { first_event_ms: 300_000, idle_ms: 180_000, request_ms: 300_000 };
+    pub const PIPELINE: Self = Self {
+        first_event_ms: 300_000,
+        idle_ms: 180_000,
+        request_ms: 300_000,
+    };
 
     /// env（INKOS_LLM_FIRST_EVENT_TIMEOUT_MS / INKOS_LLM_STREAM_IDLE_TIMEOUT_MS /
     /// INKOS_LLM_REQUEST_TIMEOUT_MS）> 显式覆盖 > 面默认（TS
     /// `readPositiveTimeout` 嵌套解析逐字）。
-    pub fn resolve(defaults: Self, first_override: Option<u64>, idle_override: Option<u64>) -> Self {
+    pub fn resolve(
+        defaults: Self,
+        first_override: Option<u64>,
+        idle_override: Option<u64>,
+    ) -> Self {
         resolve_deadline(
             defaults,
             first_override,
@@ -177,13 +187,21 @@ const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30
 impl StreamMonitor {
     fn new(callback: crate::llm::provider::StreamProgressCallback) -> Self {
         let now = std::time::Instant::now();
-        Self { start: now, last_emit: now, total_chars: 0, chinese_chars: 0, callback }
+        Self {
+            start: now,
+            last_emit: now,
+            total_chars: 0,
+            chinese_chars: 0,
+            callback,
+        }
     }
 
     fn on_delta(&mut self, text: &str) {
         self.total_chars = self.total_chars.saturating_add(text.chars().count() as u32);
         self.chinese_chars = self.chinese_chars.saturating_add(
-            text.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c)).count() as u32,
+            text.chars()
+                .filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c))
+                .count() as u32,
         );
         if self.last_emit.elapsed() >= PROGRESS_INTERVAL {
             self.emit(crate::llm::provider::StreamStatus::Streaming);
@@ -205,9 +223,6 @@ impl StreamMonitor {
     }
 }
 
-
-
-
 /// 轨迹观测头注入（134 号：TS traceHeaders——kkaiapi 端点 9-11 头，其它零；
 /// Rust 无重试环 clientAttempt 恒 1、无 thinkingBudget 恒 disabled，备案）。
 fn inject_trajectory_headers(
@@ -223,7 +238,10 @@ fn inject_trajectory_headers(
         base_url,
         Some(&trace),
         1,
-        crate::llm::agent_trajectory::ThinkingTrace { effort: "disabled", budget_tokens: None },
+        crate::llm::agent_trajectory::ThinkingTrace {
+            effort: "disabled",
+            budget_tokens: None,
+        },
     );
     let mut req = req;
     for (name, value) in headers {
@@ -284,7 +302,14 @@ pub fn build_chat_completion_request(params: &ChatCompletionParams) -> serde_jso
         })
         .collect();
 
-    let reserved: &[&str] = &["max_tokens", "temperature", "model", "messages", "stream", "tools"];
+    let reserved: &[&str] = &[
+        "max_tokens",
+        "temperature",
+        "model",
+        "messages",
+        "stream",
+        "tools",
+    ];
     let mut body = serde_json::json!({
         "model": params.model,
         "messages": messages,
@@ -372,7 +397,11 @@ pub fn aggregate_tool_calls(deltas: &ToolCallDeltas) -> Vec<StreamedToolCall> {
         .into_iter()
         .filter_map(|index| {
             let (id, name, arguments) = by_index.remove(&index)?;
-            (!id.is_empty() && !name.is_empty()).then_some(StreamedToolCall { id, name, arguments })
+            (!id.is_empty() && !name.is_empty()).then_some(StreamedToolCall {
+                id,
+                name,
+                arguments,
+            })
         })
         .collect()
 }
@@ -441,7 +470,11 @@ impl From<reqwest::Error> for StreamError {
 }
 
 impl StreamingChatClient {
-    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>, extra_headers: HashMap<String, String>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: impl Into<String>,
+        extra_headers: HashMap<String, String>,
+    ) -> Self {
         StreamingChatClient {
             http: reqwest::Client::new(),
             base_url: base_url.into(),
@@ -454,7 +487,10 @@ impl StreamingChatClient {
     /// /chat/completions（OpenAI chat 协议）；Responses → POST /responses
     /// （106 号，TS chatCompletionVia responses 分支逐字语义）。两路均收集
     /// 完整响应（StreamedCompletion）。
-    pub async fn stream_chat(&self, params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError> {
+    pub async fn stream_chat(
+        &self,
+        params: &ChatCompletionParams<'_>,
+    ) -> Result<StreamedCompletion, StreamError> {
         match params.api_format {
             TransportApiFormat::Responses => self.responses_completion(params).await,
             TransportApiFormat::Chat => self.chat_completion(params).await,
@@ -462,7 +498,10 @@ impl StreamingChatClient {
     }
 
     /// chat completions 传输（原有主路径）。
-    async fn chat_completion(&self, params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError> {
+    async fn chat_completion(
+        &self,
+        params: &ChatCompletionParams<'_>,
+    ) -> Result<StreamedCompletion, StreamError> {
         let body = build_chat_completion_request(params);
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let mut req = self
@@ -485,9 +524,9 @@ impl StreamingChatClient {
         });
         // 看门狗布防（仅流式；TS 在 fetch 前创建 deadline——首事件窗覆盖
         // 连接+响应头+首个流事件）。
-        let first_window = params.stream.then(|| {
-            std::time::Duration::from_millis(params.deadline.first_event_ms)
-        });
+        let first_window = params
+            .stream
+            .then(|| std::time::Duration::from_millis(params.deadline.first_event_ms));
         let armed_at = first_window.map(|_| tokio::time::Instant::now());
         let resp = match (armed_at, first_window) {
             (Some(armed), Some(window)) => tokio::time::timeout_at(armed + window, req.send())
@@ -568,7 +607,8 @@ impl StreamingChatClient {
             );
             // TS 非流式同款 output-limit 守卫（finish_reason 在 message 层）。
             if matches!(
-                json.pointer("/choices/0/finish_reason").and_then(Value::as_str),
+                json.pointer("/choices/0/finish_reason")
+                    .and_then(Value::as_str),
                 Some("length") | Some("max_tokens")
             ) {
                 return Err(StreamError::OutputLimit(
@@ -587,8 +627,9 @@ impl StreamingChatClient {
                         .filter_map(|call| {
                             let id = call.get("id").and_then(Value::as_str)?;
                             let name = call.pointer("/function/name").and_then(Value::as_str)?;
-                            let arguments =
-                                call.pointer("/function/arguments").and_then(Value::as_str)?;
+                            let arguments = call
+                                .pointer("/function/arguments")
+                                .and_then(Value::as_str)?;
                             Some(StreamedToolCall {
                                 id: id.to_string(),
                                 name: name.to_string(),
@@ -601,7 +642,9 @@ impl StreamingChatClient {
             return Ok(StreamedCompletion {
                 content,
                 prompt_tokens: json.pointer("/usage/prompt_tokens").and_then(Value::as_u64),
-                completion_tokens: json.pointer("/usage/completion_tokens").and_then(Value::as_u64),
+                completion_tokens: json
+                    .pointer("/usage/completion_tokens")
+                    .and_then(Value::as_u64),
                 total_tokens: json.pointer("/usage/total_tokens").and_then(Value::as_u64),
                 done: true,
                 tool_calls,
@@ -632,8 +675,8 @@ impl StreamingChatClient {
         let mut stream = resp.bytes_stream();
         let idle_window = std::time::Duration::from_millis(params.deadline.idle_ms);
         // 首块沿用布防时刻起算的首事件窗（剩余预算；TS 同一时钟窗）。
-        let mut next_deadline = armed_at
-            .map(|armed| armed + first_window.expect("流式必带首事件窗"));
+        let mut next_deadline =
+            armed_at.map(|armed| armed + first_window.expect("流式必带首事件窗"));
         let mut saw_chunk = false;
         loop {
             let item = match next_deadline {
@@ -667,14 +710,23 @@ impl StreamingChatClient {
                         }
                     }
                     SseEvent::ReasoningDelta(s) => reasoning.push_str(&s),
-                    SseEvent::Usage { prompt_tokens: p, completion_tokens: c, total_tokens: t } => {
+                    SseEvent::Usage {
+                        prompt_tokens: p,
+                        completion_tokens: c,
+                        total_tokens: t,
+                    } => {
                         prompt_tokens = p;
                         completion_tokens = c;
                         total_tokens = t;
                     }
                     SseEvent::Done => done = true,
                     SseEvent::FinishReason(reason) => terminal_finish_reason = Some(reason),
-                    SseEvent::ToolCallDelta { index, id, name, arguments } => {
+                    SseEvent::ToolCallDelta {
+                        index,
+                        id,
+                        name,
+                        arguments,
+                    } => {
                         tool_call_deltas.push((index, id, name, arguments));
                     }
                 }
@@ -691,7 +743,11 @@ impl StreamingChatClient {
                         content.push_str(&emittable);
                     }
                 }
-                SseEvent::Usage { prompt_tokens: p, completion_tokens: c, total_tokens: t } => {
+                SseEvent::Usage {
+                    prompt_tokens: p,
+                    completion_tokens: c,
+                    total_tokens: t,
+                } => {
                     prompt_tokens = p;
                     completion_tokens = c;
                     total_tokens = t;
@@ -713,7 +769,10 @@ impl StreamingChatClient {
         // 流完整性守卫（TS 守卫序逐字：output-limit → 空响应 → 缺终态）。
         // 工具调用轮 content 为空是常态——有 tool_calls 时豁免空响应守卫
         // （TS 自定义传输不做工具聚合，本侧为其工具能力的适应性扩展）。
-        if matches!(terminal_finish_reason.as_deref(), Some("length") | Some("max_tokens")) {
+        if matches!(
+            terminal_finish_reason.as_deref(),
+            Some("length") | Some("max_tokens")
+        ) {
             return Err(StreamError::OutputLimit(
                 terminal_finish_reason.unwrap_or_default(),
             ));
@@ -750,7 +809,10 @@ impl StreamingChatClient {
     /// responses 传输（106 号）：POST /responses——非流式整体解析 + 流式
     /// 事件解析（`response.output_text.delta` 增量 / `response.completed|
     /// incomplete` 终态守卫），TS chatCompletionVia responses 分支逐字语义。
-    async fn responses_completion(&self, params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError> {
+    async fn responses_completion(
+        &self,
+        params: &ChatCompletionParams<'_>,
+    ) -> Result<StreamedCompletion, StreamError> {
         let body = build_responses_request(params);
         let url = format!("{}/responses", self.base_url.trim_end_matches('/'));
         let mut req = self
@@ -769,9 +831,9 @@ impl StreamingChatClient {
                 + std::time::Duration::from_millis(params.deadline.request_ms)
         });
         // 看门狗与 chat 传输同构（TS 两传输共用 deadline.signal/activity）。
-        let first_window = params.stream.then(|| {
-            std::time::Duration::from_millis(params.deadline.first_event_ms)
-        });
+        let first_window = params
+            .stream
+            .then(|| std::time::Duration::from_millis(params.deadline.first_event_ms));
         let armed_at = first_window.map(|_| tokio::time::Instant::now());
         let resp = match (armed_at, first_window) {
             (Some(armed), Some(window)) => tokio::time::timeout_at(armed + window, req.send())
@@ -839,7 +901,9 @@ impl StreamingChatClient {
                 .map_err(|e| StreamError::Protocol(format!("invalid JSON response: {e}")))?;
             let content = extract_responses_content(&json);
             if content.is_empty() {
-                return Err(StreamError::Protocol("LLM returned empty response".to_string()));
+                return Err(StreamError::Protocol(
+                    "LLM returned empty response".to_string(),
+                ));
             }
             return Ok(StreamedCompletion {
                 content,
@@ -860,8 +924,8 @@ impl StreamingChatClient {
         let mut stream = resp.bytes_stream();
         let mut raw = Vec::<u8>::new();
         let idle_window = std::time::Duration::from_millis(params.deadline.idle_ms);
-        let mut next_deadline = armed_at
-            .map(|armed| armed + first_window.expect("流式必带首事件窗"));
+        let mut next_deadline =
+            armed_at.map(|armed| armed + first_window.expect("流式必带首事件窗"));
         let mut saw_chunk = false;
         loop {
             let item = match next_deadline {
@@ -905,10 +969,19 @@ impl StreamingChatClient {
             }
             if event_type == "response.completed" || event_type == "response.incomplete" {
                 saw_terminal = true;
-                let response = json.get("response").cloned().unwrap_or(serde_json::Value::Null);
-                prompt_tokens = response.pointer("/usage/input_tokens").and_then(Value::as_u64);
-                completion_tokens = response.pointer("/usage/output_tokens").and_then(Value::as_u64);
-                total_tokens = response.pointer("/usage/total_tokens").and_then(Value::as_u64);
+                let response = json
+                    .get("response")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                prompt_tokens = response
+                    .pointer("/usage/input_tokens")
+                    .and_then(Value::as_u64);
+                completion_tokens = response
+                    .pointer("/usage/output_tokens")
+                    .and_then(Value::as_u64);
+                total_tokens = response
+                    .pointer("/usage/total_tokens")
+                    .and_then(Value::as_u64);
                 if content.is_empty() {
                     content = extract_responses_content(&response);
                 }
@@ -928,7 +1001,16 @@ impl StreamingChatClient {
         if let Some(monitor) = monitor {
             monitor.finish();
         }
-        Ok(StreamedCompletion { content, prompt_tokens, completion_tokens, total_tokens, done: true, tool_calls: Vec::new(), reasoning: String::new(), finish_reason: None })
+        Ok(StreamedCompletion {
+            content,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            done: true,
+            tool_calls: Vec::new(),
+            reasoning: String::new(),
+            finish_reason: None,
+        })
     }
 }
 
@@ -946,13 +1028,19 @@ impl StreamingChatClient {
 /// 消费方（成本观测）立项再入契约。
 #[async_trait::async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn stream_chat(&self, params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError>;
+    async fn stream_chat(
+        &self,
+        params: &ChatCompletionParams<'_>,
+    ) -> Result<StreamedCompletion, StreamError>;
 }
 
 /// 生产实现：委托固有方法（同名优先不构成递归——显式路径限定）。
 #[async_trait::async_trait]
 impl LlmProvider for StreamingChatClient {
-    async fn stream_chat(&self, params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError> {
+    async fn stream_chat(
+        &self,
+        params: &ChatCompletionParams<'_>,
+    ) -> Result<StreamedCompletion, StreamError> {
         StreamingChatClient::stream_chat(self, params).await
     }
 }
@@ -965,7 +1053,9 @@ use serde_json::Value;
 fn join_system_prompt(messages: &[LLMMessage]) -> Option<String> {
     let parts: Vec<&str> = messages
         .iter()
-        .filter(|message| matches!(message.role, LLMRole::System) && !message.content.trim().is_empty())
+        .filter(|message| {
+            matches!(message.role, LLMRole::System) && !message.content.trim().is_empty()
+        })
         .map(|message| message.content.trim())
         .collect();
     (!parts.is_empty()).then(|| parts.join("\n\n"))
@@ -1059,8 +1149,8 @@ fn sse_data_events(text: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::provider::LLMMessage;
+    use super::*;
 
     /// R45/567 号：第二实现定型证明——seam 可接纳非 HTTP 提供方（进程内
     /// mock/未来本地推理），Consumer 经 `dyn LlmProvider` 分发不辨身份。
@@ -1070,7 +1160,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LlmProvider for MockProvider {
-        async fn stream_chat(&self, _params: &ChatCompletionParams<'_>) -> Result<StreamedCompletion, StreamError> {
+        async fn stream_chat(
+            &self,
+            _params: &ChatCompletionParams<'_>,
+        ) -> Result<StreamedCompletion, StreamError> {
             Ok(StreamedCompletion {
                 content: self.content.clone(),
                 prompt_tokens: Some(1),
@@ -1086,7 +1179,9 @@ mod tests {
 
     #[tokio::test]
     async fn provider_seam_accepts_second_implementation() {
-        let mock = MockProvider { content: "mock".into() };
+        let mock = MockProvider {
+            content: "mock".into(),
+        };
         // dyn 分发：Consumer 只依赖 trait 面。
         let provider: &dyn LlmProvider = &mock;
         let params = ChatCompletionParams {
@@ -1112,10 +1207,33 @@ mod tests {
     #[test]
     fn build_request_shape() {
         let msgs = vec![
-            LLMMessage { role: LLMRole::System, content: "你是助手".into(), tool_calls: None, tool_call_id: None },
-            LLMMessage { role: LLMRole::User, content: "你好".into(), tool_calls: None, tool_call_id: None },
+            LLMMessage {
+                role: LLMRole::System,
+                content: "你是助手".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: LLMRole::User,
+                content: "你好".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
         ];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 1000, stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: None, progress: None, deadline: StreamDeadlineSpec::PIPELINE, trajectory: None };
+        let params = ChatCompletionParams {
+            model: "gpt-4o",
+            messages: &msgs,
+            temperature: 0.7,
+            max_tokens: 1000,
+            stream: true,
+            api_format: TransportApiFormat::Chat,
+            extra: None,
+            tools: None,
+            images: None,
+            progress: None,
+            deadline: StreamDeadlineSpec::PIPELINE,
+            trajectory: None,
+        };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o");
         assert_eq!(body["temperature"], 0.7);
@@ -1129,18 +1247,52 @@ mod tests {
     #[test]
     fn images_inject_vision_array_into_last_user_message_only() {
         let msgs = vec![
-            LLMMessage { role: LLMRole::System, content: "sys".into(), tool_calls: None, tool_call_id: None },
-            LLMMessage { role: LLMRole::User, content: "早前的用户轮".into(), tool_calls: None, tool_call_id: None },
-            LLMMessage { role: LLMRole::Assistant, content: "回复".into(), tool_calls: None, tool_call_id: None },
-            LLMMessage { role: LLMRole::User, content: "看这张图".into(), tool_calls: None, tool_call_id: None },
+            LLMMessage {
+                role: LLMRole::System,
+                content: "sys".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: LLMRole::User,
+                content: "早前的用户轮".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: LLMRole::Assistant,
+                content: "回复".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: LLMRole::User,
+                content: "看这张图".into(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
         ];
         let images = vec![
-            ChatImage { data: "aGVsbG8=".into(), mime_type: "image/png".into() },
-            ChatImage { data: "eXlNQQ==".into(), mime_type: "image/jpeg".into() },
+            ChatImage {
+                data: "aGVsbG8=".into(),
+                mime_type: "image/png".into(),
+            },
+            ChatImage {
+                data: "eXlNQQ==".into(),
+                mime_type: "image/jpeg".into(),
+            },
         ];
         let params = ChatCompletionParams {
-            model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
-            stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&images), progress: None,
+            model: "gpt-4o",
+            messages: &msgs,
+            temperature: 0.7,
+            max_tokens: 100,
+            stream: true,
+            api_format: TransportApiFormat::Chat,
+            extra: None,
+            tools: None,
+            images: Some(&images),
+            progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
             trajectory: None,
         };
@@ -1151,16 +1303,30 @@ mod tests {
         assert_eq!(last[0]["type"], "text");
         assert_eq!(last[0]["text"], "看这张图");
         assert_eq!(last[1]["type"], "image_url");
-        assert_eq!(last[1]["image_url"]["url"], "data:image/png;base64,aGVsbG8=");
-        assert_eq!(last[2]["image_url"]["url"], "data:image/jpeg;base64,eXlNQQ==");
+        assert_eq!(
+            last[1]["image_url"]["url"],
+            "data:image/png;base64,aGVsbG8="
+        );
+        assert_eq!(
+            last[2]["image_url"]["url"],
+            "data:image/jpeg;base64,eXlNQQ=="
+        );
         // 早前 user 轮与其它角色保持纯字符串。
         assert_eq!(body["messages"][1]["content"], "早前的用户轮");
         assert_eq!(body["messages"][0]["content"], "sys");
         // 空图片列表 → 全部纯字符串。
         let empty: [ChatImage; 0] = [];
         let params = ChatCompletionParams {
-            model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100,
-            stream: true, api_format: TransportApiFormat::Chat, extra: None, tools: None, images: Some(&empty), progress: None,
+            model: "gpt-4o",
+            messages: &msgs,
+            temperature: 0.7,
+            max_tokens: 100,
+            stream: true,
+            api_format: TransportApiFormat::Chat,
+            extra: None,
+            tools: None,
+            images: Some(&empty),
+            progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
             trajectory: None,
         };
@@ -1173,8 +1339,26 @@ mod tests {
         let mut extra = HashMap::new();
         extra.insert("model".into(), serde_json::json!("EVIL")); // 保留字段，应被忽略
         extra.insert("top_p".into(), serde_json::json!(0.9)); // 非保留，应保留
-        let msgs = vec![LLMMessage { role: LLMRole::User, content: "x".into(), tool_calls: None, tool_call_id: None }];
-        let params = ChatCompletionParams { model: "gpt-4o", messages: &msgs, temperature: 0.7, max_tokens: 100, stream: true, api_format: TransportApiFormat::Chat, extra: Some(&extra), tools: None, images: None, progress: None, deadline: StreamDeadlineSpec::PIPELINE, trajectory: None };
+        let msgs = vec![LLMMessage {
+            role: LLMRole::User,
+            content: "x".into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        let params = ChatCompletionParams {
+            model: "gpt-4o",
+            messages: &msgs,
+            temperature: 0.7,
+            max_tokens: 100,
+            stream: true,
+            api_format: TransportApiFormat::Chat,
+            extra: Some(&extra),
+            tools: None,
+            images: None,
+            progress: None,
+            deadline: StreamDeadlineSpec::PIPELINE,
+            trajectory: None,
+        };
         let body = build_chat_completion_request(&params);
         assert_eq!(body["model"], "gpt-4o"); // 未被覆盖
         assert_eq!(body["top_p"], 0.9); // 保留
@@ -1183,7 +1367,12 @@ mod tests {
     // ── 106 号：responses 传输纯函数 ──────────────────────────────────
 
     fn msg(role: LLMRole, content: &str) -> LLMMessage {
-        LLMMessage { role, content: content.into(), tool_calls: None, tool_call_id: None }
+        LLMMessage {
+            role,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
 
     #[test]
@@ -1195,8 +1384,16 @@ mod tests {
             msg(LLMRole::User, "继续"),
         ];
         let params = ChatCompletionParams {
-            model: "gpt-5", messages: &msgs, temperature: 0.5, max_tokens: 128,
-            stream: true, api_format: TransportApiFormat::Responses, extra: None, tools: None, images: None, progress: None,
+            model: "gpt-5",
+            messages: &msgs,
+            temperature: 0.5,
+            max_tokens: 128,
+            stream: true,
+            api_format: TransportApiFormat::Responses,
+            extra: None,
+            tools: None,
+            images: None,
+            progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
             trajectory: None,
         };
@@ -1221,14 +1418,28 @@ mod tests {
         extra.insert("temperature".to_string(), serde_json::json!(0.2));
         let msgs = vec![msg(LLMRole::User, "x")];
         let params = ChatCompletionParams {
-            model: "m", messages: &msgs, temperature: 0.7, max_tokens: 16,
-            stream: false, api_format: TransportApiFormat::Responses, extra: Some(&extra), tools: None, images: None, progress: None,
+            model: "m",
+            messages: &msgs,
+            temperature: 0.7,
+            max_tokens: 16,
+            stream: false,
+            api_format: TransportApiFormat::Responses,
+            extra: Some(&extra),
+            tools: None,
+            images: None,
+            progress: None,
             deadline: StreamDeadlineSpec::PIPELINE,
             trajectory: None,
         };
         let body = build_responses_request(&params);
-        assert_eq!(body["temperature"], 0.2, "extra 覆盖基础键（TS ...extra 展开序）");
-        assert!(body.get("instructions").is_none(), "无 system → 无 instructions");
+        assert_eq!(
+            body["temperature"], 0.2,
+            "extra 覆盖基础键（TS ...extra 展开序）"
+        );
+        assert!(
+            body.get("instructions").is_none(),
+            "无 system → 无 instructions"
+        );
     }
 
     #[test]
@@ -1256,13 +1467,18 @@ mod tests {
         let events: std::sync::Arc<std::sync::Mutex<Vec<StreamProgress>>> =
             std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink = events.clone();
-        let mut monitor = StreamMonitor::new(std::sync::Arc::new(move |progress: &StreamProgress| {
-            sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(progress.clone());
-        }));
+        let mut monitor =
+            StreamMonitor::new(std::sync::Arc::new(move |progress: &StreamProgress| {
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(progress.clone());
+            }));
         monitor.on_delta("你好abc世界");
         monitor.on_delta("x");
         monitor.finish();
-        let events = events.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let events = events
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // <30s 节流 → 无 streaming 心跳，仅终态 done（TS 同款默认间隔语义）。
         assert_eq!(events.len(), 1, "{events:?}");
         assert_eq!(events[0].status, StreamStatus::Done);
@@ -1296,8 +1512,15 @@ mod tests {
         );
         // 显式覆盖 > 面默认。
         assert_eq!(
-            resolve_deadline(StreamDeadlineSpec::PIPELINE, Some(500), None, None, None, None)
-                .first_event_ms,
+            resolve_deadline(
+                StreamDeadlineSpec::PIPELINE,
+                Some(500),
+                None,
+                None,
+                None,
+                None
+            )
+            .first_event_ms,
             500
         );
         // env > 显式覆盖（TS provider-stream-deadline 测试同款语义）。
@@ -1310,7 +1533,11 @@ mod tests {
                 None,
                 None
             ),
-            StreamDeadlineSpec { first_event_ms: 10, idle_ms: 180_000, request_ms: 300_000 }
+            StreamDeadlineSpec {
+                first_event_ms: 10,
+                idle_ms: 180_000,
+                request_ms: 300_000
+            }
         );
         // env 非法值回退到覆盖值。
         assert_eq!(
@@ -1359,16 +1586,33 @@ mod tests {
 
     #[test]
     fn inactivity_error_messages_match_ts() {
-        let first = StreamError::Inactivity { stage: InactivityStage::FirstEvent, timeout_ms: 10 };
-        assert_eq!(first.to_string(), "LLM stream produced no event within 10ms");
-        let idle = StreamError::Inactivity { stage: InactivityStage::Idle, timeout_ms: 90_000 };
-        assert_eq!(idle.to_string(), "LLM stream produced no new event for 90000ms");
+        let first = StreamError::Inactivity {
+            stage: InactivityStage::FirstEvent,
+            timeout_ms: 10,
+        };
+        assert_eq!(
+            first.to_string(),
+            "LLM stream produced no event within 10ms"
+        );
+        let idle = StreamError::Inactivity {
+            stage: InactivityStage::Idle,
+            timeout_ms: 90_000,
+        };
+        assert_eq!(
+            idle.to_string(),
+            "LLM stream produced no new event for 90000ms"
+        );
     }
 
     #[test]
     fn request_timeout_error_message_matches_ts() {
-        let err = StreamError::RequestTimeout { timeout_ms: 300_000 };
-        assert_eq!(err.to_string(), "LLM request did not complete within 300000ms");
+        let err = StreamError::RequestTimeout {
+            timeout_ms: 300_000,
+        };
+        assert_eq!(
+            err.to_string(),
+            "LLM request did not complete within 300000ms"
+        );
     }
 
     #[tokio::test]
@@ -1387,8 +1631,11 @@ mod tests {
                 }
             }
         });
-        let client =
-            StreamingChatClient::new(format!("http://{addr}/v1"), "fixture".to_string(), HashMap::new());
+        let client = StreamingChatClient::new(
+            format!("http://{addr}/v1"),
+            "fixture".to_string(),
+            HashMap::new(),
+        );
         let mut params = deadline_params(StreamDeadlineSpec {
             first_event_ms: 50,
             idle_ms: 50,
@@ -1434,8 +1681,11 @@ mod tests {
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
-        let client =
-            StreamingChatClient::new(format!("http://{addr}"), "fixture".to_string(), HashMap::new());
+        let client = StreamingChatClient::new(
+            format!("http://{addr}"),
+            "fixture".to_string(),
+            HashMap::new(),
+        );
         let params = deadline_params(StreamDeadlineSpec {
             first_event_ms: 50,
             idle_ms: 50,
@@ -1444,7 +1694,13 @@ mod tests {
         let started = std::time::Instant::now();
         let err = client.stream_chat(&params).await.unwrap_err();
         assert!(
-            matches!(err, StreamError::Inactivity { stage: InactivityStage::FirstEvent, timeout_ms: 50 }),
+            matches!(
+                err,
+                StreamError::Inactivity {
+                    stage: InactivityStage::FirstEvent,
+                    timeout_ms: 50
+                }
+            ),
             "实际错误：{err:?}"
         );
         assert!(
@@ -1523,7 +1779,6 @@ mod tests {
 
     const DONE: &str = "data: [DONE]\n\n";
 
-
     // ── 133/134 号：think 剥离接线集成（真 HTTP mock；纯函数单测在
     // think_tag_stripper 模块） ─────────────────────────────────────────
     #[tokio::test]
@@ -1537,20 +1792,25 @@ mod tests {
         ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
         let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
         assert_eq!(completion.content, "正文从这里开始。");
     }
 
     #[tokio::test]
     async fn stream_flushes_unterminated_think_block_without_loss() {
-        let base = spawn_scripted_llm(vec![
-            content_chunk("<think>推理没有闭合"),
-            DONE.to_string(),
-        ])
-        .await;
+        let base =
+            spawn_scripted_llm(vec![content_chunk("<think>推理没有闭合"), DONE.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
         let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
         assert_eq!(completion.content, "<think>推理没有闭合");
     }
@@ -1565,7 +1825,11 @@ mod tests {
         });
         let base = spawn_scripted_llm(vec![body.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 });
+        let mut params = deadline_params(StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        });
         params.stream = false;
         let completion = client.stream_chat(&params).await.unwrap();
         assert_eq!(completion.content, "非流式正文。");
@@ -1593,27 +1857,22 @@ mod tests {
         let parts = std::sync::Arc::new(parts);
         let app = axum::Router::new().route(
             "/chat/completions",
-            axum::routing::post(
-                move |headers: axum::http::HeaderMap| {
-                    let seen = seen_state.clone();
-                    let parts = parts.clone();
-                    async move {
-                        {
-                            let mut sink = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                            for (name, value) in headers.iter() {
-                                sink.push((
-                                    name.to_string(),
-                                    value.to_str().unwrap_or("").to_string(),
-                                ));
-                            }
+            axum::routing::post(move |headers: axum::http::HeaderMap| {
+                let seen = seen_state.clone();
+                let parts = parts.clone();
+                async move {
+                    {
+                        let mut sink = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                        for (name, value) in headers.iter() {
+                            sink.push((name.to_string(), value.to_str().unwrap_or("").to_string()));
                         }
-                        axum::response::IntoResponse::into_response((
-                            [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                            scripted_body((*parts).clone()).await,
-                        ))
                     }
-                },
-            ),
+                    axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        scripted_body((*parts).clone()).await,
+                    ))
+                }
+            }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -1627,7 +1886,11 @@ mod tests {
     async fn non_kkaiapi_endpoint_sends_no_trajectory_headers_even_with_scope() {
         let (base, seen) = spawn_recording_llm(vec![content_chunk("正文"), DONE.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let mut params = deadline_params(StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 });
+        let mut params = deadline_params(StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        });
         params.trajectory = Some(std::sync::Arc::new(
             crate::llm::agent_trajectory::AgentTrajectoryScope::main(
                 "inkos-test".to_string(),
@@ -1641,7 +1904,10 @@ mod tests {
             .iter()
             .filter(|(name, _)| name.to_lowercase().starts_with("x-inkos-"))
             .collect();
-        assert!(inkos_headers.is_empty(), "非 kkaiapi 端点必须零观测头：{inkos_headers:?}");
+        assert!(
+            inkos_headers.is_empty(),
+            "非 kkaiapi 端点必须零观测头：{inkos_headers:?}"
+        );
     }
 
     #[tokio::test]
@@ -1667,7 +1933,11 @@ mod tests {
         });
         let client =
             StreamingChatClient::new(format!("http://{addr}"), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 150, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 150,
+            request_ms: 300_000,
+        };
         let err = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             client.stream_chat(&deadline_params(spec)),
@@ -1706,7 +1976,11 @@ mod tests {
         });
         let client =
             StreamingChatClient::new(format!("http://{addr}"), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 150, idle_ms: 5_000, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 150,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
         let err = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             client.stream_chat(&deadline_params(spec)),
@@ -1722,20 +1996,35 @@ mod tests {
         // 有内容但流"干净地"结束且无 [DONE]/finish_reason → 截断，非完成。
         let base = spawn_scripted_llm(vec![content_chunk("写到一半")]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
             .unwrap_err();
-        assert_eq!(err.to_string(), "stream closed without [DONE]/finish_reason");
+        assert_eq!(
+            err.to_string(),
+            "stream closed without [DONE]/finish_reason"
+        );
     }
 
     #[tokio::test]
     async fn output_limit_finish_reason_is_rejected() {
-        let base = spawn_scripted_llm(            vec![content_chunk("被掐断的正文"), finish_chunk("length"), DONE.to_string()])
+        let base = spawn_scripted_llm(vec![
+            content_chunk("被掐断的正文"),
+            finish_chunk("length"),
+            DONE.to_string(),
+        ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
@@ -1751,12 +2040,19 @@ mod tests {
             ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
             .unwrap_err();
-        assert_eq!(err.to_string(), "LLM returned reasoning without a final answer");
+        assert_eq!(
+            err.to_string(),
+            "LLM returned reasoning without a final answer"
+        );
     }
 
     #[tokio::test]
@@ -1764,7 +2060,11 @@ mod tests {
         // 无内容无工具无推理 + [DONE] → 空响应。
         let base = spawn_scripted_llm(vec![DONE.to_string()]).await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
         let err = client
             .stream_chat(&deadline_params(spec))
             .await
@@ -1774,14 +2074,19 @@ mod tests {
 
     #[tokio::test]
     async fn finish_reason_stop_with_content_succeeds() {
-        let base = spawn_scripted_llm(            vec![content_chunk("正文"), finish_chunk("stop"), DONE.to_string()])
+        let base = spawn_scripted_llm(vec![
+            content_chunk("正文"),
+            finish_chunk("stop"),
+            DONE.to_string(),
+        ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
-        let completion = client
-            .stream_chat(&deadline_params(spec))
-            .await
-            .unwrap();
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
+        let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
         assert_eq!(completion.content, "正文");
         assert!(completion.done);
     }
@@ -1789,21 +2094,24 @@ mod tests {
     #[tokio::test]
     async fn tool_call_round_without_content_is_exempt_from_empty_guard() {
         // 工具调用轮 content 为空是常态（TS 自定义传输不做工具聚合的适应性扩展）。
-        let base = spawn_scripted_llm(            vec![
-                sse(&serde_json::json!({ "choices": [{ "delta": { "tool_calls": [{
+        let base = spawn_scripted_llm(vec![
+            sse(
+                &serde_json::json!({ "choices": [{ "delta": { "tool_calls": [{
                     "index": 0, "id": "call_1",
                     "function": { "name": "write", "arguments": "{}" },
-                }] } }] })),
-                finish_chunk("tool_calls"),
-                DONE.to_string(),
-            ])
+                }] } }] }),
+            ),
+            finish_chunk("tool_calls"),
+            DONE.to_string(),
+        ])
         .await;
         let client = StreamingChatClient::new(base.clone(), "key".to_string(), HashMap::new());
-        let spec = StreamDeadlineSpec { first_event_ms: 5_000, idle_ms: 5_000, request_ms: 300_000 };
-        let completion = client
-            .stream_chat(&deadline_params(spec))
-            .await
-            .unwrap();
+        let spec = StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        };
+        let completion = client.stream_chat(&deadline_params(spec)).await.unwrap();
         assert_eq!(completion.content, "");
         assert_eq!(completion.tool_calls.len(), 1);
         assert_eq!(completion.tool_calls[0].name, "write");

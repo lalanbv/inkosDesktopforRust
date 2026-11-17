@@ -25,10 +25,8 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::interactive_film::{
-    self as film, StoryGraph, StoryGraphDelta,
-};
 use crate::interaction::session::is_safe_book_id;
+use crate::interactive_film::{self as film, StoryGraph, StoryGraphDelta};
 use crate::server::books_routes::BooksRuntime;
 
 fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
@@ -68,7 +66,11 @@ pub struct AuthoringState {
     pub phase_revs: Option<Value>,
 }
 
-const DEFAULT_STATE: AuthoringState = AuthoringState { phase: "world", rev: 0, phase_revs: None };
+const DEFAULT_STATE: AuthoringState = AuthoringState {
+    phase: "world",
+    rev: 0,
+    phase_revs: None,
+};
 const VALID_PHASES: &[&str] = &["world", "scale", "structure", "workshop"];
 
 fn project_dir(project_root: &Path, project_id: &str) -> std::path::PathBuf {
@@ -104,7 +106,11 @@ pub async fn load_authoring_state(project_root: &Path, project_id: &str) -> Auth
         .unwrap_or(DEFAULT_STATE.rev);
     // TS 逐字：`phaseRevs !== undefined` 即保留（不校验形态）。
     let phase_revs = parsed.get("phaseRevs").cloned();
-    AuthoringState { phase, rev, phase_revs }
+    AuthoringState {
+        phase,
+        rev,
+        phase_revs,
+    }
 }
 
 fn snapshot_dir(project_root: &Path, project_id: &str) -> std::path::PathBuf {
@@ -117,8 +123,15 @@ async fn write_snapshot(project_root: &Path, project_id: &str, rev: i64, graph: 
     if tokio::fs::create_dir_all(&dir).await.is_err() {
         return;
     }
-    let payload = format!("{}\n", serde_json::to_string_pretty(graph).unwrap_or_default());
-    let _ = crate::utils::atomic_file_set::write_file_atomic(&dir.join(format!("{rev}.json")), &payload).await;
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(graph).unwrap_or_default()
+    );
+    let _ = crate::utils::atomic_file_set::write_file_atomic(
+        &dir.join(format!("{rev}.json")),
+        &payload,
+    )
+    .await;
     let mut entries = match tokio::fs::read_dir(&dir).await {
         Ok(entries) => entries,
         Err(_) => return,
@@ -152,7 +165,9 @@ async fn with_project_lock<T>(
 ) -> T {
     let key = format!("{}::{}", project_root.display(), project_id);
     let lock = {
-        let mut locks = project_locks().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut locks = project_locks()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         locks.entry(key).or_default().clone()
     };
     let _guard = lock.lock().await;
@@ -189,10 +204,16 @@ pub async fn apply_graph_delta(
         if tokio::fs::create_dir_all(&dir).await.is_err() {
             return Err("failed to create project dir".to_string());
         }
-        let payload = format!("{}\n", serde_json::to_string_pretty(&next_state).unwrap_or_default());
-        crate::utils::atomic_file_set::write_file_atomic(&authoring_state_path(project_root, project_id), &payload)
-            .await
-            .map_err(|e| e.to_string())?;
+        let payload = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&next_state).unwrap_or_default()
+        );
+        crate::utils::atomic_file_set::write_file_atomic(
+            &authoring_state_path(project_root, project_id),
+            &payload,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         Ok((graph, next_rev))
     })
     .await
@@ -201,9 +222,7 @@ pub async fn apply_graph_delta(
 // ── tar 归档（server.ts buildTarArchive / listArchiveFiles） ─────
 
 fn normalize_archive_path(path: &str) -> String {
-    path.replace('\\', "/")
-        .trim_start_matches('/')
-        .to_string()
+    path.replace('\\', "/").trim_start_matches('/').to_string()
 }
 
 fn list_archive_files<'a>(
@@ -242,7 +261,12 @@ async fn list_archive_files_inner(dir: &Path, prefix: &str) -> Vec<String> {
     files
 }
 
-fn write_tar_string(header: &mut [u8; 512], offset: usize, length: usize, value: &str) -> Result<(), String> {
+fn write_tar_string(
+    header: &mut [u8; 512],
+    offset: usize,
+    length: usize,
+    value: &str,
+) -> Result<(), String> {
     let encoded = value.as_bytes();
     if encoded.len() > length {
         return Err(format!("Archive path is too long for tar header: {value}"));
@@ -257,14 +281,18 @@ fn write_tar_octal(header: &mut [u8; 512], offset: usize, length: usize, value: 
     let padded = if text.len() >= width {
         text[text.len() - width..].to_string()
     } else {
-        format!("{:0width$}", text.parse::<u64>().unwrap_or(0), width = width)
-            .chars()
-            .rev()
-            .take(width)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect()
+        format!(
+            "{:0width$}",
+            text.parse::<u64>().unwrap_or(0),
+            width = width
+        )
+        .chars()
+        .rev()
+        .take(width)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
     };
     let bytes = padded.as_bytes();
     header[offset..offset + bytes.len()].copy_from_slice(bytes);
@@ -315,9 +343,7 @@ async fn build_tar_archive(source_dir: &Path, package_root_name: &str) -> Result
 
 // ── GET /interactive-films ──────────────────────────────────────
 
-pub async fn list_interactive_films(
-    State(runtime): State<BooksRuntime>,
-) -> impl IntoResponse {
+pub async fn list_interactive_films(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root();
     let films_dir = root.join("interactive-films");
     let mut entries: Vec<String> = Vec::new();
@@ -394,7 +420,11 @@ pub async fn post_story_graph_delta(
     match apply_graph_delta(root, &id, &delta, None).await {
         Ok((graph, rev)) => {
             let graph_json = serde_json::to_value(&graph).unwrap_or(Value::Null);
-            (StatusCode::OK, Json(json!({ "rev": rev, "graph": graph_json }))).into_response()
+            (
+                StatusCode::OK,
+                Json(json!({ "rev": rev, "graph": graph_json })),
+            )
+                .into_response()
         }
         Err(message) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message),
     }
@@ -416,7 +446,11 @@ pub async fn get_story_graph(
             (StatusCode::OK, Json(value)).into_response()
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => graph_not_found(&id),
-        Err(e) => api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", e.to_string()),
+        Err(e) => api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            e.to_string(),
+        ),
     }
 }
 
@@ -429,7 +463,11 @@ pub async fn get_project_export(
     if !is_safe_book_id(&id) {
         return invalid_id(&id);
     }
-    let project_dir = runtime.state.project_root().join("interactive-films").join(&id);
+    let project_dir = runtime
+        .state
+        .project_root()
+        .join("interactive-films")
+        .join(&id);
     if tokio::fs::metadata(&project_dir).await.is_err() {
         return api_error(
             StatusCode::NOT_FOUND,
@@ -439,15 +477,25 @@ pub async fn get_project_export(
     }
     let tar = match build_tar_archive(&project_dir, &id).await {
         Ok(tar) => tar,
-        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message),
+        Err(message) => {
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message)
+        }
     };
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     use std::io::Write as _;
     if encoder.write_all(&tar).is_err() {
-        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "gzip failed");
+        return api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "gzip failed",
+        );
     }
     let Ok(gzip) = encoder.finish() else {
-        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "gzip failed");
+        return api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "gzip failed",
+        );
     };
     let filename = crate::server::task_store::js_encode_uri_component(&id);
     (
@@ -470,7 +518,11 @@ async fn loaded_graph(runtime: &BooksRuntime, id: &str) -> Result<StoryGraph, Re
     match film::load_story_graph(runtime.state.project_root(), id).await {
         Ok(Some(graph)) => Ok(graph),
         Ok(None) => Err(graph_not_found(id)),
-        Err(message) => Err(api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message)),
+        Err(message) => Err(api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            message,
+        )),
     }
 }
 
@@ -500,8 +552,8 @@ pub async fn get_story_graph_analysis(
     }
     match loaded_graph(&runtime, &id).await {
         Ok(graph) => {
-            let report = serde_json::to_value(film::review_story_graph(&graph))
-                .unwrap_or(Value::Null);
+            let report =
+                serde_json::to_value(film::review_story_graph(&graph)).unwrap_or(Value::Null);
             // TS `analyzeEmotionalArcs` 返回包装对象 `{arcs, truncated}`（emotion.ts
             // L35）——此前裸序列化 arcs 数组，UI `arcs.arcs.slice` 即崩（281 号）。
             let (arcs, truncated) = film::analyze_emotional_arcs(&graph);
@@ -651,7 +703,9 @@ pub async fn post_node_image(
                 format!("node {node_id} not found"),
             )
         }
-        Err(message) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message),
+        Err(message) => {
+            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message)
+        }
     };
     if !graph.nodes.iter().any(|n| n.id == node_id) {
         return api_error(
@@ -679,7 +733,9 @@ pub async fn post_node_image(
         return api_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "INTERNAL_ERROR",
-            format!("node {node_id} has no imageSlot.prompt or sceneDesc to generate an image from"),
+            format!(
+                "node {node_id} has no imageSlot.prompt or sceneDesc to generate an image from"
+            ),
         );
     }
     let root = runtime.state.project_root();
@@ -710,18 +766,32 @@ pub async fn post_node_image(
     {
         Ok(image) => image,
         Err(message) => {
-            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "IMAGE_GENERATION_FAILED", message)
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "IMAGE_GENERATION_FAILED",
+                message,
+            )
         }
     };
     let asset_ref = film::node_image_rel_path(&id, &node_id, image.extension);
     let abs = root.join(&asset_ref);
     if let Some(parent) = abs.parent() {
         if let Err(message) = tokio::fs::create_dir_all(parent).await {
-            return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message.to_string());
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                message.to_string(),
+            );
         }
     }
-    if let Err(message) = crate::utils::atomic_file_set::write_file_atomic_bytes(&abs, &image.bytes).await {
-        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", message.to_string());
+    if let Err(message) =
+        crate::utils::atomic_file_set::write_file_atomic_bytes(&abs, &image.bytes).await
+    {
+        return api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            message.to_string(),
+        );
     }
     // buildSetImageRefDelta：upsert 节点 + imageSlot {prompt, assetRef}。
     let mut node_with_image = node.clone();
@@ -733,7 +803,13 @@ pub async fn post_node_image(
         "nodes": { "upsert": [serde_json::to_value(&node_with_image).unwrap_or(Value::Null)] }
     })) {
         Ok(delta) => delta,
-        Err(e) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", e.to_string()),
+        Err(e) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                e.to_string(),
+            )
+        }
     };
     match apply_graph_delta(root, &id, &delta, None).await {
         Ok((_, rev)) => (

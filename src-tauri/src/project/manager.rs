@@ -1,8 +1,6 @@
 //! 项目生命周期管理器
 
-use crate::project::{
-    ProjectDetector, ProjectHealth, ProjectIndex, ProjectMeta, ProjectScanner,
-};
+use crate::project::{ProjectDetector, ProjectHealth, ProjectIndex, ProjectMeta, ProjectScanner};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -30,8 +28,7 @@ pub struct ProjectManager {
 impl ProjectManager {
     /// 创建管理器
     pub fn new(db_path: &Path) -> Result<Self> {
-        let index = ProjectIndex::open(db_path)
-            .context("Failed to open project database")?;
+        let index = ProjectIndex::open(db_path).context("Failed to open project database")?;
 
         Ok(Self {
             index,
@@ -49,7 +46,10 @@ impl ProjectManager {
     /// 返回新添加的项目列表（已存在的项目会被跳过）。
     pub async fn scan_and_add(&self, root: &Path) -> Result<Vec<ProjectMeta>> {
         // 扫描目录
-        let discovered = self.scanner.scan(root).await
+        let discovered = self
+            .scanner
+            .scan(root)
+            .await
             .context("Failed to scan directory")?;
 
         let mut added = Vec::new();
@@ -63,11 +63,15 @@ impl ProjectManager {
                 }
                 None => {
                     // 新项目，添加到数据库
-                    self.index.insert(&meta)
+                    self.index
+                        .insert(&meta)
                         .context(format!("Failed to insert project: {:?}", meta.path))?;
 
                     // 更新缓存
-                    self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(meta.id.clone(), meta.clone());
+                    self.cache
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .insert(meta.id.clone(), meta.clone());
 
                     tracing::info!("添加项目: {} ({:?})", meta.name, meta.path);
                     added.push(meta);
@@ -86,18 +90,22 @@ impl ProjectManager {
         }
 
         // 检测项目类型
-        let (project_type, name) = ProjectDetector::detect_with_name(path)
-            .context("Failed to detect project type")?;
+        let (project_type, name) =
+            ProjectDetector::detect_with_name(path).context("Failed to detect project type")?;
 
         // 创建元数据
         let meta = ProjectMeta::new(name, path.to_path_buf(), project_type);
 
         // 写入数据库
-        self.index.insert(&meta)
+        self.index
+            .insert(&meta)
             .context("Failed to insert project")?;
 
         // 更新缓存
-        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(meta.id.clone(), meta.clone());
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(meta.id.clone(), meta.clone());
 
         tracing::info!("添加项目: {} ({:?})", meta.name, meta.path);
         Ok(meta)
@@ -106,11 +114,15 @@ impl ProjectManager {
     /// 更新项目元数据（写穿缓存）
     pub fn update_project(&self, meta: &ProjectMeta) -> Result<()> {
         // 写入数据库
-        self.index.update(meta)
+        self.index
+            .update(meta)
             .context("Failed to update project")?;
 
         // 更新缓存
-        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(meta.id.clone(), meta.clone());
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(meta.id.clone(), meta.clone());
 
         tracing::debug!("更新项目: {}", meta.id);
         Ok(())
@@ -119,11 +131,13 @@ impl ProjectManager {
     /// 删除项目
     pub fn remove_project(&self, id: &str) -> Result<()> {
         // 从数据库删除
-        self.index.delete(id)
-            .context("Failed to delete project")?;
+        self.index.delete(id).context("Failed to delete project")?;
 
         // 清除缓存
-        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(id);
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(id);
 
         tracing::info!("删除项目: {}", id);
         Ok(())
@@ -133,7 +147,10 @@ impl ProjectManager {
     pub fn get_project(&self, id: &str) -> Result<Option<ProjectMeta>> {
         // 先查缓存
         {
-            let cache = self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cache = self
+                .cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if let Some(meta) = cache.get(id) {
                 return Ok(Some(meta.clone()));
             }
@@ -144,7 +161,10 @@ impl ProjectManager {
 
         // 更新缓存
         if let Some(ref m) = meta {
-            self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id.to_string(), m.clone());
+            self.cache
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(id.to_string(), m.clone());
         }
 
         Ok(meta)
@@ -159,7 +179,8 @@ impl ProjectManager {
 
         if let Some(ref m) = meta {
             self.cache
-                .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(m.id.clone(), m.clone());
         }
 
@@ -183,7 +204,9 @@ impl ProjectManager {
     /// 是秒级精度，同一秒内连续打开两个项目会并列，`list_recent` 顺序不确定。
     /// `mark_opened` 在库内单条语句里原子分配单调序号，不受时钟精度与 NTP 回拨影响。
     pub fn open_project(&self, id: &str) -> Result<ProjectMeta> {
-        let mut meta = self.index.get_by_id(id)?
+        let mut meta = self
+            .index
+            .get_by_id(id)?
             .ok_or_else(|| anyhow::anyhow!("Project not found: {}", id))?;
 
         // 更新 last_opened_at（展示用），序号由数据库分配
@@ -193,7 +216,10 @@ impl ProjectManager {
             .context("Failed to update last_opened_at")?;
 
         // 刷新缓存
-        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id.to_string(), meta.clone());
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id.to_string(), meta.clone());
 
         tracing::info!("打开项目: {} ({})", meta.name, id);
         Ok(meta)
@@ -216,18 +242,24 @@ impl ProjectManager {
 
     /// 切换收藏状态
     pub fn toggle_favorite(&self, id: &str) -> Result<()> {
-        let mut meta = self.index.get_by_id(id)?
+        let mut meta = self
+            .index
+            .get_by_id(id)?
             .ok_or_else(|| anyhow::anyhow!("Project not found: {}", id))?;
 
         // 切换状态
         meta.toggle_favorite();
 
         // 写入数据库
-        self.index.update(&meta)
+        self.index
+            .update(&meta)
             .context("Failed to update favorite status")?;
 
         // 刷新缓存
-        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id.to_string(), meta.clone());
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id.to_string(), meta.clone());
 
         tracing::debug!("切换收藏状态: {} -> {}", id, meta.is_favorite);
         Ok(())
@@ -282,7 +314,10 @@ impl ProjectManager {
     /// 清空缓存（仅测试用）
     #[cfg(test)]
     pub fn clear_cache(&self) {
-        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clear();
+        self.cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clear();
     }
 }
 
@@ -320,11 +355,8 @@ mod tests {
     #[test]
     fn test_add_project() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         let meta = manager.add_project(&project_path).unwrap();
@@ -337,11 +369,8 @@ mod tests {
     #[test]
     fn test_add_duplicate_project() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         manager.add_project(&project_path).unwrap();
@@ -354,11 +383,8 @@ mod tests {
     #[test]
     fn test_update_project() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         let mut meta = manager.add_project(&project_path).unwrap();
@@ -367,17 +393,17 @@ mod tests {
         manager.update_project(&meta).unwrap();
 
         let retrieved = manager.get_project(&meta.id).unwrap().unwrap();
-        assert_eq!(retrieved.description, Some("Updated description".to_string()));
+        assert_eq!(
+            retrieved.description,
+            Some("Updated description".to_string())
+        );
     }
 
     #[test]
     fn test_remove_project() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         let meta = manager.add_project(&project_path).unwrap();
@@ -391,11 +417,8 @@ mod tests {
     #[test]
     fn test_get_project_cache_hit() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         let meta = manager.add_project(&project_path).unwrap();
@@ -409,11 +432,8 @@ mod tests {
     #[test]
     fn test_get_project_cache_miss() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         let meta = manager.add_project(&project_path).unwrap();
@@ -430,11 +450,8 @@ mod tests {
     #[test]
     fn test_open_project() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         let meta = manager.add_project(&project_path).unwrap();
@@ -448,11 +465,8 @@ mod tests {
     #[test]
     fn test_toggle_favorite() {
         let (_temp_db, manager) = create_test_manager();
-        let project_temp = create_test_project_dir(
-            Path::new("/tmp"),
-            "test-app",
-            r#"{"name": "test-app"}"#,
-        );
+        let project_temp =
+            create_test_project_dir(Path::new("/tmp"), "test-app", r#"{"name": "test-app"}"#);
 
         let project_path = project_temp.path().join("test-app");
         let meta = manager.add_project(&project_path).unwrap();
@@ -472,16 +486,8 @@ mod tests {
     fn test_list_projects() {
         let (_temp_db, manager) = create_test_manager();
 
-        let temp1 = create_test_project_dir(
-            Path::new("/tmp"),
-            "app1",
-            r#"{"name": "app1"}"#,
-        );
-        let temp2 = create_test_project_dir(
-            Path::new("/tmp"),
-            "app2",
-            r#"{"name": "app2"}"#,
-        );
+        let temp1 = create_test_project_dir(Path::new("/tmp"), "app1", r#"{"name": "app1"}"#);
+        let temp2 = create_test_project_dir(Path::new("/tmp"), "app2", r#"{"name": "app2"}"#);
 
         manager.add_project(&temp1.path().join("app1")).unwrap();
         manager.add_project(&temp2.path().join("app2")).unwrap();
@@ -494,16 +500,8 @@ mod tests {
     fn test_list_recent() {
         let (_temp_db, manager) = create_test_manager();
 
-        let temp1 = create_test_project_dir(
-            Path::new("/tmp"),
-            "app1",
-            r#"{"name": "app1"}"#,
-        );
-        let temp2 = create_test_project_dir(
-            Path::new("/tmp"),
-            "app2",
-            r#"{"name": "app2"}"#,
-        );
+        let temp1 = create_test_project_dir(Path::new("/tmp"), "app1", r#"{"name": "app1"}"#);
+        let temp2 = create_test_project_dir(Path::new("/tmp"), "app2", r#"{"name": "app2"}"#);
 
         let meta1 = manager.add_project(&temp1.path().join("app1")).unwrap();
         std::thread::sleep(std::time::Duration::from_secs(1));
@@ -531,11 +529,7 @@ mod tests {
     fn test_search_projects() {
         let (_temp_db, manager) = create_test_manager();
 
-        let temp1 = create_test_project_dir(
-            Path::new("/tmp"),
-            "my-app",
-            r#"{"name": "my-app"}"#,
-        );
+        let temp1 = create_test_project_dir(Path::new("/tmp"), "my-app", r#"{"name": "my-app"}"#);
         let temp2 = create_test_project_dir(
             Path::new("/tmp"),
             "another-project",
@@ -543,7 +537,9 @@ mod tests {
         );
 
         manager.add_project(&temp1.path().join("my-app")).unwrap();
-        manager.add_project(&temp2.path().join("another-project")).unwrap();
+        manager
+            .add_project(&temp2.path().join("another-project"))
+            .unwrap();
 
         let results = manager.search_projects("app").unwrap();
         assert_eq!(results.len(), 1);
@@ -573,7 +569,9 @@ mod tests {
             "healthy-app",
             r#"{"name": "healthy-app"}"#,
         );
-        let meta = manager.add_project(&project_temp.path().join("healthy-app")).unwrap();
+        let meta = manager
+            .add_project(&project_temp.path().join("healthy-app"))
+            .unwrap();
 
         // 真实项目健康检查（Node.js 项目，可能报 node_modules 缺失但不算失败）
         let r = manager.check_health(&meta.id).await;

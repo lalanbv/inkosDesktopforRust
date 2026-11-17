@@ -35,7 +35,11 @@ fn intent_path(book_dir: &Path, chapter_number: u32) -> PathBuf {
 /// 保存治理计划（markdown 渲染 + 落盘）。
 pub async fn save_persisted_plan(book_dir: &Path, plan: &PlanChapterOutput) -> std::io::Result<()> {
     let content = render_persisted_plan_markdown(&plan.intent, &plan.memo, &plan.planner_inputs);
-    crate::utils::atomic_file_set::write_file_atomic(&plan_path(book_dir, plan.memo.chapter), &content).await
+    crate::utils::atomic_file_set::write_file_atomic(
+        &plan_path(book_dir, plan.memo.chapter),
+        &content,
+    )
+    .await
 }
 
 /// 读取治理计划；任何解析失败返回 None（调用方重规划）。
@@ -101,7 +105,10 @@ pub fn render_persisted_plan_markdown(
         String::new(),
         "## Metadata".to_string(),
         format!("Chapter: {}", memo.chapter),
-        format!("Golden Opening: {}", if memo.is_golden_opening { "yes" } else { "no" }),
+        format!(
+            "Golden Opening: {}",
+            if memo.is_golden_opening { "yes" } else { "no" }
+        ),
         String::new(),
         "<!-- INKOS_PLAN_MEMO_START -->".to_string(),
         render_memo_markdown(memo),
@@ -109,8 +116,14 @@ pub fn render_persisted_plan_markdown(
         String::new(),
         "## Intent".to_string(),
         format!("Intent Goal: {}", intent.goal),
-        format!("Outline Node: {}", intent.outline_node.as_deref().unwrap_or("(none)")),
-        format!("Arc Context: {}", intent.arc_context.as_deref().unwrap_or("(none)")),
+        format!(
+            "Outline Node: {}",
+            intent.outline_node.as_deref().unwrap_or("(none)")
+        ),
+        format!(
+            "Arc Context: {}",
+            intent.arc_context.as_deref().unwrap_or("(none)")
+        ),
         String::new(),
         "### Must Keep".to_string(),
         render_list(&intent.must_keep),
@@ -266,10 +279,7 @@ async fn load_legacy_intent_plan(
 fn extract_section(markdown: &str, heading: &str) -> Option<String> {
     // TS 的 `(?=\n## |\n### |$)`（m 标志）中 $ 于每个行尾成立——懒惰匹配
     // 恒停于首个行尾，实际只捕获标题后**第一行**。`[^\n]*` 等价还原该怪癖。
-    let pattern = format!(
-        r"(?m)^## {}\s*\n([^\n]*)",
-        regex_escape(heading)
-    );
+    let pattern = format!(r"(?m)^## {}\s*\n([^\n]*)", regex_escape(heading));
     let regex = Regex::new(&pattern).ok()?;
     let value = regex
         .captures(markdown)
@@ -451,7 +461,9 @@ mod tests {
             .await
             .unwrap();
 
-        let loaded = load_persisted_plan(dir.path(), 5).await.expect("legacy 应回读");
+        let loaded = load_persisted_plan(dir.path(), 5)
+            .await
+            .expect("legacy 应回读");
         assert_eq!(loaded.intent.goal, "延续主线推进目标");
         assert_eq!(loaded.intent.outline_node.as_deref(), Some("节点甲"));
         assert_eq!(loaded.intent.must_keep, vec!["保一"]);

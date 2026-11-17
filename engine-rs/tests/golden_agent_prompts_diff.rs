@@ -20,14 +20,14 @@ fn chat_prompts_match_ts_snapshot() {
             "edit.bound" => {
                 inkos_engine::interaction::chat_prompts::build_edit_prompt(Some("b1"), is_zh)
             }
-            "edit.unbound" => inkos_engine::interaction::chat_prompts::build_edit_prompt(None, is_zh),
+            "edit.unbound" => {
+                inkos_engine::interaction::chat_prompts::build_edit_prompt(None, is_zh)
+            }
             "book-create.staging" => {
                 inkos_engine::interaction::chat_prompts::build_book_create_prompt(is_zh)
             }
             "short.clarify" => inkos_engine::interaction::chat_prompts::build_short_prompt(is_zh),
-            "script.clarify" => {
-                inkos_engine::interaction::chat_prompts::build_script_prompt(is_zh)
-            }
+            "script.clarify" => inkos_engine::interaction::chat_prompts::build_script_prompt(is_zh),
             "storyboard.clarify" => {
                 inkos_engine::interaction::chat_prompts::build_storyboard_prompt(is_zh)
             }
@@ -46,8 +46,3 @@ fn chat_prompts_match_ts_snapshot() {
         assert_eq!(got, expected.as_str().unwrap_or(""), "prompt '{key}' 漂移");
     }
 }
-
-
-
-
-

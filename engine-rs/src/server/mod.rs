@@ -13,41 +13,41 @@ pub mod agent_production;
 pub mod agent_route;
 pub mod audit_route;
 pub mod backup_routes;
-pub mod books_routes;
 pub mod book_create_routes;
-pub mod short_capability_route;
-pub mod fanfic_routes;
+pub mod books_routes;
 pub mod books_state_routes;
-pub mod series_backfill_routes;
+pub mod fanfic_routes;
 pub mod genre_routes;
+pub mod interactive_film_routes;
 pub mod loopback_guard;
 pub mod ops_routes;
 pub mod parent_watchdog;
 pub mod play_routes;
-pub mod interactive_film_routes;
 pub mod project_config_routes;
 pub mod project_files_routes;
 pub mod segment_guard;
+pub mod series_backfill_routes;
 pub mod service_routes;
 pub mod session_routes;
-pub mod work_routes;
+pub mod short_capability_route;
 pub mod skill_routes;
-pub mod translation_routes;
-pub mod upload_common;
 pub mod sse;
 pub mod static_routes;
 pub mod style_routes;
 pub mod task_store;
+pub mod translation_routes;
+pub mod upload_common;
+pub mod work_routes;
 pub mod write_next_route;
 
 pub use write_next_route::{WriteNextRunner, WriteNextRuntime};
 
+use crate::models::length_governance::LengthCountingMode;
 use crate::utils::{
     context_filter::{cap_context_block, ContextCapOptions},
     derive_book_id_from_title,
     length_metrics::count_chapter_length,
 };
-use crate::models::length_governance::LengthCountingMode;
 use axum::{
     extract::State,
     http::StatusCode,
@@ -89,7 +89,6 @@ pub(crate) async fn read_body_capped(
         .await
         .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)
 }
-
 
 // ── 请求/响应 DTO ───────────────────────────────────────────────
 
@@ -139,7 +138,11 @@ pub struct HealthResponse {
 // ── Handlers ────────────────────────────────────────────────────
 
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
-    Json(HealthResponse { ok: true, version: state.version, backend: "rust-engine".to_string() })
+    Json(HealthResponse {
+        ok: true,
+        version: state.version,
+        backend: "rust-engine".to_string(),
+    })
 }
 
 /// 工具目录单条投影（debug 面）。
@@ -191,7 +194,9 @@ async fn derive_book_id(
     if req.title.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, "title 不能为空".into()));
     }
-    Ok(Json(BookIdResponse { id: derive_book_id_from_title(&req.title) }))
+    Ok(Json(BookIdResponse {
+        id: derive_book_id_from_title(&req.title),
+    }))
 }
 
 async fn count_length(
@@ -213,7 +218,9 @@ async fn count_length(
             ))
         }
     };
-    Ok(Json(CountLengthResponse { count: count_chapter_length(&req.content, mode) }))
+    Ok(Json(CountLengthResponse {
+        count: count_chapter_length(&req.content, mode),
+    }))
 }
 
 async fn cap_context(
@@ -229,7 +236,9 @@ async fn cap_context(
         max_chars: req.max_chars,
         head_ratio: req.head_ratio,
     };
-    Ok(Json(CapContextResponse { content: cap_context_block(&req.content, opts) }))
+    Ok(Json(CapContextResponse {
+        content: cap_context_block(&req.content, opts),
+    }))
 }
 
 /// 回环 Origin 反射 CORS 层（173 号 W-A4a 收紧；原 125 号为 Hono `cors()`
@@ -247,14 +256,14 @@ pub fn sidecar_cors_layer() -> tower_http::cors::CorsLayer {
 }
 
 /// [`sidecar_cors_layer`] 的显式白名单形态（供测试/嵌入装配；bin 走 env 版）。
-pub fn sidecar_cors_layer_with_extras(
-    extra_origins: Vec<String>,
-) -> tower_http::cors::CorsLayer {
+pub fn sidecar_cors_layer_with_extras(extra_origins: Vec<String>) -> tower_http::cors::CorsLayer {
     use axum::http::Method;
     tower_http::cors::CorsLayer::new()
-        .allow_origin(tower_http::cors::AllowOrigin::predicate(move |origin, _| {
-            loopback_guard::origin_is_allowed(origin.to_str().unwrap_or(""), &extra_origins)
-        }))
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(
+            move |origin, _| {
+                loopback_guard::origin_is_allowed(origin.to_str().unwrap_or(""), &extra_origins)
+            },
+        ))
         .allow_methods([
             Method::GET,
             Method::HEAD,
@@ -267,7 +276,8 @@ pub fn sidecar_cors_layer_with_extras(
 }
 
 /// 构造路由（供 Tauri 命令 / 独立 bin 复用）。
-pub fn router(state: AppState) -> Router {    Router::new()
+pub fn router(state: AppState) -> Router {
+    Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/debug/tools", get(debug_tools))
         // R41/563 号：会话末轮 token 计量快照（内存观测面，无状态依赖）。
@@ -280,7 +290,11 @@ pub fn router(state: AppState) -> Router {    Router::new()
 }
 
 /// 带运行时句柄的组合路由（utility + SSE + write-next）。
-pub fn router_with_runtime(state: AppState, hub: std::sync::Arc<sse::BroadcastHub>, write_next: write_next_route::WriteNextRuntime) -> Router {
+pub fn router_with_runtime(
+    state: AppState,
+    hub: std::sync::Arc<sse::BroadcastHub>,
+    write_next: write_next_route::WriteNextRuntime,
+) -> Router {
     router(state)
         // SSE 快照对账用引擎项目根（前端 EventSource 只传 sessionId；
         // write-next 运行时持有同一根——检查点落盘面与恢复面同源）。
@@ -291,7 +305,10 @@ pub fn router_with_runtime(state: AppState, hub: std::sync::Arc<sse::BroadcastHu
                 project_root: write_next.project_root.clone(),
             }),
         )
-        .route("/api/v1/books/:id/write-next", post(write_next_route::write_next).with_state(write_next))
+        .route(
+            "/api/v1/books/:id/write-next",
+            post(write_next_route::write_next).with_state(write_next),
+        )
 }
 
 /// 完整组合路由（utility + SSE + write-next + audit）。
@@ -301,8 +318,10 @@ pub fn router_full(
     write_next: write_next_route::WriteNextRuntime,
     audit: audit_route::AuditRuntime,
 ) -> Router {
-    router_with_runtime(state, hub, write_next)
-        .route("/api/v1/books/:id/audit/:chapter", post(audit_route::audit_chapter).with_state(audit))
+    router_with_runtime(state, hub, write_next).route(
+        "/api/v1/books/:id/audit/:chapter",
+        post(audit_route::audit_chapter).with_state(audit),
+    )
 }
 
 /// books 域全量组合路由（+ plan/settle/draft/revise）。
@@ -314,20 +333,59 @@ pub fn router_books(
     books: books_routes::BooksRuntime,
 ) -> Router {
     router_full(state, hub, write_next, audit)
-        .route("/api/v1/books/:id/plan", post(books_routes::plan).with_state(books.clone()))
-        .route("/api/v1/books/:id/settle", post(books_routes::settle).with_state(books.clone()))
-        .route("/api/v1/books/:id/draft", post(books_routes::draft).with_state(books.clone()))
-        .route("/api/v1/books/:id/revise/:chapter", post(books_routes::revise).with_state(books.clone()))
-        .route("/api/v1/books/:id/rewrite/:chapter", post(books_routes::rewrite).with_state(books.clone()))
-        .route("/api/v1/books/:id/resync/:chapter", post(books_routes::resync).with_state(books.clone()))
-        .route("/api/v1/books/:id/compose", post(books_routes::compose).with_state(books.clone()))
-        .route("/api/v1/books/:id/consolidate", post(books_routes::consolidate_endpoint).with_state(books.clone()))
-        .route("/api/v1/books/:id/repair-state/:chapter", post(books_routes::repair_state).with_state(books.clone()))
-        .route("/api/v1/books/:id/analytics", get(books_routes::analytics).with_state(books.clone()))
-        .route("/api/v1/books/:id/eval", get(books_routes::eval).with_state(books.clone()))
-        .route("/api/v1/books/:id/export", get(books_routes::export).with_state(books.clone()))
+        .route(
+            "/api/v1/books/:id/plan",
+            post(books_routes::plan).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/settle",
+            post(books_routes::settle).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/draft",
+            post(books_routes::draft).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/revise/:chapter",
+            post(books_routes::revise).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/rewrite/:chapter",
+            post(books_routes::rewrite).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/resync/:chapter",
+            post(books_routes::resync).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/compose",
+            post(books_routes::compose).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/consolidate",
+            post(books_routes::consolidate_endpoint).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/repair-state/:chapter",
+            post(books_routes::repair_state).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/analytics",
+            get(books_routes::analytics).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/eval",
+            get(books_routes::eval).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/export",
+            get(books_routes::export).with_state(books.clone()),
+        )
         // 443 号：R18 备份双端点移植（386 备案随 164 号默认引擎切换失效后翻案）。
-        .route("/api/v1/backup/export", get(backup_routes::export).with_state(books.clone()))
+        .route(
+            "/api/v1/backup/export",
+            get(backup_routes::export).with_state(books.clone()),
+        )
         .route(
             "/api/v1/backup/import",
             post(backup_routes::import)
@@ -335,14 +393,25 @@ pub fn router_books(
                 .with_state(books.clone()),
         )
         // 954 号：快照回滚用户可执行闭环（列举 + 服务端回滚执行）。
-        .route("/api/v1/backup/snapshots", get(backup_routes::snapshots).with_state(books.clone()))
-        .route("/api/v1/backup/rollback", post(backup_routes::rollback).with_state(books.clone()))
+        .route(
+            "/api/v1/backup/snapshots",
+            get(backup_routes::snapshots).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/backup/rollback",
+            post(backup_routes::rollback).with_state(books.clone()),
+        )
         // 48 号：状态端点组（列表/详情/更新/删除 + 章节读 + approve/reject +
         // truth 文件 + chapter-review-mode）。
-        .route("/api/v1/books", get(books_state_routes::list_books).with_state(books.clone()))
+        .route(
+            "/api/v1/books",
+            get(books_state_routes::list_books).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/timeline",
-            get(books_state_routes::get_timeline).put(books_state_routes::put_timeline).with_state(books.clone()),
+            get(books_state_routes::get_timeline)
+                .put(books_state_routes::put_timeline)
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/series-backfill/extract",
@@ -417,7 +486,10 @@ pub fn router_books(
             "/api/v1/books/:id/detect/:chapter",
             post(books_state_routes::detect_chapter).with_state(books.clone()),
         )
-        .route("/api/v1/books/:id/truth", get(books_state_routes::truth_list).with_state(books.clone()))
+        .route(
+            "/api/v1/books/:id/truth",
+            get(books_state_routes::truth_list).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/truth/*file",
             get(books_state_routes::truth_file)
@@ -430,8 +502,14 @@ pub fn router_books(
             get(books_state_routes::create_status).with_state(books.clone()),
         )
         // 53 号：genres 域（列表/详情/创建/编辑/删除/内置复制）。
-        .route("/api/v1/genres", get(genre_routes::list_genres).with_state(books.clone()))
-        .route("/api/v1/genres/create", post(genre_routes::create_genre).with_state(books.clone()))
+        .route(
+            "/api/v1/genres",
+            get(genre_routes::list_genres).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/genres/create",
+            post(genre_routes::create_genre).with_state(books.clone()),
+        )
         .route(
             "/api/v1/genres/:id",
             get(genre_routes::genre_detail)
@@ -439,7 +517,10 @@ pub fn router_books(
                 .delete(genre_routes::delete_genre)
                 .with_state(books.clone()),
         )
-        .route("/api/v1/genres/:id/copy", post(genre_routes::copy_genre).with_state(books.clone()))
+        .route(
+            "/api/v1/genres/:id/copy",
+            post(genre_routes::copy_genre).with_state(books.clone()),
+        )
         // 54 号：project 配置域（inkos.json 轻量键值读写面）。input-governance-mode
         // 已随 686 号移除（TS 上游 e7c04465 删除该面与 legacy 管线分支，双端对齐）。
         .route(
@@ -490,7 +571,10 @@ pub fn router_books(
         )
         // 55 号：风格与导入域（指纹/文风向导/正典导入/番外正典读）。
         // 58 号：创建与导入链（staging 原子创建 + 章节导入回放）。
-        .route("/api/v1/books/create", post(book_create_routes::create_book).with_state(books.clone()))
+        .route(
+            "/api/v1/books/create",
+            post(book_create_routes::create_book).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/import/chapters",
             post(book_create_routes::import_chapters_endpoint).with_state(books.clone()),
@@ -505,13 +589,22 @@ pub fn router_books(
             post(style_routes::import_canon_file).with_state(books.clone()),
         )
         // 59 号：同人/番外/仿写创建域。
-        .route("/api/v1/fanfic/init", post(fanfic_routes::fanfic_init).with_state(books.clone()))
+        .route(
+            "/api/v1/fanfic/init",
+            post(fanfic_routes::fanfic_init).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/fanfic/refresh",
             post(fanfic_routes::fanfic_refresh).with_state(books.clone()),
         )
-        .route("/api/v1/spinoff/init", post(fanfic_routes::spinoff_init).with_state(books.clone()))
-        .route("/api/v1/imitation/init", post(fanfic_routes::imitation_init).with_state(books.clone()))
+        .route(
+            "/api/v1/spinoff/init",
+            post(fanfic_routes::spinoff_init).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/imitation/init",
+            post(fanfic_routes::imitation_init).with_state(books.clone()),
+        )
         .route(
             "/api/v1/style/analyze",
             post(style_routes::style_analyze).with_state(books.clone()),
@@ -548,7 +641,9 @@ pub fn router_books(
         )
         .route(
             "/api/v1/books/:id/codex",
-            get(books_state_routes::get_codex).put(books_state_routes::put_codex).with_state(books.clone()),
+            get(books_state_routes::get_codex)
+                .put(books_state_routes::put_codex)
+                .with_state(books.clone()),
         )
         // R21/391 号：Context Lens——上下文装配透明回放（纯读）。
         .route(
@@ -567,7 +662,10 @@ pub fn router_books(
                 .with_state(books.clone()),
         )
         // 60 号：skills / prompt-packs 轻域。
-        .route("/api/v1/skills", get(skill_routes::list_skills).with_state(books.clone()))
+        .route(
+            "/api/v1/skills",
+            get(skill_routes::list_skills).with_state(books.clone()),
+        )
         // 768 号决策①A：信任管理（静态段注册在 :skillId 参数路由之前）。
         .route(
             "/api/v1/skills/trust",
@@ -646,7 +744,10 @@ pub fn router_books(
                 .with_state(books.clone()),
         )
         // 63 号：services / cover 域。
-        .route("/api/v1/services", get(service_routes::list_services).with_state(books.clone()))
+        .route(
+            "/api/v1/services",
+            get(service_routes::list_services).with_state(books.clone()),
+        )
         .route(
             "/api/v1/services/config",
             get(service_routes::get_services_config)
@@ -696,7 +797,10 @@ pub fn router_books(
                 .with_state(books.clone()),
         )
         // 65 号：交互 agent 端点（直通聊天主路径；工具面随 66 号）。
-        .route("/api/v1/agent", post(agent_route::post_agent).with_state(books.clone()))
+        .route(
+            "/api/v1/agent",
+            post(agent_route::post_agent).with_state(books.clone()),
+        )
         // 64 号：sessions / interaction 会话域。
         .route(
             "/api/v1/interaction/session",
@@ -1055,7 +1159,9 @@ mod tests {
     use tower::ServiceExt;
 
     fn app() -> Router {
-        router(AppState { version: "0.0.1-test".into() })
+        router(AppState {
+            version: "0.0.1-test".into(),
+        })
     }
 
     async fn body_string(body: axum::body::Body) -> String {
@@ -1069,21 +1175,36 @@ mod tests {
     #[tokio::test]
     async fn debug_tools_projects_full_registry() {
         let resp = app()
-            .oneshot(Request::builder().uri("/api/v1/debug/tools").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/debug/tools")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_string(resp.into_body()).await;
         let entries: Vec<serde_json::Value> = serde_json::from_str(&body).unwrap();
-        assert_eq!(entries.len(), 33, "书会话有效目录（36 注册去重 33 唯一名，973 号 +1）");
-        assert_eq!(entries[0]["name"], "set_world_anchor", "声明序 = 分发链序首族首件");
+        assert_eq!(
+            entries.len(),
+            33,
+            "书会话有效目录（36 注册去重 33 唯一名，973 号 +1）"
+        );
+        assert_eq!(
+            entries[0]["name"], "set_world_anchor",
+            "声明序 = 分发链序首族首件"
+        );
         assert!(
             entries[0]["parametersSha256"].as_str().unwrap().len() == 64,
             "sha256 hex；camelCase 键面（与 TS 条目同名同形，差分器对照数据源）"
         );
         // R39：全目录过三段管线（恒 true，加法超集字段）。
         assert_eq!(entries[0]["pipeline"], true, "R39 管线标记");
-        assert!(entries.iter().all(|e| e["pipeline"] == true), "33 条全量管线标记");
+        assert!(
+            entries.iter().all(|e| e["pipeline"] == true),
+            "33 条全量管线标记"
+        );
         let names: Vec<&str> = entries.iter().filter_map(|e| e["name"].as_str()).collect();
         assert!(names.contains(&"read") && names.contains(&"ingest_material"));
         // 973 号：revise_paragraph 入册（翻译修订代理面）。
@@ -1117,7 +1238,8 @@ mod tests {
             surface_nodes: 25,
         };
         crate::server::agent_route::context_meter_registry()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .push(("meter-test-session".into(), seed));
 
         let resp = app()
@@ -1166,21 +1288,30 @@ mod tests {
 
         // 清理注册表（全局态，防跨测试污染）。
         crate::server::agent_route::context_meter_registry()
-            .lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .retain(|(id, _)| id != "meter-test-session");
     }
 
     #[tokio::test]
     async fn health_ok() {
         let resp = app()
-            .oneshot(Request::builder().uri("/api/v1/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_string(resp.into_body()).await;
         assert!(body.contains(r#""ok":true"#));
         assert!(body.contains("0.0.1-test"));
-        assert!(body.contains(r#""backend":"rust-engine""#), "170 号：应答应含后端标识");
+        assert!(
+            body.contains(r#""backend":"rust-engine""#),
+            "170 号：应答应含后端标识"
+        );
     }
 
     /// 445 号：API 响应统一 no-store——防浏览器启发式缓存跨会话陈旧遥测
@@ -1188,11 +1319,18 @@ mod tests {
     #[tokio::test]
     async fn api_responses_carry_no_store() {
         let resp = app()
-            .oneshot(Request::builder().uri("/api/v1/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(
-            resp.headers().get(axum::http::header::CACHE_CONTROL).map(|v| v.to_str().unwrap()),
+            resp.headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .map(|v| v.to_str().unwrap()),
             Some("no-store")
         );
     }
@@ -1200,11 +1338,17 @@ mod tests {
     #[tokio::test]
     async fn cors_layer_reflects_loopback_origins_only() {
         use axum::http::HeaderValue;
-        let app = router(AppState { version: "0.0.1-test".into() })
-            .layer(sidecar_cors_layer());
+        let app = router(AppState {
+            version: "0.0.1-test".into(),
+        })
+        .layer(sidecar_cors_layer());
 
         // 回环 Origin（端口不限）：ACAO 反射请求 Origin（173 号）。
-        for origin in ["http://localhost:5173", "http://127.0.0.1:7788", "tauri://localhost"] {
+        for origin in [
+            "http://localhost:5173",
+            "http://127.0.0.1:7788",
+            "tauri://localhost",
+        ] {
             let response = app
                 .clone()
                 .oneshot(
@@ -1240,7 +1384,10 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status().as_u16(), 200, "{origin}");
             assert!(
-                response.headers().get("access-control-allow-origin").is_none(),
+                response
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .is_none(),
                 "{origin} 不应发 ACAO"
             );
         }
@@ -1257,9 +1404,18 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(response.headers().get("access-control-allow-origin").is_none());
-        assert!(response.headers().get("access-control-allow-methods").is_none());
-        assert!(response.headers().get("access-control-allow-headers").is_none());
+        assert!(response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+        assert!(response
+            .headers()
+            .get("access-control-allow-methods")
+            .is_none());
+        assert!(response
+            .headers()
+            .get("access-control-allow-headers")
+            .is_none());
 
         // Preflight（回环 Origin）：短路 2xx，ACAO 反射，方法族含 POST，
         // 头镜像请求的 content-type。
@@ -1290,7 +1446,10 @@ mod tests {
             .to_ascii_lowercase();
         assert!(methods.contains("post"), "方法族应含 POST: {methods}");
         assert_eq!(
-            response.headers().get("access-control-allow-headers").cloned(),
+            response
+                .headers()
+                .get("access-control-allow-headers")
+                .cloned(),
             Some(HeaderValue::from_str("content-type").unwrap())
         );
 
@@ -1309,14 +1468,21 @@ mod tests {
             .await
             .unwrap();
         assert!(response.status().is_success());
-        assert!(response.headers().get("access-control-allow-origin").is_none());
+        assert!(response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
     }
 
     #[tokio::test]
     async fn cors_layer_extra_origins_reflected() {
         use axum::http::HeaderValue;
-        let app = router(AppState { version: "0.0.1-test".into() })
-            .layer(sidecar_cors_layer_with_extras(vec!["https://embed.example".into()]));
+        let app = router(AppState {
+            version: "0.0.1-test".into(),
+        })
+        .layer(sidecar_cors_layer_with_extras(vec![
+            "https://embed.example".into(),
+        ]));
 
         // env 白名单（非回环）命中：同样反射（与守卫白名单同源共享）。
         let response = app
@@ -1347,7 +1513,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(response.headers().get("access-control-allow-origin").is_none());
+        assert!(response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
     }
 
     #[tokio::test]
@@ -1396,7 +1565,9 @@ mod tests {
             .method(Method::POST)
             .uri("/api/v1/utils/cap-context")
             .header("content-type", "application/json")
-            .body(Body::from(r#"{"content":"short","label":"x","maxChars":100}"#))
+            .body(Body::from(
+                r#"{"content":"short","label":"x","maxChars":100}"#,
+            ))
             .unwrap();
         let resp = app().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);

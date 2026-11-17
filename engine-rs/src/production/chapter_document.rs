@@ -6,11 +6,7 @@ use crate::utils::language::WritingLanguage;
 use crate::utils::source_text::split_source_lines;
 
 /// TS `chapterDocumentHeading`。
-pub fn chapter_document_heading(
-    number: u32,
-    title: &str,
-    language: WritingLanguage,
-) -> String {
+pub fn chapter_document_heading(number: u32, title: &str, language: WritingLanguage) -> String {
     if language == WritingLanguage::En {
         format!("# Chapter {number}: {title}")
     } else {
@@ -35,8 +31,12 @@ pub fn chapter_document_body(
         while cursor < lines.len() && lines[cursor].trim().is_empty() {
             cursor += 1;
         }
-        let line = lines.get(cursor).map(|line| line.trim()).unwrap_or_default();
-        let heading_number = read_chapter_heading(line).map(|(heading_number, _, _)| heading_number);
+        let line = lines
+            .get(cursor)
+            .map(|line| line.trim())
+            .unwrap_or_default();
+        let heading_number =
+            read_chapter_heading(line).map(|(heading_number, _, _)| heading_number);
         // 继续 = 非空行且（==heading 或 章号==number）；否则 break。
         let keep_stripping = !line.is_empty()
             && (line == heading || heading_number.map(|value| value == number).unwrap_or(false));

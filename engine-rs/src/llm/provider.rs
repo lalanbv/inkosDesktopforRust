@@ -13,10 +13,10 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "export-bindings")]
-use ts_rs::TS;
 use std::collections::HashMap;
 use std::sync::OnceLock;
+#[cfg(feature = "export-bindings")]
+use ts_rs::TS;
 
 const INKOS_USER_AGENT: &str = "InkOS/1.3.5";
 
@@ -54,18 +54,29 @@ pub struct LLMMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<serde_json::Value>,
     /// tool 轮的工具调用 id。
-    #[serde(rename = "tool_call_id", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "tool_call_id",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub tool_call_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"system\" | \"user\" | \"assistant\" | \"tool\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"system\" | \"user\" | \"assistant\" | \"tool\"")
+)]
 pub enum LLMRole {
-    #[serde(rename = "system")] System,
-    #[serde(rename = "user")] User,
-    #[serde(rename = "assistant")] Assistant,
-    #[serde(rename = "tool")] Tool,
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "assistant")]
+    Assistant,
+    #[serde(rename = "tool")]
+    Tool,
 }
 
 /// 流式进度（已用时/总字符/中文字符/状态）。
@@ -82,10 +93,15 @@ pub struct StreamProgress {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"streaming\" | \"done\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"streaming\" | \"done\"")
+)]
 pub enum StreamStatus {
-    #[serde(rename = "streaming")] Streaming,
-    #[serde(rename = "done")] Done,
+    #[serde(rename = "streaming")]
+    Streaming,
+    #[serde(rename = "done")]
+    Done,
 }
 
 /// 流式进度回调（126 号：SSE `llm:progress` 的进程内载体）。
@@ -99,7 +115,10 @@ pub fn estimate_text_tokens(text: &str) -> u32 {
     if text.is_empty() {
         return 0;
     }
-    let cjk = text.chars().filter(|c| ('\u{3400}'..='\u{9fff}').contains(c)).count() as u32;
+    let cjk = text
+        .chars()
+        .filter(|c| ('\u{3400}'..='\u{9fff}').contains(c))
+        .count() as u32;
     let utf16_len = text.encode_utf16().count() as u32;
     let non_cjk = utf16_len - cjk;
     // Math.ceil(cjk + nonCjk / 4)（cjk 已整数，等价 cjk + ceil(nonCjk/4)）
@@ -184,7 +203,9 @@ pub fn is_byte_string(value: &str) -> bool {
 }
 
 /// 过滤头部：丢弃非法名或非字节值的项；空则返回 None。
-pub fn sanitize_http_headers(headers: Option<&HashMap<String, String>>) -> Option<HashMap<String, String>> {
+pub fn sanitize_http_headers(
+    headers: Option<&HashMap<String, String>>,
+) -> Option<HashMap<String, String>> {
     let headers = headers?;
     let mut sanitized: HashMap<String, String> = HashMap::new();
     for (k, v) in headers {
@@ -220,7 +241,9 @@ mod tests {
     #[test]
     fn is_retryable_covers_transient_faces() {
         // HTTP 瞬时（BadStatus 文本形态）
-        assert!(is_retryable_llm_error("HTTP 429: {\"error\":\"rate limit\"}"));
+        assert!(is_retryable_llm_error(
+            "HTTP 429: {\"error\":\"rate limit\"}"
+        ));
         assert!(is_retryable_llm_error("HTTP 503: service unavailable"));
         // 传输层（reqwest 文本形态）
         assert!(is_retryable_llm_error(
@@ -228,22 +251,32 @@ mod tests {
         ));
         assert!(is_retryable_llm_error("operation timed out"));
         // 流不活动（StreamError::Inactivity 文本逐字）
-        assert!(is_retryable_llm_error("LLM stream produced no event within 300000ms"));
-        assert!(is_retryable_llm_error("LLM stream produced no new event for 180000ms"));
+        assert!(is_retryable_llm_error(
+            "LLM stream produced no event within 300000ms"
+        ));
+        assert!(is_retryable_llm_error(
+            "LLM stream produced no new event for 180000ms"
+        ));
         // 协议层空响应/缺终态（TS isIncompleteLLMResponseError 逐字）
         assert!(is_retryable_llm_error("LLM returned empty response"));
-        assert!(is_retryable_llm_error("LLM returned reasoning without a final answer"));
+        assert!(is_retryable_llm_error(
+            "LLM returned reasoning without a final answer"
+        ));
     }
 
     #[test]
     fn is_retryable_rejects_permanent_faces() {
         // 非瞬时：显式排除 model_not_available（重试无用）
-        assert!(!is_retryable_llm_error("HTTP 500: {\"error\":{\"code\":\"model_not_available\"}}"));
+        assert!(!is_retryable_llm_error(
+            "HTTP 500: {\"error\":{\"code\":\"model_not_available\"}}"
+        ));
         assert!(!is_retryable_llm_error("model not available on inference"));
         // 4xx 业务错与未知文本（status_re 只匹配 429/502/503/504）
         assert!(!is_retryable_llm_error("HTTP 401: unauthorized"));
         assert!(!is_retryable_llm_error("HTTP 404: not found"));
-        assert!(!is_retryable_llm_error("plan chapter failed: something else"));
+        assert!(!is_retryable_llm_error(
+            "plan chapter failed: something else"
+        ));
     }
 
     #[test]
@@ -274,7 +307,9 @@ mod tests {
 
     #[test]
     fn transient_phrases() {
-        assert!(is_transient_llm_http_error("server overloaded, retry later"));
+        assert!(is_transient_llm_http_error(
+            "server overloaded, retry later"
+        ));
         assert!(is_transient_llm_http_error("rate limit exceeded"));
         assert!(is_transient_llm_http_error("please retry your request"));
     }

@@ -59,7 +59,7 @@ fn validate_relative_artifact_path(value: &str) -> Result<(), String> {
     let lower = value.to_ascii_lowercase();
     let drive_letter = lower.len() >= 2
         && lower.as_bytes()[0].is_ascii_alphabetic()
-        && (lower.as_bytes()[1] == b':' )
+        && (lower.as_bytes()[1] == b':')
         && lower[2..].starts_with(['\\', '/']);
     let ok = !value.is_empty()
         && !value.starts_with('/')
@@ -178,13 +178,12 @@ impl ArtifactManifest {
                 Some(revision) if revision.id == *expected => {}
                 Some(_) => {
                     return Err(
-                        "currentRevisionId must identify the revision whose status is current".into(),
+                        "currentRevisionId must identify the revision whose status is current"
+                            .into(),
                     );
                 }
                 None => {
-                    return Err(
-                        "currentRevisionId must reference a known revision".into()
-                    );
+                    return Err("currentRevisionId must reference a known revision".into());
                 }
             }
         }
@@ -332,7 +331,11 @@ impl WorkProfile {
         for capability_id in &self.capability_ids {
             validate_harness_id(capability_id)?;
         }
-        for skill_id in self.required_skill_ids.iter().chain(self.recommended_skill_ids.iter()) {
+        for skill_id in self
+            .required_skill_ids
+            .iter()
+            .chain(self.recommended_skill_ids.iter())
+        {
             validate_harness_id(skill_id)?;
         }
         for kind in &self.artifact_kinds {

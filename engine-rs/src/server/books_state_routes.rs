@@ -104,7 +104,9 @@ pub async fn list_books(State(runtime): State<BooksRuntime>) -> impl IntoRespons
 // PUT 走 schema 校验（TS TimelineSchema 同款：version literal 1 + plotline
 // id 唯一），非法 400。生成端点默认关闭（待产品决策，179 号分解文档）。
 
-async fn read_timeline_file(book_dir: &std::path::Path) -> Option<crate::models::timeline::Timeline> {
+async fn read_timeline_file(
+    book_dir: &std::path::Path,
+) -> Option<crate::models::timeline::Timeline> {
     let raw = match tokio::fs::read_to_string(book_dir.join("story").join("timeline.json")).await {
         Ok(raw) => raw,
         Err(_) => return None,
@@ -132,12 +134,7 @@ pub async fn put_timeline(
     Path(book_id): Path<String>,
     body: Bytes,
 ) -> impl IntoResponse {
-    let bad_request = |message: &str| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": message })),
-        )
-    };
+    let bad_request = |message: &str| (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
     let Ok(timeline) = serde_json::from_slice::<crate::models::timeline::Timeline>(&body) else {
         return bad_request("Invalid timeline payload");
     };
@@ -147,7 +144,11 @@ pub async fn put_timeline(
     if timeline.book_id != book_id {
         return bad_request("Timeline bookId does not match the route");
     }
-    let path = runtime.state.book_dir(&book_id).join("story").join("timeline.json");
+    let path = runtime
+        .state
+        .book_dir(&book_id)
+        .join("story")
+        .join("timeline.json");
     if let Some(parent) = path.parent() {
         if tokio::fs::create_dir_all(parent).await.is_err() {
             return (
@@ -280,13 +281,23 @@ pub async fn delete_book(
     let book_dir = runtime.state.book_dir(&book_id);
     match tokio::fs::remove_dir_all(&book_dir).await {
         Ok(()) => {
-            runtime.hub.broadcast("book:deleted", &json!({ "bookId": book_id }));
-            (StatusCode::OK, Json(json!({ "ok": true, "bookId": book_id })))
+            runtime
+                .hub
+                .broadcast("book:deleted", &json!({ "bookId": book_id }));
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "bookId": book_id })),
+            )
         }
         // TS rm { force: true }：目标不存在时不报错（ENOENT 被吞）→ ok。
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            runtime.hub.broadcast("book:deleted", &json!({ "bookId": book_id }));
-            (StatusCode::OK, Json(json!({ "ok": true, "bookId": book_id })))
+            runtime
+                .hub
+                .broadcast("book:deleted", &json!({ "bookId": book_id }));
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "bookId": book_id })),
+            )
         }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -301,7 +312,12 @@ pub async fn read_chapter(
     State(runtime): State<BooksRuntime>,
     Path((book_id, chapter)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let not_found = || (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Chapter not found" })),
+        )
+    };
     // TS parseInt 失败 → NaN → find 无候选 → 404（同样落 404，无 400 分支）。
     let Ok(number) = chapter.parse::<u32>() else {
         return not_found();
@@ -309,7 +325,9 @@ pub async fn read_chapter(
     // 687 号：数值等值定位（TS findChapterFileByNumber 逐字镜像）——「能列出
     // 即可打开」+ 前缀碰撞（num=7 误配 00071_）根除。
     let chapters_dir = runtime.state.book_dir(&book_id).join("chapters");
-    let Some(file_name) = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await else {
+    let Some(file_name) =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await
+    else {
         return not_found();
     };
     let Ok(content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {
@@ -329,7 +347,10 @@ pub async fn approve_chapter(
 ) -> impl IntoResponse {
     let Ok(number) = chapter.parse::<u32>() else {
         // TS parseInt NaN → map 无命中 → 200 ok（静默）。
-        return (StatusCode::OK, Json(json!({ "ok": true, "chapterNumber": null, "status": "approved" })));
+        return (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "chapterNumber": null, "status": "approved" })),
+        );
     };
     match runtime.state.load_chapter_index(&book_id).await {
         Ok(index) => {
@@ -437,14 +458,20 @@ fn ts_parse_int(raw: &str) -> Option<i64> {
 }
 
 fn internal_error(message: impl std::fmt::Display) -> (StatusCode, Json<Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": message.to_string() })))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": message.to_string() })),
+    )
 }
 
 /// 章节 JSON 正文解析：无效 JSON / 缺失或非字符串字段 → None。
 /// （TS 分别抛异常/TypeError → 500；此处统一 500，文案偏差备案。）
 fn json_string_field(bytes: &Bytes, field: &str) -> Option<String> {
     let parsed: Value = serde_json::from_slice(bytes).ok()?;
-    parsed.get(field).and_then(Value::as_str).map(str::to_string)
+    parsed
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
 }
 
 // ── GET /api/v1/books/:id/chapters/:num/workspace ────────────────
@@ -462,7 +489,11 @@ pub async fn chapter_workspace(
     };
     let number = number as u32;
     let store = FsStateStore;
-    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+    let book_dir = runtime
+        .state
+        .book_dir(&book_id)
+        .to_string_lossy()
+        .into_owned();
     let Ok(brief) = read_chapter_user_brief(&store, &book_dir, number).await else {
         return internal_error("workspace brief read failed");
     };
@@ -523,7 +554,11 @@ pub async fn put_workspace_brief(
         );
     };
     let number = number as u32;
-    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+    let book_dir = runtime
+        .state
+        .book_dir(&book_id)
+        .to_string_lossy()
+        .into_owned();
     match save_chapter_user_brief(&FsStateStore, &book_dir, number, brief).await {
         Ok(()) => (
             StatusCode::OK,
@@ -548,7 +583,11 @@ pub async fn get_chapter_version(
         );
     };
     let number = number as u32;
-    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
+    let book_dir = runtime
+        .state
+        .book_dir(&book_id)
+        .to_string_lossy()
+        .into_owned();
     match read_chapter_version(&FsStateStore, &book_dir, number, &version_id).await {
         Ok(content) => (
             StatusCode::OK,
@@ -558,7 +597,10 @@ pub async fn get_chapter_version(
                 "content": content,
             })),
         ),
-        Err(error) => (StatusCode::NOT_FOUND, Json(json!({ "error": error.to_string() }))),
+        Err(error) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": error.to_string() })),
+        ),
     }
 }
 
@@ -574,8 +616,13 @@ pub async fn restore_chapter_version(
         return internal_error(format!("Invalid chapter number: {display}"));
     };
     let number = number as u32;
-    let book_dir = runtime.state.book_dir(&book_id).to_string_lossy().into_owned();
-    let full_text = match read_chapter_version(&FsStateStore, &book_dir, number, &version_id).await {
+    let book_dir = runtime
+        .state
+        .book_dir(&book_id)
+        .to_string_lossy()
+        .into_owned();
+    let full_text = match read_chapter_version(&FsStateStore, &book_dir, number, &version_id).await
+    {
         Ok(content) => content,
         Err(error) => return internal_error(error),
     };
@@ -591,9 +638,10 @@ pub async fn restore_chapter_version(
     .await
     {
         Ok(result) => {
-            runtime
-                .hub
-                .broadcast("chapter:restored", &json!({ "bookId": book_id, "chapterNumber": number }));
+            runtime.hub.broadcast(
+                "chapter:restored",
+                &json!({ "bookId": book_id, "chapterNumber": number }),
+            );
             (
                 StatusCode::OK,
                 Json(json!({
@@ -681,9 +729,19 @@ pub async fn export_save(
     let parsed: Value = serde_json::from_slice(&body)
         .unwrap_or_else(|_| json!({ "format": "txt", "approvedOnly": false }));
     // TS `format ?? "txt"`：缺失/null → txt；非字符串垃圾输入按 txt（偏差备案）。
-    let fmt = parsed.get("format").and_then(Value::as_str).unwrap_or("txt").to_string();
-    let approved_only = parsed.get("approvedOnly").and_then(Value::as_bool).unwrap_or(false);
-    let output_path = runtime.state.book_dir(&book_id).join(format!("{book_id}.{fmt}"));
+    let fmt = parsed
+        .get("format")
+        .and_then(Value::as_str)
+        .unwrap_or("txt")
+        .to_string();
+    let approved_only = parsed
+        .get("approvedOnly")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let output_path = runtime
+        .state
+        .book_dir(&book_id)
+        .join(format!("{book_id}.{fmt}"));
     match build_export_artifact(
         &runtime.state,
         &book_id,
@@ -696,7 +754,12 @@ pub async fn export_save(
         Ok(artifact) => {
             // build_export_artifact 只构建内存负载（GET /export 直接回流）；
             // export-save 的落盘语义在此完成（对齐 TS writeExportArtifact）。
-            if let Err(error) = crate::utils::atomic_file_set::write_file_atomic_bytes(std::path::Path::new(&artifact.output_path), &artifact.payload).await {
+            if let Err(error) = crate::utils::atomic_file_set::write_file_atomic_bytes(
+                std::path::Path::new(&artifact.output_path),
+                &artifact.payload,
+            )
+            .await
+            {
                 return internal_error(error);
             }
             (
@@ -709,7 +772,10 @@ pub async fn export_save(
                 })),
             )
         }
-        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error }))),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error })),
+        ),
     }
 }
 
@@ -726,7 +792,9 @@ pub async fn post_workspace_inspiration(
     let invalid = || {
         (
             StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "A valid chapter number and optional brief string are required" })),
+            Json(
+                json!({ "error": "A valid chapter number and optional brief string are required" }),
+            ),
         )
     };
     let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
@@ -743,8 +811,13 @@ pub async fn post_workspace_inspiration(
     let book_dir = runtime.state.book_dir(&book_id);
     let chapters_dir = book_dir.join("chapters");
     // 687 号：数值等值定位（TS findChapterFileByNumber 镜像）。
-    let Some(file_name) = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
+    let Some(file_name) =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Chapter not found" })),
+        );
     };
     let Ok(chapter_content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {
         return internal_error("chapter read failed");
@@ -782,8 +855,16 @@ pub async fn post_workspace_inspiration(
         ]
         .join("\n")
     };
-    let requested_brief = parsed.get("brief").and_then(Value::as_str).map(str::trim).unwrap_or("");
-    let brief = if requested_brief.is_empty() { persisted_brief.as_str() } else { requested_brief };
+    let requested_brief = parsed
+        .get("brief")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let brief = if requested_brief.is_empty() {
+        persisted_brief.as_str()
+    } else {
+        requested_brief
+    };
     let mut user_parts: Vec<String> = Vec::with_capacity(5);
     user_parts.push(if is_en {
         format!("Book: {}", book.title)
@@ -820,8 +901,18 @@ pub async fn post_workspace_inspiration(
         .chat(
             "inspiration",
             vec![
-                LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_parts.join("\n\n"), tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_parts.join("\n\n"),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.9,
             Some(600),
@@ -833,7 +924,10 @@ pub async fn post_workspace_inspiration(
             if card.is_empty() {
                 return internal_error("The model returned an empty inspiration card");
             }
-            (StatusCode::OK, Json(json!({ "chapterNumber": number, "card": card })))
+            (
+                StatusCode::OK,
+                Json(json!({ "chapterNumber": number, "card": card })),
+            )
         }
         Err(error) => internal_error(error),
     }
@@ -852,12 +946,17 @@ pub async fn write_truth_file(
     let internal_error_shape = || {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } })),
+            Json(
+                json!({ "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } }),
+            ),
         )
     };
     let book_dir = runtime.state.book_dir(&book_id);
     let Some(resolved) = resolve_truth_file_path(&book_dir, &file) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid truth file" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid truth file" })),
+        );
     };
     // 新布局书的兼容指针 shim 只读（Phase 5 后权威在 outline/）。
     if LEGACY_SHIM_FILES.contains(&file.as_str()) && is_new_layout_book(&book_dir).await {
@@ -993,14 +1092,21 @@ pub async fn detect_chapter(
     State(runtime): State<BooksRuntime>,
     Path((book_id, chapter)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let not_found = || (StatusCode::NOT_FOUND, Json(json!({ "error": "Chapter not found" })));
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Chapter not found" })),
+        )
+    };
     // 687 号：负数/NaN 无前导号等值候选，统一落 404（旧 padded "00-1"/"NaN"
     // 形态随 startsWith 匹配一并退役）。
     let Ok(number) = chapter.parse::<u32>() else {
         return not_found();
     };
     let chapters_dir = runtime.state.book_dir(&book_id).join("chapters");
-    let Some(file_name) = crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await else {
+    let Some(file_name) =
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, number).await
+    else {
         return not_found();
     };
     let Ok(content) = tokio::fs::read_to_string(chapters_dir.join(&file_name)).await else {
@@ -1091,9 +1197,14 @@ fn resolve_truth_file_path(book_dir: &std::path::Path, file: &str) -> Option<std
 }
 
 async fn is_new_layout_book(book_dir: &std::path::Path) -> bool {
-    tokio::fs::try_exists(book_dir.join("story").join("outline").join("story_frame.md"))
-        .await
-        .unwrap_or(false)
+    tokio::fs::try_exists(
+        book_dir
+            .join("story")
+            .join("outline")
+            .join("story_frame.md"),
+    )
+    .await
+    .unwrap_or(false)
 }
 
 /// UTF-16 码元切片（TS `content.slice(0, 200)`）。
@@ -1142,11 +1253,19 @@ pub async fn truth_list(
         .into_iter()
         .filter(|f| !f.starts_with("outline") && !f.starts_with("roles"))
         .collect();
-    let outline_files: Vec<String> =
-        list_md_json_yaml(&story_dir.join("outline")).await.into_iter().map(|f| format!("outline/{f}")).collect();
+    let outline_files: Vec<String> = list_md_json_yaml(&story_dir.join("outline"))
+        .await
+        .into_iter()
+        .map(|f| format!("outline/{f}"))
+        .collect();
     let mut all = flat_files;
     all.extend(outline_files);
-    for role_dir in ["roles/主要角色", "roles/次要角色", "roles/major", "roles/minor"] {
+    for role_dir in [
+        "roles/主要角色",
+        "roles/次要角色",
+        "roles/major",
+        "roles/minor",
+    ] {
         let entries: Vec<String> = list_md_json_yaml(&story_dir.join(role_dir))
             .await
             .into_iter()
@@ -1195,7 +1314,10 @@ pub async fn truth_file(
 ) -> impl IntoResponse {
     let book_dir = runtime.state.book_dir(&book_id);
     let Some(resolved) = resolve_truth_file_path(&book_dir, &file) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid truth file" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid truth file" })),
+        );
     };
     let legacy = LEGACY_SHIM_FILES.contains(&file.as_str()) && is_new_layout_book(&book_dir).await;
     let runtime_diagnostic = runtime_diagnostic_re().is_match(&file);
@@ -1213,7 +1335,9 @@ pub async fn truth_file(
             payload["content"] = json!(content);
             // outline/* 携带 YAML frontmatter：结构化字段供 UI 卡片渲染，
             // content 保持原文（编辑器往返不变）。
-            if let Ok(parsed) = crate::models::book_rules::try_parse_book_rules_frontmatter(&content) {
+            if let Ok(parsed) =
+                crate::models::book_rules::try_parse_book_rules_frontmatter(&content)
+            {
                 payload["frontmatter"] = serde_json::to_value(&parsed.rules).unwrap_or(Value::Null);
                 payload["body"] = json!(parsed.body);
             }
@@ -1301,7 +1425,10 @@ pub async fn get_review_mode(
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     // TS 语义（118 号对跑勘误）：404 仅当 inkos.json/book.json **文件**缺失或
@@ -1349,7 +1476,10 @@ pub async fn put_review_mode(
     Json(body): Json<ReviewModeBody>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     let (project_mode, Ok(mut raw_book)) = (
@@ -1413,7 +1543,10 @@ pub async fn put_review_mode(
     let book_path = root.join("books").join(&book_id).join("book.json");
     // TS JSON.stringify(raw, null, 2)：2 空格缩进、无尾换行。199 号：原子替换写。
     let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
-    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized).await.is_err() {
+    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized)
+        .await
+        .is_err()
+    {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
@@ -1450,7 +1583,10 @@ pub async fn get_timeline_auto_beats(
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     let Ok(raw_book) = load_raw_book_config(root, &book_id).await else {
@@ -1481,7 +1617,10 @@ pub async fn put_timeline_auto_beats(
     Json(body): Json<TimelineAutoBeatsBody>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     let Ok(mut raw_book) = load_raw_book_config(root, &book_id).await else {
@@ -1514,13 +1653,19 @@ pub async fn put_timeline_auto_beats(
     let book_path = root.join("books").join(&book_id).join("book.json");
     // 199 号：原子替换写（截断的 book.json = 整本书不可加载）。
     let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
-    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized).await.is_err() {
+    if crate::utils::atomic_file_set::write_file_atomic(&book_path, &serialized)
+        .await
+        .is_err()
+    {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
         );
     }
-    (StatusCode::OK, Json(json!({ "ok": true, "enabled": enabled })))
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "enabled": enabled })),
+    )
 }
 
 #[cfg(test)]
@@ -1577,17 +1722,49 @@ mod tests {
     fn app(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
             .route("/api/v1/books", axum::routing::get(list_books))
-            .route("/api/v1/books/:id", axum::routing::get(book_detail).put(update_book).delete(delete_book))
-            .route("/api/v1/books/:id/chapters/:num", axum::routing::get(read_chapter))
-            .route("/api/v1/books/:id/chapters/:num/approve", axum::routing::post(approve_chapter))
-            .route("/api/v1/books/:id/chapters/:num/reject", axum::routing::post(reject_chapter))
+            .route(
+                "/api/v1/books/:id",
+                axum::routing::get(book_detail)
+                    .put(update_book)
+                    .delete(delete_book),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num",
+                axum::routing::get(read_chapter),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/approve",
+                axum::routing::post(approve_chapter),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/reject",
+                axum::routing::post(reject_chapter),
+            )
             .route("/api/v1/books/:id/truth", axum::routing::get(truth_list))
-            .route("/api/v1/books/:id/timeline", axum::routing::get(get_timeline).put(put_timeline))
-            .route("/api/v1/books/:id/series-backfill/extract", axum::routing::post(crate::server::series_backfill_routes::extract))
-            .route("/api/v1/books/:id/series-backfill/apply", axum::routing::post(crate::server::series_backfill_routes::apply))
-            .route("/api/v1/books/:id/series-backfill/existing", axum::routing::get(crate::server::series_backfill_routes::existing))
-            .route("/api/v1/books/:id/truth/*file", axum::routing::get(truth_file))
-            .route("/api/v1/books/:id/chapter-review-mode", axum::routing::get(get_review_mode).put(put_review_mode))
+            .route(
+                "/api/v1/books/:id/timeline",
+                axum::routing::get(get_timeline).put(put_timeline),
+            )
+            .route(
+                "/api/v1/books/:id/series-backfill/extract",
+                axum::routing::post(crate::server::series_backfill_routes::extract),
+            )
+            .route(
+                "/api/v1/books/:id/series-backfill/apply",
+                axum::routing::post(crate::server::series_backfill_routes::apply),
+            )
+            .route(
+                "/api/v1/books/:id/series-backfill/existing",
+                axum::routing::get(crate::server::series_backfill_routes::existing),
+            )
+            .route(
+                "/api/v1/books/:id/truth/*file",
+                axum::routing::get(truth_file),
+            )
+            .route(
+                "/api/v1/books/:id/chapter-review-mode",
+                axum::routing::get(get_review_mode).put(put_review_mode),
+            )
             .route(
                 "/api/v1/books/:id/timeline-auto-beats",
                 axum::routing::get(get_timeline_auto_beats).put(put_timeline_auto_beats),
@@ -1595,16 +1772,24 @@ mod tests {
             .with_state(runtime)
     }
 
-    fn request(method: &str, uri: &str, body: Option<&str>) -> axum::http::Request<axum::body::Body> {
+    fn request(
+        method: &str,
+        uri: &str,
+        body: Option<&str>,
+    ) -> axum::http::Request<axum::body::Body> {
         let mut builder = axum::http::Request::builder().method(method).uri(uri);
         if body.is_some() {
             builder = builder.header("content-type", "application/json");
         }
-        builder.body(axum::body::Body::from(body.unwrap_or("").to_string())).unwrap()
+        builder
+            .body(axum::body::Body::from(body.unwrap_or("").to_string()))
+            .unwrap()
     }
 
     async fn json_body(response: axum::http::Response<axum::body::Body>) -> Value {
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         serde_json::from_slice(&bytes).unwrap()
     }
 
@@ -1662,7 +1847,8 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["book"]["chapterWordCount"], 5000);
         assert_eq!(parsed["book"]["status"], "paused");
-        let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
+        let raw =
+            std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
         assert!(raw.contains("\"chapterWordCount\": 5000"));
     }
 
@@ -1731,7 +1917,10 @@ mod tests {
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["status"], "approved");
         let index = state.load_chapter_index("b1").await.unwrap();
-        assert_eq!(index[0].status, crate::models::chapter::ChapterStatus::Approved);
+        assert_eq!(
+            index[0].status,
+            crate::models::chapter::ChapterStatus::Approved
+        );
     }
 
     #[tokio::test]
@@ -1766,7 +1955,10 @@ mod tests {
         )
         .unwrap();
         std::fs::write(book_dir.join("story").join("current_state.md"), "状态v2").unwrap();
-        state.save_chapter_index("b1", &[meta(1), meta(2)]).await.unwrap();
+        state
+            .save_chapter_index("b1", &[meta(1), meta(2)])
+            .await
+            .unwrap();
 
         let response = app(runtime_for(dir.path()))
             .oneshot(request("POST", "/api/v1/books/b1/chapters/2/reject", None))
@@ -1799,10 +1991,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fixture(dir.path());
         let book_dir = dir.path().join("books").join("b1");
-        std::fs::write(book_dir.join("story").join("pending_hooks.md"), "| 伏笔 | 状态 |").unwrap();
+        std::fs::write(
+            book_dir.join("story").join("pending_hooks.md"),
+            "| 伏笔 | 状态 |",
+        )
+        .unwrap();
         // 新布局：story_bible 变 shim → legacy 标记。
         std::fs::write(
-            book_dir.join("story").join("outline").join("story_frame.md"),
+            book_dir
+                .join("story")
+                .join("outline")
+                .join("story_frame.md"),
             "---\nversion: \"1.0\"\nprotagonist:\n  name: 林动\n---\n正文框架",
         )
         .unwrap();
@@ -1820,13 +2019,20 @@ mod tests {
         assert!(names.contains(&"pending_hooks.md"));
         assert!(names.contains(&"story_bible.md"));
         assert!(names.contains(&"outline/story_frame.md"));
-        let bible = files.iter().find(|f| f["name"] == "story_bible.md").unwrap();
+        let bible = files
+            .iter()
+            .find(|f| f["name"] == "story_bible.md")
+            .unwrap();
         assert_eq!(bible["legacy"], true);
 
         // 单文件：frontmatter 解析 + legacy。
         let runtime = runtime_for(dir.path());
         let response = app(runtime)
-            .oneshot(request("GET", "/api/v1/books/b1/truth/outline/story_frame.md", None))
+            .oneshot(request(
+                "GET",
+                "/api/v1/books/b1/truth/outline/story_frame.md",
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -1838,19 +2044,31 @@ mod tests {
         // 白名单拒绝 → 400；缺文件 → 200 content null。
         let runtime = runtime_for(dir.path());
         let invalid = app(runtime)
-            .oneshot(request("GET", "/api/v1/books/b1/truth/../../etc/passwd", None))
+            .oneshot(request(
+                "GET",
+                "/api/v1/books/b1/truth/../../etc/passwd",
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
         let runtime = runtime_for(dir.path());
         let missing = app(runtime)
-            .oneshot(request("GET", "/api/v1/books/b1/truth/pending_hooks2.md", None))
+            .oneshot(request(
+                "GET",
+                "/api/v1/books/b1/truth/pending_hooks2.md",
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
         let runtime = runtime_for(dir.path());
         let absent = app(runtime)
-            .oneshot(request("GET", "/api/v1/books/b1/truth/style_guide.md", None))
+            .oneshot(request(
+                "GET",
+                "/api/v1/books/b1/truth/style_guide.md",
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(absent.status(), StatusCode::OK);
@@ -1887,7 +2105,11 @@ mod tests {
             ]
         });
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&payload.to_string())))
+            .oneshot(request(
+                "PUT",
+                "/api/v1/books/b1/timeline",
+                Some(&payload.to_string()),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -1897,7 +2119,10 @@ mod tests {
             .unwrap();
         let parsed = json_body(response).await;
         assert_eq!(parsed["timeline"]["plotlines"].as_array().unwrap().len(), 2);
-        assert_eq!(parsed["timeline"]["plotlines"][0]["cells"][0]["title"], "风起");
+        assert_eq!(
+            parsed["timeline"]["plotlines"][0]["cells"][0]["title"],
+            "风起"
+        );
 
         // 落盘位置 = story/timeline.json。
         assert!(dir.path().join("books/b1/story/timeline.json").exists());
@@ -1911,7 +2136,11 @@ mod tests {
             ]
         });
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&dup.to_string())))
+            .oneshot(request(
+                "PUT",
+                "/api/v1/books/b1/timeline",
+                Some(&dup.to_string()),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -1921,7 +2150,11 @@ mod tests {
             "version": 1, "bookId": "other", "updatedAt": "t", "plotlines": []
         });
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&mismatch.to_string())))
+            .oneshot(request(
+                "PUT",
+                "/api/v1/books/b1/timeline",
+                Some(&mismatch.to_string()),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -1931,14 +2164,22 @@ mod tests {
             "version": 2, "bookId": "b1", "updatedAt": "t", "plotlines": []
         });
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some(&wrong_version.to_string())))
+            .oneshot(request(
+                "PUT",
+                "/api/v1/books/b1/timeline",
+                Some(&wrong_version.to_string()),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // 坏载荷 → 400；随后 GET 回落 null。
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("PUT", "/api/v1/books/b1/timeline", Some("{ not json")))
+            .oneshot(request(
+                "PUT",
+                "/api/v1/books/b1/timeline",
+                Some("{ not json"),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -1947,7 +2188,10 @@ mod tests {
             .await
             .unwrap();
         let parsed = json_body(response).await;
-        assert!(!parsed["timeline"].is_null(), "先前 PUT 已合法落盘，GET 应仍可读");
+        assert!(
+            !parsed["timeline"].is_null(),
+            "先前 PUT 已合法落盘，GET 应仍可读"
+        );
     }
 
     /// 184 号 C3-b：系列回填 apply/extract 校验面（LLM 前路径）。
@@ -1959,24 +2203,40 @@ mod tests {
 
         // 未抽取先 apply → 400。
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some("{}")))
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/series-backfill/apply",
+                Some("{}"),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // extract：缺 sourceBookId → 400；源书不存在 → 400；源=目标 → 400。
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/extract", Some("{}")))
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/series-backfill/extract",
+                Some("{}"),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/extract", Some(r#"{"sourceBookId":"ghost"}"#)))
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/series-backfill/extract",
+                Some(r#"{"sourceBookId":"ghost"}"#),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/extract", Some(r#"{"sourceBookId":"b1"}"#)))
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/series-backfill/extract",
+                Some(r#"{"sourceBookId":"b1"}"#),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -1991,28 +2251,46 @@ mod tests {
             ]
         }"#;
         std::fs::create_dir_all(book_dir.join("story")).unwrap();
-        std::fs::write(book_dir.join("story").join("series_backfill_draft.json"), draft).unwrap();
+        std::fs::write(
+            book_dir.join("story").join("series_backfill_draft.json"),
+            draft,
+        )
+        .unwrap();
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some(r#"{"itemIds":["it-2"]}"#)))
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/series-backfill/apply",
+                Some(r#"{"itemIds":["it-2"]}"#),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let md = std::fs::read_to_string(book_dir.join("story").join("series_backfill.md")).unwrap();
+        let md =
+            std::fs::read_to_string(book_dir.join("story").join("series_backfill.md")).unwrap();
         assert!(md.contains("反派"));
         assert!(!md.contains("元气体系"), "勾选子集不应包含未选项");
 
         // 缺省全量。
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some("{}")))
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/series-backfill/apply",
+                Some("{}"),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let md = std::fs::read_to_string(book_dir.join("story").join("series_backfill.md")).unwrap();
+        let md =
+            std::fs::read_to_string(book_dir.join("story").join("series_backfill.md")).unwrap();
         assert!(md.contains("元气体系") && md.contains("反派"));
 
         // 空勾选 → 400。
         let response = app(runtime_for(dir.path()))
-            .oneshot(request("POST", "/api/v1/books/b1/series-backfill/apply", Some(r#"{"itemIds":[]}"#)))
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/series-backfill/apply",
+                Some(r#"{"itemIds":[]}"#),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -2048,7 +2326,8 @@ mod tests {
         let parsed = json_body(response).await;
         assert_eq!(parsed["ok"], true);
         assert_eq!(parsed["bookMode"], "manual");
-        let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
+        let raw =
+            std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
         assert!(raw.contains("\"reviewMode\": \"manual\""));
 
         // PUT inherit → 键删除。
@@ -2062,7 +2341,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
+        let raw =
+            std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
         assert!(!raw.contains("reviewMode"));
     }
 
@@ -2094,7 +2374,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let parsed = json_body(response).await;
         assert_eq!(parsed["enabled"], true);
-        let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
+        let raw =
+            std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
         assert!(raw.contains("\"autoTimelineBeats\": true"));
 
         // GET 回读 bookEnabled = true。
@@ -2118,7 +2399,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let raw = std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
+        let raw =
+            std::fs::read_to_string(dir.path().join("books").join("b1").join("book.json")).unwrap();
         assert!(!raw.contains("autoTimelineBeats"));
     }
 
@@ -2128,7 +2410,11 @@ mod tests {
         fixture(dir.path());
         let runtime = runtime_for(dir.path());
         let response = app(runtime)
-            .oneshot(request("GET", "/api/v1/books/ghost/timeline-auto-beats", None))
+            .oneshot(request(
+                "GET",
+                "/api/v1/books/ghost/timeline-auto-beats",
+                None,
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -2141,7 +2427,11 @@ mod tests {
     async fn non_object_book_json_returns_404_not_panic() {
         let dir = tempfile::tempdir().unwrap();
         fixture(dir.path());
-        std::fs::write(dir.path().join("books").join("b1").join("book.json"), "[1,2,3]").unwrap();
+        std::fs::write(
+            dir.path().join("books").join("b1").join("book.json"),
+            "[1,2,3]",
+        )
+        .unwrap();
         for (method, uri, body) in [
             ("GET", "/api/v1/books/b1/chapter-review-mode", None),
             (
@@ -2184,7 +2474,10 @@ pub async fn get_best_of_n(
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     let raw_book = match load_raw_book_config(root, &book_id).await {
@@ -2216,7 +2509,10 @@ pub async fn put_best_of_n(
     Json(body): Json<PutBestOfNBody>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     let Ok(mut raw_book) = load_raw_book_config(root, &book_id).await else {
@@ -2267,7 +2563,10 @@ pub async fn get_series_id(
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     let raw_book = match load_raw_book_config(root, &book_id).await {
@@ -2299,7 +2598,10 @@ pub async fn put_series_id(
     Json(body): Json<PutSeriesIdBody>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let root = runtime.state.project_root();
     let Ok(mut raw_book) = load_raw_book_config(root, &book_id).await else {
@@ -2323,10 +2625,7 @@ pub async fn put_series_id(
             .unwrap()
             .insert("seriesId".to_string(), json!(value));
     } else {
-        raw_book
-            .as_object_mut()
-            .unwrap()
-            .remove("seriesId");
+        raw_book.as_object_mut().unwrap().remove("seriesId");
     }
     let book_path = root.join("books").join(&book_id).join("book.json");
     let serialized = serde_json::to_string_pretty(&raw_book).unwrap_or_default();
@@ -2351,15 +2650,28 @@ pub async fn get_codex(
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let raw = tokio::fs::read_to_string(
-        runtime.state.project_root().join("books").join(&book_id).join("story").join("entity_codex.json"),
+        runtime
+            .state
+            .project_root()
+            .join("books")
+            .join(&book_id)
+            .join("story")
+            .join("entity_codex.json"),
     )
     .await
     .unwrap_or_default();
     let parsed: Value = serde_json::from_str(&raw).unwrap_or(json!({}));
-    let cards = parsed.get("cards").and_then(Value::as_array).cloned().unwrap_or_default();
+    let cards = parsed
+        .get("cards")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     (StatusCode::OK, Json(json!({ "cards": cards })))
 }
 
@@ -2369,10 +2681,16 @@ pub async fn put_codex(
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let Some(cards) = body.get("cards").and_then(Value::as_array) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "cards array required" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "cards array required" })),
+        );
     };
     let story_dir = runtime
         .state
@@ -2381,7 +2699,10 @@ pub async fn put_codex(
         .join(&book_id)
         .join("story");
     if std::fs::create_dir_all(&story_dir).is_err() {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "io" })));
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "io" })),
+        );
     }
     let payload = json!({ "version": 1, "cards": cards });
     match std::fs::write(
@@ -2389,7 +2710,10 @@ pub async fn put_codex(
         serde_json::to_string_pretty(&payload).unwrap_or_default(),
     ) {
         Ok(()) => (StatusCode::OK, Json(json!({ "ok": true, "cards": cards }))),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "io" }))),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "io" })),
+        ),
     }
 }
 
@@ -2402,7 +2726,10 @@ pub async fn get_context_lens_chapters(
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" })));
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        );
     }
     let runtime_dir = runtime
         .state
@@ -2439,13 +2766,25 @@ pub async fn get_context_lens(
     Path((book_id, chapter_raw)): Path<(String, String)>,
 ) -> impl IntoResponse {
     if !is_safe_book_id(&book_id) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid book id" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        )
+            .into_response();
     }
     let Ok(chapter) = chapter_raw.parse::<u32>() else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid chapter" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid chapter" })),
+        )
+            .into_response();
     };
     if chapter == 0 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Invalid chapter" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid chapter" })),
+        )
+            .into_response();
     }
     let runtime_dir = runtime
         .state
@@ -2462,26 +2801,24 @@ pub async fn get_context_lens(
         )
             .into_response()
     };
-    let context_package: crate::models::input_governance::ContextPackage = match tokio::fs::read_to_string(
-        runtime_dir.join(format!("{slug}.context.json")),
-    )
-    .await
-    .ok()
-    .and_then(|raw| serde_json::from_str(&raw).ok())
-    {
-        Some(package) => package,
-        None => return not_found(),
-    };
-    let trace: crate::models::input_governance::ChapterTrace = match tokio::fs::read_to_string(
-        runtime_dir.join(format!("{slug}.trace.json")),
-    )
-    .await
-    .ok()
-    .and_then(|raw| serde_json::from_str(&raw).ok())
-    {
-        Some(trace) => trace,
-        None => return not_found(),
-    };
+    let context_package: crate::models::input_governance::ContextPackage =
+        match tokio::fs::read_to_string(runtime_dir.join(format!("{slug}.context.json")))
+            .await
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+        {
+            Some(package) => package,
+            None => return not_found(),
+        };
+    let trace: crate::models::input_governance::ChapterTrace =
+        match tokio::fs::read_to_string(runtime_dir.join(format!("{slug}.trace.json")))
+            .await
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+        {
+            Some(trace) => trace,
+            None => return not_found(),
+        };
     let lens = crate::utils::context_lens::build_context_lens(&context_package, &trace);
     match serde_json::to_value(&lens) {
         Ok(value) => (StatusCode::OK, Json(value)).into_response(),

@@ -83,7 +83,13 @@ mod tests {
 
     #[test]
     fn split_skips_escaped_pipes() {
-        assert_eq!(split_table_row_escaped("| a\\|b | c |"), vec!["", " a\\|b ", " c ", ""]);
-        assert_eq!(split_table_row_escaped("| a | b |"), vec!["", " a ", " b ", ""]);
+        assert_eq!(
+            split_table_row_escaped("| a\\|b | c |"),
+            vec!["", " a\\|b ", " c ", ""]
+        );
+        assert_eq!(
+            split_table_row_escaped("| a | b |"),
+            vec!["", " a ", " b ", ""]
+        );
     }
 }

@@ -26,7 +26,11 @@ pub struct SubAgentDeps<'a> {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
@@ -44,7 +48,10 @@ pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult
     // activeSkills()) → runWithAgentContext({activatedSkills})。
     // 532 号：use_skill 已移植（240 号）——合并序补上同轮动态激活
     // （turn_skill_activations 后写胜，覆盖同 id worker 绑定），对齐 TS。
-    let agent = args.get("agent").and_then(Value::as_str).unwrap_or_default();
+    let agent = args
+        .get("agent")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let root = deps.runtime.state.project_root().to_path_buf();
     let available = crate::skills::external_loader::load_available_agent_skills(
         &root,
@@ -53,7 +60,8 @@ pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult
     )
     .await
     .skills;
-    let worker_binding = crate::skills::production_bindings::worker_skills_for_agent(&available, agent);
+    let worker_binding =
+        crate::skills::production_bindings::worker_skills_for_agent(&available, agent);
     let worker = crate::skills::production_bindings::merge_activated_skill_guidance(&[
         &worker_binding,
         &crate::skills::production_bindings::turn_skill_activations(),
@@ -68,7 +76,10 @@ pub async fn tool_sub_agent(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult
 }
 
 async fn tool_sub_agent_inner(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
-    let agent = args.get("agent").and_then(Value::as_str).unwrap_or_default();
+    let agent = args
+        .get("agent")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     if !SUB_AGENTS.contains(&agent) {
         return error_result(format!(
             "Invalid sub_agent.agent: {agent}（expected one of {}）",
@@ -98,7 +109,9 @@ async fn tool_sub_agent_inner(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResu
         return text_result(message, None);
     }
     match agent {
-        "architect" if architect_revise => architect_revise_foundation(deps, args, instruction).await,
+        "architect" if architect_revise => {
+            architect_revise_foundation(deps, args, instruction).await
+        }
         "architect" => architect_create(deps, args, instruction).await,
         "writer" => writer(deps, args).await,
         "auditor" => auditor(deps, args).await,
@@ -137,13 +150,20 @@ async fn architect_revise_foundation(
     if deps.active_book_id.is_none() {
         return text_result("Open the book first before revising its foundation.", None);
     }
-    let book_id = match resolve_tool_book_id("architect", field_str(args, "bookId"), deps.active_book_id) {
-        Ok(book_id) => book_id,
-        Err(message) => return error_result(message),
-    };
+    let book_id =
+        match resolve_tool_book_id("architect", field_str(args, "bookId"), deps.active_book_id) {
+            Ok(book_id) => book_id,
+            Err(message) => return error_result(message),
+        };
     // TS `feedback ?? instruction`：feedback 缺省/空串回退 instruction。
     let feedback = field_str(args, "feedback").unwrap_or(instruction);
-    match crate::server::book_create_routes::revise_foundation_chain(deps.runtime, &book_id, feedback).await {
+    match crate::server::book_create_routes::revise_foundation_chain(
+        deps.runtime,
+        &book_id,
+        feedback,
+    )
+    .await
+    {
         Ok(()) => {
             let message = if deps.language == "en" {
                 format!(
@@ -162,10 +182,11 @@ async fn architect_revise_foundation(
 
 /// writer：单章 / 多章连写（复用 write_next 链 + Manual 审核模式装配）。
 async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
-    let book_id = match resolve_tool_book_id("writer", field_str(args, "bookId"), deps.active_book_id) {
-        Ok(book_id) => book_id,
-        Err(message) => return error_result(message),
-    };
+    let book_id =
+        match resolve_tool_book_id("writer", field_str(args, "bookId"), deps.active_book_id) {
+            Ok(book_id) => book_id,
+            Err(message) => return error_result(message),
+        };
     let chapter_count = args
         .get("chapterCount")
         .and_then(Value::as_f64)
@@ -265,7 +286,10 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
     }
     // 单章：status 非 ready-for-review 且非 active → 需复查提示。
     let last = chapters.first().cloned().unwrap_or(Value::Null);
-    let status = last.get("status").and_then(Value::as_str).unwrap_or_default();
+    let status = last
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let word_count_value = last.get("wordCount").cloned().unwrap_or(json!("unknown"));
     let message = if !status.is_empty() && status != "ready-for-review" && status != "active" {
         format!(
@@ -289,10 +313,11 @@ async fn writer(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
 
 /// auditor：审一章（缺省最新章）。
 async fn auditor(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
-    let book_id = match resolve_tool_book_id("auditor", field_str(args, "bookId"), deps.active_book_id) {
-        Ok(book_id) => book_id,
-        Err(message) => return error_result(message),
-    };
+    let book_id =
+        match resolve_tool_book_id("auditor", field_str(args, "bookId"), deps.active_book_id) {
+            Ok(book_id) => book_id,
+            Err(message) => return error_result(message),
+        };
     let chapter_number = match args
         .get("chapterNumber")
         .and_then(Value::as_f64)
@@ -310,14 +335,14 @@ async fn auditor(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
         router: deps.runtime.effective_router().await.clone(),
         builtin_genres_dir: deps.runtime.builtin_genres_dir.clone(),
     };
-    match crate::server::audit_route::run_audit_flow(&audit_runtime, &book_id, chapter_number, None).await {
+    match crate::server::audit_route::run_audit_flow(&audit_runtime, &book_id, chapter_number, None)
+        .await
+    {
         Ok(audit) => {
             let issue_lines: Vec<String> = audit
                 .issues
                 .iter()
-                .map(|issue| {
-                    format!("[{:?}] {}", issue.severity, issue.description)
-                })
+                .map(|issue| format!("[{:?}] {}", issue.severity, issue.description))
                 .collect();
             let passed = if audit.passed { "PASSED" } else { "FAILED" };
             let mut text = format!(
@@ -338,10 +363,11 @@ async fn auditor(deps: &SubAgentDeps<'_>, args: &Value) -> ToolResult {
 /// 缺省 spot-fix）。复用 47 号 /revise 审核环，gate 用 runtime 配置（TS sub_agent
 /// → pipeline.reviseDraft 的 `config.revisionGate ?? "strict"`）。文本/details 逐字。
 async fn reviser(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> ToolResult {
-    let book_id = match resolve_tool_book_id("reviser", field_str(args, "bookId"), deps.active_book_id) {
-        Ok(book_id) => book_id,
-        Err(message) => return error_result(message),
-    };
+    let book_id =
+        match resolve_tool_book_id("reviser", field_str(args, "bookId"), deps.active_book_id) {
+            Ok(book_id) => book_id,
+            Err(message) => return error_result(message),
+        };
     // TS reviseDraft：显式 0/负数与"最新章 - 1 < 1"同报"无章可修"。
     let no_chapters = error_result(format!("No chapters to revise for \"{book_id}\""));
     let chapter_number = match args
@@ -375,7 +401,9 @@ async fn reviser(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> To
             let details = revision_details_json(&book_id, &mode, &result);
             if result.applied {
                 text_result(
-                    format!("Revision ({mode}) complete for \"{book_id}\" chapter {chapter_number}."),
+                    format!(
+                        "Revision ({mode}) complete for \"{book_id}\" chapter {chapter_number}."
+                    ),
                     Some(details),
                 )
             } else {
@@ -466,10 +494,11 @@ fn revision_diagnostics_text(diagnostics: &RevisionDiagnostics) -> String {
 
 /// exporter：导出工件（format/approvedOnly 可从 instruction 推断）+ 落盘。
 async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> ToolResult {
-    let book_id = match resolve_tool_book_id("exporter", field_str(args, "bookId"), deps.active_book_id) {
-        Ok(book_id) => book_id,
-        Err(message) => return error_result(message),
-    };
+    let book_id =
+        match resolve_tool_book_id("exporter", field_str(args, "bookId"), deps.active_book_id) {
+            Ok(book_id) => book_id,
+            Err(message) => return error_result(message),
+        };
     let format_arg = field_str(args, "format");
     let inferred_format = match format_arg {
         Some(format) => format.to_string(),
@@ -477,7 +506,10 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
             let lower = instruction.to_lowercase();
             if lower.contains("epub") {
                 "epub".to_string()
-            } else if lower.contains("markdown") || instruction.contains(" md ") || instruction.contains("MD") {
+            } else if lower.contains("markdown")
+                || instruction.contains(" md ")
+                || instruction.contains("MD")
+            {
                 "md".to_string()
             } else {
                 "txt".to_string()
@@ -486,9 +518,11 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
     };
     let approved_only = match args.get("approvedOnly").and_then(Value::as_bool) {
         Some(value) => value,
-        None => instruction.contains("approved")
-            || instruction.contains("已通过")
-            || instruction.contains("通过章节"),
+        None => {
+            instruction.contains("approved")
+                || instruction.contains("已通过")
+                || instruction.contains("通过章节")
+        }
     };
     let format = crate::interaction::export_artifact::ExportFormat::parse(Some(&inferred_format));
     match crate::interaction::export_artifact::build_export_artifact(
@@ -505,7 +539,12 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
             if let Some(parent) = std::path::Path::new(&artifact.output_path).parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
             }
-            if let Err(e) = crate::utils::atomic_file_set::write_file_atomic_bytes(std::path::Path::new(&artifact.output_path), &artifact.payload).await {
+            if let Err(e) = crate::utils::atomic_file_set::write_file_atomic_bytes(
+                std::path::Path::new(&artifact.output_path),
+                &artifact.payload,
+            )
+            .await
+            {
                 return error_result(format!("Export failed: {e}"));
             }
             text_result(
@@ -553,7 +592,6 @@ pub fn sub_agent_schema() -> Value {
     })
 }
 
-
 // ── 注册模块（R38b）：sub_agent 单件——生产变更面（TS 剔除名单九件之一，
 //    子代理可写章节/真相文件）。 ──
 
@@ -561,7 +599,8 @@ crate::interaction::registry::tool_def!(
     SubAgent,
     "sub_agent",
     MutationKind::ProductionMutation,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[sub_agent_schema()], "sub_agent") },
     schema_parameters(&[sub_agent_schema()], "sub_agent"),
     ctx.sub_agent_deps.is_some(),
@@ -582,9 +621,15 @@ mod tests {
     fn schema_shape() {
         let schema = sub_agent_schema();
         assert_eq!(schema["function"]["name"], "sub_agent");
-        assert_eq!(schema["function"]["parameters"]["required"], json!(["agent", "instruction"]));
         assert_eq!(
-            schema["function"]["parameters"]["properties"]["agent"]["enum"].as_array().unwrap().len(),
+            schema["function"]["parameters"]["required"],
+            json!(["agent", "instruction"])
+        );
+        assert_eq!(
+            schema["function"]["parameters"]["properties"]["agent"]["enum"]
+                .as_array()
+                .unwrap()
+                .len(),
             5
         );
     }
@@ -613,29 +658,57 @@ mod tests {
             builtin_genres_dir: root.join("assets").join("genres"),
             revision_gate: Default::default(),
         };
-        let deps = SubAgentDeps { runtime: &books, active_book_id: None, language: "zh", abort: None };
+        let deps = SubAgentDeps {
+            runtime: &books,
+            active_book_id: None,
+            language: "zh",
+            abort: None,
+        };
         // 非法 agent / 缺 instruction。
-        let bad = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "bogus", "instruction": "x" })));
+        let bad = tokio_rt.block_on(tool_sub_agent(
+            &deps,
+            &json!({ "agent": "bogus", "instruction": "x" }),
+        ));
         assert!(bad.is_error && bad.text.contains("Invalid sub_agent.agent"));
         let missing = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "writer" })));
         assert!(missing.is_error && missing.text.contains("requires an instruction"));
         // 无书守卫（writer/auditor/exporter）。
-        let no_book = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "writer", "instruction": "写一章" })));
+        let no_book = tokio_rt.block_on(tool_sub_agent(
+            &deps,
+            &json!({ "agent": "writer", "instruction": "写一章" }),
+        ));
         assert_eq!(
             no_book.text,
             "No active book. Only the architect agent can create a book from this session."
         );
         assert!(!no_book.is_error);
         // 有书时 architect 建书拒绝（双语；revise=true 放行不走此文案）。
-        let with_book = SubAgentDeps { runtime: &books, active_book_id: Some("b1"), language: "zh", abort: None };
-        let rejected = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "architect", "instruction": "建书" })));
-        assert_eq!(rejected.text, "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。");
+        let with_book = SubAgentDeps {
+            runtime: &books,
+            active_book_id: Some("b1"),
+            language: "zh",
+            abort: None,
+        };
+        let rejected = tokio_rt.block_on(tool_sub_agent(
+            &with_book,
+            &json!({ "agent": "architect", "instruction": "建书" }),
+        ));
+        assert_eq!(
+            rejected.text,
+            "当前已有书籍，不需要建书。如果你想创建新书，请先回到首页。"
+        );
         // reviser 无章可修（书不存在 → 最新章 - 1 = 0，TS 链内错误文本）。
-        let reviser = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "reviser", "instruction": "改一章" })));
+        let reviser = tokio_rt.block_on(tool_sub_agent(
+            &with_book,
+            &json!({ "agent": "reviser", "instruction": "改一章" }),
+        ));
         assert!(reviser.is_error);
         assert_eq!(reviser.text, "No chapters to revise for \"b1\"");
         // reviser 显式 0 章同报无章可修。
-        let zero = tokio_rt.block_on(tool_sub_agent(&with_book, &json!({ "agent": "reviser", "instruction": "改一章", "chapterNumber": 0 })));
+        let zero = tokio_rt.block_on(tool_sub_agent(
+            &with_book,
+            &json!({ "agent": "reviser", "instruction": "改一章", "chapterNumber": 0 }),
+        ));
         assert!(zero.is_error);
         assert_eq!(zero.text, "No chapters to revise for \"b1\"");
         // architect.revise 无书守卫（TS 逐字）。
@@ -643,11 +716,20 @@ mod tests {
             &deps,
             &json!({ "agent": "architect", "instruction": "重写架构稿", "revise": true }),
         ));
-        assert_eq!(no_book_revise.text, "Open the book first before revising its foundation.");
+        assert_eq!(
+            no_book_revise.text,
+            "Open the book first before revising its foundation."
+        );
         assert!(!no_book_revise.is_error);
         // architect 缺 title。
-        let no_title = tokio_rt.block_on(tool_sub_agent(&deps, &json!({ "agent": "architect", "instruction": "建书" })));
-        assert_eq!(no_title.text, "Error: title is required for the architect agent.");
+        let no_title = tokio_rt.block_on(tool_sub_agent(
+            &deps,
+            &json!({ "agent": "architect", "instruction": "建书" }),
+        ));
+        assert_eq!(
+            no_title.text,
+            "Error: title is required for the architect agent."
+        );
     }
 
     /// 拒绝分支的 details/诊断文本逐字（fabricated 门控拒绝结果）。
@@ -682,7 +764,10 @@ mod tests {
         assert_eq!(details["mode"], "polish");
         assert_eq!(details["applied"], false);
         assert_eq!(details["status"], "unchanged");
-        assert!(details["skippedReason"].as_str().unwrap().starts_with("Manual revision kept"));
+        assert!(details["skippedReason"]
+            .as_str()
+            .unwrap()
+            .starts_with("Manual revision kept"));
         let diagnostics = &details["revisionDiagnostics"];
         assert_eq!(diagnostics["before"]["blockingCount"], 2);
         assert_eq!(diagnostics["after"]["aiTellCount"], 0);
@@ -691,8 +776,14 @@ mod tests {
 
         let text = revision_diagnostics_text(result.revision_diagnostics.as_ref().unwrap());
         assert!(text.starts_with("\nRevision gate:\n- Standard: "), "{text}");
-        assert!(text.contains("- Before: blocking=2, critical=1, aiTell=1"), "{text}");
-        assert!(text.contains("- After: blocking=3, critical=1, aiTell=0"), "{text}");
+        assert!(
+            text.contains("- Before: blocking=2, critical=1, aiTell=1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("- After: blocking=3, critical=1, aiTell=0"),
+            "{text}"
+        );
         assert!(
             text.contains("- Remaining issues:\n  - [warning] 节奏: 中段推进略缓。 (压缩。)"),
             "{text}"

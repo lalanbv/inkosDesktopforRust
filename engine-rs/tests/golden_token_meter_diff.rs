@@ -8,7 +8,8 @@
 use inkos_engine::utils::token_meter::TokenMeter;
 use serde_json::Value;
 
-const VECTORS: &str = include_str!("../../packages/core/src/__tests__/golden/token-meter-vectors.json");
+const VECTORS: &str =
+    include_str!("../../packages/core/src/__tests__/golden/token-meter-vectors.json");
 
 #[test]
 fn token_meter_golden_vectors_replay() {
@@ -45,8 +46,7 @@ fn token_meter_golden_vectors_replay() {
                 "measure" => {
                     let actual = serde_json::to_value(meter.measure()).expect("snapshot 序列化");
                     assert_eq!(
-                        &actual,
-                        &op["expect"],
+                        &actual, &op["expect"],
                         "case {name}: 快照漂移（双端共享向量，改向量须双端同批）"
                     );
                 }

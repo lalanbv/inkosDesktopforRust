@@ -64,7 +64,8 @@ fn parse_matches_shared_vectors() {
         let got = parse_entity_roster(vector["input"].as_str().unwrap());
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            expected, vector["expected"],
+            expected,
+            vector["expected"],
             "parse vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -124,7 +125,8 @@ fn resolve_matches_shared_vectors() {
         let got = resolve_roster_candidates(&case.candidates, &case.roster);
         let expected = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            expected, vector["expected"],
+            expected,
+            vector["expected"],
             "resolve vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -164,8 +166,7 @@ fn confirmations_match_shared_vectors() {
         let expected_roster: Vec<RosterEntity> =
             serde_json::from_value(vector["expectedRoster"].clone()).unwrap();
         let applied_expected = vector["applied"].clone();
-        let (roster, applied) =
-            apply_roster_confirmation(&case.roster, &case.confirmation);
+        let (roster, applied) = apply_roster_confirmation(&case.roster, &case.confirmation);
         assert_eq!(
             serde_json::to_value(&applied).unwrap(),
             applied_expected,

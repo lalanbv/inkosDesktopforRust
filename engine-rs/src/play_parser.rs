@@ -17,9 +17,16 @@ use std::collections::HashMap;
 
 /// 端点/关系键别名 → 规范键（模型常用替代名）。
 const EDGE_KEY_ALIASES: &[(&str, &str)] = &[
-    ("from", "fromId"), ("source", "fromId"), ("subject", "fromId"),
-    ("to", "toId"), ("target", "toId"), ("object", "toId"),
-    ("relation", "type"), ("rel", "type"), ("kind", "type"), ("relationship", "type"),
+    ("from", "fromId"),
+    ("source", "fromId"),
+    ("subject", "fromId"),
+    ("to", "toId"),
+    ("target", "toId"),
+    ("object", "toId"),
+    ("relation", "type"),
+    ("rel", "type"),
+    ("kind", "type"),
+    ("relationship", "type"),
 ];
 
 /// `${prefix}_${base 或 x${index}}`，base = value.trim().replace(/\s+/g,"_").slice(0,30)。
@@ -141,7 +148,11 @@ fn is_low_information_edge_id(id: &Value, edge_type: &Value) -> bool {
 }
 
 /// 补 edge 的 id/event 引用、按别名映射键、按 label 解析端点。
-fn backfill_edges(container: &Value, event_id: &str, label_to_id: &HashMap<String, String>) -> Value {
+fn backfill_edges(
+    container: &Value,
+    event_id: &str,
+    label_to_id: &HashMap<String, String>,
+) -> Value {
     let mut c = match container {
         Value::Object(m) => m.clone(),
         other => return other.clone(),
@@ -172,8 +183,13 @@ fn backfill_edges(container: &Value, event_id: &str, label_to_id: &HashMap<Strin
             };
             // 别名 → 规范键
             for (alias, canonical) in EDGE_KEY_ALIASES {
-                if !has_text(o.get(*canonical).unwrap_or(&Value::Null)) && has_text(o.get(*alias).unwrap_or(&Value::Null)) {
-                    o.insert((*canonical).into(), o.get(*alias).cloned().unwrap_or(Value::Null));
+                if !has_text(o.get(*canonical).unwrap_or(&Value::Null))
+                    && has_text(o.get(*alias).unwrap_or(&Value::Null))
+                {
+                    o.insert(
+                        (*canonical).into(),
+                        o.get(*alias).cloned().unwrap_or(Value::Null),
+                    );
                 }
             }
             // 按 label 解析端点
@@ -182,16 +198,25 @@ fn backfill_edges(container: &Value, event_id: &str, label_to_id: &HashMap<Strin
             let to = o.get("toId").cloned().unwrap_or(Value::Null);
             o.insert("toId".into(), resolve(&to));
             if !has_text(o.get("validFromEventId").unwrap_or(&Value::Null)) {
-                o.insert("validFromEventId".into(), Value::String(event_id.to_string()));
+                o.insert(
+                    "validFromEventId".into(),
+                    Value::String(event_id.to_string()),
+                );
             }
             if !has_text(o.get("sourceEventId").unwrap_or(&Value::Null)) {
                 o.insert("sourceEventId".into(), Value::String(event_id.to_string()));
             }
-            if is_low_information_edge_id(o.get("id").unwrap_or(&Value::Null), o.get("type").unwrap_or(&Value::Null)) {
+            if is_low_information_edge_id(
+                o.get("id").unwrap_or(&Value::Null),
+                o.get("type").unwrap_or(&Value::Null),
+            ) {
                 let fid = o.get("fromId").cloned().unwrap_or(Value::Null);
                 let ty = o.get("type").cloned().unwrap_or(Value::Null);
                 let tid = o.get("toId").cloned().unwrap_or(Value::Null);
-                o.insert("id".into(), Value::String(edge_id_from_parts(&fid, &ty, &tid, i)));
+                o.insert(
+                    "id".into(),
+                    Value::String(edge_id_from_parts(&fid, &ty, &tid, i)),
+                );
             }
             Value::Object(o)
         })
@@ -220,7 +245,15 @@ pub fn normalize_time_advance(value: &Value) -> Value {
                 }
             }
             if !normalized.contains_key("anchor") {
-                for k in ["now", "current", "currentTime", "worldTime", "phase", "clock", "at"] {
+                for k in [
+                    "now",
+                    "current",
+                    "currentTime",
+                    "worldTime",
+                    "phase",
+                    "clock",
+                    "at",
+                ] {
                     if let Some(v) = raw.get(k) {
                         normalized.insert("anchor".into(), v.clone());
                         break;
@@ -301,7 +334,9 @@ pub fn normalize_play_mutation(value: &Value) -> Value {
     // turn 推导
     let turn: Option<i64> = match v.get("turn") {
         Some(Value::Number(n)) if n.is_i64() && n.as_i64().unwrap_or(-1) >= 0 => n.as_i64(),
-        Some(Value::String(s)) if s.trim().chars().all(|c| c.is_ascii_digit()) && !s.trim().is_empty() => {
+        Some(Value::String(s))
+            if s.trim().chars().all(|c| c.is_ascii_digit()) && !s.trim().is_empty() =>
+        {
             s.trim().parse::<i64>().ok().filter(|n| *n >= 0)
         }
         _ => None,
@@ -320,12 +355,22 @@ pub fn normalize_play_mutation(value: &Value) -> Value {
     v.insert("entities".into(), entities.clone());
 
     let state_slots = v.get("stateSlots").cloned().unwrap_or(Value::Null);
-    v.insert("stateSlots".into(), backfill_upsert_ids(&state_slots, "slot", "label"));
+    v.insert(
+        "stateSlots".into(),
+        backfill_upsert_ids(&state_slots, "slot", "label"),
+    );
 
     let label_to_id = build_label_to_id(&entities);
     let edges = v.get("edges").cloned().unwrap_or(Value::Null);
-    let edge_event = if event_id.is_empty() { "evt-0".to_string() } else { event_id };
-    v.insert("edges".into(), backfill_edges(&edges, &edge_event, &label_to_id));
+    let edge_event = if event_id.is_empty() {
+        "evt-0".to_string()
+    } else {
+        event_id
+    };
+    v.insert(
+        "edges".into(),
+        backfill_edges(&edges, &edge_event, &label_to_id),
+    );
 
     Value::Object(v)
 }
@@ -380,17 +425,26 @@ mod tests {
 
     #[test]
     fn slugify_and_edge_id() {
-        assert_eq!(slugify_id("ent", &Value::String("林 动".into()), 0), "ent_林_动");
+        assert_eq!(
+            slugify_id("ent", &Value::String("林 动".into()), 0),
+            "ent_林_动"
+        );
         assert_eq!(slugify_id("ent", &Value::Null, 5), "ent_x5");
         assert_eq!(
-            edge_id_from_parts(&Value::String("a b".into()), &Value::String("holds".into()), &Value::String("c".into()), 1),
+            edge_id_from_parts(
+                &Value::String("a b".into()),
+                &Value::String("holds".into()),
+                &Value::String("c".into()),
+                1
+            ),
             "edge_a_b_holds_c"
         );
     }
 
     #[test]
     fn backfill_upsert_ids_fills_missing() {
-        let input = serde_json::json!({ "upsert": [{ "label": "主角" }, { "id": "e2", "label": "x" }] });
+        let input =
+            serde_json::json!({ "upsert": [{ "label": "主角" }, { "id": "e2", "label": "x" }] });
         let out = backfill_upsert_ids(&input, "ent", "label");
         let arr = out.get("upsert").unwrap().as_array().unwrap();
         assert_eq!(arr[0].get("id").unwrap().as_str().unwrap(), "ent_主角");
@@ -399,7 +453,10 @@ mod tests {
 
     #[test]
     fn normalize_time_advance_scalar_and_object() {
-        assert_eq!(normalize_time_advance(&Value::String("1小时".into())), serde_json::json!({ "elapsed": "1小时" }));
+        assert_eq!(
+            normalize_time_advance(&Value::String("1小时".into())),
+            serde_json::json!({ "elapsed": "1小时" })
+        );
         let obj = serde_json::json!({ "duration": "2h", "reason": "休息" });
         let out = normalize_time_advance(&obj);
         assert_eq!(out.get("elapsed").unwrap().as_str().unwrap(), "2h");
@@ -420,23 +477,42 @@ mod tests {
         assert!(out["entities"]["upsert"].is_array());
         assert!(out["evidence"]["transitions"].is_array());
         // entity id 补全
-        assert_eq!(out["entities"]["upsert"][0]["id"].as_str().unwrap(), "ent_主角");
+        assert_eq!(
+            out["entities"]["upsert"][0]["id"].as_str().unwrap(),
+            "ent_主角"
+        );
         // notes 空 trim → []
         assert_eq!(out["notes"].as_array().unwrap().len(), 0);
         // eventId 从 turn 派生
         assert_eq!(out["eventId"].as_str().unwrap(), "evt-3");
         // edge 别名 from→fromId + 按 label 解析端点
-        assert!(out["edges"]["upsert"][0]["fromId"].as_str().unwrap().contains("ent_主角"));
-        assert!(out["edges"]["upsert"][0]["id"].as_str().unwrap().starts_with("edge_"));
+        assert!(out["edges"]["upsert"][0]["fromId"]
+            .as_str()
+            .unwrap()
+            .contains("ent_主角"));
+        assert!(out["edges"]["upsert"][0]["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("edge_"));
     }
 
     #[test]
     fn low_information_edge_id_detection() {
-        assert!(is_low_information_edge_id(&Value::Null, &Value::String("x".into())));
-        assert!(is_low_information_edge_id(&Value::String("edge".into()), &Value::Null));
-        assert!(is_low_information_edge_id(&Value::String("edge_holds".into()), &Value::String("holds".into())));
-        assert!(!is_low_information_edge_id(&Value::String("edge_a_holds_b".into()), &Value::String("holds".into())));
+        assert!(is_low_information_edge_id(
+            &Value::Null,
+            &Value::String("x".into())
+        ));
+        assert!(is_low_information_edge_id(
+            &Value::String("edge".into()),
+            &Value::Null
+        ));
+        assert!(is_low_information_edge_id(
+            &Value::String("edge_holds".into()),
+            &Value::String("holds".into())
+        ));
+        assert!(!is_low_information_edge_id(
+            &Value::String("edge_a_holds_b".into()),
+            &Value::String("holds".into())
+        ));
     }
 }
-
-

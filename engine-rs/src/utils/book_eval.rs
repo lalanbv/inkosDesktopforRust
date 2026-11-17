@@ -112,14 +112,20 @@ fn compute_hook_resolve_rate(content: &str) -> u32 {
         if !is_table_row(line) {
             continue;
         }
-        if line.contains("---") || line.contains("hook") || line.contains("Hook") || line.contains("HOOK")
+        if line.contains("---")
+            || line.contains("hook")
+            || line.contains("Hook")
+            || line.contains("HOOK")
             || line.contains("伏笔")
         {
             continue;
         }
         total_hooks += 1;
-        if line.contains("resolved") || line.contains("Resolved") || line.contains("RESOLVED")
-            || line.contains("已回收") || line.contains("已解决")
+        if line.contains("resolved")
+            || line.contains("Resolved")
+            || line.contains("RESOLVED")
+            || line.contains("已回收")
+            || line.contains("已解决")
         {
             resolved_hooks += 1;
         }
@@ -157,7 +163,10 @@ pub async fn evaluate_book_quality(
     book_id: &str,
     chapters_query: Option<&str>,
 ) -> Result<BookEval, String> {
-    let index = state.load_chapter_index(book_id).await.map_err(|e| e.to_string())?;
+    let index = state
+        .load_chapter_index(book_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let book_dir = state.book_dir(book_id);
     let chapters_dir = book_dir.join("chapters");
     let (start, end) = parse_chapter_range(chapters_query);
@@ -171,15 +180,20 @@ pub async fn evaluate_book_quality(
     for ch in &filtered {
         // 845 号：TS book-eval.ts 自 682 号起走 findChapterFileByNumber（数值等值 + 择优），
         // 本处 `starts_with(padded)` 为漏网端口偏移——前缀碰撞 + 双形态下取 list 首个；归一。
-        let file = crate::state::chapter_filename::find_chapter_file_by_number(&chapter_files, ch.number);
+        let file =
+            crate::state::chapter_filename::find_chapter_file_by_number(&chapter_files, ch.number);
         let content = match file {
-            Some(name) => tokio::fs::read_to_string(chapters_dir.join(name)).await.unwrap_or_default(),
+            Some(name) => tokio::fs::read_to_string(chapters_dir.join(name))
+                .await
+                .unwrap_or_default(),
             None => String::new(),
         };
         let ai_tells = if content.is_empty() {
             0
         } else {
-            analyze_ai_tells(&content, language_of(&content)).issues.len()
+            analyze_ai_tells(&content, language_of(&content))
+                .issues
+                .len()
         };
         let paragraphs: Vec<String> = paragraph_split_re()
             .split(&content)
@@ -191,7 +205,11 @@ pub async fn evaluate_book_quality(
             .filter(|p| p.encode_utf16().count() < 35)
             .count();
         let paragraph_warnings: u32 =
-            if !paragraphs.is_empty() && (short_paras as f64) > (paragraphs.len() as f64) * 0.4 { 1 } else { 0 };
+            if !paragraphs.is_empty() && (short_paras as f64) > (paragraphs.len() as f64) * 0.4 {
+                1
+            } else {
+                0
+            };
         let ai_tell_density = if !content.is_empty() {
             round2((ai_tells as f64 / content.encode_utf16().count() as f64) * 1000.0)
         } else {
@@ -217,12 +235,11 @@ pub async fn evaluate_book_quality(
         .await
         .unwrap_or_default();
     let hook_resolve_rate = compute_hook_resolve_rate(&hooks_content);
-    let duplicate_titles = duplicate_title_count(&index.iter().map(|ch| ch.title.clone()).collect::<Vec<_>>());
+    let duplicate_titles =
+        duplicate_title_count(&index.iter().map(|ch| ch.title.clone()).collect::<Vec<_>>());
 
-    let analytics_chapters: Vec<AnalyticsChapter> = index
-        .iter()
-        .map(AnalyticsChapter::from_meta)
-        .collect();
+    let analytics_chapters: Vec<AnalyticsChapter> =
+        index.iter().map(AnalyticsChapter::from_meta).collect();
     let analytics = compute_analytics(book_id, &analytics_chapters);
 
     let avg_ai_tell_density = if !chapter_evals.is_empty() {
@@ -231,7 +248,11 @@ pub async fn evaluate_book_quality(
         0.0
     };
     let avg_paragraph_warnings = if !chapter_evals.is_empty() {
-        chapter_evals.iter().map(|c| c.paragraph_warnings as f64).sum::<f64>() / chapter_evals.len() as f64
+        chapter_evals
+            .iter()
+            .map(|c| c.paragraph_warnings as f64)
+            .sum::<f64>()
+            / chapter_evals.len() as f64
     } else {
         0.0
     };
@@ -256,7 +277,10 @@ pub async fn evaluate_book_quality(
         quality_score,
         quality_trend: chapter_evals
             .iter()
-            .map(|ch| QualityTrendPoint { chapter: ch.number, score: compute_chapter_eval_score(ch) })
+            .map(|ch| QualityTrendPoint {
+                chapter: ch.number,
+                score: compute_chapter_eval_score(ch),
+            })
             .collect(),
         chapters: chapter_evals,
     })
@@ -295,7 +319,11 @@ mod tests {
 
     #[test]
     fn duplicate_titles_case_insensitive() {
-        let titles = vec!["第一章".to_string(), "第一章 ".to_string(), "第二章".to_string()];
+        let titles = vec![
+            "第一章".to_string(),
+            "第一章 ".to_string(),
+            "第二章".to_string(),
+        ];
         assert_eq!(duplicate_title_count(&titles), 1);
     }
 
@@ -360,8 +388,12 @@ mod tests {
         ];
         state.save_chapter_index("demo-book", &index).await.unwrap();
         let book_dir = state.book_dir("demo-book");
-        tokio::fs::create_dir_all(book_dir.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(book_dir.join("story")).await.unwrap();
+        tokio::fs::create_dir_all(book_dir.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book_dir.join("story"))
+            .await
+            .unwrap();
         tokio::fs::write(
             book_dir.join("chapters").join("0001_第一章.md"),
             "# 第一章\n\n他推开门，发现灯还亮着。",
@@ -381,7 +413,9 @@ mod tests {
         .await
         .unwrap();
 
-        let report = evaluate_book_quality(&state, "demo-book", None).await.unwrap();
+        let report = evaluate_book_quality(&state, "demo-book", None)
+            .await
+            .unwrap();
         assert_eq!(report.book_id, "demo-book");
         assert_eq!(report.total_chapters, 2);
         assert_eq!(report.duplicate_titles, 1);
@@ -392,7 +426,9 @@ mod tests {
         assert_eq!(report.chapters[1].status, "audit-failed");
 
         // 区间过滤：chapters=1 只评第 1 章。
-        let only_first = evaluate_book_quality(&state, "demo-book", Some("1")).await.unwrap();
+        let only_first = evaluate_book_quality(&state, "demo-book", Some("1"))
+            .await
+            .unwrap();
         assert_eq!(only_first.total_chapters, 1);
         // totalWords 取过滤窗口；duplicateTitles 仍按全量 index。
         assert_eq!(only_first.duplicate_titles, 1);

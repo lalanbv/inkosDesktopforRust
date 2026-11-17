@@ -15,7 +15,11 @@ fn seed_projects(root: &std::path::Path, n: usize) {
     for i in 0..n {
         let dir = root.join(format!("proj-{i}"));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("package.json"), format!(r#"{{"name":"proj-{i}"}}"#)).unwrap();
+        fs::write(
+            dir.join("package.json"),
+            format!(r#"{{"name":"proj-{i}"}}"#),
+        )
+        .unwrap();
     }
 }
 
@@ -26,10 +30,11 @@ fn bench_scan(c: &mut Criterion) {
     let mut group = c.benchmark_group("scanner");
     group.sample_size(20); // 扫描有 I/O，样本数降到 20 加速（默认 100）
     group.bench_function("scan_50_projects", |b| {
-        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
-            let scanner = ProjectScanner::new();
-            let _ = scanner.scan(temp.path()).await.unwrap();
-        });
+        b.to_async(tokio::runtime::Runtime::new().unwrap())
+            .iter(|| async {
+                let scanner = ProjectScanner::new();
+                let _ = scanner.scan(temp.path()).await.unwrap();
+            });
     });
     group.finish();
 }

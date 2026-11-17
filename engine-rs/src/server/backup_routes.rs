@@ -103,7 +103,11 @@ fn list_archive_files(dir: &Path, prefix: &str, out: &mut Vec<String>) -> std::i
         if name == ".DS_Store" {
             continue;
         }
-        let relative = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
         let path = dir.join(&name);
         if path.is_dir() {
             list_archive_files(&path, &relative, out)?;
@@ -124,7 +128,10 @@ async fn sync_works_for_backup(root: &Path) {
         return;
     };
     for entry in entries.flatten() {
-        let is_directory = entry.file_type().map(|file_type| file_type.is_dir()).unwrap_or(false);
+        let is_directory = entry
+            .file_type()
+            .map(|file_type| file_type.is_dir())
+            .unwrap_or(false);
         if !is_directory {
             continue;
         }
@@ -154,20 +161,30 @@ pub async fn export(
     State(runtime): State<BooksRuntime>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let include_secrets = params.get("includeSecrets").map(|v| v == "1").unwrap_or(false);
-    let include_sessions = params.get("includeSessions").map(|v| v == "1").unwrap_or(false);
+    let include_secrets = params
+        .get("includeSecrets")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let include_sessions = params
+        .get("includeSessions")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let root = runtime.state.project_root().to_path_buf();
     // 763 号：整书 staging 复制 + tar + gzip 是秒级阻塞工作，移出 runtime
     // 线程（run_export 本体保持同步签名——725 号 bench 契约面语义不变）。
     sync_works_for_backup(&root).await;
-    let result = tokio::task::spawn_blocking(move || run_export(&root, include_secrets, include_sessions))
-        .await;
+    let result =
+        tokio::task::spawn_blocking(move || run_export(&root, include_secrets, include_sessions))
+            .await;
     match result {
         Ok(Ok(bytes)) => (
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "application/gzip"),
-                (header::CONTENT_DISPOSITION, "attachment; filename=\"inkos-backup.tar.gz\""),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"inkos-backup.tar.gz\"",
+                ),
             ],
             bytes,
         )
@@ -187,7 +204,11 @@ pub async fn export(
 
 // 725 号 0GC：pub 化供 bench 消费（hot_paths backup_export 组基线——staging
 // 复制为 443 号契约面语义保持，gzip level 6 为合理档位不做压缩级别调参）。
-pub fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) -> std::io::Result<Vec<u8>> {
+pub fn run_export(
+    root: &Path,
+    include_secrets: bool,
+    include_sessions: bool,
+) -> std::io::Result<Vec<u8>> {
     // 940 号：includeSessions=1 真正打包 sessions/（原形态参数仅进 manifest
     // scope、打包范围静默忽略=参数骗人；sessions/ 为会话 JSONL 用户创作上
     // 下文）。默认仍排除。
@@ -240,7 +261,9 @@ pub fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) ->
     let mut total_bytes = 0u64;
     for file in &files {
         file_count += 1;
-        total_bytes += std::fs::metadata(staging.join(file)).map(|m| m.len()).unwrap_or(0);
+        total_bytes += std::fs::metadata(staging.join(file))
+            .map(|m| m.len())
+            .unwrap_or(0);
     }
     let manifest = json!({
         "version": 1,
@@ -291,10 +314,15 @@ pub fn run_export(root: &Path, include_secrets: bool, include_sessions: bool) ->
             }
         }
         if result.is_ok() {
-            result = builder.finish().map_err(|e| std::io::Error::other(e.to_string()));
+            result = builder
+                .finish()
+                .map_err(|e| std::io::Error::other(e.to_string()));
         }
         match result {
-            Ok(()) => builder.into_inner().and_then(|e| e.finish()).map_err(|e| std::io::Error::other(e.to_string())),
+            Ok(()) => builder
+                .into_inner()
+                .and_then(|e| e.finish())
+                .map_err(|e| std::io::Error::other(e.to_string())),
             Err(error) => Err(error),
         }
     };
@@ -314,7 +342,9 @@ pub async fn import(
     let result = tokio::task::spawn_blocking(move || run_import(&root, &body, confirm)).await;
     match result {
         Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
-        Ok(Err(error)) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response(),
+        Ok(Err(error)) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": error }))).into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": error.to_string() })),
@@ -364,7 +394,10 @@ fn manifest_introduced_list(manifest: &serde_json::Value) -> IntroducedList {
     if manifest.get("kind").and_then(serde_json::Value::as_str) != Some("pre-restore-snapshot") {
         return IntroducedList::Absent;
     }
-    let Some(items) = manifest.get("introduced").and_then(serde_json::Value::as_array) else {
+    let Some(items) = manifest
+        .get("introduced")
+        .and_then(serde_json::Value::as_array)
+    else {
         return IntroducedList::Absent;
     };
     let mut paths = Vec::with_capacity(items.len());
@@ -438,7 +471,9 @@ fn run_import_with_clock(
     // 产后搁浅断点；此处按「能工作的契约」实现）。
     let package_prefix = format!("{PACKAGE_ROOT_NAME}/");
     let restore_name = |name: &str| -> String {
-        name.strip_prefix(package_prefix.as_str()).unwrap_or(name).to_string()
+        name.strip_prefix(package_prefix.as_str())
+            .unwrap_or(name)
+            .to_string()
     };
     // 955 号：确认段持 per-root 恢复串行锁——覆盖面盘点须在锁内（锁外盘点
     // 与写回之间他者恢复新建的文件会漏出快照=回滚面缺口）；预览只读不持锁。
@@ -455,7 +490,10 @@ fn run_import_with_clock(
     // 除 introduced=完全回到快照时刻（952 备案「部分回滚边界」清偿）。
     let mut overwriting: Vec<String> = Vec::new();
     let mut introduced: Vec<String> = Vec::new();
-    for entry in entries.iter().filter(|entry| !is_manifest_entry(&entry.name)) {
+    for entry in entries
+        .iter()
+        .filter(|entry| !is_manifest_entry(&entry.name))
+    {
         let name = restore_name(&entry.name);
         if is_existing(&root.join(&name)) {
             overwriting.push(name);
@@ -481,7 +519,12 @@ fn run_import_with_clock(
                     return Err(format!("unsafe introduced path: {bad}"));
                 }
                 let mut seen = std::collections::HashSet::with_capacity(paths.len());
-                Some(paths.into_iter().filter(|path| seen.insert(path.clone())).collect())
+                Some(
+                    paths
+                        .into_iter()
+                        .filter(|path| seen.insert(path.clone()))
+                        .collect(),
+                )
             }
         }
     } else {
@@ -492,7 +535,10 @@ fn run_import_with_clock(
         // 955 号：计数面=数据条目（manifest 元数据除外）=写回面——954 前把
         // manifest 计入 fileCount/newFiles：真实导出包预览「新增 1」而实际不
         // 写任何新文件，且预览总数比确认后的 restored 多 1。
-        let file_count = entries.iter().filter(|entry| !is_manifest_entry(&entry.name)).count();
+        let file_count = entries
+            .iter()
+            .filter(|entry| !is_manifest_entry(&entry.name))
+            .count();
         let new_files = file_count - overwriting.len();
         // 956 号：回滚预览透传 introduced 清单（快照记录的恢复期间新增文件，
         // 供 UI 呈现「可一并删除」决策面）。仅回滚端点且清单可用且全路径安全
@@ -776,13 +822,20 @@ fn run_rollback(
         return Err(RollbackFailure::InvalidName);
     }
     let path = root.join("backups").join(name);
-    let is_regular = std::fs::symlink_metadata(&path).map(|meta| meta.is_file()).unwrap_or(false);
+    let is_regular = std::fs::symlink_metadata(&path)
+        .map(|meta| meta.is_file())
+        .unwrap_or(false);
     if !is_regular {
         return Err(RollbackFailure::NotFound);
     }
     let bytes = std::fs::read(&path).map_err(|_| RollbackFailure::NotFound)?;
-    let mode = if delete_introduced { IntroducedMode::Delete } else { IntroducedMode::Keep };
-    run_import_with_clock(root, &bytes, confirm, mode, current_millis).map_err(RollbackFailure::Import)
+    let mode = if delete_introduced {
+        IntroducedMode::Delete
+    } else {
+        IntroducedMode::Keep
+    };
+    run_import_with_clock(root, &bytes, confirm, mode, current_millis)
+        .map_err(RollbackFailure::Import)
 }
 
 /// `GET /api/v1/backup/snapshots`——列举可回滚快照。
@@ -811,7 +864,10 @@ pub async fn rollback(
 ) -> impl IntoResponse {
     let root = runtime.state.project_root().to_path_buf();
     let confirm = params.get("confirm").map(|v| v == "1").unwrap_or(false);
-    let delete_introduced = params.get("deleteIntroduced").map(|v| v == "1").unwrap_or(false);
+    let delete_introduced = params
+        .get("deleteIntroduced")
+        .map(|v| v == "1")
+        .unwrap_or(false);
     let name = params.get("name").cloned().unwrap_or_default();
     let result =
         tokio::task::spawn_blocking(move || run_rollback(&root, &name, confirm, delete_introduced))
@@ -873,7 +929,9 @@ fn parse_archive(body: &[u8]) -> Result<(Vec<ArchiveEntry>, Vec<String>), String
         // 安全三则：总解压字节上限（防炸弹）。
         *total += bytes.len() as u64;
         if *total > TAR_MAX_TOTAL_BYTES {
-            return Err(format!("tar exceeds max total bytes ({TAR_MAX_TOTAL_BYTES})"));
+            return Err(format!(
+                "tar exceeds max total bytes ({TAR_MAX_TOTAL_BYTES})"
+            ));
         }
         entries.push(ArchiveEntry { name, bytes });
         Ok(())
@@ -884,11 +942,24 @@ fn parse_archive(body: &[u8]) -> Result<(Vec<ArchiveEntry>, Vec<String>), String
                 .entries()
                 .map_err(|e| e.to_string())?
             {
-                collect_entry(entry.map_err(|e| e.to_string())?, &mut entries, &mut rejected, &mut total)?;
+                collect_entry(
+                    entry.map_err(|e| e.to_string())?,
+                    &mut entries,
+                    &mut rejected,
+                    &mut total,
+                )?;
             }
         } else {
-            for entry in tar::Archive::new(body).entries().map_err(|e| e.to_string())? {
-                collect_entry(entry.map_err(|e| e.to_string())?, &mut entries, &mut rejected, &mut total)?;
+            for entry in tar::Archive::new(body)
+                .entries()
+                .map_err(|e| e.to_string())?
+            {
+                collect_entry(
+                    entry.map_err(|e| e.to_string())?,
+                    &mut entries,
+                    &mut rejected,
+                    &mut total,
+                )?;
             }
         }
         Ok(())
@@ -905,7 +976,12 @@ fn iso_now() -> String {
     let days = secs / 86_400;
     let rem = secs % 86_400;
     let (year, month, day) = civil_from_days(days as i64);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{ms:03}Z", rem / 3600, (rem % 3600) / 60, rem % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{ms:03}Z",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
 }
 
 /// 天数 → (y, m, d)（Howard Hinnant civil_from_days 算法，公开领域）。
@@ -935,7 +1011,11 @@ mod tests {
             r#"{"id":"b1","title":"t","platform":"other","genre":"other","status":"active"}"#,
         )
         .unwrap();
-        std::fs::write(root.join("books/b1/story/current_state.md"), "# 当前状态\n\n- 章节一。\n").unwrap();
+        std::fs::write(
+            root.join("books/b1/story/current_state.md"),
+            "# 当前状态\n\n- 章节一。\n",
+        )
+        .unwrap();
         std::fs::write(root.join("inkos.json"), r#"{"name":"walkthrough"}"#).unwrap();
         std::fs::create_dir_all(root.join(".inkos")).unwrap();
         std::fs::write(root.join(".inkos/secrets.json"), r#"{"services":{}}"#).unwrap();
@@ -952,7 +1032,11 @@ mod tests {
         .unwrap();
         for dir in ["translations", "genres", "skills", "radar", "worlds"] {
             std::fs::create_dir_all(root.join(dir)).unwrap();
-            std::fs::write(root.join(format!("{dir}/data.json")), format!("{{\"seeded\":\"{dir}\"}}")).unwrap();
+            std::fs::write(
+                root.join(format!("{dir}/data.json")),
+                format!("{{\"seeded\":\"{dir}\"}}"),
+            )
+            .unwrap();
         }
         (dir, root)
     }
@@ -983,7 +1067,9 @@ mod tests {
     }
 
     fn manifest_bytes(generator: &str, version: i64) -> Vec<u8> {
-        serde_json::json!({ "version": version, "generator": generator }).to_string().into_bytes()
+        serde_json::json!({ "version": version, "generator": generator })
+            .to_string()
+            .into_bytes()
     }
 
     /// 949 号：打包前 sync 循环单元面——手工放置 source 补登为 candidate
@@ -992,7 +1078,11 @@ mod tests {
     async fn backup_sync_covers_manual_works_and_isolates_failures() {
         let (_dir, root) = temp_root();
         // 手工放置形态：source 有文件、manifest 未注册（947 备案的补齐对象）。
-        std::fs::write(root.join("works/w1/source/outline.md"), "# 大纲\n\n- 第一幕。\n").unwrap();
+        std::fs::write(
+            root.join("works/w1/source/outline.md"),
+            "# 大纲\n\n- 第一幕。\n",
+        )
+        .unwrap();
         // Finder .DS_Store 形态杂散文件 + 坏 work 目录——不得影响 w1 补齐。
         std::fs::write(root.join("works/.DS_Store"), "junk").unwrap();
         std::fs::create_dir_all(root.join("works/w-broken")).unwrap();
@@ -1004,9 +1094,18 @@ mod tests {
         .unwrap();
         let artifacts = manifest["artifacts"].as_array().unwrap();
         assert_eq!(artifacts.len(), 1, "{manifest}");
-        assert_eq!(artifacts[0]["currentRevisionId"], serde_json::Value::Null, "{manifest}");
-        assert_eq!(artifacts[0]["revisions"][0]["status"], "candidate", "{manifest}");
-        let snapshot = artifacts[0]["revisions"][0]["snapshotPath"].as_str().unwrap();
+        assert_eq!(
+            artifacts[0]["currentRevisionId"],
+            serde_json::Value::Null,
+            "{manifest}"
+        );
+        assert_eq!(
+            artifacts[0]["revisions"][0]["status"], "candidate",
+            "{manifest}"
+        );
+        let snapshot = artifacts[0]["revisions"][0]["snapshotPath"]
+            .as_str()
+            .unwrap();
         assert!(root.join("works/w1").join(snapshot).is_file(), "{snapshot}");
     }
 
@@ -1016,19 +1115,37 @@ mod tests {
         let gz = run_export(&root, false, false).unwrap();
         let entries = parse_archive(&gz).unwrap().0;
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert!(names.iter().all(|n| n.starts_with("inkos-backup/")), "{names:?}");
-        assert!(names.contains(&"inkos-backup/backup-manifest.json"), "{names:?}");
-        assert!(names.contains(&"inkos-backup/books/b1/book.json"), "{names:?}");
-        assert!(names.contains(&"inkos-backup/prompt/writer.md"), "{names:?}");
-        assert!(names.contains(&"inkos-backup/works/w1/work.json"), "{names:?}"); // 938 号：works 域入备份
-        // 939 号：五新目录种子条目全部入包。
+        assert!(
+            names.iter().all(|n| n.starts_with("inkos-backup/")),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"inkos-backup/backup-manifest.json"),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"inkos-backup/books/b1/book.json"),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"inkos-backup/prompt/writer.md"),
+            "{names:?}"
+        );
+        assert!(
+            names.contains(&"inkos-backup/works/w1/work.json"),
+            "{names:?}"
+        ); // 938 号：works 域入备份
+           // 939 号：五新目录种子条目全部入包。
         for dir in ["translations", "genres", "skills", "radar", "worlds"] {
             assert!(
                 names.contains(&format!("inkos-backup/{dir}/data.json").as_str()),
                 "{names:?}"
             );
         }
-        assert!(!names.iter().any(|n| n.contains("secrets.json")), "secrets must be excluded: {names:?}");
+        assert!(
+            !names.iter().any(|n| n.contains("secrets.json")),
+            "secrets must be excluded: {names:?}"
+        );
         let manifest: serde_json::Value = serde_json::from_slice(
             entries
                 .iter()
@@ -1055,7 +1172,10 @@ mod tests {
     fn import_preview_reports_overwriting_and_new_files() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
             ("inkos-backup/books/b1/book.json", br#"{"id":"b1"}"#),
             ("inkos-backup/books/b2/new.md", b"new file"),
         ]);
@@ -1064,7 +1184,10 @@ mod tests {
         // 955 号：计数面=数据条目（manifest 元数据不计）——954 前 3/2 口径把
         // manifest 报成「新增文件」，预览总数比确认 restored 多 1。
         assert_eq!(preview["fileCount"], 2);
-        assert_eq!(preview["overwriting"], serde_json::json!(["books/b1/book.json"]));
+        assert_eq!(
+            preview["overwriting"],
+            serde_json::json!(["books/b1/book.json"])
+        );
         assert_eq!(preview["newFiles"], 1);
         // 预览总数=确认后的写回数（用户看到的两个数字一致）。
         assert_eq!(run_import(&root, &tar_bytes, true).unwrap()["restored"], 2);
@@ -1075,8 +1198,14 @@ mod tests {
         let (dir, root) = temp_root();
         let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
-            ("inkos-backup/books/b1/book.json", br#"{"id":"b1","restored":true}"#),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
+            (
+                "inkos-backup/books/b1/book.json",
+                br#"{"id":"b1","restored":true}"#,
+            ),
         ]);
         let response = run_import(&root, &tar_bytes, true).unwrap();
         assert_eq!(response["ok"], true);
@@ -1088,10 +1217,17 @@ mod tests {
         // 快照含原文件内容（回滚保险）
         let backups = std::fs::read_dir(root.join("backups")).unwrap().count();
         assert_eq!(backups, 1);
-        let snapshot_path = root
-            .join("backups")
-            .join(std::fs::read_dir(root.join("backups")).unwrap().next().unwrap().unwrap().file_name());
-        let snapshot_entries = parse_archive(&std::fs::read(&snapshot_path).unwrap()).unwrap().0;
+        let snapshot_path = root.join("backups").join(
+            std::fs::read_dir(root.join("backups"))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap()
+                .file_name(),
+        );
+        let snapshot_entries = parse_archive(&std::fs::read(&snapshot_path).unwrap())
+            .unwrap()
+            .0;
         assert_eq!(snapshot_entries.len(), 2); // 951 号起：快照附 manifest 条目
         assert_eq!(snapshot_entries[0].name, "books/b1/book.json");
         assert_eq!(snapshot_entries[0].bytes, original);
@@ -1114,12 +1250,23 @@ mod tests {
         assert_eq!(list_snapshots(&root)["snapshots"], serde_json::json!([]));
         std::fs::create_dir_all(root.join("backups")).unwrap();
         std::fs::write(root.join("backups/pre-restore-1731100000000.tar"), b"old").unwrap();
-        std::fs::write(root.join("backups/pre-restore-1731200000000.tar"), b"newer-longer").unwrap();
+        std::fs::write(
+            root.join("backups/pre-restore-1731200000000.tar"),
+            b"newer-longer",
+        )
+        .unwrap();
         // 形态外残留：tmp 半成品、杂散文件、同名目录——一律不入列。
-        std::fs::write(root.join("backups/.pre-restore-1731300000000.tmp"), b"partial").unwrap();
+        std::fs::write(
+            root.join("backups/.pre-restore-1731300000000.tmp"),
+            b"partial",
+        )
+        .unwrap();
         std::fs::write(root.join("backups/other.tar"), b"junk").unwrap();
         std::fs::create_dir_all(root.join("backups/pre-restore-1731400000000.tar")).unwrap();
-        let items = list_snapshots(&root)["snapshots"].as_array().unwrap().clone();
+        let items = list_snapshots(&root)["snapshots"]
+            .as_array()
+            .unwrap()
+            .clone();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["name"], "pre-restore-1731200000000.tar"); // 名倒序=时间倒序
         assert_eq!(items[0]["size"], 12);
@@ -1131,9 +1278,18 @@ mod tests {
     fn rollback_rejects_invalid_or_missing_names() {
         let (_dir, root) = temp_root();
         // 形态守卫：穿越/非数字/空名一律 InvalidName（先于盘面访问）。
-        assert!(matches!(run_rollback(&root, "../../etc/passwd", false, false), Err(RollbackFailure::InvalidName)));
-        assert!(matches!(run_rollback(&root, "pre-restore-abc.tar", false, false), Err(RollbackFailure::InvalidName)));
-        assert!(matches!(run_rollback(&root, "", false, false), Err(RollbackFailure::InvalidName)));
+        assert!(matches!(
+            run_rollback(&root, "../../etc/passwd", false, false),
+            Err(RollbackFailure::InvalidName)
+        ));
+        assert!(matches!(
+            run_rollback(&root, "pre-restore-abc.tar", false, false),
+            Err(RollbackFailure::InvalidName)
+        ));
+        assert!(matches!(
+            run_rollback(&root, "", false, false),
+            Err(RollbackFailure::InvalidName)
+        ));
         // 形态合法但文件不存在。
         assert!(matches!(
             run_rollback(&root, "pre-restore-1731100000000.tar", false, false),
@@ -1146,8 +1302,14 @@ mod tests {
         let (dir, root) = temp_root();
         let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
-            ("inkos-backup/books/b1/book.json", br#"{"id":"b1","tampered":true}"#),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
+            (
+                "inkos-backup/books/b1/book.json",
+                br#"{"id":"b1","tampered":true}"#,
+            ),
         ]);
         run_import(&root, &tar_bytes, true).unwrap(); // 产生 pre-restore 快照（含 original）
         let snapshot_name = {
@@ -1161,13 +1323,19 @@ mod tests {
         // preview 段：服务端读快照走 import 同一管道（安全三则+manifest 先验生效）。
         let preview = run_rollback(&root, &snapshot_name, false, false).unwrap();
         assert_eq!(preview["preview"]["fileCount"], 1); // 955 号：manifest 不计（数据条目=写回面）
-        assert_eq!(preview["preview"]["overwriting"], serde_json::json!(["books/b1/book.json"]));
+        assert_eq!(
+            preview["preview"]["overwriting"],
+            serde_json::json!(["books/b1/book.json"])
+        );
         // confirm 段：回滚执行——book.json 回 original。
         let done = run_rollback(&root, &snapshot_name, true, false).unwrap();
         assert_eq!(done["ok"], true);
         assert_eq!(done["restored"], 1); // manifest 不计
         assert_eq!(done["snapshot"], true);
-        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
+        assert_eq!(
+            std::fs::read(root.join("books/b1/book.json")).unwrap(),
+            original
+        );
         // 回滚自身也留快照（import 不变式自动保持）：backups/ 现有 2 份。
         assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 2);
         drop(dir);
@@ -1176,8 +1344,9 @@ mod tests {
     // ── 955 号：954 新增代码审查修复（命名碰撞/并发串行/形态对齐/回滚面=列举面）──
 
     /// 双端共享向量表（TS backup-routes.test.ts 断言同文件）。
-    const SNAPSHOT_NAME_VECTORS: &str =
-        include_str!("../../../packages/studio/src/__tests__/golden/backup-snapshot-name-vectors.json");
+    const SNAPSHOT_NAME_VECTORS: &str = include_str!(
+        "../../../packages/studio/src/__tests__/golden/backup-snapshot-name-vectors.json"
+    );
 
     fn listed_snapshot_names(root: &Path) -> Vec<String> {
         list_snapshots(root)["snapshots"]
@@ -1189,15 +1358,30 @@ mod tests {
     }
 
     fn snapshot_book(root: &Path, name: &str) -> Vec<u8> {
-        let entries = parse_archive(&std::fs::read(root.join("backups").join(name)).unwrap()).unwrap().0;
-        entries.into_iter().find(|entry| entry.name == "books/b1/book.json").unwrap().bytes
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(name)).unwrap())
+            .unwrap()
+            .0;
+        entries
+            .into_iter()
+            .find(|entry| entry.name == "books/b1/book.json")
+            .unwrap()
+            .bytes
     }
 
     fn marker_package(marker: &str) -> Vec<u8> {
         simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
-            ("inkos-backup/books/b1/book.json", format!("{{\"marker\":\"{marker}\"}}").as_bytes()),
-            ("inkos-backup/inkos.json", format!("{{\"name\":\"{marker}\"}}").as_bytes()),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
+            (
+                "inkos-backup/books/b1/book.json",
+                format!("{{\"marker\":\"{marker}\"}}").as_bytes(),
+            ),
+            (
+                "inkos-backup/inkos.json",
+                format!("{{\"name\":\"{marker}\"}}").as_bytes(),
+            ),
         ])
     }
 
@@ -1232,11 +1416,17 @@ mod tests {
     fn snapshot_allocation_skips_occupied_millis() {
         let dir = tempfile::tempdir().unwrap();
         let backups = dir.path();
-        assert_eq!(allocate_snapshot_millis(backups, 1_731_100_000_000).unwrap(), 1_731_100_000_000);
+        assert_eq!(
+            allocate_snapshot_millis(backups, 1_731_100_000_000).unwrap(),
+            1_731_100_000_000
+        );
         std::fs::write(backups.join("pre-restore-1731100000000.tar"), b"a").unwrap();
         // 同名目录同样视为占用（rename 到目录会失败，不能当空位）。
         std::fs::create_dir_all(backups.join("pre-restore-1731100000001.tar")).unwrap();
-        assert_eq!(allocate_snapshot_millis(backups, 1_731_100_000_000).unwrap(), 1_731_100_000_002);
+        assert_eq!(
+            allocate_snapshot_millis(backups, 1_731_100_000_000).unwrap(),
+            1_731_100_000_002
+        );
     }
 
     /// 同毫秒二次恢复：两份快照并存且首份内容不被覆盖（954 前 rename 覆盖=
@@ -1245,17 +1435,40 @@ mod tests {
     fn same_millis_restores_keep_both_snapshots() {
         let (dir, root) = temp_root();
         let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
-        let first = run_import_with_clock(&root, &marker_package("A"), true, IntroducedMode::Ignore, || 1_731_100_000_000).unwrap();
+        let first = run_import_with_clock(
+            &root,
+            &marker_package("A"),
+            true,
+            IntroducedMode::Ignore,
+            || 1_731_100_000_000,
+        )
+        .unwrap();
         assert_eq!(first["snapshot"], true);
-        let second = run_import_with_clock(&root, &marker_package("B"), true, IntroducedMode::Ignore, || 1_731_100_000_000).unwrap();
+        let second = run_import_with_clock(
+            &root,
+            &marker_package("B"),
+            true,
+            IntroducedMode::Ignore,
+            || 1_731_100_000_000,
+        )
+        .unwrap();
         assert_eq!(second["snapshot"], true);
         assert_eq!(
             listed_snapshot_names(&root),
-            vec!["pre-restore-1731100000001.tar", "pre-restore-1731100000000.tar"]
+            vec![
+                "pre-restore-1731100000001.tar",
+                "pre-restore-1731100000000.tar"
+            ]
         );
         // 首份=首次恢复前（original），次份=二次恢复前（A 的恢复结果）。
-        assert_eq!(snapshot_book(&root, "pre-restore-1731100000000.tar"), original);
-        assert_eq!(snapshot_book(&root, "pre-restore-1731100000001.tar"), br#"{"marker":"A"}"#.to_vec());
+        assert_eq!(
+            snapshot_book(&root, "pre-restore-1731100000000.tar"),
+            original
+        );
+        assert_eq!(
+            snapshot_book(&root, "pre-restore-1731100000001.tar"),
+            br#"{"marker":"A"}"#.to_vec()
+        );
         drop(dir);
     }
 
@@ -1267,19 +1480,37 @@ mod tests {
         let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
         let (pack_a, pack_b) = (marker_package("A"), marker_package("B"));
         std::thread::scope(|scope| {
-            let a = scope.spawn(|| run_import_with_clock(&root, &pack_a, true, IntroducedMode::Ignore, || 1_731_100_000_000));
-            let b = scope.spawn(|| run_import_with_clock(&root, &pack_b, true, IntroducedMode::Ignore, || 1_731_100_000_000));
+            let a = scope.spawn(|| {
+                run_import_with_clock(&root, &pack_a, true, IntroducedMode::Ignore, || {
+                    1_731_100_000_000
+                })
+            });
+            let b = scope.spawn(|| {
+                run_import_with_clock(&root, &pack_b, true, IntroducedMode::Ignore, || {
+                    1_731_100_000_000
+                })
+            });
             assert_eq!(a.join().unwrap().unwrap()["ok"], true);
             assert_eq!(b.join().unwrap().unwrap()["ok"], true);
         });
         let book = std::fs::read_to_string(root.join("books/b1/book.json")).unwrap();
         let config = std::fs::read_to_string(root.join("inkos.json")).unwrap();
-        let (winner, loser) = if book.contains("\"A\"") { ("A", "B") } else { ("B", "A") };
-        assert!(config.contains(&format!("\"{winner}\"")), "写回交错: {book} / {config}");
+        let (winner, loser) = if book.contains("\"A\"") {
+            ("A", "B")
+        } else {
+            ("B", "A")
+        };
+        assert!(
+            config.contains(&format!("\"{winner}\"")),
+            "写回交错: {book} / {config}"
+        );
         let names = listed_snapshot_names(&root);
         assert_eq!(names.len(), 2, "{names:?}");
         assert_eq!(snapshot_book(&root, &names[1]), original);
-        assert_eq!(snapshot_book(&root, &names[0]), format!("{{\"marker\":\"{loser}\"}}").into_bytes());
+        assert_eq!(
+            snapshot_book(&root, &names[0]),
+            format!("{{\"marker\":\"{loser}\"}}").into_bytes()
+        );
         drop(dir);
     }
 
@@ -1291,9 +1522,16 @@ mod tests {
         let (dir, root) = temp_root();
         run_import(&root, &marker_package("A"), true).unwrap();
         let real = listed_snapshot_names(&root).remove(0);
-        std::os::unix::fs::symlink(root.join("backups").join(&real), root.join("backups/pre-restore-1.tar")).unwrap();
+        std::os::unix::fs::symlink(
+            root.join("backups").join(&real),
+            root.join("backups/pre-restore-1.tar"),
+        )
+        .unwrap();
         assert_eq!(listed_snapshot_names(&root), vec![real.clone()]);
-        assert!(matches!(run_rollback(&root, "pre-restore-1.tar", false, false), Err(RollbackFailure::NotFound)));
+        assert!(matches!(
+            run_rollback(&root, "pre-restore-1.tar", false, false),
+            Err(RollbackFailure::NotFound)
+        ));
         assert!(run_rollback(&root, &real, false, false).is_ok());
         drop(dir);
     }
@@ -1314,15 +1552,32 @@ mod tests {
             serde_json::json!(["books/b1/book.json", "inkos.json"])
         );
         run_import(&root, &package, true).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join(MANIFEST_NAME)).unwrap(), user_note);
+        assert_eq!(
+            std::fs::read_to_string(root.join(MANIFEST_NAME)).unwrap(),
+            user_note
+        );
         let snapshot = listed_snapshot_names(&root).remove(0);
-        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap()).unwrap().0;
-        assert_eq!(entries.iter().filter(|entry| entry.name == MANIFEST_NAME).count(), 1);
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap())
+            .unwrap()
+            .0;
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| entry.name == MANIFEST_NAME)
+                .count(),
+            1
+        );
         // 快照可回滚：book.json 回到恢复前原件，用户笔记原样保留。
         let rolled = run_rollback(&root, &snapshot, true, false).unwrap();
         assert_eq!(rolled["ok"], true);
-        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
-        assert_eq!(std::fs::read_to_string(root.join(MANIFEST_NAME)).unwrap(), user_note);
+        assert_eq!(
+            std::fs::read(root.join("books/b1/book.json")).unwrap(),
+            original
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(MANIFEST_NAME)).unwrap(),
+            user_note
+        );
         drop(dir);
     }
 
@@ -1334,16 +1589,12 @@ mod tests {
             run_import(&root, &no_manifest, false).unwrap_err(),
             "backup-manifest.json missing"
         );
-        let bad_generator = simple_tar(&[
-            (MANIFEST_NAME, &manifest_bytes("other-tool", 1)),
-        ]);
+        let bad_generator = simple_tar(&[(MANIFEST_NAME, &manifest_bytes("other-tool", 1))]);
         assert_eq!(
             run_import(&root, &bad_generator, false).unwrap_err(),
             "unsupported backup generator/version"
         );
-        let bad_version = simple_tar(&[
-            (MANIFEST_NAME, &manifest_bytes("inkos-desktop", 2)),
-        ]);
+        let bad_version = simple_tar(&[(MANIFEST_NAME, &manifest_bytes("inkos-desktop", 2))]);
         assert_eq!(
             run_import(&root, &bad_version, false).unwrap_err(),
             "unsupported backup generator/version"
@@ -1369,10 +1620,18 @@ mod tests {
         assert!(error.contains("evil.md"), "{error}");
         assert!(!root.join("evil.md").exists());
         assert!(!root.join("inkos-backup/safe.md").exists());
-        assert_eq!(run_import(&root, &simple_tar(&[
-            (MANIFEST_NAME, &manifest_bytes("inkos-desktop", 1)),
-            ("/etc/passwd", b"evil"),
-        ]), true).unwrap_err(), "unsafe entries rejected: /etc/passwd");
+        assert_eq!(
+            run_import(
+                &root,
+                &simple_tar(&[
+                    (MANIFEST_NAME, &manifest_bytes("inkos-desktop", 1)),
+                    ("/etc/passwd", b"evil"),
+                ]),
+                true
+            )
+            .unwrap_err(),
+            "unsafe entries rejected: /etc/passwd"
+        );
     }
 
     // 941 号：includeSessions 参数真化的 Rust 侧行为锁（对齐 TS 双用例）。
@@ -1380,7 +1639,11 @@ mod tests {
     fn export_include_sessions_true_packs_sessions() {
         let (_dir, root) = temp_root();
         std::fs::create_dir_all(root.join("sessions/sess-1")).unwrap();
-        std::fs::write(root.join("sessions/sess-1/session.jsonl"), r#"{"seq":1,"type":"turn"}"#).unwrap();
+        std::fs::write(
+            root.join("sessions/sess-1/session.jsonl"),
+            r#"{"seq":1,"type":"turn"}"#,
+        )
+        .unwrap();
         let gz = run_export(&root, false, true).unwrap();
         let entries = parse_archive(&gz).unwrap().0;
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
@@ -1408,15 +1671,26 @@ mod tests {
         let gz = run_export(&root, false, false).unwrap();
         let entries = parse_archive(&gz).unwrap().0;
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-        assert!(!names.iter().any(|n| n.starts_with("inkos-backup/sessions/")), "{names:?}"); // 默认排除保持
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.starts_with("inkos-backup/sessions/")),
+            "{names:?}"
+        ); // 默认排除保持
     }
 
     #[test]
     fn import_accepts_gzip_layer() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
-            ("inkos-backup/books/b1/book.json", br#"{"id":"b1","gz":true}"#),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
+            (
+                "inkos-backup/books/b1/book.json",
+                br#"{"id":"b1","gz":true}"#,
+            ),
         ]);
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         std::io::Write::write_all(&mut encoder, &tar_bytes).unwrap();
@@ -1442,10 +1716,12 @@ mod tests {
         let gz = run_export(&root, false, false).unwrap();
         let entries = parse_archive(&gz).unwrap().0;
         let full = format!("{PACKAGE_ROOT_NAME}/{rel}");
-        let entry = entries
-            .iter()
-            .find(|e| e.name == full)
-            .unwrap_or_else(|| panic!("long path entry missing: {full}; got {:?}", entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>()));
+        let entry = entries.iter().find(|e| e.name == full).unwrap_or_else(|| {
+            panic!(
+                "long path entry missing: {full}; got {:?}",
+                entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>()
+            )
+        });
         assert_eq!(entry.bytes, br#"{"rev":"long-path-body"}"#.to_vec());
     }
 
@@ -1470,7 +1746,8 @@ mod tests {
         let response = run_import(&root, &tar_bytes, true).unwrap();
         assert_eq!(response["ok"], true);
         assert_eq!(response["restored"], 1);
-        let restored = std::fs::read(root.join("works/w1/revisions/r1/chapter-0001-r2.json")).unwrap();
+        let restored =
+            std::fs::read(root.join("works/w1/revisions/r1/chapter-0001-r2.json")).unwrap();
         assert_eq!(restored, payload.to_vec());
     }
 
@@ -1494,8 +1771,9 @@ mod tests {
 
     // ── 956 号：完全回滚语义（快照 manifest 决策面 + introduced 可选删除）──
 
-    const INTRODUCED_PATH_VECTORS: &str =
-        include_str!("../../../packages/studio/src/__tests__/golden/backup-introduced-path-vectors.json");
+    const INTRODUCED_PATH_VECTORS: &str = include_str!(
+        "../../../packages/studio/src/__tests__/golden/backup-introduced-path-vectors.json"
+    );
 
     /// 956 号真流（覆盖 1+新增 1）confirm 后快照 manifest 决策面精确：
     /// overwriting=被覆盖名单、introduced=恢复新增名单；快照数据条目仅含
@@ -1504,22 +1782,42 @@ mod tests {
     fn snapshot_manifest_records_overwriting_and_introduced_lists() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
-            ("inkos-backup/books/b1/book.json", br#"{"id":"b1","restored":true}"#),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
+            (
+                "inkos-backup/books/b1/book.json",
+                br#"{"id":"b1","restored":true}"#,
+            ),
             ("inkos-backup/notes/new-file.md", b"introduced content"),
         ]);
         let response = run_import(&root, &tar_bytes, true).unwrap();
         assert_eq!(response["snapshot"], true);
         let snapshot = listed_snapshot_names(&root).remove(0);
-        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap()).unwrap().0;
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap())
+            .unwrap()
+            .0;
         let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
         assert!(names.contains(&"books/b1/book.json"));
         assert!(!names.contains(&"notes/new-file.md"));
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&entries.iter().find(|entry| entry.name == MANIFEST_NAME).unwrap().bytes).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &entries
+                .iter()
+                .find(|entry| entry.name == MANIFEST_NAME)
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
         assert_eq!(manifest["kind"], "pre-restore-snapshot");
-        assert_eq!(manifest["overwriting"], serde_json::json!(["books/b1/book.json"]));
-        assert_eq!(manifest["introduced"], serde_json::json!(["notes/new-file.md"]));
+        assert_eq!(
+            manifest["overwriting"],
+            serde_json::json!(["books/b1/book.json"])
+        );
+        assert_eq!(
+            manifest["introduced"],
+            serde_json::json!(["notes/new-file.md"])
+        );
     }
 
     /// 956 号：纯新增恢复（全 introduced）也留快照——此前 overwriting 空=
@@ -1529,19 +1827,27 @@ mod tests {
     fn pure_addition_restore_now_snapshots_introduced_list() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
             ("inkos-backup/notes/only-new.md", b"only new"),
         ]);
         let response = run_import(&root, &tar_bytes, true).unwrap();
         assert_eq!(response["snapshot"], true);
         assert_eq!(response["restored"], 1);
         let snapshot = listed_snapshot_names(&root).remove(0);
-        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap()).unwrap().0;
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(&snapshot)).unwrap())
+            .unwrap()
+            .0;
         // 快照唯一条目=自身 manifest（无被覆盖文件可留档）。
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, MANIFEST_NAME);
         let manifest: serde_json::Value = serde_json::from_slice(&entries[0].bytes).unwrap();
-        assert_eq!(manifest["introduced"], serde_json::json!(["notes/only-new.md"]));
+        assert_eq!(
+            manifest["introduced"],
+            serde_json::json!(["notes/only-new.md"])
+        );
     }
 
     /// 956 号：回滚预览（Keep 模式）透传 introduced 清单——内容取自快照
@@ -1551,7 +1857,10 @@ mod tests {
     fn rollback_preview_passes_through_introduced_list() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
             ("inkos-backup/books/b1/book.json", br#"{"v2":true}"#),
             ("inkos-backup/notes/new.md", b"new content"),
         ]);
@@ -1560,11 +1869,18 @@ mod tests {
         std::fs::create_dir_all(root.join("notes")).unwrap();
         std::fs::write(root.join("notes/new.md"), b"mutated").unwrap();
         let preview = run_rollback(&root, &snapshot, false, false).unwrap();
-        assert_eq!(preview["preview"]["introduced"], serde_json::json!(["notes/new.md"]));
+        assert_eq!(
+            preview["preview"]["introduced"],
+            serde_json::json!(["notes/new.md"])
+        );
         // 同一快照字节走 import（Ignore 模式）——无 introduced 键。
         let bytes = std::fs::read(root.join("backups").join(&snapshot)).unwrap();
         let import_preview = run_import(&root, &bytes, false).unwrap();
-        assert!(import_preview.get("preview").unwrap().get("introduced").is_none());
+        assert!(import_preview
+            .get("preview")
+            .unwrap()
+            .get("introduced")
+            .is_none());
     }
 
     /// 956 号完全回滚闭环：写回覆盖文件回快照时刻 + 删除 introduced + 回滚
@@ -1576,7 +1892,10 @@ mod tests {
         let (_dir, root) = temp_root();
         let original = std::fs::read(root.join("books/b1/book.json")).unwrap();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
             ("inkos-backup/books/b1/book.json", br#"{"v2":true}"#),
             ("inkos-backup/notes/new.md", b"introduced-v2"),
         ]);
@@ -1591,26 +1910,46 @@ mod tests {
         assert_eq!(done["snapshot"], true);
         assert_eq!(done["removed"], 1);
         assert!(done.get("deleteFailed").is_none());
-        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), original);
+        assert_eq!(
+            std::fs::read(root.join("books/b1/book.json")).unwrap(),
+            original
+        );
         assert!(!root.join("notes/new.md").exists());
 
         // 回滚自身保险快照（第 2 份）自洽。
         let names = listed_snapshot_names(&root);
         assert_eq!(names.len(), 2);
         let guard = &names[0]; // 数值倒序首位=本次回滚留档
-        let entries = parse_archive(&std::fs::read(root.join("backups").join(guard)).unwrap()).unwrap().0;
-        let data_names: Vec<&str> =
-            entries.iter().filter(|entry| entry.name != MANIFEST_NAME).map(|entry| entry.name.as_str()).collect();
+        let entries = parse_archive(&std::fs::read(root.join("backups").join(guard)).unwrap())
+            .unwrap()
+            .0;
+        let data_names: Vec<&str> = entries
+            .iter()
+            .filter(|entry| entry.name != MANIFEST_NAME)
+            .map(|entry| entry.name.as_str())
+            .collect();
         assert_eq!(data_names, vec!["books/b1/book.json", "notes/new.md"]);
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&entries.iter().find(|entry| entry.name == MANIFEST_NAME).unwrap().bytes).unwrap();
-        assert_eq!(manifest["overwriting"], serde_json::json!(["books/b1/book.json"]));
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &entries
+                .iter()
+                .find(|entry| entry.name == MANIFEST_NAME)
+                .unwrap()
+                .bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            manifest["overwriting"],
+            serde_json::json!(["books/b1/book.json"])
+        );
         assert_eq!(manifest["introduced"], serde_json::json!([]));
         assert_eq!(manifest["removing"], serde_json::json!(["notes/new.md"]));
         // 保险闭环：保守回滚保险快照 → 待删文件复原（内容=删除前时刻）。
         let undone = run_rollback(&root, guard, true, false).unwrap();
         assert_eq!(undone["restored"], 2);
-        assert_eq!(std::fs::read(root.join("notes/new.md")).unwrap(), b"mutated-before-full-rollback");
+        assert_eq!(
+            std::fs::read(root.join("notes/new.md")).unwrap(),
+            b"mutated-before-full-rollback"
+        );
     }
 
     /// 956 号：保守回滚（不带 deleteIntroduced）语义不变——introduced 文件
@@ -1619,7 +1958,10 @@ mod tests {
     fn conservative_rollback_keeps_introduced_files() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
             ("inkos-backup/books/b1/book.json", br#"{"v2":true}"#),
             ("inkos-backup/notes/new.md", b"new content"),
         ]);
@@ -1654,9 +1996,15 @@ mod tests {
             matches!(err, Err(RollbackFailure::Import(ref error)) if error.contains("lacks introduced list")),
             "{err:?}"
         );
-        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), before);
+        assert_eq!(
+            std::fs::read(root.join("books/b1/book.json")).unwrap(),
+            before
+        );
         // 无新增快照、无 tmp 残留（backups/ 仅源快照一项）。
-        assert_eq!(listed_snapshot_names(&root), vec!["pre-restore-1731100000000.tar".to_string()]);
+        assert_eq!(
+            listed_snapshot_names(&root),
+            vec!["pre-restore-1731100000000.tar".to_string()]
+        );
         assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 1);
         // 向后兼容：同快照保守回滚成功。
         let done = run_rollback(&root, "pre-restore-1731100000000.tar", true, false).unwrap();
@@ -1700,12 +2048,21 @@ mod tests {
             matches!(confirm, Err(RollbackFailure::Import(ref error)) if error.contains("unsafe introduced path")),
             "{confirm:?}"
         );
-        assert_eq!(std::fs::read(root.join("books/b1/book.json")).unwrap(), before);
+        assert_eq!(
+            std::fs::read(root.join("books/b1/book.json")).unwrap(),
+            before
+        );
         assert_eq!(std::fs::read_dir(root.join("backups")).unwrap().count(), 1); // 无新增快照/tmp
-        // Keep 模式：宽容展示（200 无 introduced 键），confirm 不删。
-        let keep_preview = run_rollback(&root, "pre-restore-1731200000000.tar", false, false).unwrap();
-        assert!(keep_preview.get("preview").unwrap().get("introduced").is_none());
-        let keep_confirm = run_rollback(&root, "pre-restore-1731200000000.tar", true, false).unwrap();
+                                                                                 // Keep 模式：宽容展示（200 无 introduced 键），confirm 不删。
+        let keep_preview =
+            run_rollback(&root, "pre-restore-1731200000000.tar", false, false).unwrap();
+        assert!(keep_preview
+            .get("preview")
+            .unwrap()
+            .get("introduced")
+            .is_none());
+        let keep_confirm =
+            run_rollback(&root, "pre-restore-1731200000000.tar", true, false).unwrap();
         assert_eq!(keep_confirm["restored"], 1);
         assert!(keep_confirm.get("removed").is_none());
     }
@@ -1716,7 +2073,10 @@ mod tests {
     fn full_rollback_skips_already_missing_introduced_files() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
             ("inkos-backup/notes/new.md", b"new content"),
         ]);
         run_import(&root, &tar_bytes, true).unwrap();
@@ -1738,7 +2098,10 @@ mod tests {
     fn full_rollback_skips_symlinked_introduced_targets() {
         let (_dir, root) = temp_root();
         let tar_bytes = simple_tar(&[
-            (format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(), &manifest_bytes("inkos-desktop", 1)),
+            (
+                format!("{PACKAGE_ROOT_NAME}/{MANIFEST_NAME}").as_str(),
+                &manifest_bytes("inkos-desktop", 1),
+            ),
             ("inkos-backup/notes/link.md", b"placeholder"),
         ]);
         run_import(&root, &tar_bytes, true).unwrap();

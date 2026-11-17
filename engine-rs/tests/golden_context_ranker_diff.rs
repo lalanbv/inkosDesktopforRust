@@ -17,9 +17,15 @@ fn weights_of(raw: &Value) -> RankerWeights {
     match raw {
         Value::Null => DEFAULT_RANKER_WEIGHTS,
         obj => RankerWeights {
-            recency: obj["recency"].as_f64().unwrap_or(DEFAULT_RANKER_WEIGHTS.recency),
-            frequency: obj["frequency"].as_f64().unwrap_or(DEFAULT_RANKER_WEIGHTS.frequency),
-            hook_bonus: obj["hookBonus"].as_f64().unwrap_or(DEFAULT_RANKER_WEIGHTS.hook_bonus),
+            recency: obj["recency"]
+                .as_f64()
+                .unwrap_or(DEFAULT_RANKER_WEIGHTS.recency),
+            frequency: obj["frequency"]
+                .as_f64()
+                .unwrap_or(DEFAULT_RANKER_WEIGHTS.frequency),
+            hook_bonus: obj["hookBonus"]
+                .as_f64()
+                .unwrap_or(DEFAULT_RANKER_WEIGHTS.hook_bonus),
         },
     }
 }
@@ -27,14 +33,18 @@ fn weights_of(raw: &Value) -> RankerWeights {
 #[test]
 fn rank_within_tier_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["rankWithinTier"].as_array().expect("rankWithinTier array") {
+    for vector in vectors["rankWithinTier"]
+        .as_array()
+        .expect("rankWithinTier array")
+    {
         let weights = weights_of(&vector["weights"]);
         let entries: Vec<inkos_engine::utils::context_ranker::RankFeatures> =
             serde_json::from_value(vector["input"].clone()).expect("rank features");
         let got = rank_within_tier(&entries, &weights);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "rankWithinTier vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -44,7 +54,10 @@ fn rank_within_tier_matches_shared_vectors() {
 #[test]
 fn composition_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["composition"].as_array().expect("composition array") {
+    for vector in vectors["composition"]
+        .as_array()
+        .expect("composition array")
+    {
         let weights = weights_of(&vector["weights"]);
         let entries: Vec<inkos_engine::utils::context_ranker::RankFeatures> =
             serde_json::from_value(vector["input"].clone()).expect("rank features");
@@ -57,7 +70,8 @@ fn composition_matches_shared_vectors() {
             .map(|value| value.as_str().unwrap().to_string())
             .collect();
         assert_eq!(
-            got_sources, expected_order,
+            got_sources,
+            expected_order,
             "composition vector '{}' order drifted",
             vector["name"].as_str().unwrap()
         );
@@ -69,7 +83,8 @@ fn composition_matches_shared_vectors() {
             .map(|value| value.as_f64().unwrap())
             .collect();
         assert_eq!(
-            got_scores, expected_scores,
+            got_scores,
+            expected_scores,
             "composition vector '{}' scores drifted",
             vector["name"].as_str().unwrap()
         );
@@ -79,7 +94,10 @@ fn composition_matches_shared_vectors() {
 #[test]
 fn opening_hint_matches_shared_vectors() {
     let vectors: Value = serde_json::from_str(VECTORS).unwrap();
-    for vector in vectors["openingHint"].as_array().expect("openingHint array") {
+    for vector in vectors["openingHint"]
+        .as_array()
+        .expect("openingHint array")
+    {
         let language = match vector["language"].as_str().unwrap() {
             "en" => WritingLanguage::En,
             _ => WritingLanguage::Zh,
@@ -91,7 +109,11 @@ fn opening_hint_matches_shared_vectors() {
         );
         let expected = &vector["expected"];
         if expected.is_null() {
-            assert!(got.is_none(), "hint vector '{}' should be none", vector["name"].as_str().unwrap());
+            assert!(
+                got.is_none(),
+                "hint vector '{}' should be none",
+                vector["name"].as_str().unwrap()
+            );
             continue;
         }
         assert_eq!(

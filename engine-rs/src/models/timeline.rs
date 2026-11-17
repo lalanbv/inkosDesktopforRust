@@ -76,7 +76,11 @@ pub struct PlotlineBeat {
 pub fn merge_chapter_beats(timeline: &mut Timeline, chapter: u32, beats: &[PlotlineBeat]) -> usize {
     let mut applied = 0usize;
     for beat in beats {
-        let Some(line) = timeline.plotlines.iter_mut().find(|p| p.id == beat.plotline_id) else {
+        let Some(line) = timeline
+            .plotlines
+            .iter_mut()
+            .find(|p| p.id == beat.plotline_id)
+        else {
             continue;
         };
         let cell = TimelineCell {
@@ -87,7 +91,11 @@ pub fn merge_chapter_beats(timeline: &mut Timeline, chapter: u32, beats: &[Plotl
         match line.cells.iter().position(|c| c.chapter == chapter) {
             Some(idx) => line.cells[idx] = cell,
             None => {
-                let pos = line.cells.iter().take_while(|c| c.chapter < chapter).count();
+                let pos = line
+                    .cells
+                    .iter()
+                    .take_while(|c| c.chapter < chapter)
+                    .count();
                 line.cells.insert(pos, cell);
             }
         }
@@ -116,11 +124,15 @@ mod tests {
         assert_eq!(timeline.version, 1);
         assert_eq!(timeline.plotlines.len(), 1);
         assert_eq!(timeline.plotlines[0].cells[0].chapter, 1);
-        assert_eq!(timeline.plotlines[0].cells[0].title.as_deref(), Some("风起"));
+        assert_eq!(
+            timeline.plotlines[0].cells[0].title.as_deref(),
+            Some("风起")
+        );
         assert!(timeline.plotlines[0].cells[0].note.is_some());
 
         // cells 缺省：省略 plotlines 内 cells → 反序列化为空。
-        let minimal = r#"{"version":1,"bookId":"b1","updatedAt":"t","plotlines":[{"id":"a","name":"A"}]}"#;
+        let minimal =
+            r#"{"version":1,"bookId":"b1","updatedAt":"t","plotlines":[{"id":"a","name":"A"}]}"#;
         let timeline: Timeline = serde_json::from_str(minimal).unwrap();
         assert!(timeline.plotlines[0].cells.is_empty());
 
@@ -183,13 +195,13 @@ mod tests {
             &[beat("main", Some("高潮"), Some("第三章"))],
         );
         assert_eq!(applied, 1);
-        let applied2 = merge_chapter_beats(
-            &mut timeline,
-            2,
-            &[beat("main", Some("推进"), None)],
-        );
+        let applied2 = merge_chapter_beats(&mut timeline, 2, &[beat("main", Some("推进"), None)]);
         assert_eq!(applied2, 1);
-        let chapters: Vec<u32> = timeline.plotlines[0].cells.iter().map(|c| c.chapter).collect();
+        let chapters: Vec<u32> = timeline.plotlines[0]
+            .cells
+            .iter()
+            .map(|c| c.chapter)
+            .collect();
         assert_eq!(chapters, vec![1, 2, 3]);
         // 空标题/空 note 净化为 None。
         assert_eq!(timeline.plotlines[0].cells[1].note, None);
@@ -201,7 +213,10 @@ mod tests {
         let applied = merge_chapter_beats(
             &mut timeline,
             2,
-            &[beat("ghost", Some("不存在"), None), beat("main", Some("第二章"), None)],
+            &[
+                beat("ghost", Some("不存在"), None),
+                beat("main", Some("第二章"), None),
+            ],
         );
         assert_eq!(applied, 1);
         assert!(timeline.plotlines.iter().all(|p| p.id != "ghost"));

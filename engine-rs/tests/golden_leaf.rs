@@ -743,8 +743,7 @@ fn build_governed_memory_evidence_blocks_matches_ts() {
             _ => None, // null / 缺失 → 默认 zh（对齐 TS language ?? "zh"）
         };
         let got = build_governed_memory_evidence_blocks(&pkg, language);
-        let got_json =
-            serde_json::to_value(&got).expect("GovernedMemoryEvidenceBlocks 序列化失败");
+        let got_json = serde_json::to_value(&got).expect("GovernedMemoryEvidenceBlocks 序列化失败");
         // Rust None 字段经 skip_serializing_if 省略，与 TS undefined 被 JSON.stringify 丢弃对齐。
         assert_eq!(
             got_json, c.expected,
@@ -792,7 +791,8 @@ fn is_current_state_seed_placeholder_matches_ts() {
             .as_bool()
             .unwrap_or_else(|| panic!("case {}: expected 非 bool", c.name));
         assert_eq!(
-            got, want,
+            got,
+            want,
             "case `{}`: is_current_state_seed_placeholder 与 TS 不一致 (input 前缀={:?})",
             c.name,
             &input[..input.len().min(20)]
@@ -835,8 +835,7 @@ fn build_fanfic_canon_section_matches_ts() {
             Some("cp") => FanficMode::Cp,
             other => panic!("case {}: 未知 mode {other:?}", c.name),
         };
-        let canon = c
-            .input["fanficCanon"]
+        let canon = c.input["fanficCanon"]
             .as_str()
             .unwrap_or_else(|| panic!("case {}: fanficCanon 非 string", c.name));
         let got = build_fanfic_canon_section(canon, mode);
@@ -877,7 +876,11 @@ fn settler_book() -> inkos_engine::models::book::BookConfig {
     }
 }
 
-fn settler_gp(numerical: bool, lang: &str, types: &[&str]) -> inkos_engine::models::genre_profile::GenreProfile {
+fn settler_gp(
+    numerical: bool,
+    lang: &str,
+    types: &[&str],
+) -> inkos_engine::models::genre_profile::GenreProfile {
     inkos_engine::models::genre_profile::GenreProfile {
         name: "都市脑洞".into(),
         id: "urban".into(),
@@ -937,7 +940,9 @@ fn build_settler_system_prompt_matches_ts() {
 
 #[test]
 fn build_settler_user_prompt_matches_ts() {
-    use inkos_engine::agents::settler_prompts::{build_settler_user_prompt, SettlerUserPromptInput};
+    use inkos_engine::agents::settler_prompts::{
+        build_settler_user_prompt, SettlerUserPromptInput,
+    };
     const PH: &str = "(文件尚未创建)";
     for c in &load().build_settler_user_prompt {
         // 3 个固定向量：params 全字段在 Rust 侧按命名重建（对齐 TS dump 的字面量）。
@@ -1111,7 +1116,10 @@ fn detect_cross_chapter_repetition_matches_ts() {
                 let p3 = "雪覆盖了田野";
                 let current = format!("{p1}{p1}{p2}{p2}{p3}{p3}其他内容填充。");
                 let recent = format!("历史章节提到{p1}和{p2}与{p3}。{}填充。", "长".repeat(100));
-                (detect_cross_chapter_repetition(&current, &recent, WritingLanguage::Zh), WritingLanguage::Zh)
+                (
+                    detect_cross_chapter_repetition(&current, &recent, WritingLanguage::Zh),
+                    WritingLanguage::Zh,
+                )
             }
             "en-three" => {
                 let current = "the dark shadow moved the dark shadow moved the silent figure stood the silent figure stood the cold wind blew the cold wind blew trailing prose.";
@@ -1119,7 +1127,10 @@ fn detect_cross_chapter_repetition_matches_ts() {
                     "earlier the dark shadow moved and the silent figure stood while the cold wind blew. {}",
                     "x".repeat(100)
                 );
-                (detect_cross_chapter_repetition(current, &recent, WritingLanguage::En), WritingLanguage::En)
+                (
+                    detect_cross_chapter_repetition(current, &recent, WritingLanguage::En),
+                    WritingLanguage::En,
+                )
             }
             other => panic!("未知 detect_cross_chapter_repetition case: {other}"),
         };
@@ -1163,7 +1174,11 @@ fn detect_duplicate_title_matches_ts() {
         let new_title = c.input["newTitle"].as_str().unwrap();
         let existing: Vec<String> = c.input["existing"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let got = detect_duplicate_title(new_title, &existing);
         let got_val = serde_json::to_value(&got).expect("violations 序列化");
@@ -1183,7 +1198,11 @@ fn resolve_duplicate_title_matches_ts() {
         let new_title = c.input["newTitle"].as_str().unwrap();
         let existing: Vec<String> = c.input["existing"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
         let lang = lang_opt(&c.input).unwrap_or(WritingLanguage::Zh);
         let got = resolve_duplicate_title(new_title, &existing, lang, None);
@@ -1279,8 +1298,6 @@ fn build_governed_character_matrix_working_set_matches_ts() {
     }
 }
 
-
-
 #[test]
 fn writer_build_governed_user_prompt_matches_ts() {
     use inkos_engine::agents::writer::{build_governed_user_prompt, GovernedUserPromptInput};
@@ -1352,7 +1369,8 @@ fn writer_build_length_requirement_block_matches_ts() {
             c.input["target"].as_u64().unwrap() as u32,
             lang_opt(&c.input).expect("language 必填"),
         );
-        let got = build_length_requirement_block(&spec, Some(lang_opt(&c.input).expect("language 必填")));
+        let got =
+            build_length_requirement_block(&spec, Some(lang_opt(&c.input).expect("language 必填")));
         assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
     }
 }
@@ -1365,10 +1383,6 @@ fn writer_sanitize_filename_matches_ts() {
         assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
     }
 }
-
-
-
-
 
 #[test]
 fn writer_build_style_fingerprint_matches_ts() {
@@ -1433,8 +1447,6 @@ fn compute_recyclable_hooks_matches_ts() {
     }
 }
 
-
-
 #[test]
 fn render_summary_snapshot_matches_ts() {
     use inkos_engine::state::memory_db::StoredSummary;
@@ -1460,12 +1472,16 @@ fn planner_system_prompt_matches_ts() {
 
 #[test]
 fn planner_build_user_message_matches_ts() {
-    use inkos_engine::agents::planner_prompts::{build_planner_user_message, PlannerUserMessageInput};
+    use inkos_engine::agents::planner_prompts::{
+        build_planner_user_message, PlannerUserMessageInput,
+    };
     for c in &load().planner_build_user_message {
         let input = &c.input;
         let got = build_planner_user_message(&PlannerUserMessageInput {
             chapter_number: input["chapterNumber"].as_u64().unwrap() as u32,
-            previous_chapter_ending_excerpt: input["previousChapterEndingExcerpt"].as_str().unwrap_or(""),
+            previous_chapter_ending_excerpt: input["previousChapterEndingExcerpt"]
+                .as_str()
+                .unwrap_or(""),
             recent_summaries: input["recentSummaries"].as_str().unwrap_or(""),
             current_arc_prose: input["currentArcProse"].as_str().unwrap_or(""),
             protagonist_matrix_row: input["protagonistMatrixRow"].as_str().unwrap_or(""),
@@ -1543,9 +1559,7 @@ fn planner_extract_protagonist_row_matches_ts() {
 
 #[test]
 fn planner_extract_relation_rows_matches_ts() {
-    use inkos_engine::agents::planner_context::{
-        extract_collaborator_rows, extract_opponent_rows,
-    };
+    use inkos_engine::agents::planner_context::{extract_collaborator_rows, extract_opponent_rows};
     for c in &load().planner_extract_relation_rows {
         let raw = c.input["raw"].as_str().unwrap();
         let limit = c.input["limit"].as_u64().unwrap() as usize;
@@ -1557,8 +1571,6 @@ fn planner_extract_relation_rows_matches_ts() {
         assert_eq!(got, c.expected.as_str().unwrap_or(""), "case `{}`", c.name);
     }
 }
-
-
 
 #[test]
 fn planner_format_recyclable_hooks_matches_ts() {
@@ -1619,7 +1631,11 @@ fn planner_private_suite_matches_ts() {
             "collect-must-avoid" => {
                 let prohibitions: Vec<String> = input["prohibitions"]
                     .as_array()
-                    .map(|v| v.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                    .map(|v| {
+                        v.iter()
+                            .filter_map(|x| x.as_str().map(String::from))
+                            .collect()
+                    })
                     .unwrap_or_default();
                 serde_json::to_value(collect_must_avoid(
                     input["currentFocus"].as_str().unwrap(),
@@ -1649,13 +1665,13 @@ fn planner_private_suite_matches_ts() {
                 input["outlineNode"].as_str(),
             ))
             .unwrap(),
-            "golden-window-zh" | "golden-window-en" => serde_json::to_value(
-                is_golden_opening_chapter(
+            "golden-window-zh" | "golden-window-en" => {
+                serde_json::to_value(is_golden_opening_chapter(
                     input["language"].as_str(),
                     input["chapterNumber"].as_u64().unwrap() as u32,
-                ),
-            )
-            .unwrap(),
+                ))
+                .unwrap()
+            }
             "hook-budget-under" | "hook-budget-over" => serde_json::to_value(render_hook_budget(
                 input["activeCount"].as_u64().unwrap() as usize,
                 lang_opt(input).expect("language 必填"),
@@ -1720,7 +1736,12 @@ fn build_governed_trace_matches_ts() {
             prompt_packs: None,
             compression: None,
         });
-        assert_eq!(serde_json::to_value(&got).unwrap(), c.expected, "case `{}`", c.name);
+        assert_eq!(
+            serde_json::to_value(&got).unwrap(),
+            c.expected,
+            "case `{}`",
+            c.name
+        );
     }
 }
 
@@ -1785,9 +1806,12 @@ fn reviser_private_suite_matches_ts() {
                 })
             }
             name if name.starts_with("auto-system-prompt-") => {
-                let gp: GenreProfile = serde_json::from_value(input["genreProfile"].clone()).unwrap();
+                let gp: GenreProfile =
+                    serde_json::from_value(input["genreProfile"].clone()).unwrap();
                 let length_spec: Option<LengthSpec> =
-                    serde_json::from_value(input["lengthSpec"].clone()).ok().flatten();
+                    serde_json::from_value(input["lengthSpec"].clone())
+                        .ok()
+                        .flatten();
                 let out = build_auto_system_prompt(
                     input["langPrefix"].as_str().unwrap(),
                     &gp,
@@ -1800,7 +1824,8 @@ fn reviser_private_suite_matches_ts() {
                 serde_json::to_value(out).unwrap()
             }
             name if name.starts_with("legacy-system-prompt-") => {
-                let gp: GenreProfile = serde_json::from_value(input["genreProfile"].clone()).unwrap();
+                let gp: GenreProfile =
+                    serde_json::from_value(input["genreProfile"].clone()).unwrap();
                 let out = build_legacy_system_prompt(
                     input["langPrefix"].as_str().unwrap(),
                     &gp,
@@ -1832,8 +1857,6 @@ fn reviser_private_suite_matches_ts() {
 }
 
 // ---- 37 号：length-normalizer + state-degraded note ----
-
-
 
 #[test]
 fn state_degraded_note_matches_ts() {
@@ -1890,10 +1913,8 @@ fn state_degraded_note_matches_ts() {
                 .unwrap()
             }
             name if name.starts_with("parse-") => {
-                serde_json::to_value(parse_state_degraded_review_note(
-                    input["note"].as_str(),
-                ))
-                .unwrap_or(serde_json::Value::Null)
+                serde_json::to_value(parse_state_degraded_review_note(input["note"].as_str()))
+                    .unwrap_or(serde_json::Value::Null)
             }
             name if name.starts_with("resolve-") => {
                 let meta = match input["meta"].as_str().unwrap() {
@@ -1934,8 +1955,12 @@ fn state_validator_suite_matches_ts() {
             name if name.starts_with("authority-") => {
                 let context = input["authorityContext"].as_object().map(|fields| {
                     StateValidationAuthorityContext {
-                        story_frame: fields.get("storyFrame").and_then(|v| v.as_str().map(String::from)),
-                        book_rules: fields.get("bookRules").and_then(|v| v.as_str().map(String::from)),
+                        story_frame: fields
+                            .get("storyFrame")
+                            .and_then(|v| v.as_str().map(String::from)),
+                        book_rules: fields
+                            .get("bookRules")
+                            .and_then(|v| v.as_str().map(String::from)),
                         chapter_summaries: fields
                             .get("chapterSummaries")
                             .and_then(|v| v.as_str().map(String::from)),
@@ -2071,8 +2096,8 @@ fn chapter_analyzer_suite_matches_ts() {
             ))
             .unwrap(),
             name if name.starts_with("summary-snapshot-") => {
-                let summaries: Vec<StoredSummary> = serde_json::from_value(input["summaries"].clone())
-                    .unwrap();
+                let summaries: Vec<StoredSummary> =
+                    serde_json::from_value(input["summaries"].clone()).unwrap();
                 serde_json::to_value(render_summary_snapshot(
                     &summaries,
                     lang(input["language"].as_str().unwrap()),

@@ -9,7 +9,10 @@ use ts_rs::TS;
 /// 发布平台。对齐 TS `PlatformSchema = z.enum(["tomato","feilu","qidian","other"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"tomato\" | \"feilu\" | \"qidian\" | \"other\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"tomato\" | \"feilu\" | \"qidian\" | \"other\"")
+)]
 pub enum Platform {
     #[serde(rename = "tomato")]
     Tomato,
@@ -38,7 +41,10 @@ impl Platform {
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"incubating\" | \"outlining\" | \"active\" | \"paused\" | \"completed\" | \"dropped\"")
+    ts(
+        export,
+        type = "\"incubating\" | \"outlining\" | \"active\" | \"paused\" | \"completed\" | \"dropped\""
+    )
 )]
 pub enum BookStatus {
     #[serde(rename = "incubating")]
@@ -58,7 +64,10 @@ pub enum BookStatus {
 /// 同人模式。对齐 TS `FanficModeSchema = z.enum(["canon","au","ooc","cp"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"canon\" | \"au\" | \"ooc\" | \"cp\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"canon\" | \"au\" | \"ooc\" | \"cp\"")
+)]
 pub enum FanficMode {
     #[serde(rename = "canon")]
     Canon,
@@ -74,7 +83,10 @@ pub type ChapterReviewMode = ChapterReviewModeVal;
 /// 章节审核模式。对齐 TS `type ChapterReviewMode = "auto" | "manual"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"auto\" | \"manual\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"auto\" | \"manual\"")
+)]
 pub enum ChapterReviewModeVal {
     #[serde(rename = "auto")]
     Auto,
@@ -86,7 +98,10 @@ pub type RevisionGate = RevisionGateVal;
 /// 手动修订门槛。对齐 TS `type RevisionGate = "strict" | "lenient" | "always"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"strict\" | \"lenient\" | \"always\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"strict\" | \"lenient\" | \"always\"")
+)]
 pub enum RevisionGateVal {
     #[serde(rename = "strict")]
     Strict,
@@ -186,7 +201,11 @@ pub fn normalize_platform_id(platform: &str) -> Option<Platform> {
         .filter(|c| !c.is_whitespace() && *c != '_' && *c != '-')
         .collect();
 
-    if compact == "tomato" || compact == "fanqie" || compact == "fanqienovel" || raw.contains("番茄") {
+    if compact == "tomato"
+        || compact == "fanqie"
+        || compact == "fanqienovel"
+        || raw.contains("番茄")
+    {
         return Some(Platform::Tomato);
     }
     if compact == "qidian" || compact == "qidianzhongwenwang" || raw.contains("起点") {
@@ -195,7 +214,8 @@ pub fn normalize_platform_id(platform: &str) -> Option<Platform> {
     if compact == "feilu" || raw.contains("飞卢") {
         return Some(Platform::Feilu);
     }
-    if compact == "other" || compact == "others" || raw.contains("其他") || raw.contains("其它") {
+    if compact == "other" || compact == "others" || raw.contains("其他") || raw.contains("其它")
+    {
         return Some(Platform::Other);
     }
     Some(Platform::Other)
@@ -267,7 +287,10 @@ mod tests {
         let bare: BookWritingConfig = serde_json::from_str(r#"{"reviewMode":"auto"}"#).unwrap();
         assert_eq!(bare.auto_timeline_beats, None);
         let json = serde_json::to_value(&bare).unwrap();
-        assert!(json.get("autoTimelineBeats").is_none(), "缺省 autoTimelineBeats 必须省略字段");
+        assert!(
+            json.get("autoTimelineBeats").is_none(),
+            "缺省 autoTimelineBeats 必须省略字段"
+        );
 
         let flagged: BookWritingConfig =
             serde_json::from_str(r#"{"reviewMode":"manual","autoTimelineBeats":true}"#).unwrap();
@@ -302,22 +325,44 @@ mod tests {
     fn resolve_review_mode_precedence() {
         // book 覆盖 project
         assert_eq!(
-            resolve_chapter_review_mode(Some(&BookWritingConfig { review_mode: Some(ChapterReviewModeVal::Manual), revision_gate: None, auto_timeline_beats: None, scene_beats: None }), Some(ChapterReviewModeVal::Auto)),
+            resolve_chapter_review_mode(
+                Some(&BookWritingConfig {
+                    review_mode: Some(ChapterReviewModeVal::Manual),
+                    revision_gate: None,
+                    auto_timeline_beats: None,
+                    scene_beats: None
+                }),
+                Some(ChapterReviewModeVal::Auto)
+            ),
             ChapterReviewModeVal::Manual
         );
         // book 未设 → project
         assert_eq!(
-            resolve_chapter_review_mode(Some(&BookWritingConfig::default()), Some(ChapterReviewModeVal::Manual)),
+            resolve_chapter_review_mode(
+                Some(&BookWritingConfig::default()),
+                Some(ChapterReviewModeVal::Manual)
+            ),
             ChapterReviewModeVal::Manual
         );
         // 均未设 → auto
-        assert_eq!(resolve_chapter_review_mode(None, None), ChapterReviewModeVal::Auto);
+        assert_eq!(
+            resolve_chapter_review_mode(None, None),
+            ChapterReviewModeVal::Auto
+        );
     }
 
     #[test]
     fn resolve_revision_gate_precedence() {
         assert_eq!(
-            resolve_revision_gate(Some(&BookWritingConfig { review_mode: None, revision_gate: Some(RevisionGateVal::Always), auto_timeline_beats: None, scene_beats: None }), Some(RevisionGateVal::Strict)),
+            resolve_revision_gate(
+                Some(&BookWritingConfig {
+                    review_mode: None,
+                    revision_gate: Some(RevisionGateVal::Always),
+                    auto_timeline_beats: None,
+                    scene_beats: None
+                }),
+                Some(RevisionGateVal::Strict)
+            ),
             RevisionGateVal::Always
         );
         assert_eq!(resolve_revision_gate(None, None), RevisionGateVal::Strict);

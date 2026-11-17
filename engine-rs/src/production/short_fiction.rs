@@ -120,7 +120,10 @@ pub struct ShortAuthorScope {
     pub story_title: Option<bool>,
     #[serde(rename = "chapterNumbers")]
     pub chapter_numbers: Vec<u32>,
-    #[serde(rename = "chapterTitleNumbers", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "chapterTitleNumbers",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub chapter_title_numbers: Option<Vec<u32>>,
     pub opening: bool,
     pub outline: bool,
@@ -308,9 +311,19 @@ pub fn validate_short_production_state(state: &ShortProductionState) -> Result<(
     if state.version != 2 {
         return Err("state version must be 2".into());
     }
-    for observation in state.stages.review.iter().chain(state.stages.package.iter()).chain(state.stages.cover.iter())
+    for observation in state
+        .stages
+        .review
+        .iter()
+        .chain(state.stages.package.iter())
+        .chain(state.stages.cover.iter())
         .flat_map(|stage| stage.observations.iter())
-        .chain(state.delivery.iter().flat_map(|delivery| delivery.observations.iter()))
+        .chain(
+            state
+                .delivery
+                .iter()
+                .flat_map(|delivery| delivery.observations.iter()),
+        )
     {
         observation.validate()?;
     }
@@ -331,7 +344,12 @@ pub struct ShortFictionError {
 
 impl ShortFictionError {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
-        Self { code, message: message.into(), chapters: Vec::new(), details: None }
+        Self {
+            code,
+            message: message.into(),
+            chapters: Vec::new(),
+            details: None,
+        }
     }
 
     fn with_message(mut self, message: impl Into<String>) -> Self {
@@ -353,7 +371,13 @@ impl ShortFictionError {
             chapters: details
                 .get("chapters")
                 .and_then(Value::as_array)
-                .map(|items| items.iter().filter_map(Value::as_u64).map(|n| n as u32).collect())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_u64)
+                        .map(|n| n as u32)
+                        .collect()
+                })
                 .unwrap_or_default(),
             details: Some(details),
         }
@@ -378,7 +402,8 @@ pub fn measure_short_fiction_draft(
         .collect();
     let opening_hook_length =
         count_chapter_length(draft.opening_hook.as_deref().unwrap_or(""), mode);
-    let total_length = chapter_lengths.iter().map(|item| item.length).sum::<u32>() + opening_hook_length;
+    let total_length =
+        chapter_lengths.iter().map(|item| item.length).sum::<u32>() + opening_hook_length;
     ShortFictionMeasurements {
         title: draft.story_title.clone(),
         chapter_count: draft.chapters.len() as u32,
@@ -449,7 +474,11 @@ pub fn render_short_fiction_draft_markdown(
     draft: &ShortFictionBatchDraft,
     language: WritingLanguage,
 ) -> Result<String, ShortFictionError> {
-    let hook_heading = if language == WritingLanguage::En { "## Opening Hook" } else { "## 开篇钩子" };
+    let hook_heading = if language == WritingLanguage::En {
+        "## Opening Hook"
+    } else {
+        "## 开篇钩子"
+    };
     let mut parts: Vec<String> = Vec::with_capacity(2 + draft.chapters.len());
     parts.push(format!("# {}", draft.story_title));
     if let Some(hook) = &draft.opening_hook {
@@ -465,7 +494,11 @@ pub fn render_short_fiction_draft_markdown(
             chapter.content
         ));
     }
-    Ok(parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"))
+    Ok(parts
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n"))
 }
 
 // ── 完整性与合同校验 ──────────────────────────────────────────────────
@@ -487,7 +520,10 @@ pub fn opening_hook_length_contract(target: u32, language: WritingLanguage) -> (
     let wide = target as u64;
     let minimum = std::cmp::max(1u64, (wide * 3) / 4);
     let maximum = (wide * 5).div_ceil(4); // ceil(target*1.25)
-    (minimum.min(u32::MAX as u64) as u32, maximum.min(u32::MAX as u64) as u32)
+    (
+        minimum.min(u32::MAX as u64) as u32,
+        maximum.min(u32::MAX as u64) as u32,
+    )
 }
 
 /// TS `validateOpeningHook`。
@@ -529,7 +565,10 @@ pub fn find_incomplete_short_fiction_chapters(
             chapter.title.trim().is_empty()
                 || chapter.content.contains('\u{FFFD}')
                 || length < bounds.min_chapter_length.unwrap_or(1)
-                || bounds.max_chapter_length.map(|max| length > max).unwrap_or(false)
+                || bounds
+                    .max_chapter_length
+                    .map(|max| length > max)
+                    .unwrap_or(false)
         })
         .map(|chapter| chapter.number)
         .collect()
@@ -576,7 +615,11 @@ pub fn validate_short_fiction_draft_for_final(
             "SHORT_CHAPTER_TEXT_CORRUPTED",
             format!(
                 "Chapter text contains Unicode replacement characters: {}",
-                corrupted.iter().map(|number| number.to_string()).collect::<Vec<_>>().join(", ")
+                corrupted
+                    .iter()
+                    .map(|number| number.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         )
         .with_chapters(corrupted));
@@ -598,7 +641,10 @@ pub fn validate_short_fiction_draft_for_final(
             .iter()
             .map(|number| {
                 let chapter = draft.chapters.iter().find(|item| &item.number == number);
-                format!("{number} ({})", chapter.map(|item| item.char_count).unwrap_or(0))
+                format!(
+                    "{number} ({})",
+                    chapter.map(|item| item.char_count).unwrap_or(0)
+                )
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -633,7 +679,10 @@ pub fn estimate_short_fiction_max_tokens(
         4096u32,
         (chapter_count as u64 * chars_per_chapter as u64 * 22).div_ceil(10) as u32 + 2048,
     );
-    std::cmp::min(requested, safe_short_fiction_output_budget(model_max_output))
+    std::cmp::min(
+        requested,
+        safe_short_fiction_output_budget(model_max_output),
+    )
 }
 
 /// TS `allChapterNumbers`。
@@ -665,7 +714,10 @@ pub fn build_short_fiction_chapter_batches(
         .filter(|number| *number > 0)
         .collect();
     normalized.sort_unstable();
-    normalized.chunks(batch_size).map(|chunk| chunk.to_vec()).collect()
+    normalized
+        .chunks(batch_size)
+        .map(|chunk| chunk.to_vec())
+        .collect()
 }
 
 // ── 批归一与校验（M3b structured 提交面的数据归一半）─────────────────
@@ -711,7 +763,10 @@ pub fn merge_short_fiction_batch(
         if !seen.insert(chapter.number) {
             return Err(ShortFictionError::new(
                 "SHORT_BATCH_INVALID",
-                format!("Short-fiction batch returned duplicate chapter {}.", chapter.number),
+                format!(
+                    "Short-fiction batch returned duplicate chapter {}.",
+                    chapter.number
+                ),
             ));
         }
         let content = chapter.content.trim();
@@ -719,7 +774,10 @@ pub fn merge_short_fiction_batch(
         if content.is_empty() || title.is_empty() {
             return Err(ShortFictionError::new(
                 "SHORT_BATCH_INVALID",
-                format!("Short-fiction batch returned empty chapter {}.", chapter.number),
+                format!(
+                    "Short-fiction batch returned empty chapter {}.",
+                    chapter.number
+                ),
             ));
         }
         by_number.insert(
@@ -796,13 +854,22 @@ pub fn short_review_sources(
         sources.insert("reference-material".to_string(), text.to_string());
     }
     if let Some((before,)) = comparison {
-        sources.insert("baseline-manuscript-title".to_string(), before.story_title.clone());
+        sources.insert(
+            "baseline-manuscript-title".to_string(),
+            before.story_title.clone(),
+        );
         if let Some(hook) = &before.opening_hook {
             sources.insert("baseline-manuscript-opening".to_string(), hook.clone());
         }
         for chapter in &before.chapters {
-            let current = draft.chapters.iter().find(|item| item.number == chapter.number);
-            if current.map(|item| item.title != chapter.title || item.content != chapter.content).unwrap_or(true) {
+            let current = draft
+                .chapters
+                .iter()
+                .find(|item| item.number == chapter.number);
+            if current
+                .map(|item| item.title != chapter.title || item.content != chapter.content)
+                .unwrap_or(true)
+            {
                 sources.insert(
                     format!("baseline-manuscript-chapter-{}", chapter.number),
                     format!("{}\n{}", chapter.title, chapter.content),
@@ -839,20 +906,31 @@ pub fn assert_short_author_scope(
         .chapters
         .iter()
         .filter(|chapter| {
-            let next = after.chapters.iter().find(|item| item.number == chapter.number);
+            let next = after
+                .chapters
+                .iter()
+                .find(|item| item.number == chapter.number);
             match next {
                 None => true,
                 Some(next) => {
-                    (!scope.chapter_title_numbers.as_ref().map(|list| list.contains(&chapter.number)).unwrap_or(false)
+                    (!scope
+                        .chapter_title_numbers
+                        .as_ref()
+                        .map(|list| list.contains(&chapter.number))
+                        .unwrap_or(false)
                         && next.title != chapter.title)
-                        || (!scope.chapter_numbers.contains(&chapter.number) && next.content != chapter.content)
+                        || (!scope.chapter_numbers.contains(&chapter.number)
+                            && next.content != chapter.content)
                 }
             }
         })
         .map(|chapter| chapter.number)
         .collect();
     let mut changed_parts: Vec<&str> = Vec::new();
-    if !scope.opening && before.opening_hook.clone().unwrap_or_default() != after.opening_hook.clone().unwrap_or_default() {
+    if !scope.opening
+        && before.opening_hook.clone().unwrap_or_default()
+            != after.opening_hook.clone().unwrap_or_default()
+    {
         changed_parts.push("opening");
     }
     if !scope.outline && before_outline != after_outline {
@@ -945,7 +1023,13 @@ pub fn short_input_hash(value: &Value) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());
     let digest = hasher.finalize();
-    format!("sha256:{}", digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>())
+    format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
 }
 
 fn canonicalize(value: &Value) -> Value {
@@ -989,17 +1073,19 @@ pub async fn write_short_production_state(
     validate_short_production_state(state)?;
     let mut text = serde_json::to_string_pretty(state).map_err(|error| error.to_string())?;
     text.push('\n');
-    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
-        root_dir: root,
-        writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
-            relative_path: format!(
-                "{}/production-state.json",
-                base_dir.to_string_lossy().replace('\\', "/")
-            ),
-            content: crate::utils::atomic_file_set::FileContent::Text(text),
-        }],
-        deletes: Vec::new(),
-    })
+    crate::utils::atomic_file_set::commit_atomic_file_set(
+        &crate::utils::atomic_file_set::AtomicFileSet {
+            root_dir: root,
+            writes: vec![crate::utils::atomic_file_set::AtomicFileWrite {
+                relative_path: format!(
+                    "{}/production-state.json",
+                    base_dir.to_string_lossy().replace('\\', "/")
+                ),
+                content: crate::utils::atomic_file_set::FileContent::Text(text),
+            }],
+            deletes: Vec::new(),
+        },
+    )
     .await
     .map_err(|error| error.to_string())
 }
@@ -1051,11 +1137,21 @@ mod tests {
         let draft = sample_draft();
         let measurements = measure_short_fiction_draft(&draft, WritingLanguage::Zh);
         assert_eq!(measurements.chapter_count, 2);
-        assert_eq!(measurements.unit, ShortFictionLengthUnit::NonWhitespaceCharacters);
+        assert_eq!(
+            measurements.unit,
+            ShortFictionLengthUnit::NonWhitespaceCharacters
+        );
         assert_eq!(measurements.opening_hook_length, 7);
         assert_eq!(measurements.chapter_lengths.len(), 2);
-        assert_eq!(measurements.total_length, measurements.opening_hook_length
-            + measurements.chapter_lengths.iter().map(|item| item.length).sum::<u32>());
+        assert_eq!(
+            measurements.total_length,
+            measurements.opening_hook_length
+                + measurements
+                    .chapter_lengths
+                    .iter()
+                    .map(|item| item.length)
+                    .sum::<u32>()
+        );
     }
 
     #[test]
@@ -1095,7 +1191,10 @@ mod tests {
             24576.0,
             None,
         );
-        assert_eq!(batches, vec![vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], vec![11, 12]]);
+        assert_eq!(
+            batches,
+            vec![vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], vec![11, 12]]
+        );
         let capped = build_short_fiction_chapter_batches(&[1, 2, 3, 4], 1000, 24576.0, Some(2));
         assert_eq!(capped, vec![vec![1, 2], vec![3, 4]]);
     }
@@ -1103,7 +1202,8 @@ mod tests {
     #[test]
     fn opening_hook_contract_bounds() {
         assert!(validate_opening_hook(Some(&"x".repeat(100)), 100, WritingLanguage::Zh).is_ok());
-        let error = validate_opening_hook(Some(&"x".repeat(50)), 100, WritingLanguage::Zh).unwrap_err();
+        let error =
+            validate_opening_hook(Some(&"x".repeat(50)), 100, WritingLanguage::Zh).unwrap_err();
         assert_eq!(error.code, "SHORT_OPENING_HOOK_CONTRACT");
         assert_eq!(error.details.as_ref().unwrap()["minimum"], 75);
         assert_eq!(error.details.as_ref().unwrap()["maximum"], 125);
@@ -1139,12 +1239,21 @@ mod tests {
         };
         let error = assert_short_author_scope(&scope, &before, &after, "", "").unwrap_err();
         assert_eq!(error.code, "SHORT_REVISION_OUT_OF_SCOPE");
-        assert_eq!(error.details.as_ref().unwrap()["changedParts"], serde_json::json!(["title"]));
+        assert_eq!(
+            error.details.as_ref().unwrap()["changedParts"],
+            serde_json::json!(["title"])
+        );
         // 整稿授权仍不含改名（TS：title 检查在 wholeManuscript 早退之前）——
         // 须显式 storyTitle 授权才放行。
-        let scope = ShortAuthorScope { whole_manuscript: true, ..scope };
+        let scope = ShortAuthorScope {
+            whole_manuscript: true,
+            ..scope
+        };
         assert!(assert_short_author_scope(&scope, &before, &after, "", "").is_err());
-        let scope = ShortAuthorScope { story_title: Some(true), ..scope };
+        let scope = ShortAuthorScope {
+            story_title: Some(true),
+            ..scope
+        };
         assert!(assert_short_author_scope(&scope, &before, &after, "", "").is_ok());
     }
 
@@ -1190,9 +1299,11 @@ mod tests {
         let raw = std::fs::read_to_string(root.join("works/x/production-state.json")).unwrap();
         assert!(raw.ends_with('\n'), "TS stringify+\\n 同款尾换行");
         // 缺文件 → None
-        assert!(read_short_production_state(root, std::path::Path::new("works/ghost"))
-            .unwrap()
-            .is_none());
+        assert!(
+            read_short_production_state(root, std::path::Path::new("works/ghost"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// 金标准渲染文本（与 TS vitest short-fiction-cross-engine.test.ts 逐字共用）。

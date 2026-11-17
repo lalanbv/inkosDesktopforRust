@@ -24,7 +24,10 @@ pub struct ArtifactReaderError {
 
 fn fail(code: &'static str, message: &str, work_id: &str) -> ArtifactReaderError {
     let _ = work_id;
-    ArtifactReaderError { code, message: message.to_string() }
+    ArtifactReaderError {
+        code,
+        message: message.to_string(),
+    }
 }
 
 /// TS `readArtifactRevision`；`revision_id=None` = 当前修订。
@@ -37,10 +40,17 @@ pub async fn read_artifact_revision(
     let work = load_work_manifest(project_root, work_id)
         .await
         .map_err(|error| fail("ARTIFACT_NOT_FOUND", &error.to_string(), work_id))?;
-    let artifact = work.artifacts.iter().find(|item| item.id == artifact_id).cloned();
+    let artifact = work
+        .artifacts
+        .iter()
+        .find(|item| item.id == artifact_id)
+        .cloned();
     let revision = artifact.as_ref().and_then(|item| {
         let wanted = revision_id.unwrap_or(item.current_revision_id.as_deref().unwrap_or(""));
-        item.revisions.iter().find(|candidate| candidate.id == wanted).cloned()
+        item.revisions
+            .iter()
+            .find(|candidate| candidate.id == wanted)
+            .cloned()
     });
     let (Some(artifact), Some(revision)) = (artifact, revision) else {
         return Err(fail(
@@ -60,7 +70,10 @@ pub async fn read_artifact_revision(
                 work_id,
             )
         } else {
-            ArtifactReaderError { code: "ARTIFACT_SNAPSHOT_UNAVAILABLE", message: error.to_string() }
+            ArtifactReaderError {
+                code: "ARTIFACT_SNAPSHOT_UNAVAILABLE",
+                message: error.to_string(),
+            }
         }
     })?;
     let target = root_real.join(revision.snapshot_path.as_deref().unwrap_or(&revision.path));
@@ -74,7 +87,10 @@ pub async fn read_artifact_revision(
             ));
         }
         Err(error) => {
-            return Err(ArtifactReaderError { code: "ARTIFACT_PATH_OUTSIDE_WORK", message: error.to_string() })
+            return Err(ArtifactReaderError {
+                code: "ARTIFACT_PATH_OUTSIDE_WORK",
+                message: error.to_string(),
+            })
         }
     };
     if !resolved.starts_with(&root_real) {
@@ -84,9 +100,12 @@ pub async fn read_artifact_revision(
             work_id,
         ));
     }
-    let bytes = tokio::fs::read(&resolved).await.map_err(|error| {
-        ArtifactReaderError { code: "ARTIFACT_SNAPSHOT_UNAVAILABLE", message: error.to_string() }
-    })?;
+    let bytes = tokio::fs::read(&resolved)
+        .await
+        .map_err(|error| ArtifactReaderError {
+            code: "ARTIFACT_SNAPSHOT_UNAVAILABLE",
+            message: error.to_string(),
+        })?;
     if format!("sha256:{}", hex_sha256(&bytes)) != revision.checksum {
         return Err(fail(
             "ARTIFACT_REVISION_CONFLICT",

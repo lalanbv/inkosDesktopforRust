@@ -98,7 +98,11 @@ impl EditPlanContract {
     }
 
     /// 字段长度明细（CHAPTER_LENGTH_OUT_OF_RANGE 回喂面）。
-    pub fn field_lengths(&self, replacements: &[String], counting_mode: LengthCountingMode) -> Value {
+    pub fn field_lengths(
+        &self,
+        replacements: &[String],
+        counting_mode: LengthCountingMode,
+    ) -> Value {
         match self {
             EditPlanContract::Ranges(ranges) => {
                 let field_lengths: Vec<Value> = ranges
@@ -365,7 +369,11 @@ pub async fn revise_chapter(
     } else {
         format!(
             "修订第{}章。\n\n## 观察或用户指令\n{}\n\n## 权威上下文\n{}{}\n\n## 当前章节\n{}",
-            input.chapter_number, observation_list, context, length_block.unwrap_or_default(), source
+            input.chapter_number,
+            observation_list,
+            context,
+            length_block.unwrap_or_default(),
+            source
         )
     };
     let messages = vec![llm_system(&system_prompt), llm_user(&user_prompt)];
@@ -382,7 +390,14 @@ pub async fn revise_chapter(
     let spot_fix = input.mode == ReviseMode::SpotFix || resolved_permission.is_some();
     let resolved_scoped = resolved_permission.map(|resolved| resolved.scoped.clone());
     if spot_fix {
-        submit_spot_fix(agents, &messages, &input, resolved_scoped.as_deref(), output_budget).await
+        submit_spot_fix(
+            agents,
+            &messages,
+            &input,
+            resolved_scoped.as_deref(),
+            output_budget,
+        )
+        .await
     } else {
         submit_rewrite(agents, &messages, &input, output_budget).await
     }
@@ -401,10 +416,11 @@ async fn submit_spot_fix(
 ) -> Result<ReviseOutput, String> {
     let original_chapter = input.chapter_content;
     let mut usage = TokenUsage::default();
-    let plan_contract: std::sync::Arc<EditPlanContract> = std::sync::Arc::new(if let Some(scoped) = resolved_scoped {
-        EditPlanContract::Scoped(scoped.clone())
-    } else {
-        let plan = run_structured_tool(
+    let plan_contract: std::sync::Arc<EditPlanContract> = std::sync::Arc::new(
+        if let Some(scoped) = resolved_scoped {
+            EditPlanContract::Scoped(scoped.clone())
+        } else {
+            let plan = run_structured_tool(
             Arc::clone(agents.chat),
             agents.model,
             messages,
@@ -424,23 +440,29 @@ async fn submit_spot_fix(
         )
         .await
         .map_err(|error| error.message)?;
-        usage.add(&plan.usage);
-        let ranges: Vec<crate::production::text_range_edits::TextEditRange> = plan
-            .result
-            .get("ranges")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|range| crate::production::text_range_edits::TextEditRange {
-                        start_line: range.get("startLine").and_then(Value::as_u64).unwrap_or(0) as u32,
-                        end_line: range.get("endLine").and_then(Value::as_u64).unwrap_or(0) as u32,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        EditPlanContract::Ranges(super::text_range_edits::text_range_edit_contract(original_chapter, &ranges)?)
-    });
+            usage.add(&plan.usage);
+            let ranges: Vec<crate::production::text_range_edits::TextEditRange> = plan
+                .result
+                .get("ranges")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|range| crate::production::text_range_edits::TextEditRange {
+                            start_line: range.get("startLine").and_then(Value::as_u64).unwrap_or(0)
+                                as u32,
+                            end_line: range.get("endLine").and_then(Value::as_u64).unwrap_or(0)
+                                as u32,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            EditPlanContract::Ranges(super::text_range_edits::text_range_edit_contract(
+                original_chapter,
+                &ranges,
+            )?)
+        },
+    );
     // 骨架（区间外字节保留）与 replacement 预算。
     let fixed_content = plan_contract.apply_empty()?;
     let fixed_length = input
@@ -464,7 +486,12 @@ async fn submit_spot_fix(
         Some(budget)
     });
     if let Some(budget) = &replacement_budget {
-        if budget.get("maximum").and_then(Value::as_i64).map(|max| max < 0).unwrap_or(false) {
+        if budget
+            .get("maximum")
+            .and_then(Value::as_i64)
+            .map(|max| max < 0)
+            .unwrap_or(false)
+        {
             return Err(serde_json::json!({
                 "code": "CHAPTER_EDIT_SCOPE_CONFLICT",
                 "replacementBudget": budget,
@@ -483,8 +510,7 @@ async fn submit_spot_fix(
     ));
     let spec_for_validate = input.length_spec.cloned();
     let original_for_validate = original_chapter.to_string();
-    let candidate_sink: Option<Arc<std::sync::Mutex<Vec<String>>>> =
-        input.candidate_sink.clone();
+    let candidate_sink: Option<Arc<std::sync::Mutex<Vec<String>>>> = input.candidate_sink.clone();
     let plan_for_validate = std::sync::Arc::clone(&plan_contract);
     let fixed_length_for_validate = fixed_length;
     let budget_for_validate = replacement_budget.clone();
@@ -495,16 +521,22 @@ async fn submit_spot_fix(
         let candidate_sink = candidate_sink.clone();
         let budget_for_validate = budget_for_validate.clone();
         Box::pin(async move {
-            let replacements = plan_for_validate.collect_replacements(&value)
+            let replacements = plan_for_validate
+                .collect_replacements(&value)
                 .map_err(super::structured_agent::StructuredToolError::plain)?;
-            let candidate = plan_for_validate.apply_replacements(&replacements)
+            let candidate = plan_for_validate
+                .apply_replacements(&replacements)
                 .map_err(super::structured_agent::StructuredToolError::plain)?;
             if let Some(sink) = &candidate_sink {
-                sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(candidate.clone());
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(candidate.clone());
             }
             if assert_chapter_length(&candidate, spec_for_validate.as_ref()).is_err() {
-                let source_length =
-                    count_chapter_length(&original_for_validate, counting_mode_for(spec_for_validate.as_ref()));
+                let source_length = count_chapter_length(
+                    &original_for_validate,
+                    counting_mode_for(spec_for_validate.as_ref()),
+                );
                 let mode = counting_mode_for(spec_for_validate.as_ref());
                 let submitted_length = fixed_length_for_validate
                     .map(|fixed| count_chapter_length(&candidate, mode).saturating_sub(fixed));
@@ -534,7 +566,8 @@ async fn submit_spot_fix(
                     "candidateCommitted": false,
                     "instruction": "Revise only the named replacement fields. Their individual counts locate the excess or shortage; the assembled chapter measurement is authoritative. Meet the entire measured reduction or increase in the next submission, not just part of it. Rephrase the selected passages when small deletions cannot recover enough space; preserve facts and the requested creative effect. Do not repeat the rejected wording unchanged or modify protected surrounding text.",
                 });
-                let field_lengths = plan_for_validate.field_lengths(&replacements, counting_mode_for(spec_for_validate.as_ref()));
+                let field_lengths = plan_for_validate
+                    .field_lengths(&replacements, counting_mode_for(spec_for_validate.as_ref()));
                 if let (Value::Object(map), Value::Object(extra)) = (&mut details, &field_lengths) {
                     for (key, value) in extra {
                         map.insert(key.clone(), value.clone());
@@ -582,8 +615,12 @@ async fn submit_spot_fix(
 /// editableRanges 面（scoped=ranges JSON；ranges 合同=ranges JSON 同形）。
 fn plan_contract_editable_ranges(contract: &EditPlanContract) -> Value {
     match contract {
-        EditPlanContract::Ranges(ranges) => serde_json::to_value(&ranges.ranges).unwrap_or(Value::Null),
-        EditPlanContract::Scoped(scoped) => serde_json::to_value(&scoped.spans).unwrap_or(Value::Null),
+        EditPlanContract::Ranges(ranges) => {
+            serde_json::to_value(&ranges.ranges).unwrap_or(Value::Null)
+        }
+        EditPlanContract::Scoped(scoped) => {
+            serde_json::to_value(&scoped.spans).unwrap_or(Value::Null)
+        }
     }
 }
 
@@ -612,13 +649,16 @@ async fn submit_rewrite(
                 ));
             }
             if let Some(sink) = &candidate_sink {
-                sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(revised_content.clone());
+                sink.lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(revised_content.clone());
             }
-            assert_chapter_length(&revised_content, spec.as_ref())
-                .map_err(|error| super::structured_agent::StructuredToolError::coded(
+            assert_chapter_length(&revised_content, spec.as_ref()).map_err(|error| {
+                super::structured_agent::StructuredToolError::coded(
                     "CHAPTER_LENGTH_OUT_OF_RANGE",
                     error.message,
-                ))?;
+                )
+            })?;
             let mut updated = value.clone();
             if let Value::Object(map) = &mut updated {
                 map.insert("revisedContent".into(), Value::String(revised_content));
@@ -639,7 +679,10 @@ async fn submit_rewrite(
         },
         Some(validate),
         Vec::new(),
-        StructuredRunOptions { temperature: None, max_tokens: Some(max_tokens) },
+        StructuredRunOptions {
+            temperature: None,
+            max_tokens: Some(max_tokens),
+        },
     )
     .await
     .map_err(|error| error.message)?;
@@ -666,11 +709,21 @@ fn counting_mode_for(spec: Option<&ShortLengthSpec>) -> LengthCountingMode {
 }
 
 fn llm_system(content: &str) -> LLMMessage {
-    LLMMessage { role: crate::llm::provider::LLMRole::System, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: crate::llm::provider::LLMRole::System,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 fn llm_user(content: &str) -> LLMMessage {
-    LLMMessage { role: crate::llm::provider::LLMRole::User, content: content.into(), tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: crate::llm::provider::LLMRole::User,
+        content: content.into(),
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 // ── 测试（mock 注入：同 prompt+同 mock 响应 → 同产物字节）────────────
@@ -691,7 +744,10 @@ mod tests {
         StructuredDefaults,
         Arc<Mutex<Vec<Value>>>,
     ) {
-        let defaults = StructuredDefaults { temperature: 0.7, max_tokens: 8192 };
+        let defaults = StructuredDefaults {
+            temperature: 0.7,
+            max_tokens: 8192,
+        };
         let captured: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
         let captured_for_fn = Arc::clone(&captured);
         let script = Arc::new(Mutex::new(VecDeque::from(script)));
@@ -703,11 +759,24 @@ mod tests {
                 "toolChoice": request.tool_choice,
                 "tools": request.tools,
             });
-            payload["lastUser"] = request.messages.last().map(|message| message.content.clone()).into();
+            payload["lastUser"] = request
+                .messages
+                .last()
+                .map(|message| message.content.clone())
+                .into();
             Box::pin(async move {
-                captured_for_fn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(payload);
-                let next = script.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).pop_front();
-                next.ok_or_else(|| ChatTurnError { message: "script exhausted".into(), output_limit: false })
+                captured_for_fn
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(payload);
+                let next = script
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .pop_front();
+                next.ok_or_else(|| ChatTurnError {
+                    message: "script exhausted".into(),
+                    output_limit: false,
+                })
             })
         });
         (chat, defaults, captured)
@@ -722,7 +791,11 @@ mod tests {
                 arguments: serde_json::to_string(&payload).unwrap(),
             }],
             finish_reason: Some("tool_calls".into()),
-            usage: ChatTurnUsage { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+            usage: ChatTurnUsage {
+                prompt_tokens: 5,
+                completion_tokens: 5,
+                total_tokens: 10,
+            },
         }
     }
 
@@ -731,12 +804,18 @@ mod tests {
     async fn spot_fix_two_phase_plan_then_replacements() {
         let chapter = "第一章标题行\n\n正文第一段。\n\n正文第二段。\n";
         let (chat, defaults, captured) = scripted(vec![
-            tool_response("submit_chapter_edit_ranges", serde_json::json!({
-                "ranges": [{ "startLine": 5, "endLine": 5 }],
-            })),
-            tool_response("submit_chapter_range_replacements", serde_json::json!({
-                "range_0_content": "修订后的第二段。\n",
-            })),
+            tool_response(
+                "submit_chapter_edit_ranges",
+                serde_json::json!({
+                    "ranges": [{ "startLine": 5, "endLine": 5 }],
+                }),
+            ),
+            tool_response(
+                "submit_chapter_range_replacements",
+                serde_json::json!({
+                    "range_0_content": "修订后的第二段。\n",
+                }),
+            ),
         ]);
         let agents = ReviseChapterAgents {
             chat: &chat,
@@ -762,12 +841,23 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(output.revised_content, "第一章标题行\n\n正文第一段。\n\n修订后的第二段。\n");
+        assert_eq!(
+            output.revised_content,
+            "第一章标题行\n\n正文第一段。\n\n修订后的第二段。\n"
+        );
         // 双段：轮 1=submit_chapter_edit_ranges，轮 2=submit_chapter_range_replacements
-        let calls = captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let calls = captured
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         assert_eq!(calls.len(), 2);
-        assert_eq!(calls[0]["tools"][0]["function"]["name"], "submit_chapter_edit_ranges");
-        assert_eq!(calls[1]["tools"][0]["function"]["name"], "submit_chapter_range_replacements");
+        assert_eq!(
+            calls[0]["tools"][0]["function"]["name"],
+            "submit_chapter_edit_ranges"
+        );
+        assert_eq!(
+            calls[1]["tools"][0]["function"]["name"],
+            "submit_chapter_range_replacements"
+        );
         assert_eq!(calls[0]["toolChoice"], "required");
     }
 
@@ -775,12 +865,18 @@ mod tests {
     #[tokio::test]
     async fn rewrite_length_contract_rejects_then_accepts() {
         let (chat, defaults, _captured) = scripted(vec![
-            tool_response("submit_revised_chapter", serde_json::json!({
-                "revisedContent": "太短",
-            })),
-            tool_response("submit_revised_chapter", serde_json::json!({
-                "revisedContent": "这段修订后的正文达到了最少十个非空白字符的长度要求。",
-            })),
+            tool_response(
+                "submit_revised_chapter",
+                serde_json::json!({
+                    "revisedContent": "太短",
+                }),
+            ),
+            tool_response(
+                "submit_revised_chapter",
+                serde_json::json!({
+                    "revisedContent": "这段修订后的正文达到了最少十个非空白字符的长度要求。",
+                }),
+            ),
         ]);
         let agents = ReviseChapterAgents {
             chat: &chat,
@@ -819,9 +915,18 @@ mod tests {
     #[tokio::test]
     async fn rewrite_always_short_exhausts_to_error() {
         let (chat, defaults, _captured) = scripted(vec![
-            tool_response("submit_revised_chapter", serde_json::json!({ "revisedContent": "短" })),
-            tool_response("submit_revised_chapter", serde_json::json!({ "revisedContent": "仍短" })),
-            tool_response("submit_revised_chapter", serde_json::json!({ "revisedContent": "继续短" })),
+            tool_response(
+                "submit_revised_chapter",
+                serde_json::json!({ "revisedContent": "短" }),
+            ),
+            tool_response(
+                "submit_revised_chapter",
+                serde_json::json!({ "revisedContent": "仍短" }),
+            ),
+            tool_response(
+                "submit_revised_chapter",
+                serde_json::json!({ "revisedContent": "继续短" }),
+            ),
         ]);
         let agents = ReviseChapterAgents {
             chat: &chat,
@@ -853,6 +958,9 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("CHAPTER_LENGTH_OUT_OF_RANGE"), "{error}");
+        assert!(
+            error.to_string().contains("CHAPTER_LENGTH_OUT_OF_RANGE"),
+            "{error}"
+        );
     }
 }

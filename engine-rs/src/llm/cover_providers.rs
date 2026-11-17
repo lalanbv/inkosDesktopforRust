@@ -47,7 +47,9 @@ pub const COVER_PROVIDER_PRESETS: &[CoverProviderPreset] = &[
 ];
 
 /// 按 service 查封面预设。对齐 TS `resolveCoverProviderPreset`。
-pub fn resolve_cover_provider_preset(service: Option<&str>) -> Option<&'static CoverProviderPreset> {
+pub fn resolve_cover_provider_preset(
+    service: Option<&str>,
+) -> Option<&'static CoverProviderPreset> {
     COVER_PROVIDER_PRESETS
         .iter()
         .find(|provider| Some(provider.service) == service)
@@ -87,7 +89,10 @@ mod tests {
     #[test]
     fn three_presets() {
         assert_eq!(COVER_PROVIDER_PRESETS.len(), 3);
-        assert_eq!(resolve_cover_provider_preset(Some("kkaiapi")).unwrap().api, "images");
+        assert_eq!(
+            resolve_cover_provider_preset(Some("kkaiapi")).unwrap().api,
+            "images"
+        );
         assert!(resolve_cover_provider_preset(Some("unknown")).is_none());
         assert!(resolve_cover_provider_preset(None).is_none());
     }

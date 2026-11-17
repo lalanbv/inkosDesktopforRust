@@ -151,7 +151,11 @@ fn safe_segment(value: &str) -> String {
         .chars()
         .flat_map(char::to_lowercase)
         .map(|c| {
-            if matches!(c, '\\' | '/' | ':' | '\0' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_whitespace() {
+            if matches!(
+                c,
+                '\\' | '/' | ':' | '\0' | '*' | '?' | '"' | '<' | '>' | '|'
+            ) || c.is_whitespace()
+            {
                 '-'
             } else {
                 c
@@ -224,16 +228,27 @@ async fn resolve_source_text(
     };
     let full = safe_child_path(project_root, path)?;
     Ok(Some(
-        tokio::fs::read_to_string(&full).await.map_err(|e| e.to_string())?,
+        tokio::fs::read_to_string(&full)
+            .await
+            .map_err(|e| e.to_string())?,
     ))
 }
 
-
 /// TS `textArtifact`（141 号）：内容保证尾换行的产物条目。
-fn text_artifact(relative_path: String, content: &str) -> crate::utils::atomic_file_set::AtomicFileWrite {
+fn text_artifact(
+    relative_path: String,
+    content: &str,
+) -> crate::utils::atomic_file_set::AtomicFileWrite {
     use crate::utils::atomic_file_set::{AtomicFileWrite, FileContent};
-    let content = if content.ends_with('\n') { content.to_string() } else { format!("{content}\n") };
-    AtomicFileWrite { relative_path, content: FileContent::Text(content) }
+    let content = if content.ends_with('\n') {
+        content.to_string()
+    } else {
+        format!("{content}\n")
+    };
+    AtomicFileWrite {
+        relative_path,
+        content: FileContent::Text(content),
+    }
 }
 
 /// TS `assertNonEmptyArtifacts`：任一产物空 → 拒交。
@@ -246,7 +261,10 @@ fn assert_non_empty_artifacts(
             crate::utils::atomic_file_set::FileContent::Bytes(bytes) => bytes.is_empty(),
         };
         if empty {
-            return Err(format!("Production artifact is empty: {}", artifact.relative_path));
+            return Err(format!(
+                "Production artifact is empty: {}",
+                artifact.relative_path
+            ));
         }
     }
     Ok(())
@@ -285,25 +303,39 @@ async fn commit_production_complete(
     .map_err(|e| e.to_string())
 }
 
-async fn write_project_text(project_root: &Path, relative_path: &str, content: &str) -> Result<(), String> {
+async fn write_project_text(
+    project_root: &Path,
+    relative_path: &str,
+    content: &str,
+) -> Result<(), String> {
     let full = safe_child_path(project_root, relative_path)?;
     if let Some(parent) = full.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
     let payload = if content.ends_with('\n') {
         content.to_string()
     } else {
         format!("{content}\n")
     };
-    crate::utils::atomic_file_set::write_file_atomic(&full, &payload).await.map_err(|e| e.to_string())
+    crate::utils::atomic_file_set::write_file_atomic(&full, &payload)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn ensure_project_dir(project_root: &Path, relative_path: &str) -> Result<(), String> {
     let full = safe_child_path(project_root, relative_path)?;
-    tokio::fs::create_dir_all(&full).await.map_err(|e| e.to_string())
+    tokio::fs::create_dir_all(&full)
+        .await
+        .map_err(|e| e.to_string())
 }
 
-fn merge_requirements(instruction: &str, requirements: Option<&str>, language: Option<&str>) -> String {
+fn merge_requirements(
+    instruction: &str,
+    requirements: Option<&str>,
+    language: Option<&str>,
+) -> String {
     let extra_label = if language == Some("en") {
         "Additional requirements:"
     } else {
@@ -313,7 +345,11 @@ fn merge_requirements(instruction: &str, requirements: Option<&str>, language: O
     if let Some(extra) = requirements.map(str::trim).filter(|r| !r.is_empty()) {
         parts.push(format!("\n{extra_label}\n{extra}"));
     }
-    parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n")
+    parts
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ── assets manifest ─────────────────────────────────────────────
@@ -357,16 +393,27 @@ fn create_storyboard_assets_manifest(
 
 // ── run 函数 ────────────────────────────────────────────────────
 
-pub async fn run_script_creation(options: ScriptCreationRunOptions<'_>) -> Result<ScriptCreationRunResult, String> {
+pub async fn run_script_creation(
+    options: ScriptCreationRunOptions<'_>,
+) -> Result<ScriptCreationRunResult, String> {
     let project_id = safe_segment(options.project_id.unwrap_or(&slugify(options.title)));
     let base_dir = resolve_project_base_dir(options.out_dir.unwrap_or("dramas"), &project_id)?;
-    let source_text = resolve_source_text(options.project_root, options.source_text, options.source_path).await?;
+    let source_text = resolve_source_text(
+        options.project_root,
+        options.source_text,
+        options.source_path,
+    )
+    .await?;
     let input = ScriptCreationInput {
         title: options.title.to_string(),
         source_kind: options.source_kind.map(String::from),
         target_format: options.target_format.map(String::from),
         source_text: source_text.clone(),
-        requirements: Some(merge_requirements(options.instruction, options.requirements, options.language)),
+        requirements: Some(merge_requirements(
+            options.instruction,
+            options.requirements,
+            options.language,
+        )),
         episode_count: options.episode_count,
         episode_duration: options.episode_duration.map(String::from),
         language: options.language.map(String::from),
@@ -376,7 +423,9 @@ pub async fn run_script_creation(options: ScriptCreationRunOptions<'_>) -> Resul
     let spec = agents::render_script_spec(&input);
 
     (options.on_progress)("Writing script draft...".to_string());
-    let script = agents::normalize_script_episode_end_labels(&agents::write_script(options.router, &input).await?);
+    let script = agents::normalize_script_episode_end_labels(
+        &agents::write_script(options.router, &input).await?,
+    );
     // 141 号：交付校验（恰好一份人物节 + 非空剧本正文节）先行——拒则零提交。
     agents::assert_script_deliverable(&script, options.language)?;
     let artifacts = vec![
@@ -401,15 +450,26 @@ pub async fn run_script_creation(options: ScriptCreationRunOptions<'_>) -> Resul
     })
 }
 
-pub async fn run_storyboard_creation(options: StoryboardCreationRunOptions<'_>) -> Result<StoryboardCreationRunResult, String> {
+pub async fn run_storyboard_creation(
+    options: StoryboardCreationRunOptions<'_>,
+) -> Result<StoryboardCreationRunResult, String> {
     let project_id = safe_segment(options.project_id.unwrap_or(&slugify(options.title)));
     let base_dir = resolve_project_base_dir(options.out_dir.unwrap_or("storyboards"), &project_id)?;
-    let source_text = resolve_source_text(options.project_root, options.source_text, options.source_path).await?;
+    let source_text = resolve_source_text(
+        options.project_root,
+        options.source_text,
+        options.source_path,
+    )
+    .await?;
     let input = StoryboardCreationInput {
         title: options.title.to_string(),
         source_kind: options.source_kind.map(String::from),
         source_text,
-        requirements: Some(merge_requirements(options.instruction, options.requirements, options.language)),
+        requirements: Some(merge_requirements(
+            options.instruction,
+            options.requirements,
+            options.language,
+        )),
         visual_style: options.visual_style.map(String::from),
         aspect_ratio: options.aspect_ratio.map(String::from),
         granularity: options.granularity.map(String::from),
@@ -473,13 +533,23 @@ pub async fn run_interactive_film_creation(
     options: InteractiveFilmCreationRunOptions<'_>,
 ) -> Result<InteractiveFilmCreationRunResult, String> {
     let project_id = safe_segment(options.project_id.unwrap_or(&slugify(options.title)));
-    let base_dir = resolve_project_base_dir(options.out_dir.unwrap_or("interactive-films"), &project_id)?;
-    let source_text = resolve_source_text(options.project_root, options.source_text, options.source_path).await?;
+    let base_dir =
+        resolve_project_base_dir(options.out_dir.unwrap_or("interactive-films"), &project_id)?;
+    let source_text = resolve_source_text(
+        options.project_root,
+        options.source_text,
+        options.source_path,
+    )
+    .await?;
     let input = InteractiveFilmCreationInput {
         title: options.title.to_string(),
         source_kind: options.source_kind.map(String::from),
         source_text,
-        requirements: Some(merge_requirements(options.instruction, options.requirements, options.language)),
+        requirements: Some(merge_requirements(
+            options.instruction,
+            options.requirements,
+            options.language,
+        )),
         target_audience: options.target_audience.map(String::from),
         episode_count: options.episode_count,
         episode_duration: options.episode_duration.map(String::from),
@@ -491,25 +561,39 @@ pub async fn run_interactive_film_creation(
     (options.on_progress)("Writing interactive-film creation spec...".to_string());
     let spec = agents::render_interactive_film_spec(&input);
 
-    (options.on_progress)("Writing story tree, flags, script, storyboard, and image prompts...".to_string());
+    (options.on_progress)(
+        "Writing story tree, flags, script, storyboard, and image prompts...".to_string(),
+    );
     let package_markdown = agents::write_interactive_film(options.router, &input).await?;
-    let story_tree = agents::required_section(&package_markdown, &["剧情树", "Story Tree", "Branching Story Tree"]);
-    let flags = agents::required_section(&package_markdown, &[
-        "旗标与变量系统说明",
-        "变量与旗标表",
-        "变量和旗标表",
-        "变量表",
-        "旗标表",
-        "Variables and Flags",
-        "Flag Table",
-    ]);
-    let script = agents::required_section(&package_markdown, &["互动剧本", "Interactive Script", "Script"]);
-    let storyboard = agents::required_section(&package_markdown, &[
-        "分镜与图像提示词",
-        "分镜表",
-        "Storyboard and Image Prompts",
-        "Storyboard",
-    ]);
+    let story_tree = agents::required_section(
+        &package_markdown,
+        &["剧情树", "Story Tree", "Branching Story Tree"],
+    );
+    let flags = agents::required_section(
+        &package_markdown,
+        &[
+            "旗标与变量系统说明",
+            "变量与旗标表",
+            "变量和旗标表",
+            "变量表",
+            "旗标表",
+            "Variables and Flags",
+            "Flag Table",
+        ],
+    );
+    let script = agents::required_section(
+        &package_markdown,
+        &["互动剧本", "Interactive Script", "Script"],
+    );
+    let storyboard = agents::required_section(
+        &package_markdown,
+        &[
+            "分镜与图像提示词",
+            "分镜表",
+            "Storyboard and Image Prompts",
+            "Storyboard",
+        ],
+    );
     let image_prompts = agents::extract_storyboard_image_prompts(&storyboard);
     let story_graph_path = rel_path(&["interactive-films", &project_id, "story-graph.json"]);
 
@@ -606,8 +690,17 @@ async fn create_interactive_film_story_graph(
     image_prompts: &str,
     on_progress: &mut (dyn FnMut(String) + Send),
 ) -> StoryGraph {
-    let premise = build_interactive_film_graph_premise(input, story_tree, flags, script, image_prompts);
-    match agents::generate_story_graph_from_premise(router, project_id, title, &premise, input.language.as_deref()).await {
+    let premise =
+        build_interactive_film_graph_premise(input, story_tree, flags, script, image_prompts);
+    match agents::generate_story_graph_from_premise(
+        router,
+        project_id,
+        title,
+        &premise,
+        input.language.as_deref(),
+    )
+    .await
+    {
         Ok(graph) => graph,
         Err(error) => {
             on_progress(format!(
@@ -628,38 +721,64 @@ fn build_interactive_film_graph_premise(
 ) -> String {
     if input.language.as_deref() == Some("en") {
         [
-            Some(format!("Creation brief: {}", input.requirements.as_deref().unwrap_or_default())),
-            input.target_audience.as_deref().map(|a| format!("Target audience: {a}")),
-            input.episode_count.map(|c| format!("Segments/episodes: {c}")),
-            input.episode_duration.as_deref().map(|d| format!("Per-segment duration: {d}")),
+            Some(format!(
+                "Creation brief: {}",
+                input.requirements.as_deref().unwrap_or_default()
+            )),
+            input
+                .target_audience
+                .as_deref()
+                .map(|a| format!("Target audience: {a}")),
+            input
+                .episode_count
+                .map(|c| format!("Segments/episodes: {c}")),
+            input
+                .episode_duration
+                .as_deref()
+                .map(|d| format!("Per-segment duration: {d}")),
             input.budget.as_deref().map(|b| format!("Budget: {b}")),
-            input.reference_mode.as_deref().map(|r| format!("Reference mode: {r}")),
+            input
+                .reference_mode
+                .as_deref()
+                .map(|r| format!("Reference mode: {r}")),
             Some(format!("Story tree:\n{story_tree}")),
             Some(format!("Variables and flags:\n{flags}")),
             Some(format!("Interactive script:\n{script}")),
             Some(format!("Image prompts:\n{image_prompts}")),
         ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("\n\n")
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
     } else {
         [
-            Some(format!("创作需求：{}", input.requirements.as_deref().unwrap_or_default())),
-            input.target_audience.as_deref().map(|a| format!("目标受众：{a}")),
+            Some(format!(
+                "创作需求：{}",
+                input.requirements.as_deref().unwrap_or_default()
+            )),
+            input
+                .target_audience
+                .as_deref()
+                .map(|a| format!("目标受众：{a}")),
             input.episode_count.map(|c| format!("段落/集数：{c}")),
-            input.episode_duration.as_deref().map(|d| format!("单段时长：{d}")),
+            input
+                .episode_duration
+                .as_deref()
+                .map(|d| format!("单段时长：{d}")),
             input.budget.as_deref().map(|b| format!("预算：{b}")),
-            input.reference_mode.as_deref().map(|r| format!("参考模式：{r}")),
+            input
+                .reference_mode
+                .as_deref()
+                .map(|r| format!("参考模式：{r}")),
             Some(format!("剧情树：\n{story_tree}")),
             Some(format!("变量旗标：\n{flags}")),
             Some(format!("互动剧本：\n{script}")),
             Some(format!("图像提示词：\n{image_prompts}")),
         ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("\n\n")
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
     }
 }
 
@@ -678,7 +797,10 @@ fn build_fallback_story_graph(
     let en = input.language.as_deref() == Some("en");
     let prompts = agents::parse_storyboard_prompt_lines(image_prompts);
     // (episodeCount ?? prompts.length) || 3，再 clamp [2, 8]。
-    let act_base = input.episode_count.map(|c| c as usize).unwrap_or(prompts.len());
+    let act_base = input
+        .episode_count
+        .map(|c| c as usize)
+        .unwrap_or(prompts.len());
     let act_count = if act_base == 0 { 3 } else { act_base }.clamp(2, 8);
     let requirements_or_title = || {
         input
@@ -703,19 +825,30 @@ fn build_fallback_story_graph(
 
     let mut nodes = vec![StoryNode {
         id: "start".to_string(),
-        title: if en { "Opening".into() } else { "开场".to_string() },
+        title: if en {
+            "Opening".into()
+        } else {
+            "开场".to_string()
+        },
         node_type: NodeType::Start,
         scene_desc: requirements_or_title().to_string(),
         dialogue: Vec::new(),
         choices: vec![Choice {
             id: "start-act-1".to_string(),
-            text: if en { "Enter Act 1".into() } else { "进入第一幕".to_string() },
+            text: if en {
+                "Enter Act 1".into()
+            } else {
+                "进入第一幕".to_string()
+            },
             target_node_id: "act-1".to_string(),
             condition: None,
             effects: Vec::new(),
             weight: None,
         }],
-        image_slot: Some(ImageSlot { prompt: prompt_at(0), asset_ref: None }),
+        image_slot: Some(ImageSlot {
+            prompt: prompt_at(0),
+            asset_ref: None,
+        }),
         act: "start".to_string(),
         position: Some(Position { x: 0.0, y: 0.0 }),
     }];
@@ -724,8 +857,16 @@ fn build_fallback_story_graph(
         let is_last = index == act_count;
         nodes.push(StoryNode {
             id: format!("act-{index}"),
-            title: if en { format!("Act {index}") } else { format!("第 {index} 幕") },
-            node_type: if is_last { NodeType::Branch } else { NodeType::Normal },
+            title: if en {
+                format!("Act {index}")
+            } else {
+                format!("第 {index} 幕")
+            },
+            node_type: if is_last {
+                NodeType::Branch
+            } else {
+                NodeType::Normal
+            },
             scene_desc: if en {
                 format!("Act {index} of the interactive film \"{title}\".")
             } else {
@@ -736,7 +877,11 @@ fn build_fallback_story_graph(
                 vec![
                     Choice {
                         id: "to-ending-a".to_string(),
-                        text: if en { "Complete the main objective".into() } else { "完成主线目标".to_string() },
+                        text: if en {
+                            "Complete the main objective".into()
+                        } else {
+                            "完成主线目标".to_string()
+                        },
                         target_node_id: "ending-a".to_string(),
                         condition: None,
                         effects: vec![story_step()],
@@ -744,7 +889,11 @@ fn build_fallback_story_graph(
                     },
                     Choice {
                         id: "to-ending-b".to_string(),
-                        text: if en { "Take the other aftermath".into() } else { "进入另一条余波".to_string() },
+                        text: if en {
+                            "Take the other aftermath".into()
+                        } else {
+                            "进入另一条余波".to_string()
+                        },
                         target_node_id: "ending-b".to_string(),
                         condition: None,
                         effects: vec![story_step()],
@@ -754,14 +903,21 @@ fn build_fallback_story_graph(
             } else {
                 vec![Choice {
                     id: format!("act-{index}-next"),
-                    text: if en { "Keep going".into() } else { "继续推进".to_string() },
+                    text: if en {
+                        "Keep going".into()
+                    } else {
+                        "继续推进".to_string()
+                    },
                     target_node_id: format!("act-{}", index + 1),
                     condition: None,
                     effects: vec![story_step()],
                     weight: None,
                 }]
             },
-            image_slot: Some(ImageSlot { prompt: prompt_at(index - 1), asset_ref: None }),
+            image_slot: Some(ImageSlot {
+                prompt: prompt_at(index - 1),
+                asset_ref: None,
+            }),
             act: format!("act-{index}"),
             position: Some(Position {
                 x: (index * 260) as f64,
@@ -770,29 +926,39 @@ fn build_fallback_story_graph(
         });
     }
 
-    nodes.push(
-        StoryNode {
-            id: "ending-a".to_string(),
-            title: if en { "Ending One".into() } else { "结局一".to_string() },
-            node_type: NodeType::Ending,
-            scene_desc: if en {
-                "The main objective is completed and the story converges.".to_string()
-            } else {
-                "主线目标被完成，故事进入收束。".to_string()
-            },
-            dialogue: Vec::new(),
-            choices: Vec::new(),
-            image_slot: None,
-            act: "ending".to_string(),
-            position: Some(Position { x: ((act_count + 1) * 260) as f64, y: -80.0 }),
-        },
-    );
     nodes.push(StoryNode {
-        id: "ending-b".to_string(),
-        title: if en { "Ending Two".into() } else { "结局二".to_string() },
+        id: "ending-a".to_string(),
+        title: if en {
+            "Ending One".into()
+        } else {
+            "结局一".to_string()
+        },
         node_type: NodeType::Ending,
         scene_desc: if en {
-            "The player keeps the other aftermath and the story closes on the forked path.".to_string()
+            "The main objective is completed and the story converges.".to_string()
+        } else {
+            "主线目标被完成，故事进入收束。".to_string()
+        },
+        dialogue: Vec::new(),
+        choices: Vec::new(),
+        image_slot: None,
+        act: "ending".to_string(),
+        position: Some(Position {
+            x: ((act_count + 1) * 260) as f64,
+            y: -80.0,
+        }),
+    });
+    nodes.push(StoryNode {
+        id: "ending-b".to_string(),
+        title: if en {
+            "Ending Two".into()
+        } else {
+            "结局二".to_string()
+        },
+        node_type: NodeType::Ending,
+        scene_desc: if en {
+            "The player keeps the other aftermath and the story closes on the forked path."
+                .to_string()
         } else {
             "玩家选择保留另一条余波，故事进入分岔收束。".to_string()
         },
@@ -800,7 +966,10 @@ fn build_fallback_story_graph(
         choices: Vec::new(),
         image_slot: None,
         act: "ending".to_string(),
-        position: Some(Position { x: ((act_count + 1) * 260) as f64, y: 120.0 }),
+        position: Some(Position {
+            x: ((act_count + 1) * 260) as f64,
+            y: 120.0,
+        }),
     });
 
     StoryGraph {
@@ -819,14 +988,22 @@ fn build_fallback_story_graph(
             name: "story_progress".to_string(),
             variable_type: VariableType::Counter,
             default: json!(0),
-            desc: if en { "Story progression".to_string() } else { "剧情推进进度".to_string() },
+            desc: if en {
+                "Story progression".to_string()
+            } else {
+                "剧情推进进度".to_string()
+            },
         }],
         nodes,
         endings: vec![
             Ending {
                 id: "ending-a".to_string(),
                 node_id: "ending-a".to_string(),
-                title: if en { "Ending One".into() } else { "结局一".to_string() },
+                title: if en {
+                    "Ending One".into()
+                } else {
+                    "结局一".to_string()
+                },
                 ending_type: EndingType::Neutral,
                 description: if en {
                     "The main objective is completed.".to_string()
@@ -837,7 +1014,11 @@ fn build_fallback_story_graph(
             Ending {
                 id: "ending-b".to_string(),
                 node_id: "ending-b".to_string(),
-                title: if en { "Ending Two".into() } else { "结局二".to_string() },
+                title: if en {
+                    "Ending Two".into()
+                } else {
+                    "结局二".to_string()
+                },
                 ending_type: EndingType::Secret,
                 description: if en {
                     "The player keeps the other aftermath.".to_string()
@@ -879,7 +1060,10 @@ mod tests {
         // start + act-1..3 + 双结局 = 6 节点。
         assert_eq!(graph.nodes.len(), 6);
         assert_eq!(graph.nodes[0].id, "start");
-        assert_eq!(graph.nodes[0].node_type, crate::interactive_film::NodeType::Start);
+        assert_eq!(
+            graph.nodes[0].node_type,
+            crate::interactive_film::NodeType::Start
+        );
         // 末幕 branch 双选择（ending-a/b，各带 story_progress add 1）。
         let last = &graph.nodes[3];
         assert_eq!(last.id, "act-3");
@@ -892,7 +1076,10 @@ mod tests {
         assert_eq!(graph.nodes[1].choices[0].effects[0].var, "story_progress");
         assert!(graph.nodes[0].choices[0].effects.is_empty());
         // 结局节点类型与坐标布局。
-        assert_eq!(graph.nodes[4].node_type, crate::interactive_film::NodeType::Ending);
+        assert_eq!(
+            graph.nodes[4].node_type,
+            crate::interactive_film::NodeType::Ending
+        );
         assert_eq!(graph.nodes[4].position.as_ref().unwrap().x, 1040.0);
         assert_eq!(graph.nodes[4].position.as_ref().unwrap().y, -80.0);
         assert_eq!(graph.nodes[5].position.as_ref().unwrap().y, 120.0);
@@ -902,11 +1089,23 @@ mod tests {
         assert_eq!(graph.variables.len(), 1);
         assert_eq!(graph.variables[0].name, "story_progress");
         assert_eq!(graph.variables[0].default, serde_json::json!(0));
-        assert_eq!(graph.endings[0].ending_type, crate::interactive_film::EndingType::Neutral);
-        assert_eq!(graph.endings[1].ending_type, crate::interactive_film::EndingType::Secret);
+        assert_eq!(
+            graph.endings[0].ending_type,
+            crate::interactive_film::EndingType::Neutral
+        );
+        assert_eq!(
+            graph.endings[1].ending_type,
+            crate::interactive_film::EndingType::Secret
+        );
         // imageSlot：prompts 轮换（act-2 用第 2 条，act-3 越界回第 1 条）。
-        assert_eq!(graph.nodes[2].image_slot.as_ref().unwrap().prompt, "灯下人影");
-        assert_eq!(graph.nodes[3].image_slot.as_ref().unwrap().prompt, "雨夜街口");
+        assert_eq!(
+            graph.nodes[2].image_slot.as_ref().unwrap().prompt,
+            "灯下人影"
+        );
+        assert_eq!(
+            graph.nodes[3].image_slot.as_ref().unwrap().prompt,
+            "雨夜街口"
+        );
         let anchor = graph.world_anchor.as_ref().unwrap();
         assert_eq!(anchor.story_core, "雨夜旧宅的探索");
         assert_eq!(anchor.genre, "interactive-film");
@@ -927,7 +1126,13 @@ mod tests {
     #[test]
     fn graph_premise_zh_sections() {
         let input = film_input(Some(5), "悬疑向多结局");
-        let premise = build_interactive_film_graph_premise(&input, "主线树", "旗标表", "剧本正文", "提示词集");
+        let premise = build_interactive_film_graph_premise(
+            &input,
+            "主线树",
+            "旗标表",
+            "剧本正文",
+            "提示词集",
+        );
         for needle in [
             "创作需求：悬疑向多结局",
             "目标受众：青年玩家",
@@ -940,8 +1145,14 @@ mod tests {
         ] {
             assert!(premise.contains(needle), "premise 缺 {needle}：\n{premise}");
         }
-        assert!(!premise.contains("预算"), "premise 不应含空缺段：\n{premise}");
-        assert!(!premise.contains("参考模式"), "premise 不应含空缺段：\n{premise}");
+        assert!(
+            !premise.contains("预算"),
+            "premise 不应含空缺段：\n{premise}"
+        );
+        assert!(
+            !premise.contains("参考模式"),
+            "premise 不应含空缺段：\n{premise}"
+        );
     }
 
     #[test]
@@ -952,7 +1163,8 @@ mod tests {
             budget: Some("low".to_string()),
             ..film_input(Some(2), "brief")
         };
-        let premise = build_interactive_film_graph_premise(&input, "tree", "flags", "script", "prompts");
+        let premise =
+            build_interactive_film_graph_premise(&input, "tree", "flags", "script", "prompts");
         assert!(premise.contains("Creation brief: brief"));
         assert!(premise.contains("Budget: low"));
         assert!(premise.contains("Segments/episodes: 2"));

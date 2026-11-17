@@ -16,7 +16,9 @@ use std::path::{Path, PathBuf};
 
 use crate::models::runtime_state::HookRecord;
 use crate::state::memory_db::StoredSummary;
-use crate::utils::memory_retrieval::{retrieve_memory_selection, MemorySelection, RetrieveMemoryParams};
+use crate::utils::memory_retrieval::{
+    retrieve_memory_selection, MemorySelection, RetrieveMemoryParams,
+};
 use crate::utils::outline_paths::{
     read_current_state_with_fallback, read_story_frame, read_volume_map,
 };
@@ -55,10 +57,7 @@ pub struct PlanningMaterials {
 }
 
 /// 读取前章末屏节选：chapters/ 下前导号数值等值的章文件，去首行取正文，截尾 320 UTF-16 单元。
-pub async fn read_previous_ending_excerpt(
-    book_dir: &Path,
-    chapter_number: u32,
-) -> Option<String> {
+pub async fn read_previous_ending_excerpt(book_dir: &Path, chapter_number: u32) -> Option<String> {
     let previous_chapter = chapter_number.checked_sub(1)?;
     if previous_chapter < 1 {
         return None;
@@ -68,7 +67,8 @@ pub async fn read_previous_ending_excerpt(
     // 845 号：定位归一到 resolve_chapter_file（数值等值 + 正典优先）——此前 starts_with(padded)
     // 按 read_dir 顺序取首个；TS planning-materials.ts 同步归一到 findChapterFileByNumber。
     let file_name =
-        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, previous_chapter).await?;
+        crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, previous_chapter)
+            .await?;
     let markdown = tokio::fs::read_to_string(chapters_dir.join(file_name))
         .await
         .ok()?;
@@ -133,12 +133,11 @@ pub async fn load_planning_seed_materials(
     );
 
     // 章节号 DESC 过滤后取前 4，再还原 ASC。
-    let mut chapter_summaries: Vec<StoredSummary> = parse_chapter_summaries_markdown(
-        &chapter_summaries_raw,
-    )
-    .into_iter()
-    .filter(|summary| summary.chapter < i64::from(chapter_number))
-    .collect();
+    let mut chapter_summaries: Vec<StoredSummary> =
+        parse_chapter_summaries_markdown(&chapter_summaries_raw)
+            .into_iter()
+            .filter(|summary| summary.chapter < i64::from(chapter_number))
+            .collect();
     chapter_summaries.sort_by(|left, right| right.chapter.cmp(&left.chapter));
     let previous_ending_hook = chapter_summaries
         .first()
@@ -190,14 +189,40 @@ pub async fn gather_planning_materials(
 
     let story_dir = &seed.story_dir;
     let mut planner_inputs: Vec<String> = vec![
-        story_dir.join("author_intent.md").to_string_lossy().into_owned(),
-        story_dir.join("current_focus.md").to_string_lossy().into_owned(),
-        story_dir.join("outline").join("story_frame.md").to_string_lossy().into_owned(),
-        story_dir.join("outline").join("volume_map.md").to_string_lossy().into_owned(),
-        story_dir.join("chapter_summaries.md").to_string_lossy().into_owned(),
-        story_dir.join("book_rules.md").to_string_lossy().into_owned(),
-        story_dir.join("current_state.md").to_string_lossy().into_owned(),
-        story_dir.join("pending_hooks.md").to_string_lossy().into_owned(),
+        story_dir
+            .join("author_intent.md")
+            .to_string_lossy()
+            .into_owned(),
+        story_dir
+            .join("current_focus.md")
+            .to_string_lossy()
+            .into_owned(),
+        story_dir
+            .join("outline")
+            .join("story_frame.md")
+            .to_string_lossy()
+            .into_owned(),
+        story_dir
+            .join("outline")
+            .join("volume_map.md")
+            .to_string_lossy()
+            .into_owned(),
+        story_dir
+            .join("chapter_summaries.md")
+            .to_string_lossy()
+            .into_owned(),
+        story_dir
+            .join("book_rules.md")
+            .to_string_lossy()
+            .into_owned(),
+        story_dir
+            .join("current_state.md")
+            .to_string_lossy()
+            .into_owned(),
+        story_dir
+            .join("pending_hooks.md")
+            .to_string_lossy()
+            .into_owned(),
     ];
     if let Some(db_path) = &memory_selection.db_path {
         planner_inputs.push(db_path.clone());
@@ -242,7 +267,9 @@ mod tests {
         let chapters = dir.path().join("chapters");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
         let body = format!("# 标题\n{}", "长".repeat(400));
-        tokio::fs::write(chapters.join("0012-xxx.md"), body).await.unwrap();
+        tokio::fs::write(chapters.join("0012-xxx.md"), body)
+            .await
+            .unwrap();
 
         let excerpt = read_previous_ending_excerpt(dir.path(), 13).await.unwrap();
         assert_eq!(excerpt.encode_utf16().count(), 320);

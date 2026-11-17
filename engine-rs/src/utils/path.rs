@@ -63,7 +63,10 @@ fn is_same_or_descendant(root: &Path, descendant: &Path) -> bool {
     if desc_comps.len() < root_comps.len() {
         return false;
     }
-    root_comps.iter().zip(desc_comps.iter()).all(|(r, d)| r == d)
+    root_comps
+        .iter()
+        .zip(desc_comps.iter())
+        .all(|(r, d)| r == d)
 }
 
 #[cfg(test)]

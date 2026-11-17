@@ -38,31 +38,33 @@ pub async fn write_governed_runtime_artifacts(
 
     let context_json = serde_json::to_string_pretty(context_package)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let rule_stack_yaml = serde_yaml_ng::to_string(rule_stack)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let trace_json = serde_json::to_string_pretty(trace)
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    let rule_stack_yaml =
+        serde_yaml_ng::to_string(rule_stack).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let trace_json =
+        serde_json::to_string_pretty(trace).map_err(|e| std::io::Error::other(e.to_string()))?;
 
     // 779 号：三件套是 compose → write 的权威交接组，升级为事务集提交——
     // 崩溃收敛到「三件要么全旧/全缺、要么全新」，不再出现半新半旧的交接组。
-    crate::utils::atomic_file_set::commit_atomic_file_set(&crate::utils::atomic_file_set::AtomicFileSet {
-        root_dir: runtime_dir,
-        writes: vec![
-            crate::utils::atomic_file_set::AtomicFileWrite {
-                relative_path: format!("{chapter_slug}.context.json"),
-                content: crate::utils::atomic_file_set::FileContent::Text(context_json),
-            },
-            crate::utils::atomic_file_set::AtomicFileWrite {
-                relative_path: format!("{chapter_slug}.rule-stack.yaml"),
-                content: crate::utils::atomic_file_set::FileContent::Text(rule_stack_yaml),
-            },
-            crate::utils::atomic_file_set::AtomicFileWrite {
-                relative_path: format!("{chapter_slug}.trace.json"),
-                content: crate::utils::atomic_file_set::FileContent::Text(trace_json),
-            },
-        ],
-        deletes: vec![],
-    })
+    crate::utils::atomic_file_set::commit_atomic_file_set(
+        &crate::utils::atomic_file_set::AtomicFileSet {
+            root_dir: runtime_dir,
+            writes: vec![
+                crate::utils::atomic_file_set::AtomicFileWrite {
+                    relative_path: format!("{chapter_slug}.context.json"),
+                    content: crate::utils::atomic_file_set::FileContent::Text(context_json),
+                },
+                crate::utils::atomic_file_set::AtomicFileWrite {
+                    relative_path: format!("{chapter_slug}.rule-stack.yaml"),
+                    content: crate::utils::atomic_file_set::FileContent::Text(rule_stack_yaml),
+                },
+                crate::utils::atomic_file_set::AtomicFileWrite {
+                    relative_path: format!("{chapter_slug}.trace.json"),
+                    content: crate::utils::atomic_file_set::FileContent::Text(trace_json),
+                },
+            ],
+            deletes: vec![],
+        },
+    )
     .await
     .map_err(|e| std::io::Error::other(e.to_string()))?;
 
@@ -115,18 +117,25 @@ mod tests {
             .await
             .unwrap();
         assert!(result.context_path.ends_with("chapter-0012.context.json"));
-        assert!(result.rule_stack_path.ends_with("chapter-0012.rule-stack.yaml"));
+        assert!(result
+            .rule_stack_path
+            .ends_with("chapter-0012.rule-stack.yaml"));
         assert!(result.trace_path.ends_with("chapter-0012.trace.json"));
 
-        let context_back: ContextPackage =
-            serde_json::from_str(&tokio::fs::read_to_string(&result.context_path).await.unwrap())
-                .unwrap();
+        let context_back: ContextPackage = serde_json::from_str(
+            &tokio::fs::read_to_string(&result.context_path)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(context_back, package);
         let trace_back: ChapterTrace =
             serde_json::from_str(&tokio::fs::read_to_string(&result.trace_path).await.unwrap())
                 .unwrap();
         assert_eq!(trace_back.selected_sources, vec!["runtime/chapter_memo"]);
-        let yaml_raw = tokio::fs::read_to_string(&result.rule_stack_path).await.unwrap();
+        let yaml_raw = tokio::fs::read_to_string(&result.rule_stack_path)
+            .await
+            .unwrap();
         assert!(yaml_raw.contains("layers"));
     }
 }

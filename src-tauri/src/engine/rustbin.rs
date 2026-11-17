@@ -12,8 +12,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    RUST_ENGINE_DIR_NAME, RUST_GENRES_DIR_NAME, RUST_SERVER_BIN_NAME,
-    RUST_SKILLS_DIR_NAME, RUST_STATIC_DIR_NAME,
+    RUST_ENGINE_DIR_NAME, RUST_GENRES_DIR_NAME, RUST_SERVER_BIN_NAME, RUST_SKILLS_DIR_NAME,
+    RUST_STATIC_DIR_NAME,
 };
 use crate::paths::PathResolver;
 use crate::supervisor::LaunchSpec;
@@ -152,10 +152,7 @@ pub fn resolve_builtin_asset_dirs(
     None
 }
 
-pub fn resolve_static_dir(
-    resource_dir: Option<&Path>,
-    _dev_repo_root: &Path,
-) -> Option<PathBuf> {
+pub fn resolve_static_dir(resource_dir: Option<&Path>, _dev_repo_root: &Path) -> Option<PathBuf> {
     if let Some(rd) = resource_dir {
         let candidate = rd.join(RUST_ENGINE_DIR_NAME).join(RUST_STATIC_DIR_NAME);
         if candidate.is_dir() {
@@ -273,14 +270,22 @@ mod tests {
         let app_data = tempfile::tempdir().unwrap();
         let resource = tempfile::tempdir().unwrap();
         let dev_root = tempfile::tempdir().unwrap(); // 无 engine-rs target
-        let bin = app_data.path().join(RUST_ENGINE_DIR_NAME).join(RUST_SERVER_BIN_NAME);
+        let bin = app_data
+            .path()
+            .join(RUST_ENGINE_DIR_NAME)
+            .join(RUST_SERVER_BIN_NAME);
         touch(&bin);
-        let resource_bin =
-            resource.path().join(RUST_ENGINE_DIR_NAME).join(RUST_SERVER_BIN_NAME);
+        let resource_bin = resource
+            .path()
+            .join(RUST_ENGINE_DIR_NAME)
+            .join(RUST_SERVER_BIN_NAME);
         touch(&resource_bin);
 
-        let resolved =
-            resolve_server_bin(Some(app_data.path()), Some(resource.path()), dev_root.path());
+        let resolved = resolve_server_bin(
+            Some(app_data.path()),
+            Some(resource.path()),
+            dev_root.path(),
+        );
         assert_eq!(resolved, Some(bin), "app_data 运行态副本应最优先");
     }
 
@@ -289,11 +294,17 @@ mod tests {
         let app_data = tempfile::tempdir().unwrap(); // 空
         let resource = tempfile::tempdir().unwrap();
         let dev_root = tempfile::tempdir().unwrap();
-        let bin = resource.path().join(RUST_ENGINE_DIR_NAME).join(RUST_SERVER_BIN_NAME);
+        let bin = resource
+            .path()
+            .join(RUST_ENGINE_DIR_NAME)
+            .join(RUST_SERVER_BIN_NAME);
         touch(&bin);
 
-        let resolved =
-            resolve_server_bin(Some(app_data.path()), Some(resource.path()), dev_root.path());
+        let resolved = resolve_server_bin(
+            Some(app_data.path()),
+            Some(resource.path()),
+            dev_root.path(),
+        );
         assert_eq!(resolved, Some(bin), "prod resource 副本次优先");
     }
 
@@ -303,7 +314,11 @@ mod tests {
         let resource = tempfile::tempdir().unwrap();
         let dev_root = tempfile::tempdir().unwrap();
         assert_eq!(
-            resolve_server_bin(Some(app_data.path()), Some(resource.path()), dev_root.path()),
+            resolve_server_bin(
+                Some(app_data.path()),
+                Some(resource.path()),
+                dev_root.path()
+            ),
             None,
             "全 miss 应回退 Node 后端"
         );
@@ -313,7 +328,10 @@ mod tests {
     fn static_dir_prefers_resource_then_dev() {
         let resource = tempfile::tempdir().unwrap();
         let dev_root = tempfile::tempdir().unwrap();
-        let rstatic = resource.path().join(RUST_ENGINE_DIR_NAME).join(RUST_STATIC_DIR_NAME);
+        let rstatic = resource
+            .path()
+            .join(RUST_ENGINE_DIR_NAME)
+            .join(RUST_STATIC_DIR_NAME);
         std::fs::create_dir_all(&rstatic).unwrap();
         assert_eq!(
             resolve_static_dir(Some(resource.path()), dev_root.path()),

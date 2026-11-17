@@ -26,11 +26,41 @@ pub struct HookLifecycleProfile {
 /// 按 timing 的生命周期画像（移植 HOOK_TIMING_PROFILES）。
 pub fn hook_timing_profile(timing: HookPayoffTiming) -> HookLifecycleProfile {
     match timing {
-        HookPayoffTiming::Immediate => HookLifecycleProfile { earliest_resolve_age: 1, stale_dormancy: 1, overdue_age: 3, minimum_phase: HookPhase::Opening, resolve_bias: 5 },
-        HookPayoffTiming::NearTerm => HookLifecycleProfile { earliest_resolve_age: 1, stale_dormancy: 2, overdue_age: 5, minimum_phase: HookPhase::Opening, resolve_bias: 4 },
-        HookPayoffTiming::MidArc => HookLifecycleProfile { earliest_resolve_age: 2, stale_dormancy: 4, overdue_age: 8, minimum_phase: HookPhase::Opening, resolve_bias: 3 },
-        HookPayoffTiming::SlowBurn => HookLifecycleProfile { earliest_resolve_age: 4, stale_dormancy: 5, overdue_age: 12, minimum_phase: HookPhase::Middle, resolve_bias: 2 },
-        HookPayoffTiming::Endgame => HookLifecycleProfile { earliest_resolve_age: 6, stale_dormancy: 6, overdue_age: 16, minimum_phase: HookPhase::Late, resolve_bias: 1 },
+        HookPayoffTiming::Immediate => HookLifecycleProfile {
+            earliest_resolve_age: 1,
+            stale_dormancy: 1,
+            overdue_age: 3,
+            minimum_phase: HookPhase::Opening,
+            resolve_bias: 5,
+        },
+        HookPayoffTiming::NearTerm => HookLifecycleProfile {
+            earliest_resolve_age: 1,
+            stale_dormancy: 2,
+            overdue_age: 5,
+            minimum_phase: HookPhase::Opening,
+            resolve_bias: 4,
+        },
+        HookPayoffTiming::MidArc => HookLifecycleProfile {
+            earliest_resolve_age: 2,
+            stale_dormancy: 4,
+            overdue_age: 8,
+            minimum_phase: HookPhase::Opening,
+            resolve_bias: 3,
+        },
+        HookPayoffTiming::SlowBurn => HookLifecycleProfile {
+            earliest_resolve_age: 4,
+            stale_dormancy: 5,
+            overdue_age: 12,
+            minimum_phase: HookPhase::Middle,
+            resolve_bias: 2,
+        },
+        HookPayoffTiming::Endgame => HookLifecycleProfile {
+            earliest_resolve_age: 6,
+            stale_dormancy: 6,
+            overdue_age: 16,
+            minimum_phase: HookPhase::Late,
+            resolve_bias: 1,
+        },
     }
 }
 

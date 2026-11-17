@@ -23,7 +23,10 @@ pub struct DetectionHistoryEntry {
 /// 检测动作。对齐 TS `"detect" | "rewrite"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"detect\" | \"rewrite\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"detect\" | \"rewrite\"")
+)]
 pub enum DetectionAction {
     #[serde(rename = "detect")]
     Detect,

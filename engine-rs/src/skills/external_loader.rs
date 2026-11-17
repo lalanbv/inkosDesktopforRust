@@ -100,9 +100,7 @@ enum LoadCandidateError {
 impl LoadCandidateError {
     fn message(&self) -> String {
         match self {
-            LoadCandidateError::Missing => {
-                "no such file or directory".to_string()
-            }
+            LoadCandidateError::Missing => "no such file or directory".to_string(),
             LoadCandidateError::Other(message) => message.clone(),
         }
     }
@@ -135,8 +133,7 @@ pub fn parse_agent_skill_document(
     default_rank: Option<u32>,
 ) -> Result<AgentSkill, String> {
     let (data, body) = parse_frontmatter(raw)?;
-    let data = data
-        .ok_or_else(|| "SKILL.md frontmatter must be a YAML object.".to_string())?;
+    let data = data.ok_or_else(|| "SKILL.md frontmatter must be a YAML object.".to_string())?;
     if !data.is_mapping() {
         return Err("SKILL.md frontmatter must be a YAML object.".to_string());
     }
@@ -146,11 +143,7 @@ pub fn parse_agent_skill_document(
         .and_then(|p| p.file_name())
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    let name = required_text(
-        data.get("name"),
-        "name",
-        MAX_SKILL_NAME_CHARS,
-    )?;
+    let name = required_text(data.get("name"), "name", MAX_SKILL_NAME_CHARS)?;
     let description = required_text(
         data.get("description"),
         "description",
@@ -179,7 +172,9 @@ pub fn parse_agent_skill_document(
         }
     }
     // R37 治理面：frontmatter kebab-case 显式映射（与 TS parseAgentSkillDocument 同构）。
-    let disable_model_invocation = data.get("disable-model-invocation").and_then(|v| v.as_bool());
+    let disable_model_invocation = data
+        .get("disable-model-invocation")
+        .and_then(|v| v.as_bool());
     // R44/566 号：invocation 双布尔第二位（dsh `user-invocable`，缺省 true）——
     // 仅显式 false 生效（TS === false 同构），模型面不受影响。
     let user_invocable = match data.get("user-invocable") {
@@ -248,8 +243,8 @@ fn parse_frontmatter(raw: &str) -> Result<(Option<serde_yaml_ng::Value>, String)
     let frontmatter = normalized[4..end].trim().to_string();
     let after = &normalized[end + 4..];
     let body = after.strip_prefix('\n').unwrap_or(after).to_string();
-    let data = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&frontmatter)
-        .map_err(|e| e.to_string())?;
+    let data =
+        serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&frontmatter).map_err(|e| e.to_string())?;
     let data = match data {
         serde_yaml_ng::Value::Null => None,
         other => Some(other),
@@ -333,7 +328,11 @@ fn normalize_external_skill_id(value: &str, fallback: &str) -> Result<String, St
 /// 候选目录列表（configuredSkillDirs 逐字；env 目录显式）。缺省 rank 六级表：
 /// project skills 100 → project .agents 200 → ~/.agents 300 → ~/.openclaw 400
 /// → env 500（builtin 600 在 load_builtin_agent_skills）。
-fn configured_skill_dirs(project_root: &Path, env_dirs: &[String], home_dir: Option<&Path>) -> Vec<ConfiguredSkillDir> {
+fn configured_skill_dirs(
+    project_root: &Path,
+    env_dirs: &[String],
+    home_dir: Option<&Path>,
+) -> Vec<ConfiguredSkillDir> {
     let mut out: Vec<ConfiguredSkillDir> = env_dirs
         .iter()
         .map(|path| ConfiguredSkillDir {
@@ -387,8 +386,11 @@ pub async fn load_configured_agent_skills(
     for candidate in candidates {
         let is_external = matches!(candidate.source, SkillSource::External);
         if is_external
-            && !crate::skills::trust_store::is_trusted_source(project_root, &candidate.path.to_string_lossy())
-                .await
+            && !crate::skills::trust_store::is_trusted_source(
+                project_root,
+                &candidate.path.to_string_lossy(),
+            )
+            .await
         {
             result.diagnostics.push(ExternalSkillDiagnostic {
                 path: candidate.path.to_string_lossy().to_string(),
@@ -396,7 +398,13 @@ pub async fn load_configured_agent_skills(
             });
             continue;
         }
-        match load_external_agent_skills(&candidate.path, candidate.source, Some(candidate.default_rank)).await {
+        match load_external_agent_skills(
+            &candidate.path,
+            candidate.source,
+            Some(candidate.default_rank),
+        )
+        .await
+        {
             Ok(mut loaded) => {
                 result.skills.append(&mut loaded.skills);
                 result.diagnostics.append(&mut loaded.diagnostics);
@@ -416,8 +424,8 @@ pub async fn load_configured_agent_skills(
 /// 默认（genres 的 `INKOS_BUILTIN_GENRES_DIR` 同款约定）。返回绝对路径
 /// （`discover_skill_dirs` 强制绝对）。
 pub fn builtin_skills_root() -> PathBuf {
-    let raw = std::env::var("INKOS_BUILTIN_SKILLS_DIR")
-        .unwrap_or_else(|_| "assets/skills".to_string());
+    let raw =
+        std::env::var("INKOS_BUILTIN_SKILLS_DIR").unwrap_or_else(|_| "assets/skills".to_string());
     let path = PathBuf::from(raw);
     if path.is_absolute() {
         path
@@ -485,9 +493,10 @@ async fn load_external_agent_skills(
         let skill_path = PathBuf::from(&dir).join("SKILL.md");
         match load_skill_manifest(&skill_path, source, default_rank).await {
             Ok(skill) => result.skills.push(skill),
-            Err(message) => result
-                .diagnostics
-                .push(ExternalSkillDiagnostic { path: skill_path.to_string_lossy().to_string(), message }),
+            Err(message) => result.diagnostics.push(ExternalSkillDiagnostic {
+                path: skill_path.to_string_lossy().to_string(),
+                message,
+            }),
         }
     }
     Ok(result)
@@ -501,7 +510,9 @@ async fn discover_skill_dirs(dir: &Path) -> Result<Vec<String>, LoadCandidateErr
             dir.display()
         )));
     }
-    let info = tokio::fs::metadata(dir).await.map_err(|e| io_candidate_error(&e))?;
+    let info = tokio::fs::metadata(dir)
+        .await
+        .map_err(|e| io_candidate_error(&e))?;
     if !info.is_dir() {
         return Err(LoadCandidateError::Other(format!(
             "External skill path is not a directory: {}",
@@ -526,7 +537,9 @@ async fn discover_skill_dirs_below(
     fn pinned<'a>(
         root: &'a Path,
         remaining_depth: u32,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<String>, LoadCandidateError>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<String>, LoadCandidateError>> + Send + 'a>,
+    > {
         Box::pin(discover_skill_dirs_below(root, remaining_depth))
     }
     if remaining_depth == 0 {
@@ -541,12 +554,7 @@ async fn discover_skill_dirs_below(
         .await
         .map_err(|e| io_candidate_error(&e))?
     {
-        if !entry
-            .file_type()
-            .await
-            .map(|t| t.is_dir())
-            .unwrap_or(false)
-        {
+        if !entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
         let child = root.join(entry.file_name());
@@ -590,7 +598,9 @@ async fn load_skill_manifest(
         .await
         .map_err(|e| e.to_string())?;
     if info.len() > MAX_SKILL_MANIFEST_BYTES {
-        return Err(format!("SKILL.md exceeds {MAX_SKILL_MANIFEST_BYTES} bytes."));
+        return Err(format!(
+            "SKILL.md exceeds {MAX_SKILL_MANIFEST_BYTES} bytes."
+        ));
     }
     let raw = tokio::fs::read_to_string(skill_path)
         .await
@@ -617,12 +627,7 @@ pub async fn list_project_skill_ids(
         .await
         .map_err(|e| crate::skills::SkillIdError::Io(e.to_string()))?
     {
-        if !entry
-            .file_type()
-            .await
-            .map(|t| t.is_dir())
-            .unwrap_or(false)
-        {
+        if !entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
@@ -658,7 +663,10 @@ mod tests {
         assert_eq!(skill.description, "战斗策略");
         assert_eq!(skill.body, "正文段落。");
         assert_eq!(skill.source, SkillSource::Project);
-        assert_eq!(skill.base_dir.as_deref(), Some("/root/.agents/skills/combat"));
+        assert_eq!(
+            skill.base_dir.as_deref(),
+            Some("/root/.agents/skills/combat")
+        );
     }
 
     // 775 号：信任校验可装载判定（容器形态回归锁，对齐发现语义）。
@@ -668,21 +676,33 @@ mod tests {
         let root = dir.path();
 
         // 直接形态：根上有 SKILL.md。
-        std::fs::write(root.join("SKILL.md"), "---\nname: direct\ndescription: d\n---\nb").unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            "---\nname: direct\ndescription: d\n---\nb",
+        )
+        .unwrap();
         assert!(has_skill_manifest_direct_or_below(root).await);
 
         // 容器形态：两层内子目录有（768 误拒回归锁）。
         let container = tempfile::tempdir().expect("容器临时目录");
         let skill_dir = container.path().join("pack").join("my-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: c\ndescription: d\n---\nb").unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: c\ndescription: d\n---\nb",
+        )
+        .unwrap();
         assert!(has_skill_manifest_direct_or_below(container.path()).await);
 
         // 两层外才有 → false（与载入器深度语义一致）。
         let deep = tempfile::tempdir().expect("深层临时目录");
         let deep_dir = deep.path().join("a").join("b").join("c");
         std::fs::create_dir_all(&deep_dir).unwrap();
-        std::fs::write(deep_dir.join("SKILL.md"), "---\nname: deep\ndescription: d\n---\nb").unwrap();
+        std::fs::write(
+            deep_dir.join("SKILL.md"),
+            "---\nname: deep\ndescription: d\n---\nb",
+        )
+        .unwrap();
         assert!(!has_skill_manifest_direct_or_below(deep.path()).await);
 
         // 空目录 → false。
@@ -797,9 +817,19 @@ mod tests {
         )
         .unwrap();
         // 二级嵌套（skills 顶层无 SKILL.md → 扫 2 层）
-        std::fs::create_dir_all(root.join(".agents").join("skills").join("pack").join("magic")).unwrap();
+        std::fs::create_dir_all(
+            root.join(".agents")
+                .join("skills")
+                .join("pack")
+                .join("magic"),
+        )
+        .unwrap();
         std::fs::write(
-            root.join(".agents").join("skills").join("pack").join("magic").join("SKILL.md"),
+            root.join(".agents")
+                .join("skills")
+                .join("pack")
+                .join("magic")
+                .join("SKILL.md"),
             "---\nname: Magic\ndescription: d\n---\nb",
         )
         .unwrap();
@@ -841,7 +871,8 @@ mod tests {
     async fn builtin_missing_root_degrades_to_empty() {
         // 默认路径未部署的 graceful 降级（TS file-relative 恒存在不触发；
         // Rust 独立部署备案差异）。
-        let result = load_builtin_agent_skills(std::path::Path::new("/nonexistent-builtin-root-xyz")).await;
+        let result =
+            load_builtin_agent_skills(std::path::Path::new("/nonexistent-builtin-root-xyz")).await;
         assert!(result.skills.is_empty());
         assert!(result.diagnostics.is_empty(), "缺失静默，不诊断");
     }
@@ -856,15 +887,17 @@ mod tests {
         // 项目同名技能 → registry last-write-wins 应覆盖内置默认
         write_skill(&root.join("skills"), "shared", "项目版");
 
-        let result =
-            load_available_agent_skills_with_builtin_root(root, &[], None, &builtin).await;
+        let result = load_available_agent_skills_with_builtin_root(root, &[], None, &builtin).await;
         let registry = crate::skills::create_skill_registry(result.skills);
         let listed = crate::skills::SkillRegistry::list_skills(&registry);
         let ids: Vec<&str> = listed.iter().map(|s| s.id.as_str()).collect();
         assert!(ids.contains(&"only-builtin"), "{ids:?}");
         assert!(ids.contains(&"shared"), "{ids:?}");
         let shared = listed.iter().find(|s| s.id == "shared").unwrap();
-        assert_eq!(shared.name, "项目版", "configured 在后覆盖 builtin 同名默认");
+        assert_eq!(
+            shared.name, "项目版",
+            "configured 在后覆盖 builtin 同名默认"
+        );
         assert_eq!(shared.source, SkillSource::Project);
     }
 
@@ -879,7 +912,9 @@ mod tests {
         .await;
         // 非显式（project .agents/skills、skills）缺失 → 静默；显式 env 目录缺失 → 诊断
         assert_eq!(result.diagnostics.len(), 1);
-        assert!(result.diagnostics[0].path.contains("nonexistent-absolute-path-xyz"));
+        assert!(result.diagnostics[0]
+            .path
+            .contains("nonexistent-absolute-path-xyz"));
         assert!(result.skills.is_empty());
     }
 
@@ -902,7 +937,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let skills = tmp.path().join(".agents").join("skills");
         std::fs::create_dir_all(skills.join("good")).unwrap();
-        std::fs::write(skills.join("good").join("SKILL.md"), "---\nname: G\ndescription: d\n---\nb").unwrap();
+        std::fs::write(
+            skills.join("good").join("SKILL.md"),
+            "---\nname: G\ndescription: d\n---\nb",
+        )
+        .unwrap();
         std::fs::create_dir_all(skills.join("empty")).unwrap(); // 无 SKILL.md
         let ids = list_project_skill_ids(tmp.path()).await.unwrap();
         assert!(ids.contains("good"));
@@ -921,16 +960,32 @@ mod tests {
         assert_eq!(explicit.rank, Some(42));
         assert_eq!(explicit.user_invocable, Some(false));
         // 缺省注入（defaultRank=100 → project skills 层）。
-        let defaulted =
-            parse_agent_skill_document("---\nname: D\ndescription: d\n---\nb", Path::new("/x/d/SKILL.md"), SkillSource::Project, Some(100))
-                .unwrap();
+        let defaulted = parse_agent_skill_document(
+            "---\nname: D\ndescription: d\n---\nb",
+            Path::new("/x/d/SKILL.md"),
+            SkillSource::Project,
+            Some(100),
+        )
+        .unwrap();
         assert_eq!(defaulted.rank, Some(100));
         assert_eq!(defaulted.user_invocable, None);
         // 治理布尔宽松先例：非 false 值静默缺省。
-        let lenient = parse("---\nname: L\ndescription: d\nuser-invocable: yes\n---\nb", "/x/l/SKILL.md").unwrap();
+        let lenient = parse(
+            "---\nname: L\ndescription: d\nuser-invocable: yes\n---\nb",
+            "/x/l/SKILL.md",
+        )
+        .unwrap();
         assert_eq!(lenient.user_invocable, None);
         // rank 严格面：非整数/越界 → 整份拒绝。
-        assert!(parse("---\nname: B1\ndescription: d\nrank: abc\n---\nb", "/x/b1/SKILL.md").is_err());
-        assert!(parse("---\nname: B2\ndescription: d\nrank: 1001\n---\nb", "/x/b2/SKILL.md").is_err());
+        assert!(parse(
+            "---\nname: B1\ndescription: d\nrank: abc\n---\nb",
+            "/x/b1/SKILL.md"
+        )
+        .is_err());
+        assert!(parse(
+            "---\nname: B2\ndescription: d\nrank: 1001\n---\nb",
+            "/x/b2/SKILL.md"
+        )
+        .is_err());
     }
 }

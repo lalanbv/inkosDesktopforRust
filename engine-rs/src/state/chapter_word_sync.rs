@@ -118,7 +118,10 @@ mod tests {
         assert_eq!(parse_chapter_number_from_filename("12.md"), Some(12));
         assert_eq!(parse_chapter_number_from_filename("intro.md"), None);
         assert_eq!(parse_chapter_number_from_filename("12.txt"), None);
-        assert_eq!(parse_chapter_number_from_filename("12_title.txt.md"), Some(12));
+        assert_eq!(
+            parse_chapter_number_from_filename("12_title.txt.md"),
+            Some(12)
+        );
     }
 
     #[test]
@@ -126,7 +129,7 @@ mod tests {
         let index = vec![meta(1, 100)];
         let mut contents = HashMap::new();
         contents.insert(1u32, "一二三四五六七八九十".into()); // CJK 字符数
-        // countingMode CJK → 计 CJK 字符数；"一二三四五六七八九十" = 10
+                                                              // countingMode CJK → 计 CJK 字符数；"一二三四五六七八九十" = 10
         let result = compute_word_count_changes(
             &index,
             &contents,
@@ -145,7 +148,8 @@ mod tests {
         let index = vec![meta(1, 10)];
         let mut contents = HashMap::new();
         contents.insert(1u32, "一二三四五六七八九十".into());
-        let result = compute_word_count_changes(&index, &contents, LengthCountingMode::ZhChars, "now");
+        let result =
+            compute_word_count_changes(&index, &contents, LengthCountingMode::ZhChars, "now");
         assert!(result.changes.is_empty());
         assert_eq!(result.next_index[0].updated_at, "2026-01-01T00:00:00Z"); // 未改
     }
@@ -155,7 +159,8 @@ mod tests {
         let index = vec![meta(1, 10), meta(2, 20)];
         let mut contents = HashMap::new();
         contents.insert(1u32, "一二三四五六七八九十".into()); // chapter 2 文件缺失
-        let result = compute_word_count_changes(&index, &contents, LengthCountingMode::ZhChars, "now");
+        let result =
+            compute_word_count_changes(&index, &contents, LengthCountingMode::ZhChars, "now");
         assert_eq!(result.missing_chapter_files, vec![2]);
         assert!(result.changes.is_empty());
     }

@@ -222,11 +222,13 @@ impl ScopedSelectionContract {
                 .ok_or_else(|| format!("missing replacement selection_{index}_text"))?;
             let mut body = replacement.clone();
             if span.content.ends_with('\n') {
-                if let Some(stripped) =
-                    body.strip_suffix('\r').or_else(|| body.strip_suffix('\n'))
+                if let Some(stripped) = body.strip_suffix('\r').or_else(|| body.strip_suffix('\n'))
                 {
                     let _ = stripped;
-                    body = replacement.trim_end_matches('\r').trim_end_matches('\n').to_string();
+                    body = replacement
+                        .trim_end_matches('\r')
+                        .trim_end_matches('\n')
+                        .to_string();
                 } else {
                     body = replacement
                         .trim_end_matches("\r\n")
@@ -313,7 +315,10 @@ pub fn text_scoped_selection_edit_contract(
     if !valid {
         return Err(json!({ "code": "ARTIFACT_EDIT_RANGE_INVALID" }).to_string());
     }
-    Ok(ScopedSelectionContract { content: content.to_string(), spans })
+    Ok(ScopedSelectionContract {
+        content: content.to_string(),
+        spans,
+    })
 }
 
 /// TS `textOffsetSelectionEditContract`：既有 offset 区间（恢复态/窄化面）
@@ -352,5 +357,8 @@ pub fn text_offset_selection_edit_contract(
             end_offset: *end_offset,
         });
     }
-    Ok(ScopedSelectionContract { content: content.to_string(), spans })
+    Ok(ScopedSelectionContract {
+        content: content.to_string(),
+        spans,
+    })
 }

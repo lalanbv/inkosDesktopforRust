@@ -58,7 +58,10 @@ pub fn build_beats_prompt(req: &BeatsRequest<'_>) -> (String, String) {
 
 /// 宽松解析模型输出：剥 markdown 围栏、容错引号包裹的 JSON、
 /// 过滤未知 plotline id 与空节拍（title/note 皆空视为无效）。
-pub fn parse_beats_json(text: &str, valid_ids: &HashSet<String>) -> Result<Vec<PlotlineBeat>, String> {
+pub fn parse_beats_json(
+    text: &str,
+    valid_ids: &HashSet<String>,
+) -> Result<Vec<PlotlineBeat>, String> {
     let trimmed = text.trim();
     let stripped = trimmed
         .strip_prefix("```json")
@@ -67,7 +70,8 @@ pub fn parse_beats_json(text: &str, valid_ids: &HashSet<String>) -> Result<Vec<P
         .strip_suffix("```")
         .unwrap_or(trimmed)
         .trim();
-    let value: serde_json::Value = serde_json::from_str(stripped).map_err(|e| format!("beats JSON parse failed: {e}"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(stripped).map_err(|e| format!("beats JSON parse failed: {e}"))?;
     let Some(items) = value.get("beats").and_then(serde_json::Value::as_array) else {
         return Err("beats JSON missing `beats` array".to_string());
     };
@@ -79,8 +83,14 @@ pub fn parse_beats_json(text: &str, valid_ids: &HashSet<String>) -> Result<Vec<P
         if !valid_ids.contains(id) {
             continue;
         }
-        let title = item.get("title").and_then(serde_json::Value::as_str).map(str::to_string);
-        let note = item.get("note").and_then(serde_json::Value::as_str).map(str::to_string);
+        let title = item
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        let note = item
+            .get("note")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         let is_blank = |s: Option<&str>| s.is_none_or(|v| v.trim().is_empty());
         if is_blank(title.as_deref()) && is_blank(note.as_deref()) {
             continue;
@@ -109,8 +119,18 @@ impl TimelineBeatsChat for RouterTimelineBeatsChat {
             .chat(
                 "inspiration",
                 vec![
-                    LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                    LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                    LLMMessage {
+                        role: LLMRole::System,
+                        content: system,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
+                    LLMMessage {
+                        role: LLMRole::User,
+                        content: user,
+                        tool_calls: None,
+                        tool_call_id: None,
+                    },
                 ],
                 0.3,
                 Some(1_500),
@@ -126,7 +146,10 @@ mod tests {
     use super::*;
 
     fn roster() -> Vec<(String, String)> {
-        vec![("main".to_string(), "主线".to_string()), ("sub".to_string(), "副线".to_string())]
+        vec![
+            ("main".to_string(), "主线".to_string()),
+            ("sub".to_string(), "副线".to_string()),
+        ]
     }
 
     fn ids() -> HashSet<String> {

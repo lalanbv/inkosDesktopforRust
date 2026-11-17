@@ -139,8 +139,17 @@ pub async fn list_work_manifests(
         Err(error) => return Err(WorkStoreError::Io(to_io_string(error))),
     };
     let mut ids: Vec<String> = Vec::new();
-    while let Some(entry) = entries.next_entry().await.map_err(|e| WorkStoreError::Io(e.to_string()))? {
-        if entry.file_type().await.map_err(|e| WorkStoreError::Io(e.to_string()))?.is_dir() {
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| WorkStoreError::Io(e.to_string()))?
+    {
+        if entry
+            .file_type()
+            .await
+            .map_err(|e| WorkStoreError::Io(e.to_string()))?
+            .is_dir()
+        {
             ids.push(entry.file_name().to_string_lossy().into_owned());
         }
     }

@@ -115,7 +115,10 @@ mod tests {
             RUST_SERVER_BIN_NAME,
             RUST_STATIC_DIR_NAME,
         ] {
-            assert!(!name.contains(std::path::MAIN_SEPARATOR), "{name} 含路径分隔符");
+            assert!(
+                !name.contains(std::path::MAIN_SEPARATOR),
+                "{name} 含路径分隔符"
+            );
             assert!(!name.contains('/'), "{name} 含 /");
             assert!(!name.is_empty(), "{name} 为空");
         }

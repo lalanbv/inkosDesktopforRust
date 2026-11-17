@@ -27,7 +27,10 @@ use crate::server::books_routes::BooksRuntime;
 const MAX_CANON_CHARS_PER_FILE: usize = 6_000;
 
 fn internal_error(message: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": message })))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": message })),
+    )
 }
 
 fn bad_request(message: &str) -> (StatusCode, Json<serde_json::Value>) {
@@ -43,7 +46,12 @@ async fn read_source_canon(book_dir: &std::path::Path) -> Vec<(String, String)> 
         }
     }
     // roles 目录（新旧两种布局）。
-    for role_dir in ["story/roles/主要角色", "story/roles/次要角色", "story/roles/major", "story/roles/minor"] {
+    for role_dir in [
+        "story/roles/主要角色",
+        "story/roles/次要角色",
+        "story/roles/major",
+        "story/roles/minor",
+    ] {
         let dir = book_dir.join(role_dir);
         let Ok(mut entries) = tokio::fs::read_dir(&dir).await else {
             continue;
@@ -88,14 +96,22 @@ pub async fn extract(
     body: Bytes,
 ) -> impl IntoResponse {
     let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap_or_else(|_| json!({}));
-    let Some(source_book_id) = parsed.get("sourceBookId").and_then(serde_json::Value::as_str) else {
+    let Some(source_book_id) = parsed
+        .get("sourceBookId")
+        .and_then(serde_json::Value::as_str)
+    else {
         return bad_request("sourceBookId is required");
     };
     if source_book_id == book_id {
         return bad_request("Source and target books must differ");
     }
     // 源书与目标书都必须存在。
-    if runtime.state.load_book_config(source_book_id).await.is_err() {
+    if runtime
+        .state
+        .load_book_config(source_book_id)
+        .await
+        .is_err()
+    {
         return bad_request("Source book not found");
     }
     if runtime.state.load_book_config(&book_id).await.is_err() {
@@ -115,15 +131,26 @@ pub async fn extract(
         return bad_request("Source book has no canon files (story_bible / story_frame / roles)");
     }
 
-    let system: String = "你是网文系列的设定编辑。只输出纯 JSON，不要 markdown 围栏或任何解释文字。".to_string();
+    let system: String =
+        "你是网文系列的设定编辑。只输出纯 JSON，不要 markdown 围栏或任何解释文字。".to_string();
     let user: String = build_extraction_prompt(&source_title, &canon);
     let router = (*runtime.effective_router().await).clone();
     let outcome = router
         .chat(
             "inspiration",
             vec![
-                LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.3,
             Some(2_000),
@@ -172,13 +199,22 @@ pub struct ApplyBody {
 }
 
 /// 把 items 渲染为 markdown 分节（独立文件，不改写既有真相文件）。
-pub fn render_backfill_markdown(draft: &SeriesBackfillDraft, items: &[SeriesBackfillItem]) -> String {
+pub fn render_backfill_markdown(
+    draft: &SeriesBackfillDraft,
+    items: &[SeriesBackfillItem],
+) -> String {
     let mut out = format!(
         "# 系列设定回填\n\n来源：《{}》（{}） · 抽取于 {} · 勾选 {} 条\n\n",
-        draft.source_book_id, draft.source_book_id, draft.updated_at, items.len()
+        draft.source_book_id,
+        draft.source_book_id,
+        draft.updated_at,
+        items.len()
     );
     for item in items {
-        out.push_str(&format!("## [{}] {}\n\n{}\n\n", item.category, item.title, item.content));
+        out.push_str(&format!(
+            "## [{}] {}\n\n{}\n\n",
+            item.category, item.title, item.content
+        ));
     }
     out
 }
@@ -249,7 +285,11 @@ pub async fn existing(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
-    let path = runtime.state.book_dir(&book_id).join("story").join("series_backfill.md");
+    let path = runtime
+        .state
+        .book_dir(&book_id)
+        .join("story")
+        .join("series_backfill.md");
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => (StatusCode::OK, Json(json!({ "content": content }))),
         Err(_) => (StatusCode::OK, Json(json!({ "content": null }))),
@@ -275,7 +315,12 @@ pub async fn apply(
         return bad_request("Backfill draft is corrupt; run extract again");
     };
     let items: Vec<SeriesBackfillItem> = match &parsed.item_ids {
-        Some(ids) => draft.items.iter().filter(|item| ids.contains(&item.id)).cloned().collect(),
+        Some(ids) => draft
+            .items
+            .iter()
+            .filter(|item| ids.contains(&item.id))
+            .cloned()
+            .collect(),
         None => draft.items.clone(),
     };
     if items.is_empty() {
@@ -297,7 +342,11 @@ pub async fn apply(
         items.clone()
     };
     let markdown = render_backfill_markdown(&draft, &merged);
-    let path = runtime.state.book_dir(&book_id).join("story").join("series_backfill.md");
+    let path = runtime
+        .state
+        .book_dir(&book_id)
+        .join("story")
+        .join("series_backfill.md");
     // 199 号：原子替换写（回填文件损坏 = 用户可感数据丢失）。
     if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &markdown).await {
         return internal_error(&error.to_string());
@@ -351,10 +400,7 @@ mod tests {
 
     fn app(runtime: BooksRuntime) -> axum::Router {
         axum::Router::new()
-            .route(
-                "/api/v1/books/:id/series-backfill/apply",
-                post(apply),
-            )
+            .route("/api/v1/books/:id/series-backfill/apply", post(apply))
             .route(
                 "/api/v1/books/:id/series-backfill/existing",
                 axum::routing::get(existing),
@@ -412,9 +458,7 @@ mod tests {
 
     #[test]
     fn merge_dedupes_by_category_and_title() {
-        let existing = vec![
-            item("existing-1", "worldview", "灵气体系", "旧描述。"),
-        ];
+        let existing = vec![item("existing-1", "worldview", "灵气体系", "旧描述。")];
         let selected = vec![
             item("it-1", "worldview", "灵气体系", "新描述。"), // 同 (category,title) → 跳过
             item("it-2", "character", "林动", "主角。"),
@@ -428,8 +472,19 @@ mod tests {
     /// 194 号：类别扩到 7 类（faction/item/location 新增），条数指引 8-14。
     #[test]
     fn extraction_prompt_lists_all_categories_and_counts() {
-        let prompt = build_extraction_prompt("源书", &[("story/story_bible.md".into(), "设定正文".into())]);
-        for category in ["worldview", "character", "plot", "style", "faction", "item", "location"] {
+        let prompt = build_extraction_prompt(
+            "源书",
+            &[("story/story_bible.md".into(), "设定正文".into())],
+        );
+        for category in [
+            "worldview",
+            "character",
+            "plot",
+            "style",
+            "faction",
+            "item",
+            "location",
+        ] {
             assert!(prompt.contains(category), "prompt 应包含类别 {category}");
         }
         assert!(prompt.contains("8-14 条"));
@@ -470,19 +525,24 @@ mod tests {
                     .method("POST")
                     .uri("/api/v1/books/b1/series-backfill/apply")
                     .header("content-type", "application/json")
-                    .body(axum::body::Body::from(r#"{"itemIds":["it-1","it-2"],"mode":"merge"}"#))
+                    .body(axum::body::Body::from(
+                        r#"{"itemIds":["it-1","it-2"],"mode":"merge"}"#,
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(parsed["mode"], "merge");
         assert_eq!(parsed["applied"], 2); // 勾选 2 条
         assert_eq!(parsed["total"], 2); // 合并后 2 条（同题去重）
 
-        let content = std::fs::read_to_string(book.join("story").join("series_backfill.md")).unwrap();
+        let content =
+            std::fs::read_to_string(book.join("story").join("series_backfill.md")).unwrap();
         assert!(content.contains("旧描述。")); // 既有条目保留
         assert!(content.contains("## [character] 林动"));
         assert!(!content.contains("新描述。")); // 同题新内容不覆盖旧条目
@@ -505,7 +565,8 @@ mod tests {
         .unwrap();
         std::fs::write(
             book.join("story").join("series_backfill_draft.json"),
-            serde_json::to_string(&draft_with(&[item("it-1", "character", "林动", "主角。")])).unwrap(),
+            serde_json::to_string(&draft_with(&[item("it-1", "character", "林动", "主角。")]))
+                .unwrap(),
         )
         .unwrap();
 
@@ -522,7 +583,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let content = std::fs::read_to_string(book.join("story").join("series_backfill.md")).unwrap();
+        let content =
+            std::fs::read_to_string(book.join("story").join("series_backfill.md")).unwrap();
         assert!(content.contains("## [character] 林动"));
         assert!(!content.contains("旧条目")); // 覆盖：既有条目移除
     }

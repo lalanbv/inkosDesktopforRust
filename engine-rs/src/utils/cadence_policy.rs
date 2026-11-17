@@ -10,7 +10,10 @@ use ts_rs::TS;
 /// 节奏压力等级。对齐 TS `"medium" | "high" | undefined`（undefined 由 Option::None 表达）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"medium\" | \"high\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"medium\" | \"high\"")
+)]
 pub enum CadencePressure {
     #[serde(rename = "medium")]
     Medium,
@@ -84,7 +87,11 @@ mod tests {
     #[test]
     fn high_when_count_above_high_threshold() {
         let r = resolve_cadence_pressure(CadencePressureParams {
-            count: 3, total: 10, high_threshold: 3, medium_threshold: 2, medium_window_floor: 4,
+            count: 3,
+            total: 10,
+            high_threshold: 3,
+            medium_threshold: 2,
+            medium_window_floor: 4,
         });
         assert_eq!(r, Some(CadencePressure::High));
     }
@@ -93,12 +100,20 @@ mod tests {
     fn medium_requires_window_floor() {
         // count 达 medium 但 total 不足 window_floor → None
         let r = resolve_cadence_pressure(CadencePressureParams {
-            count: 2, total: 3, high_threshold: 3, medium_threshold: 2, medium_window_floor: 4,
+            count: 2,
+            total: 3,
+            high_threshold: 3,
+            medium_threshold: 2,
+            medium_window_floor: 4,
         });
         assert_eq!(r, None);
         // total 达标 → Medium
         let r = resolve_cadence_pressure(CadencePressureParams {
-            count: 2, total: 4, high_threshold: 3, medium_threshold: 2, medium_window_floor: 4,
+            count: 2,
+            total: 4,
+            high_threshold: 3,
+            medium_threshold: 2,
+            medium_window_floor: 4,
         });
         assert_eq!(r, Some(CadencePressure::Medium));
     }
@@ -106,14 +121,24 @@ mod tests {
     #[test]
     fn none_when_below_thresholds() {
         let r = resolve_cadence_pressure(CadencePressureParams {
-            count: 1, total: 10, high_threshold: 3, medium_threshold: 2, medium_window_floor: 4,
+            count: 1,
+            total: 10,
+            high_threshold: 3,
+            medium_threshold: 2,
+            medium_window_floor: 4,
         });
         assert_eq!(r, None);
     }
 
     #[test]
     fn pressure_serializes_to_lowercase() {
-        assert_eq!(serde_json::to_string(&CadencePressure::High).unwrap(), "\"high\"");
-        assert_eq!(serde_json::to_string(&CadencePressure::Medium).unwrap(), "\"medium\"");
+        assert_eq!(
+            serde_json::to_string(&CadencePressure::High).unwrap(),
+            "\"high\""
+        );
+        assert_eq!(
+            serde_json::to_string(&CadencePressure::Medium).unwrap(),
+            "\"medium\""
+        );
     }
 }

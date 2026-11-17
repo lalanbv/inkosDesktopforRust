@@ -86,7 +86,8 @@ pub fn build_observer_system_prompt(
 [PHYSICAL_STATE]
 - <character>: <injury/healing/fatigue/power change>")
     } else {
-        format!("{lang_prefix}你是一个事实提取专家。阅读章节正文，提取每一个可观察到的事实变化。
+        format!(
+            "{lang_prefix}你是一个事实提取专家。阅读章节正文，提取每一个可观察到的事实变化。
 
 ## 提取类别
 
@@ -140,7 +141,8 @@ pub fn build_observer_system_prompt(
 - <时间标记、时长>
 
 [身体状态]
-- <角色>: <受伤/恢复/疲劳/战力变化>")
+- <角色>: <受伤/恢复/疲劳/战力变化>"
+        )
     }
 }
 
@@ -225,7 +227,10 @@ mod tests {
         let mut gp = profile_zh();
         gp.language = "en".to_string();
         let out = build_observer_system_prompt(&book(), &gp, None);
-        assert!(out.starts_with("【LANGUAGE OVERRIDE】"), "未传语言时回退 genre");
+        assert!(
+            out.starts_with("【LANGUAGE OVERRIDE】"),
+            "未传语言时回退 genre"
+        );
     }
 
     #[test]
@@ -243,6 +248,9 @@ mod tests {
     #[test]
     fn user_prompt_en() {
         let out = build_observer_user_prompt(7, "Undercurrent", "Body.", Some(WritingLanguage::En));
-        assert_eq!(out, "Extract all facts from Chapter 7 \"Undercurrent\":\n\nBody.");
+        assert_eq!(
+            out,
+            "Extract all facts from Chapter 7 \"Undercurrent\":\n\nBody."
+        );
     }
 }

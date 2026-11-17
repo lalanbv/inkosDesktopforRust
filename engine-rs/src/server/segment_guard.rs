@@ -66,7 +66,9 @@ pub async fn guard(req: Request, next: Next) -> Response {
     // percent-decode 与 axum Path 提取同源（percent-encoding crate）——
     // 中间件校验的解码值与 handler 最终拿到的 Path<String> 一致。
     let decoded = percent_decode_str(raw_seg).decode_utf8();
-    let safe = decoded.as_ref().is_ok_and(|id| crate::utils::is_safe_book_id(id));
+    let safe = decoded
+        .as_ref()
+        .is_ok_and(|id| crate::utils::is_safe_book_id(id));
     if !safe {
         let raw = decoded.as_deref().unwrap_or(raw_seg);
         return invalid_segment(ns, raw);
@@ -112,7 +114,10 @@ mod tests {
             .route("/api/v1/books/create", post(|| async { "create" }))
             .route("/api/v1/books/:id", get(|| async { "book" }))
             .route("/api/v1/books/:id/timeline", get(|| async { "timeline" }))
-            .route("/api/v1/projects/:id/story-graph", get(|| async { "graph" }))
+            .route(
+                "/api/v1/projects/:id/story-graph",
+                get(|| async { "graph" }),
+            )
             .route("/api/v1/health", get(|| async { "health" }))
             .layer(axum::middleware::from_fn(guard))
     }
@@ -123,7 +128,11 @@ mod tests {
     }
 
     fn req(method: Method, uri: &str) -> Request<Body> {
-        Request::builder().method(method).uri(uri).body(Body::empty()).unwrap()
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .unwrap()
     }
 
     #[tokio::test]
@@ -146,22 +155,40 @@ mod tests {
     #[tokio::test]
     async fn safe_ids_and_reserved_routes_pass() {
         // 合法 id（含中文 percent-encoded）放行到假路由。
-        let resp = app().oneshot(req(Method::GET, "/api/v1/books/b1")).await.unwrap();
+        let resp = app()
+            .oneshot(req(Method::GET, "/api/v1/books/b1"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         // 中文 id：URL 编码形态「夜港账本」。
         let resp = app()
-            .oneshot(req(Method::GET, "/api/v1/books/%E5%A4%9C%E6%B8%AF%E8%B4%A6%E6%9C%AC/timeline"))
+            .oneshot(req(
+                Method::GET,
+                "/api/v1/books/%E5%A4%9C%E6%B8%AF%E8%B4%A6%E6%9C%AC/timeline",
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         // 列表、创建保留段、非 books 前缀不受影响。
-        let resp = app().oneshot(req(Method::GET, "/api/v1/books")).await.unwrap();
+        let resp = app()
+            .oneshot(req(Method::GET, "/api/v1/books"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let resp = app().oneshot(req(Method::POST, "/api/v1/books/create")).await.unwrap();
+        let resp = app()
+            .oneshot(req(Method::POST, "/api/v1/books/create"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let resp = app().oneshot(req(Method::GET, "/api/v1/health")).await.unwrap();
+        let resp = app()
+            .oneshot(req(Method::GET, "/api/v1/health"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let resp = app().oneshot(req(Method::GET, "/api/v1/projects/p1/story-graph")).await.unwrap();
+        let resp = app()
+            .oneshot(req(Method::GET, "/api/v1/projects/p1/story-graph"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -171,7 +198,10 @@ mod tests {
         assert_eq!(guarded_segment("/api/v1/books/b1"), Some(("books", "b1")));
         assert_eq!(guarded_segment("/api/v1/books"), None);
         assert_eq!(guarded_segment("/api/v1/books/"), None);
-        assert_eq!(guarded_segment("/api/v1/projects/p1"), Some(("projects", "p1")));
+        assert_eq!(
+            guarded_segment("/api/v1/projects/p1"),
+            Some(("projects", "p1"))
+        );
         assert_eq!(guarded_segment("/api/v1/health"), None);
         assert_eq!(guarded_segment("/health"), None);
     }

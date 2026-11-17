@@ -22,11 +22,7 @@ use crate::server::books_routes::BooksRuntime;
 use crate::server::session_routes::normalize_api_book_id;
 
 fn flat_error(status: StatusCode, message: impl Into<String>) -> Response {
-    (
-        status,
-        Json(json!({ "error": message.into() })),
-    )
-        .into_response()
+    (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
 fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
@@ -110,7 +106,10 @@ pub async fn get_play_run(
             };
             if let Some(entry) = manifest.get(entity_id) {
                 let ready = entry.get("status").and_then(Value::as_str) == Some("ready");
-                let file = entry.get("file").and_then(Value::as_str).unwrap_or_default();
+                let file = entry
+                    .get("file")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if ready && !file.is_empty() {
                     if let Some(obj) = entity.as_object_mut() {
                         obj.insert("imageUrl".into(), json!(image_url(file)));
@@ -208,7 +207,10 @@ pub async fn post_play_generate_image(
         (Err(response), _) | (_, Err(response)) => return *response,
     };
     let payload: Value = serde_json::from_slice(&body).unwrap_or(json!({}));
-    let target = payload.get("target").and_then(Value::as_str).unwrap_or("entity");
+    let target = payload
+        .get("target")
+        .and_then(Value::as_str)
+        .unwrap_or("entity");
     let Ok(run_dir) = play::run_dir(root, &world_id, &run_id) else {
         return api_error(
             StatusCode::BAD_REQUEST,
@@ -278,7 +280,10 @@ pub async fn post_play_generate_image(
             })
             .cloned();
         let Some(entity) = entity else {
-            return flat_error(StatusCode::NOT_FOUND, format!("entity not found: {entity_id}"));
+            return flat_error(
+                StatusCode::NOT_FOUND,
+                format!("entity not found: {entity_id}"),
+            );
         };
         let prompt = play::build_play_entity_image_prompt(
             entity.get("type").and_then(Value::as_str).unwrap_or(""),
@@ -305,12 +310,24 @@ pub async fn post_play_generate_image(
                     if let Err(message) = tokio::fs::create_dir_all(&dir).await {
                         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, message.to_string());
                     }
-                    if let Err(message) = crate::utils::atomic_file_set::write_file_atomic_bytes(&dir.join(&file), &image.bytes).await {
+                    if let Err(message) = crate::utils::atomic_file_set::write_file_atomic_bytes(
+                        &dir.join(&file),
+                        &image.bytes,
+                    )
+                    .await
+                    {
                         return flat_error(StatusCode::INTERNAL_SERVER_ERROR, message.to_string());
                     }
                     let entry = json!({ "status": "ready", "file": file });
                     let _ = play::set_play_image_entry(&run_dir, &_key, &entry).await;
-                    let url = image_url_for(&world_id, &run_id, entry.get("file").and_then(Value::as_str).unwrap_or_default());
+                    let url = image_url_for(
+                        &world_id,
+                        &run_id,
+                        entry
+                            .get("file")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    );
                     (
                         StatusCode::OK,
                         Json(json!({ "key": _key, "ok": true, "status": "ready", "file": entry["file"], "url": url })),

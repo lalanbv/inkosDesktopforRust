@@ -31,7 +31,14 @@ pub trait PlayActionInterpreter: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait PlayWorldMutator: Send + Sync {
-    async fn propose_mutation(&self, turn: i64, input: &str, action: &Value, context: &str, language: &str) -> Value;
+    async fn propose_mutation(
+        &self,
+        turn: i64,
+        input: &str,
+        action: &Value,
+        context: &str,
+        language: &str,
+    ) -> Value;
 }
 
 #[async_trait::async_trait]
@@ -126,7 +133,10 @@ async fn chat_with_retry(
 ) -> Result<String, String> {
     let mut last_err = String::new();
     for attempt in 0..=2 {
-        match router.chat(agent, messages.clone(), temperature, Some(max_tokens)).await {
+        match router
+            .chat(agent, messages.clone(), temperature, Some(max_tokens))
+            .await
+        {
             Ok(outcome) => return Ok(outcome.content),
             Err(error) => {
                 let message = error.to_string();
@@ -134,7 +144,8 @@ async fn chat_with_retry(
                 if attempt >= 2 || !is_retryable_error(&message) {
                     return Err(message);
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(400 * (attempt as u64 + 1))).await;
+                tokio::time::sleep(std::time::Duration::from_millis(400 * (attempt as u64 + 1)))
+                    .await;
             }
         }
     }
@@ -149,8 +160,18 @@ impl PlayActionInterpreter for PlayAgents<'_> {
             self.router,
             "play-action-interpreter",
             vec![
-                LLMMessage { role: LLMRole::System, content: action_interpreter_system_prompt(language), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: action_interpreter_user_prompt(input, scene_brief, language), tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: action_interpreter_system_prompt(language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: action_interpreter_user_prompt(input, scene_brief, language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.15,
             1024,
@@ -206,13 +227,30 @@ impl PlayAgents<'_> {
 
 #[async_trait::async_trait]
 impl PlayWorldMutator for PlayAgents<'_> {
-    async fn propose_mutation(&self, turn: i64, input: &str, action: &Value, context: &str, language: &str) -> Value {
+    async fn propose_mutation(
+        &self,
+        turn: i64,
+        input: &str,
+        action: &Value,
+        context: &str,
+        language: &str,
+    ) -> Value {
         let raw = chat_with_retry(
             self.router,
             "play-world-mutator",
             vec![
-                LLMMessage { role: LLMRole::System, content: self.mutator_system_prompt(language).await, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: world_mutator_user_prompt(turn, input, action, context, language), tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: self.mutator_system_prompt(language).await,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: world_mutator_user_prompt(turn, input, action, context, language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.25,
             4096,
@@ -260,10 +298,28 @@ impl PlaySceneRenderer for PlayAgents<'_> {
         language: &str,
     ) -> RenderedScene {
         let system = self.renderer_system_prompt(mode, language).await;
-        let user = scene_renderer_user_prompt(input, action, mutation_summary, state_brief, world_premise, replay_context, language);
+        let user = scene_renderer_user_prompt(
+            input,
+            action,
+            mutation_summary,
+            state_brief,
+            world_premise,
+            replay_context,
+            language,
+        );
         let mut messages = vec![
-            LLMMessage { role: LLMRole::System, content: system, tool_calls: None, tool_call_id: None },
-            LLMMessage { role: LLMRole::User, content: user, tool_calls: None, tool_call_id: None },
+            LLMMessage {
+                role: LLMRole::System,
+                content: system,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            LLMMessage {
+                role: LLMRole::User,
+                content: user,
+                tool_calls: None,
+                tool_call_id: None,
+            },
         ];
         // 渲染永不抛错：瞬时重试 + 一次严格 JSON 追问 + prose 兜底。
         let mut last_content = String::new();
@@ -285,7 +341,10 @@ impl PlaySceneRenderer for PlayAgents<'_> {
             }
             last_content = content.clone();
             if let Some(parsed) = parse_json_value(&content) {
-                let scene_text = parsed.get("sceneText").and_then(Value::as_str).unwrap_or_default();
+                let scene_text = parsed
+                    .get("sceneText")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if !scene_text.is_empty() {
                     let suggested: Vec<String> = parsed
                         .get("suggestedActions")
@@ -298,10 +357,18 @@ impl PlaySceneRenderer for PlayAgents<'_> {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    return RenderedScene { scene_text: scene_text.to_string(), suggested_actions: suggested };
+                    return RenderedScene {
+                        scene_text: scene_text.to_string(),
+                        suggested_actions: suggested,
+                    };
                 }
             }
-            messages.push(LLMMessage { role: LLMRole::Assistant, content, tool_calls: None, tool_call_id: None });
+            messages.push(LLMMessage {
+                role: LLMRole::Assistant,
+                content,
+                tool_calls: None,
+                tool_call_id: None,
+            });
             messages.push(LLMMessage {
                 role: LLMRole::User,
                 content: if language == "en" {
@@ -350,17 +417,38 @@ impl PlaySceneReconciler for PlayAgents<'_> {
         world_premise: &str,
         language: &str,
     ) -> Value {
-        let action_kind = action.get("actionKind").and_then(Value::as_str).unwrap_or("do");
+        let action_kind = action
+            .get("actionKind")
+            .and_then(Value::as_str)
+            .unwrap_or("do");
         let event_id = format!("evt-{turn}");
         // fail-open：任何失败（LLM/解析/schema）→ 空补充（emptyReconciliation）。
         let content = chat_with_retry(
             self.router,
             "play-scene-reconciler",
             vec![
-                LLMMessage { role: LLMRole::System, content: scene_reconciler_system_prompt(language), tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: scene_reconciler_user_prompt(
-                    turn, action_kind, input, mutation, scene_text, context, state_brief, world_premise, language,
-                ), tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: scene_reconciler_system_prompt(language),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: scene_reconciler_user_prompt(
+                        turn,
+                        action_kind,
+                        input,
+                        mutation,
+                        scene_text,
+                        context,
+                        state_brief,
+                        world_premise,
+                        language,
+                    ),
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.1,
             2048,
@@ -372,7 +460,10 @@ impl PlaySceneReconciler for PlayAgents<'_> {
             // PlayMutationSchema.parse + eventId/turn/actionKind 补齐。
             let mut normalized = crate::play_parser::normalize_play_mutation(&raw);
             if let Some(obj) = normalized.as_object_mut() {
-                let has_event_id = obj.get("eventId").and_then(Value::as_str).is_some_and(|v| !v.is_empty());
+                let has_event_id = obj
+                    .get("eventId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| !v.is_empty());
                 if !has_event_id {
                     obj.insert("eventId".into(), json!(event_id));
                 }
@@ -380,7 +471,10 @@ impl PlaySceneReconciler for PlayAgents<'_> {
                 if !has_turn {
                     obj.insert("turn".into(), json!(turn));
                 }
-                let has_kind = obj.get("actionKind").and_then(Value::as_str).is_some_and(|v| !v.is_empty());
+                let has_kind = obj
+                    .get("actionKind")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| !v.is_empty());
                 if !has_kind {
                     obj.insert("actionKind".into(), json!(action_kind));
                 }
@@ -613,7 +707,13 @@ fn world_mutator_system_prompt(language: &str) -> String {
     .join("\n")
 }
 
-fn world_mutator_user_prompt(turn: i64, input: &str, action: &Value, context: &str, language: &str) -> String {
+fn world_mutator_user_prompt(
+    turn: i64,
+    input: &str,
+    action: &Value,
+    context: &str,
+    language: &str,
+) -> String {
     if language == "en" {
         return [
             format!("turn: {turn}"),
@@ -809,7 +909,10 @@ impl PlayRunner<'_> {
         let run_dir = crate::play::run_dir(self.project_root, &self.world_id, &self.run_id)?;
         let mut db = open_play_graph_db(&run_dir)?;
         let existing = db.snapshot();
-        let has_content = existing.get("entities").and_then(Value::as_array).is_some_and(|a| !a.is_empty())
+        let has_content = existing
+            .get("entities")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty())
             || existing
                 .get("stateSlots")
                 .and_then(Value::as_array)
@@ -837,9 +940,14 @@ impl PlayRunner<'_> {
             "secondaryActions": [],
         });
         let world_context = render_world_context(world.as_ref(), &language);
-        let context = self.build_context_brief(scene_text, &world, &language).await;
-        let opening_input = build_opening_seed_input(scene_text, suggested_actions, &world_context, &language);
-        let mut mutation = mutator.propose_mutation(0, &opening_input, &action, &context, &language).await;
+        let context = self
+            .build_context_brief(scene_text, &world, &language)
+            .await;
+        let opening_input =
+            build_opening_seed_input(scene_text, suggested_actions, &world_context, &language);
+        let mut mutation = mutator
+            .propose_mutation(0, &opening_input, &action, &context, &language)
+            .await;
         if let Some(obj) = mutation.as_object_mut() {
             obj.insert("eventId".into(), json!("evt-0"));
             obj.insert("turn".into(), json!(0));
@@ -908,9 +1016,13 @@ impl PlayRunner<'_> {
         } else {
             scene_brief.clone()
         };
-        let action = interpreter.interpret(raw_input, &scene_brief_or_default, &language).await;
+        let action = interpreter
+            .interpret(raw_input, &scene_brief_or_default, &language)
+            .await;
         let world_context = render_world_context(world.as_ref(), &language);
-        let context = self.build_context_brief(&scene_brief, &world, &language).await;
+        let context = self
+            .build_context_brief(&scene_brief, &world, &language)
+            .await;
         let mutation = mutator
             .propose_mutation(turn, raw_input, &action, &context, &language)
             .await;
@@ -925,11 +1037,23 @@ impl PlayRunner<'_> {
             .unwrap_or_default()
             .to_string();
         let render = renderer
-            .render(raw_input, &action, &mutation_summary, &state_brief, &mode, &world_context, replay_context, &language)
+            .render(
+                raw_input,
+                &action,
+                &mutation_summary,
+                &state_brief,
+                &mode,
+                &world_context,
+                replay_context,
+                &language,
+            )
             .await;
 
         // reconcile：非 blocked 回合做正文↔图谱对账；空补充不动原 mutation。
-        let blocked = mutation.get("blocked").and_then(Value::as_bool).unwrap_or(false);
+        let blocked = mutation
+            .get("blocked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let mut final_mutation = mutation.clone();
         let mut final_state_brief = state_brief.clone();
         if let Some(reconciler) = reconciler.filter(|_| !blocked) {
@@ -966,14 +1090,26 @@ impl PlayRunner<'_> {
                 before_graph,
             )
             .await?;
-            crate::play::save_checkpoint(self.project_root, &self.world_id, &self.run_id, &checkpoint).await?;
+            crate::play::save_checkpoint(
+                self.project_root,
+                &self.world_id,
+                &self.run_id,
+                &checkpoint,
+            )
+            .await?;
         }
 
         // 提交：事件 + 图 + 投影 + 状态 + transcript。
         let mut db = open_play_graph_db(&run_dir)?;
         let applied = apply_play_mutation(&mut db, &final_mutation, raw_input)?;
         db.flush()?;
-        crate::play::append_event(self.project_root, &self.world_id, &self.run_id, &applied.event).await?;
+        crate::play::append_event(
+            self.project_root,
+            &self.world_id,
+            &self.run_id,
+            &applied.event,
+        )
+        .await?;
         crate::play::write_projection(
             self.project_root,
             &self.world_id,
@@ -1006,7 +1142,14 @@ impl PlayRunner<'_> {
             &format!("{}\n", render.scene_text),
         )
         .await?;
-        crate::play::append_transcript_turn(self.project_root, &self.world_id, &self.run_id, "user", raw_input).await?;
+        crate::play::append_transcript_turn(
+            self.project_root,
+            &self.world_id,
+            &self.run_id,
+            "user",
+            raw_input,
+        )
+        .await?;
         crate::play::append_transcript_turn(
             self.project_root,
             &self.world_id,
@@ -1034,7 +1177,8 @@ impl PlayRunner<'_> {
         reconciler: Option<&dyn PlaySceneReconciler>,
         input: Option<&str>,
     ) -> Result<PlayReplayOutcome, String> {
-        let events = crate::play::read_events(self.project_root, &self.world_id, &self.run_id).await;
+        let events =
+            crate::play::read_events(self.project_root, &self.world_id, &self.run_id).await;
         let Some(last) = events.last() else {
             return Err("No Play turn to regenerate.".to_string());
         };
@@ -1085,7 +1229,13 @@ impl PlayRunner<'_> {
         .ok_or_else(|| {
             format!("Missing checkpoint before turn {last_turn}; cannot regenerate safely.")
         })?;
-        crate::play::restore_run_snapshot(self.project_root, &self.world_id, &self.run_id, &checkpoint).await?;
+        crate::play::restore_run_snapshot(
+            self.project_root,
+            &self.world_id,
+            &self.run_id,
+            &checkpoint,
+        )
+        .await?;
 
         let language = crate::play::load_world(self.project_root, &self.world_id)
             .await
@@ -1143,12 +1293,26 @@ impl PlayRunner<'_> {
         turn: i64,
         variant_id: &str,
     ) -> Result<PlayVariantRestoreOutcome, String> {
-        let Some(snapshot) =
-            crate::play::load_variant(self.project_root, &self.world_id, &self.run_id, turn, variant_id).await
+        let Some(snapshot) = crate::play::load_variant(
+            self.project_root,
+            &self.world_id,
+            &self.run_id,
+            turn,
+            variant_id,
+        )
+        .await
         else {
-            return Err(format!("Play variant not found: turn {turn} / {variant_id}"));
+            return Err(format!(
+                "Play variant not found: turn {turn} / {variant_id}"
+            ));
         };
-        crate::play::restore_run_snapshot(self.project_root, &self.world_id, &self.run_id, &snapshot).await?;
+        crate::play::restore_run_snapshot(
+            self.project_root,
+            &self.world_id,
+            &self.run_id,
+            &snapshot,
+        )
+        .await?;
         Ok(PlayVariantRestoreOutcome {
             turn,
             variant_id: variant_id.to_string(),
@@ -1156,7 +1320,12 @@ impl PlayRunner<'_> {
         })
     }
 
-    async fn build_context_brief(&self, scene_brief: &str, world: &Option<Value>, language: &str) -> String {
+    async fn build_context_brief(
+        &self,
+        scene_brief: &str,
+        world: &Option<Value>,
+        language: &str,
+    ) -> String {
         let is_en = language == "en";
         let state_brief = crate::play::read_projection(
             self.project_root,
@@ -1168,9 +1337,11 @@ impl PlayRunner<'_> {
         .unwrap_or_default();
         let world_context = render_world_context(world.as_ref(), language);
         let run_dir = crate::play::run_dir(self.project_root, &self.world_id, &self.run_id);
-        let roster = run_dir
-            .ok()
-            .and_then(|dir| crate::play::play_graph_snapshot(&dir).get("entities").cloned());
+        let roster = run_dir.ok().and_then(|dir| {
+            crate::play::play_graph_snapshot(&dir)
+                .get("entities")
+                .cloned()
+        });
         let entity_roster = render_entity_roster(
             roster
                 .as_ref()
@@ -1179,8 +1350,16 @@ impl PlayRunner<'_> {
                 .unwrap_or_default(),
             language,
         );
-        let scene_label = if is_en { "Current scene:" } else { "当前场景：" };
-        let state_label = if is_en { "Current state:" } else { "当前状态：" };
+        let scene_label = if is_en {
+            "Current scene:"
+        } else {
+            "当前场景："
+        };
+        let state_label = if is_en {
+            "Current state:"
+        } else {
+            "当前状态："
+        };
         let mut blocks: Vec<String> = Vec::new();
         if !world_context.is_empty() {
             blocks.push(world_context);
@@ -1233,10 +1412,8 @@ fn merge_by_id(items: Vec<Value>) -> Vec<Value> {
 fn normalize_summary_for_dedupe(value: &str) -> String {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(
-            r#"[\s，,。.!！?？；;：:、"'“”‘’「」『』（）()\[\]{}《》<>—\-…]+"#,
-        )
-        .unwrap()
+        regex::Regex::new(r#"[\s，,。.!！?？；;：:、"'“”‘’「」『』（）()\[\]{}《》<>—\-…]+"#)
+            .unwrap()
     });
     re.replace_all(value, "").to_lowercase()
 }
@@ -1282,7 +1459,10 @@ pub fn is_empty_mutation_supplement(mutation: &Value) -> bool {
             .and_then(Value::as_str)
             .map(|s| s.trim().is_empty())
             .unwrap_or(true)
-        && !mutation.get("blocked").and_then(Value::as_bool).unwrap_or(false)
+        && !mutation
+            .get("blocked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 /// `mergePlayMutations`：base 骨架 + supplement 合成（upsert 按 id 去重后写胜；
@@ -1307,8 +1487,13 @@ pub fn merge_play_mutations(base: &Value, supplement: &Value) -> Value {
         items
     };
     let summary = merge_mutation_summary(
-        base.get("summary").and_then(Value::as_str).unwrap_or_default(),
-        supplement.get("summary").and_then(Value::as_str).unwrap_or_default(),
+        base.get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        supplement
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
     );
     let mut merged = base.clone();
     if let Some(obj) = merged.as_object_mut() {
@@ -1336,7 +1521,12 @@ pub fn merge_play_mutations(base: &Value, supplement: &Value) -> Value {
             .get("timeAdvance")
             .filter(|v| !v.is_null())
             .cloned()
-            .or_else(|| supplement.get("timeAdvance").filter(|v| !v.is_null()).cloned());
+            .or_else(|| {
+                supplement
+                    .get("timeAdvance")
+                    .filter(|v| !v.is_null())
+                    .cloned()
+            });
         obj.insert("timeAdvance".into(), time_advance.unwrap_or(Value::Null));
         obj.insert("notes".into(), json!(concat("/notes")));
     }
@@ -1344,7 +1534,11 @@ pub fn merge_play_mutations(base: &Value, supplement: &Value) -> Value {
 }
 
 /// `buildReplayContext`（双语逐字）：重写非新回合 + 时间权威 + 禁新增事实。
-pub fn build_replay_context(original_input: &str, replacement_input: Option<&str>, language: &str) -> String {
+pub fn build_replay_context(
+    original_input: &str,
+    replacement_input: Option<&str>,
+    language: &str,
+) -> String {
     let replacement = replacement_input.map(str::trim).filter(|s| !s.is_empty());
     let differs = replacement.is_some_and(|value| value != original_input);
     if language == "en" {
@@ -1401,7 +1595,11 @@ fn render_world_context(world: Option<&Value>, language: &str) -> String {
     };
     let mut blocks = Vec::new();
     if let Some(premise) = field("premise") {
-        let label = if is_en { "World setting" } else { "世界设定" };
+        let label = if is_en {
+            "World setting"
+        } else {
+            "世界设定"
+        };
         blocks.push(format!("{label}:\n{premise}"));
     }
     if let Some(contract) = field("worldContract") {
@@ -1480,16 +1678,31 @@ fn render_entity_roster(entities: &[Value], language: &str) -> String {
     let mut lines = vec![header.to_string()];
     for entity in entities.iter().take(40) {
         let id = entity.get("id").and_then(Value::as_str).unwrap_or_default();
-        let entity_type = entity.get("type").and_then(Value::as_str).unwrap_or_default();
-        let label = entity.get("label").and_then(Value::as_str).unwrap_or_default();
-        let summary = entity.get("summary").and_then(Value::as_str).unwrap_or_default();
-        let status = entity.get("status").and_then(Value::as_str).unwrap_or_default();
+        let entity_type = entity
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let label = entity
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let summary = entity
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let status = entity
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let mut detail = summary.to_string();
         if !status.is_empty() {
             if !detail.is_empty() {
                 detail.push_str(if is_en { "; " } else { "；" });
             }
-            detail.push_str(&format!("{}: {status}", if is_en { "status" } else { "状态" }));
+            detail.push_str(&format!(
+                "{}: {status}",
+                if is_en { "status" } else { "状态" }
+            ));
         }
         let compact: String = detail.split_whitespace().collect::<Vec<_>>().join(" ");
         let clamped = if compact.chars().count() > 120 {
@@ -1512,8 +1725,14 @@ pub fn render_state_brief(action: &Value, mutation: &Value) -> String {
         String::new(),
         format!(
             "- action: {} {}",
-            action.get("actionKind").and_then(Value::as_str).unwrap_or_default(),
-            action.get("intent").and_then(Value::as_str).unwrap_or_default()
+            action
+                .get("actionKind")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            action
+                .get("intent")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
         )
         .trim()
         .to_string(),
@@ -1527,7 +1746,9 @@ pub fn render_state_brief(action: &Value, mutation: &Value) -> String {
                 .unwrap_or_default()
         ),
     ];
-    let entities = mutation.pointer("/entities/upsert").and_then(Value::as_array);
+    let entities = mutation
+        .pointer("/entities/upsert")
+        .and_then(Value::as_array);
     if let Some(entities) = entities.filter(|a| !a.is_empty()) {
         lines.push(String::new());
         lines.push("## Entities".to_string());
@@ -1535,8 +1756,14 @@ pub fn render_state_brief(action: &Value, mutation: &Value) -> String {
             lines.push(format!(
                 "- {} [{}]: {}{}",
                 entity.get("id").and_then(Value::as_str).unwrap_or_default(),
-                entity.get("type").and_then(Value::as_str).unwrap_or_default(),
-                entity.get("label").and_then(Value::as_str).unwrap_or_default(),
+                entity
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                entity
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
                 entity
                     .get("summary")
                     .and_then(Value::as_str)
@@ -1560,14 +1787,18 @@ pub fn render_state_brief(action: &Value, mutation: &Value) -> String {
                 .unwrap_or_default();
             lines.push(format!(
                 "- {} -[{}{}]-> {}",
-                edge.get("fromId").and_then(Value::as_str).unwrap_or_default(),
+                edge.get("fromId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
                 edge.get("type").and_then(Value::as_str).unwrap_or_default(),
                 role,
                 edge.get("toId").and_then(Value::as_str).unwrap_or_default()
             ));
         }
     }
-    let slots = mutation.pointer("/stateSlots/upsert").and_then(Value::as_array);
+    let slots = mutation
+        .pointer("/stateSlots/upsert")
+        .and_then(Value::as_array);
     if let Some(slots) = slots.filter(|a| !a.is_empty()) {
         lines.push(String::new());
         lines.push("## State Slots".to_string());
@@ -1575,15 +1806,24 @@ pub fn render_state_brief(action: &Value, mutation: &Value) -> String {
             lines.push(format!(
                 "- {}: {}",
                 slot.get("id").and_then(Value::as_str).unwrap_or_default(),
-                serde_json::to_string(slot.get("value").unwrap_or(&Value::Null)).unwrap_or_default()
+                serde_json::to_string(slot.get("value").unwrap_or(&Value::Null))
+                    .unwrap_or_default()
             ));
         }
     }
     if let Some(time_advance) = mutation.get("timeAdvance").filter(|v| v.is_object()) {
         lines.push(String::new());
         lines.push("## Time".to_string());
-        for (key, label) in [("elapsed", "elapsed"), ("anchor", "anchor"), ("rationale", "rationale")] {
-            if let Some(value) = time_advance.get(key).and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        for (key, label) in [
+            ("elapsed", "elapsed"),
+            ("anchor", "anchor"),
+            ("rationale", "rationale"),
+        ] {
+            if let Some(value) = time_advance
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
                 lines.push(format!("- {label}: {value}"));
             }
         }
@@ -1598,15 +1838,23 @@ pub fn render_state_brief(action: &Value, mutation: &Value) -> String {
             }
         }
     }
-    let transitions = mutation.pointer("/evidence/transitions").and_then(Value::as_array);
+    let transitions = mutation
+        .pointer("/evidence/transitions")
+        .and_then(Value::as_array);
     if let Some(transitions) = transitions.filter(|a| !a.is_empty()) {
         lines.push(String::new());
         lines.push("## Evidence".to_string());
         for transition in transitions {
             lines.push(format!(
                 "- {}: {}{}",
-                transition.get("entityId").and_then(Value::as_str).unwrap_or_default(),
-                transition.get("to").and_then(Value::as_str).unwrap_or_default(),
+                transition
+                    .get("entityId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                transition
+                    .get("to")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
                 transition
                     .get("reason")
                     .and_then(Value::as_str)
@@ -1644,12 +1892,24 @@ mod tests {
         assert_eq!(merge_mutation_summary("左", ""), "左");
         assert_eq!(merge_mutation_summary("", "右"), "右");
         // 归一后相等（标点/空白差异）取左。
-        assert_eq!(merge_mutation_summary("拿到凶器。", "拿到凶器"), "拿到凶器。");
+        assert_eq!(
+            merge_mutation_summary("拿到凶器。", "拿到凶器"),
+            "拿到凶器。"
+        );
         // 互含取宽侧。
-        assert_eq!(merge_mutation_summary("拿到凶器", "拿到凶器，并离开房间"), "拿到凶器，并离开房间");
-        assert_eq!(merge_mutation_summary("拿到凶器，并离开房间", "拿到凶器"), "拿到凶器，并离开房间");
+        assert_eq!(
+            merge_mutation_summary("拿到凶器", "拿到凶器，并离开房间"),
+            "拿到凶器，并离开房间"
+        );
+        assert_eq!(
+            merge_mutation_summary("拿到凶器，并离开房间", "拿到凶器"),
+            "拿到凶器，并离开房间"
+        );
         // 无关 → 全角分号拼接。
-        assert_eq!(merge_mutation_summary("拿到凶器", "离开房间"), "拿到凶器；离开房间");
+        assert_eq!(
+            merge_mutation_summary("拿到凶器", "离开房间"),
+            "拿到凶器；离开房间"
+        );
     }
 
     #[test]
@@ -1667,17 +1927,43 @@ mod tests {
         });
         let merged = merge_play_mutations(&base, &supplement);
         // 同 id 后写胜 + 新 id 追加。
-        let entities = merged.pointer("/entities/upsert").and_then(Value::as_array).unwrap();
+        let entities = merged
+            .pointer("/entities/upsert")
+            .and_then(Value::as_array)
+            .unwrap();
         assert_eq!(entities.len(), 2, "{merged}");
         assert_eq!(entities[0]["id"], "item-a");
         assert_eq!(entities[0]["label"], "凶器（补）");
         assert_eq!(entities[1]["id"], "item-b");
         // edges upsert 合入 + expire 拼接。
-        assert_eq!(merged.pointer("/edges/upsert").and_then(Value::as_array).unwrap().len(), 1);
-        assert_eq!(merged.pointer("/edges/expire").and_then(Value::as_array).unwrap(), &vec![json!("edge-old")]);
+        assert_eq!(
+            merged
+                .pointer("/edges/upsert")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            merged
+                .pointer("/edges/expire")
+                .and_then(Value::as_array)
+                .unwrap(),
+            &vec![json!("edge-old")]
+        );
         // notes 拼接 + timeAdvance base 优先（base 无 → 取 supplement）。
-        assert_eq!(merged.pointer("/notes").and_then(Value::as_array).unwrap().len(), 1);
-        assert_eq!(merged.pointer("/timeAdvance/elapsed"), Some(&json!("十分钟")));
+        assert_eq!(
+            merged
+                .pointer("/notes")
+                .and_then(Value::as_array)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            merged.pointer("/timeAdvance/elapsed"),
+            Some(&json!("十分钟"))
+        );
         // summary 归一相等取左。
         assert_eq!(merged.get("summary"), Some(&json!("拿到凶器")));
 
@@ -1687,7 +1973,10 @@ mod tests {
             obj.insert("timeAdvance".into(), json!({ "elapsed": "五分钟", "anchor": "黄昏", "rationale": "", "synchronized": [] }));
         }
         let merged2 = merge_play_mutations(&base_with_time, &supplement);
-        assert_eq!(merged2.pointer("/timeAdvance/elapsed"), Some(&json!("五分钟")));
+        assert_eq!(
+            merged2.pointer("/timeAdvance/elapsed"),
+            Some(&json!("五分钟"))
+        );
 
         // 空补充 → 原样返回 base。
         let empty = empty_reconciliation(1, "do");
@@ -1697,7 +1986,9 @@ mod tests {
 
     #[test]
     fn empty_supplement_gate() {
-        assert!(is_empty_mutation_supplement(&empty_reconciliation(3, "look")));
+        assert!(is_empty_mutation_supplement(&empty_reconciliation(
+            3, "look"
+        )));
         let mut with_summary = empty_reconciliation(3, "look");
         if let Some(obj) = with_summary.as_object_mut() {
             obj.insert("summary".into(), json!("有补充"));
@@ -1721,16 +2012,28 @@ mod tests {
         assert!(interpreter_system.contains("Output strict JSON, no explanation."));
         let interpreter_user =
             action_interpreter_user_prompt("I look around", "A rainy hall.", "en");
-        assert!(interpreter_user.contains("Current scene:\nA rainy hall."), "{interpreter_user}");
-        assert!(interpreter_user.contains("Player input:\nI look around"), "{interpreter_user}");
-        assert!(interpreter_user.contains("Output fields: actionKind,"), "{interpreter_user}");
+        assert!(
+            interpreter_user.contains("Current scene:\nA rainy hall."),
+            "{interpreter_user}"
+        );
+        assert!(
+            interpreter_user.contains("Player input:\nI look around"),
+            "{interpreter_user}"
+        );
+        assert!(
+            interpreter_user.contains("Output fields: actionKind,"),
+            "{interpreter_user}"
+        );
 
         // mutator：en system 关键行 + JSON 范例（保留 actor_player）。
         let mutator_system = world_mutator_system_prompt("en");
         assert!(mutator_system.starts_with("You are an interactive-fiction world-state drafter."));
         assert!(mutator_system.contains("Time is a synchronization axis, not a fixed tick."));
         assert!(mutator_system.contains("sample clue"), "范例 JSON 应在内");
-        assert!(mutator_system.contains("reserved player id actor_player") || mutator_system.contains("actor_player"));
+        assert!(
+            mutator_system.contains("reserved player id actor_player")
+                || mutator_system.contains("actor_player")
+        );
         let mutator_user = world_mutator_user_prompt(
             2,
             "I search the desk",
@@ -1738,18 +2041,38 @@ mod tests {
             "context here",
             "en",
         );
-        assert!(mutator_user.contains("Player's words:\nI search the desk"), "{mutator_user}");
-        assert!(mutator_user.contains("Action interpretation:"), "{mutator_user}");
-        assert!(mutator_user.contains("Current context:\ncontext here"), "{mutator_user}");
-        assert!(mutator_user.contains("Requirement: use eventId evt-2;"), "{mutator_user}");
+        assert!(
+            mutator_user.contains("Player's words:\nI search the desk"),
+            "{mutator_user}"
+        );
+        assert!(
+            mutator_user.contains("Action interpretation:"),
+            "{mutator_user}"
+        );
+        assert!(
+            mutator_user.contains("Current context:\ncontext here"),
+            "{mutator_user}"
+        );
+        assert!(
+            mutator_user.contains("Requirement: use eventId evt-2;"),
+            "{mutator_user}"
+        );
 
         // renderer：en system 关键行（含生死例句）+ user 标签 + Replay constraints。
         let renderer_system = scene_renderer_system_prompt("open", "en");
-        assert!(renderer_system.starts_with("You are an interactive-fiction scene-response author."));
-        assert!(renderer_system.contains("The zombie lunges"), "生死例句应在内");
+        assert!(
+            renderer_system.starts_with("You are an interactive-fiction scene-response author.")
+        );
+        assert!(
+            renderer_system.contains("The zombie lunges"),
+            "生死例句应在内"
+        );
         assert!(renderer_system.contains("Output strict JSON: sceneText, suggestedActions."));
         let guided = scene_renderer_system_prompt("guided", "en");
-        assert!(guided.contains("ONLY at a genuine decision point"), "{guided}");
+        assert!(
+            guided.contains("ONLY at a genuine decision point"),
+            "{guided}"
+        );
         let renderer_user = scene_renderer_user_prompt(
             "I open the door",
             &json!({ "actionKind": "do" }),
@@ -1759,10 +2082,22 @@ mod tests {
             Some("This is a regeneration of the previous turn."),
             "en",
         );
-        assert!(renderer_user.contains("World setting (always obey):\nA rainy night house."), "{renderer_user}");
-        assert!(renderer_user.contains("Player's words:\nI open the door"), "{renderer_user}");
-        assert!(renderer_user.contains("Applied changes this turn:\nA key is found."), "{renderer_user}");
-        assert!(renderer_user.contains("Current state summary:"), "{renderer_user}");
+        assert!(
+            renderer_user.contains("World setting (always obey):\nA rainy night house."),
+            "{renderer_user}"
+        );
+        assert!(
+            renderer_user.contains("Player's words:\nI open the door"),
+            "{renderer_user}"
+        );
+        assert!(
+            renderer_user.contains("Applied changes this turn:\nA key is found."),
+            "{renderer_user}"
+        );
+        assert!(
+            renderer_user.contains("Current state summary:"),
+            "{renderer_user}"
+        );
         assert!(
             renderer_user.contains("Replay constraints:\nThis is a regeneration"),
             "{renderer_user}"
@@ -1770,7 +2105,16 @@ mod tests {
 
         // zh 分支维持 73 号形态（不受 en 分支影响）。
         assert!(action_interpreter_system_prompt("zh").contains("动作理解器"));
-        assert!(scene_renderer_user_prompt("输入", &json!({}), "摘要", "状态", "前提", Some("约束"), "zh").contains("重写约束："));
+        assert!(scene_renderer_user_prompt(
+            "输入",
+            &json!({}),
+            "摘要",
+            "状态",
+            "前提",
+            Some("约束"),
+            "zh"
+        )
+        .contains("重写约束："));
     }
 
     #[test]
@@ -1782,16 +2126,30 @@ mod tests {
             "visualContract": "Cold lantern light.",
         });
         let en_context = render_world_context(Some(&world), "en");
-        assert!(en_context.contains("World setting:\nA manor on a snowy night."), "{en_context}");
-        assert!(en_context.contains("World contract (high priority; obey before genre defaults):"), "{en_context}");
-        assert!(en_context.contains("Visual contract (for scene and image consistency):"), "{en_context}");
+        assert!(
+            en_context.contains("World setting:\nA manor on a snowy night."),
+            "{en_context}"
+        );
+        assert!(
+            en_context.contains("World contract (high priority; obey before genre defaults):"),
+            "{en_context}"
+        );
+        assert!(
+            en_context.contains("Visual contract (for scene and image consistency):"),
+            "{en_context}"
+        );
 
         // 实体名册：en 头部 + status 标签 + "; " 分隔。
         let roster = render_entity_roster(
-            &[json!({ "id": "actor_player", "type": "actor", "label": "Tenant", "summary": "New tenant", "status": "watchful" })],
+            &[
+                json!({ "id": "actor_player", "type": "actor", "label": "Tenant", "summary": "New tenant", "status": "watchful" }),
+            ],
             "en",
         );
-        assert!(roster.contains("Current entity roster (reuse these ids;"), "{roster}");
+        assert!(
+            roster.contains("Current entity roster (reuse these ids;"),
+            "{roster}"
+        );
         assert!(roster.contains("status: watchful"), "{roster}");
         assert!(roster.contains("New tenant; status: watchful"), "{roster}");
 
@@ -1802,9 +2160,18 @@ mod tests {
             "World setting:\nA manor.",
             "en",
         );
-        assert!(seed_input.starts_with("Seed only the state that already exists"), "{seed_input}");
-        assert!(seed_input.contains("Opening scene:\nThe hall is dim."), "{seed_input}");
-        assert!(seed_input.contains("Suggested player actions:\n- Check the ledger"), "{seed_input}");
+        assert!(
+            seed_input.starts_with("Seed only the state that already exists"),
+            "{seed_input}"
+        );
+        assert!(
+            seed_input.contains("Opening scene:\nThe hall is dim."),
+            "{seed_input}"
+        );
+        assert!(
+            seed_input.contains("Suggested player actions:\n- Check the ledger"),
+            "{seed_input}"
+        );
         // zh 分支不变。
         let zh_seed = build_opening_seed_input("厅堂昏暗。", &[], "", "zh");
         assert!(zh_seed.contains("只播种这个互动世界开场已经成立的状态。"));
@@ -1813,20 +2180,31 @@ mod tests {
     #[test]
     fn replay_context_zh_en_shapes() {
         let zh = build_replay_context("打开抽屉", None, "zh");
-        assert!(zh.starts_with("这是在重写上一回合，不是推进新的下一回合。"), "{zh}");
+        assert!(
+            zh.starts_with("这是在重写上一回合，不是推进新的下一回合。"),
+            "{zh}"
+        );
         assert!(zh.contains("原玩家动作：打开抽屉"));
         assert!(!zh.contains("用户替换说明"), "无替换不出现替换行：{zh}");
         assert!(zh.contains("不得倒退时间"), "{zh}");
 
         let zh_replace = build_replay_context("打开抽屉", Some("撬开柜子"), "zh");
-        assert!(zh_replace.contains("用户替换说明：撬开柜子"), "{zh_replace}");
+        assert!(
+            zh_replace.contains("用户替换说明：撬开柜子"),
+            "{zh_replace}"
+        );
 
         let en = build_replay_context("open the drawer", Some("open the drawer"), "en");
-        assert!(en.starts_with("This is a regeneration of the previous turn"), "{en}");
-        assert!(!en.contains("Replacement instruction"), "相同替换不出现：{en}");
+        assert!(
+            en.starts_with("This is a regeneration of the previous turn"),
+            "{en}"
+        );
+        assert!(
+            !en.contains("Replacement instruction"),
+            "相同替换不出现：{en}"
+        );
         assert!(en.contains("Do not move the clock backward"), "{en}");
     }
-
 
     #[tokio::test]
     async fn play_agent_prompts_append_project_prompt_pack_override() {
@@ -1835,7 +2213,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("prompt").join("play")).unwrap();
-        std::fs::write(root.join("prompt").join("play").join("mutator.md"), "自定义世界规则指引。").unwrap();
+        std::fs::write(
+            root.join("prompt").join("play").join("mutator.md"),
+            "自定义世界规则指引。",
+        )
+        .unwrap();
         let router = crate::llm::agent_router::AgentRouter::new(
             crate::llm::agent_router::LlmEndpointConfig {
                 context_window_tokens: 128_000,
@@ -1847,7 +2229,10 @@ mod tests {
             },
             std::collections::HashMap::new(),
         );
-        let agents = PlayAgents { router: &router, root };
+        let agents = PlayAgents {
+            router: &router,
+            root,
+        };
         let mutator = agents.mutator_system_prompt("zh").await;
         assert!(
             mutator.contains("## Prompt Pack Guidance (play.mutator, source: project)"),
@@ -1873,7 +2258,8 @@ mod tests {
             "{mutator}"
         );
         assert!(mutator.contains(r#""summary":"玩家角色发现了一个示例线索和一个示例道具。""#));
-        assert!(mutator.contains(r#""type":"持有","toId":"item_sample_key","value":{"role":"holding"}"#));
+        assert!(mutator
+            .contains(r#""type":"持有","toId":"item_sample_key","value":{"role":"holding"}"#));
         assert!(mutator.contains(r#""type":"怀疑","toId":"actor_counterpart""#));
 
         let renderer = scene_renderer_system_prompt("open", "zh");
@@ -1888,23 +2274,44 @@ mod tests {
         assert!(guided.contains("suggestedActions：给 0-3 个，作为'你也许可以这样做'的跳板——只在真正出现抉择点时给，不必每回合都给；它们是参考、不是唯一前进方式，玩家随时可以自由输入、也可以只是待着。"));
 
         let action = json!({"actionKind": "do", "intent": "x"});
-        let user = scene_renderer_user_prompt("看一眼桌子", &action, "本回合变化", "状态摘要", "雨夜小城", None, "zh");
+        let user = scene_renderer_user_prompt(
+            "看一眼桌子",
+            &action,
+            "本回合变化",
+            "状态摘要",
+            "雨夜小城",
+            None,
+            "zh",
+        );
         assert!(user.contains("世界设定（始终遵守）：\n雨夜小城"), "{user}");
         assert!(user.contains("玩家原话：\n看一眼桌子"), "{user}");
-        assert!(user.contains("动作：\n{\n  \"actionKind\": \"do\"", ), "{user}");
+        assert!(
+            user.contains("动作：\n{\n  \"actionKind\": \"do\"",),
+            "{user}"
+        );
         assert!(user.contains("已应用的本回合变化：\n本回合变化"), "{user}");
         assert!(user.contains("当前状态摘要：\n状态摘要"), "{user}");
         // 无 premise 时省略世界设定块（TS premise?.trim() 判定）。
-        let no_premise = scene_renderer_user_prompt("输入", &action, "变化", "状态", "  ", None, "zh");
+        let no_premise =
+            scene_renderer_user_prompt("输入", &action, "变化", "状态", "  ", None, "zh");
         assert!(!no_premise.contains("世界设定"), "{no_premise}");
     }
 
     #[test]
     fn renderer_prompt_injects_replay_constraints() {
         let action = json!({ "actionKind": "do", "intent": "x" });
-        let without = scene_renderer_user_prompt("输入", &action, "摘要", "状态", "前提", None, "zh");
+        let without =
+            scene_renderer_user_prompt("输入", &action, "摘要", "状态", "前提", None, "zh");
         assert!(!without.contains("重写约束"), "{without}");
-        let with = scene_renderer_user_prompt("输入", &action, "摘要", "状态", "前提", Some("重写上一回合"), "zh");
+        let with = scene_renderer_user_prompt(
+            "输入",
+            &action,
+            "摘要",
+            "状态",
+            "前提",
+            Some("重写上一回合"),
+            "zh",
+        );
         assert!(with.contains("重写约束：\n重写上一回合"), "{with}");
     }
 
@@ -1935,7 +2342,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl PlayWorldMutator for FakeAgents {
-        async fn propose_mutation(&self, turn: i64, input: &str, _action: &Value, _context: &str, _language: &str) -> Value {
+        async fn propose_mutation(
+            &self,
+            turn: i64,
+            input: &str,
+            _action: &Value,
+            _context: &str,
+            _language: &str,
+        ) -> Value {
             let n = self.mutator_calls.fetch_add(1, Ordering::SeqCst);
             json!({
                 "eventId": format!("evt-{turn}"), "turn": turn, "actionKind": "do",
@@ -1966,7 +2380,10 @@ mod tests {
             _language: &str,
         ) -> RenderedScene {
             let n = self.render_calls.fetch_add(1, Ordering::SeqCst) + 1;
-            RenderedScene { scene_text: format!("场景 v{n}：紧张推进。"), suggested_actions: vec![] }
+            RenderedScene {
+                scene_text: format!("场景 v{n}：紧张推进。"),
+                suggested_actions: vec![],
+            }
         }
     }
 
@@ -1986,7 +2403,10 @@ mod tests {
         ) -> Value {
             let n = self.reconcile_calls.fetch_add(1, Ordering::SeqCst);
             if n == 0 {
-                let action_kind = action.get("actionKind").and_then(Value::as_str).unwrap_or("do");
+                let action_kind = action
+                    .get("actionKind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("do");
                 json!({
                     "eventId": format!("evt-{turn}"), "turn": turn, "actionKind": action_kind,
                     "summary": "正文补充：物件落地",
@@ -2020,7 +2440,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let runner = PlayRunner { project_root: &root, world_id: "w79".into(), run_id: "main".into() };
+        let runner = PlayRunner {
+            project_root: &root,
+            world_id: "w79".into(),
+            run_id: "main".into(),
+        };
         let fake = FakeAgents::new();
 
         // seed：播种 evt-0。
@@ -2033,7 +2457,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(step1.scene_text, "场景 v1：紧张推进。");
-        let summary = step1.mutation.get("summary").and_then(Value::as_str).unwrap();
+        let summary = step1
+            .mutation
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap();
         assert!(summary.contains("；"), "summary 合成：{summary}");
         assert!(summary.contains("第1次推进"), "{summary}");
         assert!(summary.contains("正文补充：物件落地"), "{summary}");
@@ -2046,7 +2474,10 @@ mod tests {
             .map(|e| e.get("id").and_then(Value::as_str).unwrap_or_default())
             .collect();
         assert!(entity_ids.contains(&"item-1"), "entities: {entity_ids:?}");
-        assert!(entity_ids.contains(&"item-extra"), "reconcile 补充入图：{entity_ids:?}");
+        assert!(
+            entity_ids.contains(&"item-extra"),
+            "reconcile 补充入图：{entity_ids:?}"
+        );
         let edge_labels: Vec<&str> = graph["edges"]
             .as_array()
             .unwrap()
@@ -2056,9 +2487,14 @@ mod tests {
         assert!(edge_labels.contains(&"edge-hold"), "edges: {edge_labels:?}");
         // checkpoint before-turn-1 已落盘；state.md 含补充实体。
         assert!(run_dir.join("checkpoints/before-turn-1.json").is_file());
-        let state_md = tokio::fs::read_to_string(run_dir.join("projections/state.md")).await.unwrap();
+        let state_md = tokio::fs::read_to_string(run_dir.join("projections/state.md"))
+            .await
+            .unwrap();
         assert!(state_md.contains("item-extra"), "{state_md}");
-        assert_eq!(crate::play::read_events(&root, "w79", "main").await.len(), 1);
+        assert_eq!(
+            crate::play::read_events(&root, "w79", "main").await.len(),
+            1
+        );
 
         // regenerate：无替换 → 重放原输入；场景 v2；变体对；事件数不涨。
         let replay = runner
@@ -2071,9 +2507,15 @@ mod tests {
         let regenerated_variant = replay.variant_id.clone().unwrap();
         assert_ne!(previous_variant, regenerated_variant);
         assert!(previous_variant.starts_with("v-"));
-        assert_eq!(crate::play::read_events(&root, "w79", "main").await.len(), 1, "重放覆盖不新增事件");
+        assert_eq!(
+            crate::play::read_events(&root, "w79", "main").await.len(),
+            1,
+            "重放覆盖不新增事件"
+        );
         // current state 仍是 turn 1。
-        let current = crate::play::load_current_state(&root, "w79", "main").await.unwrap();
+        let current = crate::play::load_current_state(&root, "w79", "main")
+            .await
+            .unwrap();
         assert_eq!(current.get("turn"), Some(&json!(1)));
         // 两个变体文件 + before-turn-1 检查点仍在。
         let variants_dir = run_dir.join("variants/turn-1");
@@ -2093,7 +2535,9 @@ mod tests {
         // restore previous variant：恢复第一版现场（场景 v1 + item-0/item-extra）。
         let restored = runner.restore_variant(1, &previous_variant).await.unwrap();
         assert_eq!(restored.scene_text, "场景 v1：紧张推进。");
-        let scene_md = tokio::fs::read_to_string(run_dir.join("projections/scene.md")).await.unwrap();
+        let scene_md = tokio::fs::read_to_string(run_dir.join("projections/scene.md"))
+            .await
+            .unwrap();
         assert!(scene_md.contains("场景 v1"), "{scene_md}");
         let graph3 = crate::play::play_graph_snapshot(&run_dir);
         let ids3: Vec<&str> = graph3["entities"]
@@ -2102,11 +2546,17 @@ mod tests {
             .iter()
             .map(|e| e.get("id").and_then(Value::as_str).unwrap_or_default())
             .collect();
-        assert!(ids3.contains(&"item-1") && ids3.contains(&"item-extra"), "恢复第一版：{ids3:?}");
+        assert!(
+            ids3.contains(&"item-1") && ids3.contains(&"item-extra"),
+            "恢复第一版：{ids3:?}"
+        );
         assert!(!ids3.contains(&"item-2"), "重放实体被回滚：{ids3:?}");
 
         // 缺失检查点/变体的错误面。
         let missing_variant = runner.restore_variant(9, "v-none").await.unwrap_err();
-        assert!(missing_variant.contains("Play variant not found: turn 9 / v-none"), "{missing_variant}");
+        assert!(
+            missing_variant.contains("Play variant not found: turn 9 / v-none"),
+            "{missing_variant}"
+        );
     }
 }

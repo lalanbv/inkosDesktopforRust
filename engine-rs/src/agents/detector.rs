@@ -77,9 +77,16 @@ pub async fn detect_ai_content(
 #[derive(Debug, thiserror::Error)]
 pub enum DetectError {
     #[error("{provider} API failed: {status} {body}")]
-    Http { provider: &'static str, status: u16, body: String },
+    Http {
+        provider: &'static str,
+        status: u16,
+        body: String,
+    },
     #[error("{provider} response parse failed: {source}")]
-    Parse { provider: &'static str, source: reqwest::Error },
+    Parse {
+        provider: &'static str,
+        source: reqwest::Error,
+    },
     #[error("request transport: {0}")]
     Transport(#[from] reqwest::Error),
 }
@@ -101,7 +108,11 @@ async fn detect_gptzero(
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(DetectError::Http { provider: "GPTZero", status: status.as_u16(), body });
+        return Err(DetectError::Http {
+            provider: "GPTZero",
+            status: status.as_u16(),
+            body,
+        });
     }
     let data: serde_json::Value = resp.json().await.map_err(|e| DetectError::Parse {
         provider: "GPTZero",
@@ -133,7 +144,11 @@ async fn detect_originality(
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(DetectError::Http { provider: "Originality", status: status.as_u16(), body });
+        return Err(DetectError::Http {
+            provider: "Originality",
+            status: status.as_u16(),
+            body,
+        });
     }
     let data: serde_json::Value = resp.json().await.map_err(|e| DetectError::Parse {
         provider: "Originality",
@@ -165,7 +180,11 @@ async fn detect_custom(
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(DetectError::Http { provider: "Detection", status: status.as_u16(), body });
+        return Err(DetectError::Http {
+            provider: "Detection",
+            status: status.as_u16(),
+            body,
+        });
     }
     let data: serde_json::Value = resp.json().await.map_err(|e| DetectError::Parse {
         provider: "Custom",
@@ -195,7 +214,10 @@ mod tests {
             let (_sock, _conn) = listener.accept().await.unwrap();
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         });
-        std::env::set_var(crate::pipeline::detection_runner::ENV_DETECT_HTTP_TIMEOUT_MS, "100");
+        std::env::set_var(
+            crate::pipeline::detection_runner::ENV_DETECT_HTTP_TIMEOUT_MS,
+            "100",
+        );
         let client = crate::pipeline::detection_runner::detection_http_client();
         let started = std::time::Instant::now();
         let result = detect_gptzero(
@@ -209,7 +231,10 @@ mod tests {
         std::env::remove_var(crate::pipeline::detection_runner::ENV_DETECT_HTTP_TIMEOUT_MS);
         let elapsed = started.elapsed();
         assert!(result.is_err(), "挂起端点必须在窗内报错");
-        assert!(elapsed < std::time::Duration::from_secs(5), "实测耗时 {elapsed:?} 超过注入窗预期");
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "实测耗时 {elapsed:?} 超过注入窗预期"
+        );
     }
 
     #[test]
@@ -223,7 +248,10 @@ mod tests {
     #[test]
     fn parse_gptzero_score_defaults_zero_on_missing() {
         assert_eq!(parse_gptzero_score(&serde_json::json!({})), 0.0);
-        assert_eq!(parse_gptzero_score(&serde_json::json!({ "documents": [] })), 0.0);
+        assert_eq!(
+            parse_gptzero_score(&serde_json::json!({ "documents": [] })),
+            0.0
+        );
         assert_eq!(
             parse_gptzero_score(&serde_json::json!({ "documents": [{ "other": 1 }] })),
             0.0
@@ -239,26 +267,42 @@ mod tests {
     #[test]
     fn parse_originality_score_defaults_zero_on_missing() {
         assert_eq!(parse_originality_score(&serde_json::json!({})), 0.0);
-        assert_eq!(parse_originality_score(&serde_json::json!({ "score": {} })), 0.0);
+        assert_eq!(
+            parse_originality_score(&serde_json::json!({ "score": {} })),
+            0.0
+        );
     }
 
     #[test]
     fn parse_custom_score_extracts_top_level_number() {
-        assert_eq!(parse_custom_score(&serde_json::json!({ "score": 0.5 })), 0.5);
+        assert_eq!(
+            parse_custom_score(&serde_json::json!({ "score": 0.5 })),
+            0.5
+        );
         assert_eq!(parse_custom_score(&serde_json::json!({ "score": 1 })), 1.0);
     }
 
     #[test]
     fn parse_custom_score_rejects_non_number() {
         // 非数字 score → 0（对齐 TS `typeof === "number"` 检查）。
-        assert_eq!(parse_custom_score(&serde_json::json!({ "score": "high" })), 0.0);
+        assert_eq!(
+            parse_custom_score(&serde_json::json!({ "score": "high" })),
+            0.0
+        );
         assert_eq!(parse_custom_score(&serde_json::json!({})), 0.0);
-        assert_eq!(parse_custom_score(&serde_json::json!({ "score": null })), 0.0);
+        assert_eq!(
+            parse_custom_score(&serde_json::json!({ "score": null })),
+            0.0
+        );
     }
 
     #[test]
     fn detect_error_displays_provider_and_status() {
-        let e = DetectError::Http { provider: "GPTZero", status: 401, body: "unauthorized".into() };
+        let e = DetectError::Http {
+            provider: "GPTZero",
+            status: 401,
+            body: "unauthorized".into(),
+        };
         assert!(format!("{e}").contains("GPTZero"));
         assert!(format!("{e}").contains("401"));
     }

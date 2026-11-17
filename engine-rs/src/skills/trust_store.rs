@@ -131,16 +131,22 @@ mod tests {
         assert!(!is_trusted_source(root, "/ext/skills").await);
         assert!(read_trusted_sources(root).await.is_empty());
 
-        let entries = add_trusted_source(root, "/ext/skills/").await.expect("添加");
+        let entries = add_trusted_source(root, "/ext/skills/")
+            .await
+            .expect("添加");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].path, "/ext/skills", "尾分隔符归一");
         assert!(is_trusted_source(root, "/ext/skills").await);
 
         // 幂等：重复添加不刷新 confirmedAt、不增条目。
-        let again = add_trusted_source(root, "/ext/skills").await.expect("重复添加");
+        let again = add_trusted_source(root, "/ext/skills")
+            .await
+            .expect("重复添加");
         assert_eq!(again.len(), 1);
 
-        let after_remove = remove_trusted_source(root, "/ext/skills").await.expect("移除");
+        let after_remove = remove_trusted_source(root, "/ext/skills")
+            .await
+            .expect("移除");
         assert!(after_remove.is_empty());
         assert!(!is_trusted_source(root, "/ext/skills").await);
     }
@@ -149,7 +155,9 @@ mod tests {
     async fn trust_store_tolerates_broken_json() {
         let dir = tempfile::tempdir().expect("临时目录");
         let file = trust_file(dir.path());
-        tokio::fs::create_dir_all(file.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(file.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(&file, "{ broken").await.unwrap();
         assert!(read_trusted_sources(dir.path()).await.is_empty());
         assert!(!is_trusted_source(dir.path(), "/x").await);
@@ -176,10 +184,16 @@ mod tests {
         tokio::fs::create_dir_all(&project_root).await.unwrap();
 
         let env_dirs = vec![external_root.to_string_lossy().to_string()];
-        let untrusted =
-            crate::skills::external_loader::load_configured_agent_skills(&project_root, &env_dirs, Some(&home_dir))
-                .await;
-        assert!(untrusted.skills.iter().all(|skill| skill.id != "gated-romance"));
+        let untrusted = crate::skills::external_loader::load_configured_agent_skills(
+            &project_root,
+            &env_dirs,
+            Some(&home_dir),
+        )
+        .await;
+        assert!(untrusted
+            .skills
+            .iter()
+            .all(|skill| skill.id != "gated-romance"));
         assert!(untrusted.diagnostics.iter().any(|diagnostic| {
             diagnostic.message.contains("pending trust confirmation")
                 && diagnostic.path == external_root.to_string_lossy()
@@ -188,10 +202,19 @@ mod tests {
         add_trusted_source(&project_root, &external_root.to_string_lossy())
             .await
             .expect("添加信任");
-        let trusted =
-            crate::skills::external_loader::load_configured_agent_skills(&project_root, &env_dirs, Some(&home_dir))
-                .await;
-        assert!(trusted.skills.iter().any(|skill| skill.id == "gated-romance"));
-        assert!(!trusted.diagnostics.iter().any(|diagnostic| diagnostic.message.contains("pending trust confirmation")));
+        let trusted = crate::skills::external_loader::load_configured_agent_skills(
+            &project_root,
+            &env_dirs,
+            Some(&home_dir),
+        )
+        .await;
+        assert!(trusted
+            .skills
+            .iter()
+            .any(|skill| skill.id == "gated-romance"));
+        assert!(!trusted
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("pending trust confirmation")));
     }
 }

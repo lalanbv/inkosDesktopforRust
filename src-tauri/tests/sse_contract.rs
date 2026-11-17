@@ -89,7 +89,6 @@ fn extract_broadcast_events(src: &str) -> Vec<String> {
     out
 }
 
-
 #[test]
 fn default_table_keys_are_subset_of_inkos_broadcasts() {
     // 锚定 src-tauri 目录：TS 契约源 = studio server.ts；Rust 契约源 = engine-rs/src/server 递归。
@@ -102,7 +101,10 @@ fn default_table_keys_are_subset_of_inkos_broadcasts() {
     if let Ok(s) = std::fs::read_to_string(&inkos_path) {
         sources.push((inkos_path.clone(), s));
     } else {
-        eprintln!("[sse_contract] TS 源不可读（{}），仅以 Rust 引擎为契约源", inkos_path.display());
+        eprintln!(
+            "[sse_contract] TS 源不可读（{}），仅以 Rust 引擎为契约源",
+            inkos_path.display()
+        );
     }
     // Rust 侧递归收集（server 目录全量 .rs——路由分文件持有各域 broadcast 面）。
     fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {

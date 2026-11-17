@@ -44,9 +44,7 @@ const SSE_FRAME: &[u8] = b"HTTP/1.1 200 OK\r\n\
 /// shutdown 能干净退出，run 不 panic。
 #[tokio::test]
 async fn sse_client_dispatches_frame_and_reconnects() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind 失败");
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind 失败");
     let port = listener.local_addr().unwrap().port();
 
     tokio::spawn(async move {
@@ -62,8 +60,7 @@ async fn sse_client_dispatches_frame_and_reconnects() {
     let badge_count = Arc::new(Mutex::new(0u32));
     let notifier_count = Arc::new(Mutex::new(0u32));
     let badge = Arc::new(Count(Arc::clone(&badge_count))) as Arc<dyn EventHandler>;
-    let notifier =
-        Arc::new(Count(Arc::clone(&notifier_count))) as Arc<dyn EventHandler>;
+    let notifier = Arc::new(Count(Arc::clone(&notifier_count))) as Arc<dyn EventHandler>;
     let router = Arc::new(Router::default_table(notifier, badge));
     let shutdown = Arc::new(AtomicBool::new(false));
     let url = format!("http://127.0.0.1:{port}/api/v1/events");
@@ -95,9 +92,7 @@ async fn sse_client_dispatches_frame_and_reconnects() {
     );
     // 重连生效验证：1.5s 窗口内首连接 ~t=0、二次重连 ~t=1s，故应 ≥ 2 次。
     // 放宽为 ≥ 1 以容忍调度抖动（CI 慢机可能只跑完一轮）。
-    eprintln!(
-        "[test] badge={badge_n}, notifier={notifier_n} (1.5s 窗口内重连次数)"
-    );
+    eprintln!("[test] badge={badge_n}, notifier={notifier_n} (1.5s 窗口内重连次数)");
 }
 
 /// shutdown 在首次连接前触发：run 应立即返回 Ok，不发起任何 IO。
@@ -107,8 +102,7 @@ async fn sse_client_exits_immediately_when_shutdown_pre_set() {
     let badge_count = Arc::new(Mutex::new(0u32));
     let notifier_count = Arc::new(Mutex::new(0u32));
     let badge = Arc::new(Count(Arc::clone(&badge_count))) as Arc<dyn EventHandler>;
-    let notifier =
-        Arc::new(Count(Arc::clone(&notifier_count))) as Arc<dyn EventHandler>;
+    let notifier = Arc::new(Count(Arc::clone(&notifier_count))) as Arc<dyn EventHandler>;
     let router = Arc::new(Router::default_table(notifier, badge));
     let shutdown = Arc::new(AtomicBool::new(true)); // 预置 true
     let url = "http://127.0.0.1:1/api/v1/events".to_string(); // 端口 1 不可达
@@ -132,8 +126,7 @@ async fn sse_client_handles_connection_errors_without_panic() {
     let badge_count = Arc::new(Mutex::new(0u32));
     let notifier_count = Arc::new(Mutex::new(0u32));
     let badge = Arc::new(Count(Arc::clone(&badge_count))) as Arc<dyn EventHandler>;
-    let notifier =
-        Arc::new(Count(Arc::clone(&notifier_count))) as Arc<dyn EventHandler>;
+    let notifier = Arc::new(Count(Arc::clone(&notifier_count))) as Arc<dyn EventHandler>;
     let router = Arc::new(Router::default_table(notifier, badge));
     let shutdown = Arc::new(AtomicBool::new(false));
     let url = "http://127.0.0.1:1/api/v1/events".to_string();

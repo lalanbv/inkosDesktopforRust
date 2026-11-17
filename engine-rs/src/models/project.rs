@@ -4,9 +4,9 @@
 //! 含 LLM 配置 / 通知通道（discriminated union）/ 检测 / 写作 / daemon 调度等子配置。
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 #[cfg(feature = "export-bindings")]
 use ts_rs::TS;
-use std::collections::HashMap;
 
 // ── LLM ────────────────────────────────────────────────────────
 
@@ -31,7 +31,10 @@ pub struct LLMServiceEntry {
 /// LLM API 格式。对齐 TS `z.enum(["chat","responses"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"chat\" | \"responses\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"chat\" | \"responses\"")
+)]
 pub enum LlmApiFormat {
     #[serde(rename = "chat")]
     Chat,
@@ -42,7 +45,10 @@ pub enum LlmApiFormat {
 /// LLM provider。对齐 TS `z.enum(["anthropic","openai","custom"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"anthropic\" | \"openai\" | \"custom\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"anthropic\" | \"openai\" | \"custom\"")
+)]
 pub enum LlmProvider {
     #[serde(rename = "anthropic")]
     Anthropic,
@@ -77,7 +83,10 @@ pub struct LLMCoverConfig {
 /// 封面服务。对齐 TS `z.enum(["kkaiapi","openai","google"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"kkaiapi\" | \"openai\" | \"google\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"kkaiapi\" | \"openai\" | \"google\"")
+)]
 pub enum CoverService {
     #[serde(rename = "kkaiapi")]
     Kkaiapi,
@@ -120,18 +129,31 @@ pub struct LLMConfig {
     pub cover: Option<LLMCoverConfig>,
 }
 
-fn default_service() -> String { "custom".into() }
-fn default_config_source() -> LlmConfigSource { LlmConfigSource::Env }
-fn default_temperature() -> f64 { 0.7 }
-fn default_chat() -> LlmApiFormat { LlmApiFormat::Chat }
-fn default_true() -> bool { true }
+fn default_service() -> String {
+    "custom".into()
+}
+fn default_config_source() -> LlmConfigSource {
+    LlmConfigSource::Env
+}
+fn default_temperature() -> f64 {
+    0.7
+}
+fn default_chat() -> LlmApiFormat {
+    LlmApiFormat::Chat
+}
+fn default_true() -> bool {
+    true
+}
 
 // ── 通知通道（discriminated union on "type"）────────────────────
 
 /// 通知格式。对齐 TS `z.enum(["markdown","text"])`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"markdown\" | \"text\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"markdown\" | \"text\"")
+)]
 pub enum NotifyFormat {
     #[serde(rename = "markdown")]
     Markdown,
@@ -176,7 +198,9 @@ pub enum NotifyChannel {
     },
 }
 
-fn default_markdown() -> NotifyFormat { NotifyFormat::Markdown }
+fn default_markdown() -> NotifyFormat {
+    NotifyFormat::Markdown
+}
 
 // ── 检测 / 质量门 / 写作 ────────────────────────────────────────
 
@@ -204,7 +228,10 @@ pub struct DetectionConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"gptzero\" | \"originality\" | \"custom\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"gptzero\" | \"originality\" | \"custom\"")
+)]
 pub enum DetectionProvider {
     #[serde(rename = "gptzero")]
     Gptzero,
@@ -213,9 +240,15 @@ pub enum DetectionProvider {
     #[serde(rename = "custom")]
     Custom,
 }
-fn default_detection_provider() -> DetectionProvider { DetectionProvider::Custom }
-fn default_threshold() -> f64 { 0.5 }
-fn default_max_retries() -> u32 { 3 }
+fn default_detection_provider() -> DetectionProvider {
+    DetectionProvider::Custom
+}
+fn default_threshold() -> f64 {
+    0.5
+}
+fn default_max_retries() -> u32 {
+    3
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
@@ -229,9 +262,15 @@ pub struct QualityGates {
     #[serde(default = "default_qg_step")]
     pub retry_temperature_step: f64,
 }
-fn default_qg_max_audit() -> u32 { 2 }
-fn default_qg_pause() -> u32 { 3 }
-fn default_qg_step() -> f64 { 0.1 }
+fn default_qg_max_audit() -> u32 {
+    2
+}
+fn default_qg_pause() -> u32 {
+    3
+}
+fn default_qg_step() -> f64 {
+    0.1
+}
 
 // TS QualityGatesSchema 的 `.default({2,3,0.1})` 口径。derive 的全零 Default
 // 曾令缺配置 daemon 落 {0,0,0.0}（首败即暂停、永不重试）——540 号纠偏为
@@ -254,7 +293,9 @@ pub struct FoundationConfig {
     #[serde(default = "default_foundation_retries")]
     pub review_retries: u32,
 }
-fn default_foundation_retries() -> u32 { 2 }
+fn default_foundation_retries() -> u32 {
+    2
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -266,9 +307,15 @@ pub struct WritingConfig {
     #[serde(default = "default_revision_gate")]
     pub revision_gate: super::book::RevisionGateVal,
 }
-fn default_writing_retries() -> u32 { 1 }
-fn default_review_mode() -> super::book::ChapterReviewModeVal { super::book::ChapterReviewModeVal::Auto }
-fn default_revision_gate() -> super::book::RevisionGateVal { super::book::RevisionGateVal::Strict }
+fn default_writing_retries() -> u32 {
+    1
+}
+fn default_review_mode() -> super::book::ChapterReviewModeVal {
+    super::book::ChapterReviewModeVal::Auto
+}
+fn default_revision_gate() -> super::book::RevisionGateVal {
+    super::book::RevisionGateVal::Strict
+}
 
 // ── Agent LLM 覆盖 / 输入治理 / 研究搜索 ─────────────────────────
 
@@ -314,14 +361,19 @@ pub struct ResearchSearchConfig {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"tavily\" | \"custom\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"tavily\" | \"custom\"")
+)]
 pub enum ResearchProvider {
     #[serde(rename = "tavily")]
     Tavily,
     #[serde(rename = "custom")]
     Custom,
 }
-fn default_research_provider() -> ResearchProvider { ResearchProvider::Tavily }
+fn default_research_provider() -> ResearchProvider {
+    ResearchProvider::Tavily
+}
 
 // ── Daemon 调度 ─────────────────────────────────────────────────
 
@@ -335,7 +387,10 @@ pub struct DaemonSchedule {
 }
 impl Default for DaemonSchedule {
     fn default() -> Self {
-        DaemonSchedule { radar_cron: "0 */6 * * *".into(), write_cron: "*/15 * * * *".into() }
+        DaemonSchedule {
+            radar_cron: "0 */6 * * *".into(),
+            write_cron: "*/15 * * * *".into(),
+        }
     }
 }
 
@@ -395,9 +450,19 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub daemon: DaemonConfig,
 }
-fn default_language() -> String { "zh".into() }
-fn default_foundation() -> FoundationConfig { FoundationConfig { review_retries: 2 } }
-fn default_writing() -> WritingConfig { WritingConfig { review_retries: 1, review_mode: super::book::ChapterReviewModeVal::Auto, revision_gate: super::book::RevisionGateVal::Strict } }
+fn default_language() -> String {
+    "zh".into()
+}
+fn default_foundation() -> FoundationConfig {
+    FoundationConfig { review_retries: 2 }
+}
+fn default_writing() -> WritingConfig {
+    WritingConfig {
+        review_retries: 1,
+        review_mode: super::book::ChapterReviewModeVal::Auto,
+        revision_gate: super::book::RevisionGateVal::Strict,
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -405,7 +470,11 @@ mod tests {
 
     #[test]
     fn notify_channel_discriminated_roundtrip() {
-        let tg = NotifyChannel::Telegram { bot_token: "t".into(), chat_id: "c".into(), format: NotifyFormat::Markdown };
+        let tg = NotifyChannel::Telegram {
+            bot_token: "t".into(),
+            chat_id: "c".into(),
+            format: NotifyFormat::Markdown,
+        };
         let j = serde_json::to_string(&tg).unwrap();
         assert!(j.contains(r#""type":"telegram""#));
         let back: NotifyChannel = serde_json::from_str(&j).unwrap();
@@ -414,7 +483,10 @@ mod tests {
 
     #[test]
     fn notify_wechat_work_kebab_tag() {
-        let ww = NotifyChannel::WechatWork { webhook_url: "u".into(), format: NotifyFormat::Text };
+        let ww = NotifyChannel::WechatWork {
+            webhook_url: "u".into(),
+            format: NotifyFormat::Text,
+        };
         let j = serde_json::to_string(&ww).unwrap();
         assert!(j.contains(r#""type":"wechat-work""#));
     }
@@ -424,7 +496,13 @@ mod tests {
         let s = ModelOverrideValue::Str("gpt-4".into());
         let j = serde_json::to_string(&s).unwrap();
         assert_eq!(j, r#""gpt-4""#);
-        let o = ModelOverrideValue::Override(AgentLLMOverride { model: "x".into(), provider: None, base_url: None, api_key_env: None, stream: None });
+        let o = ModelOverrideValue::Override(AgentLLMOverride {
+            model: "x".into(),
+            provider: None,
+            base_url: None,
+            api_key_env: None,
+            stream: None,
+        });
         let j2 = serde_json::to_string(&o).unwrap();
         assert!(j2.contains(r#""model":"x""#));
     }

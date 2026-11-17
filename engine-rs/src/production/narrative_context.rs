@@ -54,7 +54,11 @@ pub fn render_narrative_selected_context(
             if let Some(excerpt) = &entry.excerpt {
                 lines.push(format!("- {detail_label}: {excerpt}"));
             }
-            lines.into_iter().filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
+            lines
+                .into_iter()
+                .filter(|line| !line.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
         })
         .collect::<Vec<_>>()
         .join("\n\n")

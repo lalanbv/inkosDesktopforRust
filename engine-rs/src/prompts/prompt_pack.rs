@@ -159,7 +159,8 @@ mod tests {
         );
         assert_eq!(
             prompt_override_path("root", "interactive-film.story-graph"),
-            "root/prompt/interactive-film/story-graph.md".replace('/', std::path::MAIN_SEPARATOR_STR)
+            "root/prompt/interactive-film/story-graph.md"
+                .replace('/', std::path::MAIN_SEPARATOR_STR)
         );
     }
 
@@ -171,7 +172,10 @@ mod tests {
 
     #[test]
     fn normalize_lowercases_and_trims() {
-        assert_eq!(normalize_prompt_id("  Longform.Writer  "), "longform.writer");
+        assert_eq!(
+            normalize_prompt_id("  Longform.Writer  "),
+            "longform.writer"
+        );
     }
 
     #[tokio::test]
@@ -210,12 +214,9 @@ mod tests {
         let user_path = prompt_override_path("user", "play.mutator");
         store.set(&user_path, "USER VERSION");
 
-        let loaded = load_prompt_pack_prompt(
-            &store,
-            &input("play.mutator", None, Some("user")),
-        )
-        .await
-        .unwrap();
+        let loaded = load_prompt_pack_prompt(&store, &input("play.mutator", None, Some("user")))
+            .await
+            .unwrap();
         assert_eq!(loaded.source, PromptSource::User);
         assert_eq!(loaded.content, "USER VERSION");
     }
@@ -232,14 +233,13 @@ mod tests {
     #[tokio::test]
     async fn append_guidance_concatenates_loaded_prompt() {
         let store = InMemoryStateStore::new();
-        let out = append_prompt_pack_guidance(
-            &store,
-            "BASE",
-            &input("longform.writer", None, None),
-        )
-        .await
-        .unwrap();
-        assert!(out.starts_with("BASE\n\n## Prompt Pack Guidance (longform.writer, source: builtin)\n"));
+        let out =
+            append_prompt_pack_guidance(&store, "BASE", &input("longform.writer", None, None))
+                .await
+                .unwrap();
+        assert!(
+            out.starts_with("BASE\n\n## Prompt Pack Guidance (longform.writer, source: builtin)\n")
+        );
     }
 
     #[tokio::test]

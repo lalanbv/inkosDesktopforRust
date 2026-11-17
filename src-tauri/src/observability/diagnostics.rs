@@ -37,8 +37,7 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
     let app_data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| AppError::internal("获取 app_data_dir 失败")
-            .with_details(e.to_string()))?
+        .map_err(|e| AppError::internal("获取 app_data_dir 失败").with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 
@@ -46,8 +45,7 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
         .path()
         .app_data_dir()
         .map(|p| p.join("engine"))
-        .map_err(|e| AppError::internal("获取 engine_dir 失败")
-            .with_details(e.to_string()))?
+        .map_err(|e| AppError::internal("获取 engine_dir 失败").with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 
@@ -55,8 +53,7 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
         .path()
         .app_cache_dir()
         .map(|p| p.join("node"))
-        .map_err(|e| AppError::internal("获取 node_cache_dir 失败")
-            .with_details(e.to_string()))?
+        .map_err(|e| AppError::internal("获取 node_cache_dir 失败").with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 
@@ -64,8 +61,7 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
         .path()
         .app_data_dir()
         .map(|p| p.join("projects.json"))
-        .map_err(|e| AppError::internal("获取 projects_file 失败")
-            .with_details(e.to_string()))?
+        .map_err(|e| AppError::internal("获取 projects_file 失败").with_details(e.to_string()))?
         .to_string_lossy()
         .to_string();
 
@@ -85,39 +81,35 @@ pub async fn cmd_get_diagnostics(app: tauri::AppHandle) -> crate::error::Result<
     let engine_manifest = manifest_path.and_then(|p| fs::read_to_string(&p).ok());
 
     // 5. 最近崩溃文件（最多 5 个）
-    let crash_dir: Option<PathBuf> = app
-        .path()
-        .app_data_dir()
-        .ok()
-        .map(|p| p.join("crashes"));
+    let crash_dir: Option<PathBuf> = app.path().app_data_dir().ok().map(|p| p.join("crashes"));
 
     let mut recent_crashes = Vec::new();
     if let Some(crash_dir) = crash_dir {
         if let Ok(entries) = fs::read_dir(&crash_dir) {
-        let mut files: Vec<_> = entries
-            .filter_map(Result::ok)
-            .filter(|e| {
-                e.path()
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with("crash-") && n.ends_with(".json"))
-                    .unwrap_or(false)
-            })
-            .collect();
+            let mut files: Vec<_> = entries
+                .filter_map(Result::ok)
+                .filter(|e| {
+                    e.path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with("crash-") && n.ends_with(".json"))
+                        .unwrap_or(false)
+                })
+                .collect();
 
-        // 按修改时间排序（最新在前）
-        files.sort_by_key(|e| {
-            e.metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        });
-        files.reverse();
+            // 按修改时间排序（最新在前）
+            files.sort_by_key(|e| {
+                e.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+            });
+            files.reverse();
 
-        recent_crashes = files
-            .iter()
-            .take(5)
-            .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
-            .collect();
+            recent_crashes = files
+                .iter()
+                .take(5)
+                .filter_map(|e| e.file_name().to_str().map(|s| s.to_string()))
+                .collect();
         }
     }
 

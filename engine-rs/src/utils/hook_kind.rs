@@ -44,7 +44,9 @@ fn alias_lookup(key: &str) -> Option<HookKind> {
         // information 信息
         "information" | "info" | "secret" | "信息" | "情报" | "秘密" => HookKind::Information,
         // emotion 情感
-        "emotion" | "relationship" | "romance" | "情感" | "感情" | "关系" => HookKind::Emotion,
+        "emotion" | "relationship" | "romance" | "情感" | "感情" | "关系" => {
+            HookKind::Emotion
+        }
         // worldview 世界观
         "worldview" | "lore" | "世界观" | "设定" => HookKind::Worldview,
         _ => return None,

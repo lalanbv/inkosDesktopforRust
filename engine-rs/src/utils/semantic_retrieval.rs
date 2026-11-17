@@ -8,8 +8,8 @@
 //! 语义详见 TS 模块 doc。
 
 use serde::Deserialize;
-use serde_json::Value;
 use serde::Serialize;
+use serde_json::Value;
 
 pub const RETRIEVAL_MODES: [&str; 2] = ["semantic", "fts5-fallback"];
 
@@ -48,7 +48,10 @@ pub fn build_task_driven_query(input: &TaskQueryInput) -> String {
             return;
         }
         let lower = trimmed.to_lowercase();
-        if terms.iter().any(|existing| existing.to_lowercase() == lower) {
+        if terms
+            .iter()
+            .any(|existing| existing.to_lowercase() == lower)
+        {
             return;
         }
         let chars: Vec<char> = trimmed.chars().collect();
@@ -248,7 +251,10 @@ pub fn select_stale_chunks(
 ) -> Vec<EmbeddingChunk> {
     chunks
         .iter()
-        .filter(|chunk| cached.get(&chunk.id).map(|f| f.as_str()) != Some(chunk_fingerprint(&chunk.text).as_str()))
+        .filter(|chunk| {
+            cached.get(&chunk.id).map(|f| f.as_str())
+                != Some(chunk_fingerprint(&chunk.text).as_str())
+        })
         .cloned()
         .collect()
 }
@@ -293,9 +299,8 @@ pub async fn embed_batch(
         return Ok(Vec::new());
     }
     let client = reqwest::Client::new();
-    let timeout = std::time::Duration::from_millis(
-        config.timeout_ms.unwrap_or(DEFAULT_EMBEDDING_TIMEOUT_MS),
-    );
+    let timeout =
+        std::time::Duration::from_millis(config.timeout_ms.unwrap_or(DEFAULT_EMBEDDING_TIMEOUT_MS));
     let url = match config.provider {
         EmbeddingProvider::OpenAICompatible => {
             format!("{}/embeddings", config.base_url.trim_end_matches('/'))
@@ -321,7 +326,11 @@ pub async fn embed_batch(
             serde_json::json!({ "model": config.model, "input": texts })
         }
     };
-    let response = request.json(&body).send().await.map_err(|e| e.to_string())?;
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     let json: Value = response.json().await.map_err(|e| e.to_string())?;
     if let Some(data) = json.get("data").and_then(Value::as_array) {
         let vectors: Vec<Vec<f64>> = data

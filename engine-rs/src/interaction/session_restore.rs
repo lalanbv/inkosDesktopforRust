@@ -90,7 +90,9 @@ fn as_message_ref<'a>(event: &'a TranscriptEvent) -> Option<MessageRef<'a>> {
         // 876 号：上游 2.0 `visibility: "model"` 为仅模型可见消息——UI 恢复剔除
         // （TS visibleMessageEvents 同语义）。本函数只服务 UI 消息投影
         // （message_events_to_interaction_messages），模型恢复路径不经此处。
-        TranscriptEvent::Message { visibility, .. } if visibility.as_deref() == Some("model") => None,
+        TranscriptEvent::Message { visibility, .. } if visibility.as_deref() == Some("model") => {
+            None
+        }
         TranscriptEvent::Message {
             request_id,
             role,
@@ -105,9 +107,7 @@ fn as_message_ref<'a>(event: &'a TranscriptEvent) -> Option<MessageRef<'a>> {
             timestamp: *timestamp,
             tool_call_id: tool_call_id.as_deref(),
             legacy_thinking: display.as_ref().and_then(|d| d.thinking.as_deref()),
-            legacy_tool_executions: display
-                .as_ref()
-                .map(|d| &d.tool_executions),
+            legacy_tool_executions: display.as_ref().map(|d| &d.tool_executions),
             message,
         }),
         _ => None,
@@ -302,21 +302,18 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
             let current_thinking = if is_skill_request {
                 None
             } else {
-                thinking_from_content(
-                    reference.message.get("content").unwrap_or(&Value::Null),
-                )
+                thinking_from_content(reference.message.get("content").unwrap_or(&Value::Null))
             };
-            let current_text = text_from_content(
-                reference.message.get("content").unwrap_or(&Value::Null),
-            )
-            .trim()
-            .to_string();
+            let current_text =
+                text_from_content(reference.message.get("content").unwrap_or(&Value::Null))
+                    .trim()
+                    .to_string();
             let legacy_tool_executions = reference.legacy_tool_executions;
             let has_legacy_display = current_thinking.is_some()
                 || (!is_skill_request && reference.legacy_thinking.is_some())
-                    || legacy_tool_executions
-                        .map(|execs| !execs.is_empty())
-                        .unwrap_or(false);
+                || legacy_tool_executions
+                    .map(|execs| !execs.is_empty())
+                    .unwrap_or(false);
             if !pending_tool_executions.is_empty()
                 && !has_completed_play_tool(&pending_tool_executions)
                 && current_text.is_empty()
@@ -328,11 +325,14 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 continue;
             }
 
-            let raw_text = text_from_content(
-                reference.message.get("content").unwrap_or(&Value::Null),
-            );
+            let raw_text =
+                text_from_content(reference.message.get("content").unwrap_or(&Value::Null));
             let suppress_text = has_completed_play_tool(&pending_tool_executions);
-            let content = if suppress_text { String::new() } else { raw_text.clone() };
+            let content = if suppress_text {
+                String::new()
+            } else {
+                raw_text.clone()
+            };
             let thinking = if is_skill_request {
                 None
             } else {
@@ -349,7 +349,10 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
             } else {
                 legacy_tool_executions.cloned()
             };
-            let has_tools = tool_executions.as_ref().map(|t| !t.is_empty()).unwrap_or(false);
+            let has_tools = tool_executions
+                .as_ref()
+                .map(|t| !t.is_empty())
+                .unwrap_or(false);
             if content.is_empty() && thinking.is_none() && !has_tools {
                 if has_tool_call_content(reference.message) && current_thinking.is_some() {
                     pending_thinking.push(current_thinking);
@@ -389,7 +392,8 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
             if tool_call_id.is_empty() {
                 continue;
             }
-            let call = tool_calls.get(&(reference.request_id.to_string(), tool_call_id.to_string()));
+            let call =
+                tool_calls.get(&(reference.request_id.to_string(), tool_call_id.to_string()));
             let tool = raw
                 .get("toolName")
                 .and_then(Value::as_str)
@@ -413,7 +417,11 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
             let details = raw.get("details").cloned();
             let expired_skill = tool == "use_skill";
             let label = if tool == "sub_agent" {
-                agent.as_deref().map(agent_label).unwrap_or("sub_agent").to_string()
+                agent
+                    .as_deref()
+                    .map(agent_label)
+                    .unwrap_or("sub_agent")
+                    .to_string()
             } else {
                 tool_label(&tool).to_string()
             };
@@ -433,13 +441,20 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 obj.insert("args".into(), args);
             }
             if is_error {
-                let error = if text.is_empty() { "Tool execution failed".to_string() } else { text.chars().take(500).collect() };
+                let error = if text.is_empty() {
+                    "Tool execution failed".to_string()
+                } else {
+                    text.chars().take(500).collect()
+                };
                 obj.insert("error".into(), json!(error));
             } else if expired_skill {
                 obj.insert("result".into(), json!(EXPIRED_SKILL_RESULT_TEXT));
                 obj.insert("details".into(), json!({ "kind": "skill_expired" }));
             } else if !text.is_empty() {
-                obj.insert("result".into(), json!(text.chars().take(200).collect::<String>()));
+                obj.insert(
+                    "result".into(),
+                    json!(text.chars().take(200).collect::<String>()),
+                );
             }
             if let Some(details) = details {
                 if !expired_skill {
@@ -461,7 +476,9 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
             continue;
         }
         if reference.role == "user" && !content.is_empty() {
-            messages.push(json!({ "role": "user", "content": content, "timestamp": reference.timestamp }));
+            messages.push(
+                json!({ "role": "user", "content": content, "timestamp": reference.timestamp }),
+            );
         }
     }
 
@@ -471,9 +488,10 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
         let timestamp = pending_tool_executions
             .iter()
             .map(|execution| {
-                execution["completedAt"].as_u64().unwrap_or(0).max(
-                    execution["startedAt"].as_u64().unwrap_or(0),
-                )
+                execution["completedAt"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .max(execution["startedAt"].as_u64().unwrap_or(0))
             })
             .max()
             .unwrap_or(0);
@@ -482,7 +500,9 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 let obj = last.as_object_mut().unwrap();
                 if let Some(thinking) = thinking {
                     let merged = join_thinking(vec![
-                        obj.get("thinking").and_then(Value::as_str).map(str::to_string),
+                        obj.get("thinking")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         Some(thinking),
                     ]);
                     obj.insert("thinking".into(), json!(merged));
@@ -567,9 +587,9 @@ pub async fn derive_book_session_from_transcript(
         return None;
     }
 
-    let created = events.iter().find(|event| {
-        matches!(event, TranscriptEvent::SessionCreated { .. })
-    });
+    let created = events
+        .iter()
+        .find(|event| matches!(event, TranscriptEvent::SessionCreated { .. }));
     let (mut book_id, mut session_kind, mut play_mode, mut title, created_at, mut updated_at) =
         match created {
             Some(TranscriptEvent::SessionCreated {
@@ -637,10 +657,7 @@ pub async fn derive_book_session_from_transcript(
     }
 
     // R36 树化（636 号）：对话消息取 active 路径（元数据保持全局扫描）。
-    let chain: Vec<TranscriptEvent> = active_chain_events(&events)
-        .into_iter()
-        .cloned()
-        .collect();
+    let chain: Vec<TranscriptEvent> = active_chain_events(&events).into_iter().cloned().collect();
     let committed = committed_message_events(&chain, None);
     let messages = message_events_to_interaction_messages(&committed);
     if title.is_none() {
@@ -692,10 +709,7 @@ pub async fn read_legacy_book_session(
 }
 
 /// `migrateLegacyBookSessionToTranscript`：旧消息 → session_created + request 事件。
-pub async fn migrate_legacy_book_session_to_transcript(
-    project_root: &Path,
-    session: &BookSession,
-) {
+pub async fn migrate_legacy_book_session_to_transcript(project_root: &Path, session: &BookSession) {
     append_transcript_events(project_root, &session.session_id, |events, next_seq| {
         if !events.is_empty() {
             return Vec::new();
@@ -801,7 +815,12 @@ pub const RESTORED_HISTORY_BOUNDARY_EN: &str = "[Completed history context]\nThe
 
 fn system_llm_message(content: String, timestamp: u64) -> LLMMessage {
     let _ = timestamp;
-    LLMMessage { role: LLMRole::System, content, tool_calls: None, tool_call_id: None }
+    LLMMessage {
+        role: LLMRole::System,
+        content,
+        tool_calls: None,
+        tool_call_id: None,
+    }
 }
 
 /// event.message 为 object 判定 + 取值。
@@ -821,9 +840,11 @@ fn build_historical_tool_summary(
     let request_kinds: HashMap<&str, Option<&str>> = events
         .iter()
         .filter_map(|event| match event {
-            TranscriptEvent::RequestStarted { request_id, session_kind, .. } => {
-                Some((request_id.as_str(), session_kind.map(|k| k.as_str())))
-            }
+            TranscriptEvent::RequestStarted {
+                request_id,
+                session_kind,
+                ..
+            } => Some((request_id.as_str(), session_kind.map(|k| k.as_str()))),
             _ => None,
         })
         .collect();
@@ -836,9 +857,12 @@ fn build_historical_tool_summary(
 
     for event in &committed {
         let (request_id, role, timestamp) = match event {
-            TranscriptEvent::Message { request_id, role, timestamp, .. } => {
-                (request_id.as_str(), role.as_str(), *timestamp)
-            }
+            TranscriptEvent::Message {
+                request_id,
+                role,
+                timestamp,
+                ..
+            } => (request_id.as_str(), role.as_str(), *timestamp),
             _ => continue,
         };
         // TS 摘要循环对 kind 不匹配（含 legacy 无 kind）一律跳过——与
@@ -847,14 +871,19 @@ fn build_historical_tool_summary(
         if session_kind.is_some() && request_kind != session_kind {
             continue;
         }
-        let Some(raw) = event_message(event) else { continue };
+        let Some(raw) = event_message(event) else {
+            continue;
+        };
 
         if role == "assistant" {
             for block in content_blocks(raw) {
                 if block.get("type").and_then(Value::as_str) != Some("toolCall") {
                     continue;
                 }
-                let Some(id) = block.get("id").and_then(Value::as_str).filter(|s| !s.is_empty())
+                let Some(id) = block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
                 else {
                     continue;
                 };
@@ -893,7 +922,11 @@ fn build_historical_tool_summary(
             .or_else(|| call.map(|(tool, _)| tool.clone()))
             .unwrap_or_else(|| "tool".to_string());
         let agent = call.and_then(|(_, agent)| agent.clone());
-        let status = if raw.get("isError") == Some(&Value::Bool(true)) { "failed" } else { "completed" };
+        let status = if raw.get("isError") == Some(&Value::Bool(true)) {
+            "failed"
+        } else {
+            "completed"
+        };
         let text = if tool == "use_skill" {
             "expired; instructions are not active for later turns".to_string()
         } else {
@@ -906,8 +939,15 @@ fn build_historical_tool_summary(
         };
         let line = format!(
             "- {tool}{agent_part} {status}{trimmed_part}",
-            agent_part = agent.as_deref().map(|a| format!(":{a}")).unwrap_or_default(),
-            trimmed_part = if text.is_empty() { String::new() } else { format!(" — {text}") },
+            agent_part = agent
+                .as_deref()
+                .map(|a| format!(":{a}"))
+                .unwrap_or_default(),
+            trimmed_part = if text.is_empty() {
+                String::new()
+            } else {
+                format!(" — {text}")
+            },
         );
         summaries.push((timestamp, line));
         latest_timestamp = latest_timestamp.max(timestamp);
@@ -953,7 +993,12 @@ fn truncate_utf16_ellipsis(text: &str, limit: usize) -> String {
 /// `textOnlyAgentMessage`：user/system 取纯文本；assistant 取非空文本块拼接。
 fn text_only_agent_message(event: &TranscriptEvent) -> Option<LLMMessage> {
     let (role, timestamp, raw) = match event {
-        TranscriptEvent::Message { role, timestamp, message, .. } => (role.as_str(), *timestamp, message),
+        TranscriptEvent::Message {
+            role,
+            timestamp,
+            message,
+            ..
+        } => (role.as_str(), *timestamp, message),
         _ => return None,
     };
     if role == "toolResult" {
@@ -962,7 +1007,11 @@ fn text_only_agent_message(event: &TranscriptEvent) -> Option<LLMMessage> {
     if role == "user" || role == "system" {
         let content = text_from_content(raw.get("content").unwrap_or(&Value::Null));
         return (!content.trim().is_empty()).then(|| LLMMessage {
-            role: if role == "user" { LLMRole::User } else { LLMRole::System },
+            role: if role == "user" {
+                LLMRole::User
+            } else {
+                LLMRole::System
+            },
             content,
             tool_calls: None,
             tool_call_id: None,
@@ -998,7 +1047,9 @@ fn request_ids_with_tool_activity<'e>(events: &[&'e TranscriptEvent]) -> HashSet
     let mut ids = HashSet::new();
     for event in events {
         let (request_id, role) = match event {
-            TranscriptEvent::Message { request_id, role, .. } => (request_id.as_str(), role.as_str()),
+            TranscriptEvent::Message {
+                request_id, role, ..
+            } => (request_id.as_str(), role.as_str()),
             _ => continue,
         };
         if role == "toolResult" {
@@ -1049,14 +1100,15 @@ pub fn restore_committed_dialogue_scan(
     }
 
     let mut committed: Vec<&TranscriptEvent> = committed_message_events(events, session_kind);
-    if let Some(TranscriptEvent::Compaction { first_kept_uuid, .. }) = active_compaction {
-        let kept_index = first_kept_uuid
-            .as_deref()
-            .and_then(|target| {
-                committed
-                    .iter()
-                    .position(|event| event.message_uuid() == Some(target))
-            });
+    if let Some(TranscriptEvent::Compaction {
+        first_kept_uuid, ..
+    }) = active_compaction
+    {
+        let kept_index = first_kept_uuid.as_deref().and_then(|target| {
+            committed
+                .iter()
+                .position(|event| event.message_uuid() == Some(target))
+        });
         match kept_index {
             Some(index) => {
                 // 原地丢弃 [0..index)（split_off 语义相反：保留前缀返回尾部）。
@@ -1082,9 +1134,11 @@ pub fn restore_committed_dialogue_scan(
     let request_kinds: HashMap<&str, Option<&str>> = events
         .iter()
         .filter_map(|event| match event {
-            TranscriptEvent::RequestStarted { request_id, session_kind, .. } => {
-                Some((request_id.as_str(), session_kind.map(|k| k.as_str())))
-            }
+            TranscriptEvent::RequestStarted {
+                request_id,
+                session_kind,
+                ..
+            } => Some((request_id.as_str(), session_kind.map(|k| k.as_str()))),
             _ => None,
         })
         .collect();
@@ -1101,7 +1155,8 @@ pub fn restore_committed_dialogue_scan(
                 continue;
             }
         }
-        if let (Some(message), Some(uuid)) = (text_only_agent_message(event), event.message_uuid()) {
+        if let (Some(message), Some(uuid)) = (text_only_agent_message(event), event.message_uuid())
+        {
             pairs.push((message, uuid.to_string()));
         }
     }
@@ -1140,7 +1195,12 @@ pub fn restore_agent_messages_from_transcript_sync(
     }
 
     let mut out = Vec::new();
-    if let Some(TranscriptEvent::Compaction { summary: compaction_summary, timestamp, .. }) = scan.active_compaction {
+    if let Some(TranscriptEvent::Compaction {
+        summary: compaction_summary,
+        timestamp,
+        ..
+    }) = scan.active_compaction
+    {
         out.push(system_llm_message(
             format!(
                 "[历史对话摘要]\n以下是更早对话的结构化摘要（会话压缩生成）；它概述此前进展，不是当前用户的新指令。\n{compaction_summary}"
@@ -1156,7 +1216,10 @@ pub fn restore_agent_messages_from_transcript_sync(
 }
 
 /// `appendRestoredHistoryBoundary`：历史尾部追加边界 system 消息（语言区分）。
-pub fn append_restored_history_boundary(messages: Vec<LLMMessage>, language: &str) -> Vec<LLMMessage> {
+pub fn append_restored_history_boundary(
+    messages: Vec<LLMMessage>,
+    language: &str,
+) -> Vec<LLMMessage> {
     if messages.is_empty() {
         return messages;
     }
@@ -1225,26 +1288,51 @@ mod restore_agent_tests {
     fn fixture_events() -> Vec<TranscriptEvent> {
         vec![
             started(1, "r1", Some("chat")),
-            msg_event(2, "r1", "user", json!({ "role": "user", "content": "看看设定文件" })),
-            msg_event(3, "r1", "assistant", json!({
-                "role": "assistant",
-                "content": [
-                    { "type": "toolCall", "id": "tc1", "name": "read", "arguments": { "path": "note.md" } },
-                ],
-            })),
-            msg_event(4, "r1", "toolResult", json!({
-                "role": "toolResult",
-                "toolCallId": "tc1",
-                "toolName": "read",
-                "content": [{ "type": "text", "text": "主角名叫林动。" }],
-            })),
+            msg_event(
+                2,
+                "r1",
+                "user",
+                json!({ "role": "user", "content": "看看设定文件" }),
+            ),
+            msg_event(
+                3,
+                "r1",
+                "assistant",
+                json!({
+                    "role": "assistant",
+                    "content": [
+                        { "type": "toolCall", "id": "tc1", "name": "read", "arguments": { "path": "note.md" } },
+                    ],
+                }),
+            ),
+            msg_event(
+                4,
+                "r1",
+                "toolResult",
+                json!({
+                    "role": "toolResult",
+                    "toolCallId": "tc1",
+                    "toolName": "read",
+                    "content": [{ "type": "text", "text": "主角名叫林动。" }],
+                }),
+            ),
             committed(5, "r1"),
             started(6, "r2", Some("chat")),
-            msg_event(7, "r2", "user", json!({ "role": "user", "content": "主角叫什么？" })),
-            msg_event(8, "r2", "assistant", json!({
-                "role": "assistant",
-                "content": [{ "type": "text", "text": "主角名叫林动。" }],
-            })),
+            msg_event(
+                7,
+                "r2",
+                "user",
+                json!({ "role": "user", "content": "主角叫什么？" }),
+            ),
+            msg_event(
+                8,
+                "r2",
+                "assistant",
+                json!({
+                    "role": "assistant",
+                    "content": [{ "type": "text", "text": "主角名叫林动。" }],
+                }),
+            ),
             committed(9, "r2"),
         ]
     }
@@ -1254,9 +1342,15 @@ mod restore_agent_tests {
         let events = fixture_events();
         let summary = build_historical_tool_summary(&events, Some("chat")).unwrap();
         assert_eq!(summary.role, LLMRole::System);
-        assert!(summary.content.starts_with("[历史状态摘要]"), "content: {}", summary.content);
         assert!(
-            summary.content.contains("- read completed — 主角名叫林动。"),
+            summary.content.starts_with("[历史状态摘要]"),
+            "content: {}",
+            summary.content
+        );
+        assert!(
+            summary
+                .content
+                .contains("- read completed — 主角名叫林动。"),
             "content: {}",
             summary.content
         );
@@ -1265,8 +1359,7 @@ mod restore_agent_tests {
     #[test]
     fn dialogue_replays_text_only_turns_and_drops_tool_turns() {
         let events = fixture_events();
-        let restored =
-            restore_agent_messages_from_transcript_sync(&events, Some("chat"));
+        let restored = restore_agent_messages_from_transcript_sync(&events, Some("chat"));
         // summary（system）+ r2 user + r2 assistant；r1 工具轮不回放（user 也
         // 不保留——非 legacy，request_started 带 kind）。
         assert_eq!(restored.len(), 3);
@@ -1289,7 +1382,10 @@ mod restore_agent_tests {
             .filter(|m| m.role == LLMRole::User)
             .map(|m| m.content.as_str())
             .collect();
-        assert!(user_texts.contains(&"看看设定文件"), "users: {user_texts:?}");
+        assert!(
+            user_texts.contains(&"看看设定文件"),
+            "users: {user_texts:?}"
+        );
     }
 
     #[test]
@@ -1328,7 +1424,12 @@ mod restore_agent_tests {
             let request_id = format!("r{i}");
             let start = seq;
             events.push(started(start, &request_id, Some("chat")));
-            events.push(msg_event(start + 1, &request_id, "user", json!({ "role": "user", "content": format!("问{i}") })));
+            events.push(msg_event(
+                start + 1,
+                &request_id,
+                "user",
+                json!({ "role": "user", "content": format!("问{i}") }),
+            ));
             events.push(msg_event(start + 2, &request_id, "assistant", json!({ "role": "assistant", "content": [{ "type": "text", "text": format!("答{i}") }] })));
             events.push(committed(start + 3, &request_id));
             seq += 4;
@@ -1349,7 +1450,12 @@ mod restore_agent_tests {
         let mut events = Vec::new();
         let start = 1;
         events.push(started(start, "r0", Some("chat")));
-        events.push(msg_event(start + 1, "r0", "user", json!({ "role": "user", "content": "问0" })));
+        events.push(msg_event(
+            start + 1,
+            "r0",
+            "user",
+            json!({ "role": "user", "content": "问0" }),
+        ));
         events.push(committed(start + 2, "r0"));
         events.push(compaction_event(10, "全部摘要", None));
         let restored = restore_agent_messages_from_transcript_sync(&events, Some("chat"));
@@ -1362,7 +1468,12 @@ mod restore_agent_tests {
         let mut events = Vec::new();
         let start = 1;
         events.push(started(start, "r0", Some("chat")));
-        events.push(msg_event(start + 1, "r0", "user", json!({ "role": "user", "content": "问0" })));
+        events.push(msg_event(
+            start + 1,
+            "r0",
+            "user",
+            json!({ "role": "user", "content": "问0" }),
+        ));
         events.push(committed(start + 2, "r0"));
         events.push(compaction_event(10, "坏锚摘要", Some("missing-uuid")));
         let restored = restore_agent_messages_from_transcript_sync(&events, Some("chat"));
@@ -1381,7 +1492,12 @@ mod restore_agent_tests {
             let request_id = format!("d{i}");
             let s = seq;
             events.push(started(s, &request_id, Some("chat")));
-            events.push(msg_event(s + 1, &request_id, "user", json!({ "role": "user", "content": format!("问{i}") })));
+            events.push(msg_event(
+                s + 1,
+                &request_id,
+                "user",
+                json!({ "role": "user", "content": format!("问{i}") }),
+            ));
             events.push(msg_event(s + 2, &request_id, "assistant", json!({ "role": "assistant", "content": [{ "type": "text", "text": format!("答{i}") }] })));
             events.push(committed(s + 3, &request_id));
             seq += 4;
@@ -1400,11 +1516,16 @@ mod restore_agent_tests {
                 "role": "assistant",
                 "content": [{ "type": "toolCall", "id": format!("c{i}"), "name": "grep", "arguments": {} }],
             })));
-            tool_events.push(msg_event(tseq + 1, "rt", "toolResult", json!({
-                "role": "toolResult",
-                "toolCallId": format!("c{i}"),
-                "content": [{ "type": "text", "text": format!("结果{i}") }],
-            })));
+            tool_events.push(msg_event(
+                tseq + 1,
+                "rt",
+                "toolResult",
+                json!({
+                    "role": "toolResult",
+                    "toolCallId": format!("c{i}"),
+                    "content": [{ "type": "text", "text": format!("结果{i}") }],
+                }),
+            ));
             tseq += 2;
         }
         tool_events.push(committed(tseq, "rt"));
@@ -1418,16 +1539,26 @@ mod restore_agent_tests {
     fn tool_summary_text_folds_whitespace_and_truncates_utf16() {
         let events = vec![
             started(1, "r1", Some("chat")),
-            msg_event(2, "r1", "assistant", json!({
-                "role": "assistant",
-                "content": [{ "type": "toolCall", "id": "t1", "name": "grep", "arguments": {} }],
-            })),
-            msg_event(3, "r1", "toolResult", json!({
-                "role": "toolResult",
-                "toolCallId": "t1",
-                "toolName": "grep",
-                "content": [{ "type": "text", "text": format!("{}长文本", "词 ".repeat(200)) }],
-            })),
+            msg_event(
+                2,
+                "r1",
+                "assistant",
+                json!({
+                    "role": "assistant",
+                    "content": [{ "type": "toolCall", "id": "t1", "name": "grep", "arguments": {} }],
+                }),
+            ),
+            msg_event(
+                3,
+                "r1",
+                "toolResult",
+                json!({
+                    "role": "toolResult",
+                    "toolCallId": "t1",
+                    "toolName": "grep",
+                    "content": [{ "type": "text", "text": format!("{}长文本", "词 ".repeat(200)) }],
+                }),
+            ),
             committed(4, "r1"),
         ];
         let summary = build_historical_tool_summary(&events, None).unwrap();
@@ -1440,21 +1571,33 @@ mod restore_agent_tests {
     fn use_skill_result_uses_expired_placeholder() {
         let events = vec![
             started(1, "r1", Some("chat")),
-            msg_event(2, "r1", "assistant", json!({
-                "role": "assistant",
-                "content": [{ "type": "toolCall", "id": "t1", "name": "use_skill", "arguments": {} }],
-            })),
-            msg_event(3, "r1", "toolResult", json!({
-                "role": "toolResult",
-                "toolCallId": "t1",
-                "toolName": "use_skill",
-                "content": [{ "type": "text", "text": "# 技能全文指令" }],
-            })),
+            msg_event(
+                2,
+                "r1",
+                "assistant",
+                json!({
+                    "role": "assistant",
+                    "content": [{ "type": "toolCall", "id": "t1", "name": "use_skill", "arguments": {} }],
+                }),
+            ),
+            msg_event(
+                3,
+                "r1",
+                "toolResult",
+                json!({
+                    "role": "toolResult",
+                    "toolCallId": "t1",
+                    "toolName": "use_skill",
+                    "content": [{ "type": "text", "text": "# 技能全文指令" }],
+                }),
+            ),
             committed(4, "r1"),
         ];
         let summary = build_historical_tool_summary(&events, None).unwrap();
         assert!(
-            summary.content.contains("expired; instructions are not active for later turns"),
+            summary
+                .content
+                .contains("expired; instructions are not active for later turns"),
             "content: {}",
             summary.content
         );

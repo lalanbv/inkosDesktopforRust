@@ -59,11 +59,17 @@ fn golden_skills_registry_rank_resolution() {
             .collect();
         assert_eq!(ids, expected_ids, "{name}: 幸存 id 序");
 
-        let winner_ranks = case["expected"]["winnerRanks"].as_object().expect("winnerRanks");
+        let winner_ranks = case["expected"]["winnerRanks"]
+            .as_object()
+            .expect("winnerRanks");
         for skill in &listed {
             let expected_rank = &winner_ranks[&skill.id];
             let expected = expected_rank.as_u64().map(|n| n as u32);
-            assert_eq!(skill.rank, expected, "{name}: {}/{} 幸存 rank", skill.id, name);
+            assert_eq!(
+                skill.rank, expected,
+                "{name}: {}/{} 幸存 rank",
+                skill.id, name
+            );
         }
     }
 }

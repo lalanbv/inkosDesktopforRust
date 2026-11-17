@@ -58,7 +58,9 @@ fn args_path_traverses(args: &Value) -> bool {
 impl ToolGuard for PathTraversalGuard {
     fn check(&self, name: &str, args: &Value, _ctx: &ToolCtx<'_>) -> GuardVerdict {
         if PATH_ARG_TOOLS.contains(&name) && args_path_traverses(args) {
-            return GuardVerdict::Deny(format!("path argument must not contain '..' segments: {name}"));
+            return GuardVerdict::Deny(format!(
+                "path argument must not contain '..' segments: {name}"
+            ));
         }
         GuardVerdict::Allow
     }
@@ -145,7 +147,12 @@ pub fn is_retryable_tool_error(text: &str) -> bool {
 ///
 /// 返回 (业务结果, 观测)；[`crate::interaction::registry::execute_routed`]
 /// 为丢观测薄壳（既有调用面零破坏）。
-pub async fn run_pipeline(reg: &ToolRegistry, ctx: &ToolCtx<'_>, name: &str, args: &Value) -> (ToolResult, PipelineObservation) {
+pub async fn run_pipeline(
+    reg: &ToolRegistry,
+    ctx: &ToolCtx<'_>,
+    name: &str,
+    args: &Value,
+) -> (ToolResult, PipelineObservation) {
     // 超时按变更面定性映射（未知工具名取 ReadOnly 兜底——分发失败路径
     // 不受超时值影响）。
     let timeout = reg
@@ -166,10 +173,16 @@ pub async fn run_pipeline_with_timeout(
     let started = Instant::now();
     // ── 分发段（R38b 语义原样：available 门控 + 生产面抑制）──
     let Some(def) = reg.find(name, ctx) else {
-        return (error_result(format!("Unknown tool: {name}")), PipelineObservation::default());
+        return (
+            error_result(format!("Unknown tool: {name}")),
+            PipelineObservation::default(),
+        );
     };
     if ctx.suppress_production && def.mutation_kind() == MutationKind::ProductionMutation {
-        return (error_result(format!("Unknown tool: {name}")), PipelineObservation::default());
+        return (
+            error_result(format!("Unknown tool: {name}")),
+            PipelineObservation::default(),
+        );
     }
 
     // ── pre 段：守卫判定（装配序，Deny 短路；Ask 归一 Deny）──
@@ -183,7 +196,10 @@ pub async fn run_pipeline_with_timeout(
                     timed_out: false,
                     error_kind: Some("guard"),
                 };
-                return (error_result(format!("Blocked by guard: {reason}")), observation);
+                return (
+                    error_result(format!("Blocked by guard: {reason}")),
+                    observation,
+                );
             }
             // 闸位预留：人审通道未启用，Ask 归一拒绝（施工图 §3.1）。
             GuardVerdict::Ask => {
@@ -193,7 +209,10 @@ pub async fn run_pipeline_with_timeout(
                     timed_out: false,
                     error_kind: Some("guard"),
                 };
-                return (error_result("Blocked by guard: approval flow not enabled".to_string()), observation);
+                return (
+                    error_result("Blocked by guard: approval flow not enabled".to_string()),
+                    observation,
+                );
             }
         }
     }
@@ -212,7 +231,10 @@ pub async fn run_pipeline_with_timeout(
                 // 超时不重试（写工具副作用非幂等；只读超时多为环境性，
                 // 立即失败并如实标注）。
                 break (
-                    error_result(format!("Tool '{name}' timed out after {}s", timeout.as_secs())),
+                    error_result(format!(
+                        "Tool '{name}' timed out after {}s",
+                        timeout.as_secs()
+                    )),
                     true,
                     Some("timeout"),
                 );
@@ -220,7 +242,10 @@ pub async fn run_pipeline_with_timeout(
             Ok(Err(panic_payload)) => {
                 // 工具体 panic：转错误结果，不炸 agent 循环（隔离不吞观测）。
                 break (
-                    error_result(format!("Tool '{name}' panicked: {}", panic_message(&panic_payload))),
+                    error_result(format!(
+                        "Tool '{name}' panicked: {}",
+                        panic_message(&panic_payload)
+                    )),
                     false,
                     Some("error"),
                 );
@@ -288,8 +313,9 @@ mod tests {
 
     fn ctx() -> ToolCtx<'static> {
         // root 指向不存在的临时路径即可——守卫/分发面不触盘。
-        let root: &'static std::path::Path =
-            Box::leak(Box::new(std::path::PathBuf::from("/tmp/inkos-pipeline-test")));
+        let root: &'static std::path::Path = Box::leak(Box::new(std::path::PathBuf::from(
+            "/tmp/inkos-pipeline-test",
+        )));
         ToolCtx::root_only(root)
     }
 
@@ -311,7 +337,12 @@ mod tests {
 
     impl MockDef {
         fn new(name: &'static str, kind: MutationKind, script: Vec<MockOutcome>) -> Box<Self> {
-            Box::new(Self { name, kind, script: Mutex::new(script), calls: AtomicU32::new(0) })
+            Box::new(Self {
+                name,
+                kind,
+                script: Mutex::new(script),
+                calls: AtomicU32::new(0),
+            })
         }
     }
 
@@ -337,13 +368,29 @@ mod tests {
         }
         async fn execute(&self, _ctx: &ToolCtx<'_>, _args: &Value) -> ToolResult {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let outcome = self.script.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(0);
+            let outcome = self
+                .script
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(0);
             match outcome {
-                MockOutcome::Ok(text) => ToolResult { text: text.into(), details: None, is_error: false },
-                MockOutcome::Err(text) => ToolResult { text: text.into(), details: None, is_error: true },
+                MockOutcome::Ok(text) => ToolResult {
+                    text: text.into(),
+                    details: None,
+                    is_error: false,
+                },
+                MockOutcome::Err(text) => ToolResult {
+                    text: text.into(),
+                    details: None,
+                    is_error: true,
+                },
                 MockOutcome::Sleep(d) => {
                     tokio::time::sleep(d).await;
-                    ToolResult { text: "slept".into(), details: None, is_error: false }
+                    ToolResult {
+                        text: "slept".into(),
+                        details: None,
+                        is_error: false,
+                    }
                 }
                 MockOutcome::Panic => panic!("mock panic"),
             }
@@ -371,7 +418,8 @@ mod tests {
         let def = MockDef::new("read", MutationKind::ReadOnly, vec![]);
         let registry = reg_with(def);
         for evil in ["/../evil.txt", "a/../../b.txt", "..\\..\\secret", "ok/.."] {
-            let (res, obs) = run_pipeline(&registry, &ctx(), "read", &json!({ "path": evil })).await;
+            let (res, obs) =
+                run_pipeline(&registry, &ctx(), "read", &json!({ "path": evil })).await;
             assert!(res.is_error, "evil={evil}");
             assert!(res.text.starts_with("Blocked by guard"), "evil={evil}");
             assert_eq!(obs.error_kind, Some("guard"), "evil={evil}");
@@ -384,7 +432,13 @@ mod tests {
             vec![MockOutcome::Ok("searched")],
         );
         let registry = reg_with(def);
-        let (res, obs) = run_pipeline(&registry, &ctx(), "research_web", &json!({ "path": "../x" })).await;
+        let (res, obs) = run_pipeline(
+            &registry,
+            &ctx(),
+            "research_web",
+            &json!({ "path": "../x" }),
+        )
+        .await;
         assert!(!res.is_error);
         assert_eq!(obs.attempt, 1);
         assert_eq!(obs.error_kind, None);
@@ -483,9 +537,18 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_mapping_follows_mutation_kind() {
-        assert_eq!(pipeline_timeout(MutationKind::ReadOnly), Duration::from_secs(30));
-        assert_eq!(pipeline_timeout(MutationKind::ProjectWrite), Duration::from_secs(300));
-        assert_eq!(pipeline_timeout(MutationKind::ProductionMutation), Duration::from_secs(600));
+        assert_eq!(
+            pipeline_timeout(MutationKind::ReadOnly),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            pipeline_timeout(MutationKind::ProjectWrite),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            pipeline_timeout(MutationKind::ProductionMutation),
+            Duration::from_secs(600)
+        );
     }
 
     #[tokio::test]
@@ -529,7 +592,11 @@ mod tests {
                 })
             }
         }
-        let def = MockDef::new("read", MutationKind::ReadOnly, vec![MockOutcome::Ok("body")]);
+        let def = MockDef::new(
+            "read",
+            MutationKind::ReadOnly,
+            vec![MockOutcome::Ok("body")],
+        );
         let registry = reg_with(def);
         // 派链序与 panic 隔离经显式 hook 列表验证——SpillHook 行为由 spill.rs
         // 测试覆盖，此处仅验证派链机制本身。
@@ -537,7 +604,11 @@ mod tests {
         let h2: Box<dyn PostHook> = Box::new(AppendHook("+h2"));
         let hooks: Vec<Box<dyn PostHook>> = vec![h1, h2];
         let ctx = ctx();
-        let initial = ToolResult { text: "body".into(), details: None, is_error: false };
+        let initial = ToolResult {
+            text: "body".into(),
+            details: None,
+            is_error: false,
+        };
         let mut res = initial;
         for hook in &hooks {
             let original = res.clone();
@@ -557,11 +628,17 @@ mod tests {
     #[tokio::test]
     async fn transient_classifier_faces() {
         assert!(is_retryable_tool_error("Fetch failed: 429 rate limited"));
-        assert!(is_retryable_tool_error("Fetch failed: error sending request for url (http://x)"));
+        assert!(is_retryable_tool_error(
+            "Fetch failed: error sending request for url (http://x)"
+        ));
         assert!(is_retryable_tool_error("connection refused"));
         assert!(is_retryable_tool_error("operation timed out"));
-        assert!(!is_retryable_tool_error("read failed: No such file or directory"));
-        assert!(!is_retryable_tool_error("research_web requires a topic argument"));
+        assert!(!is_retryable_tool_error(
+            "read failed: No such file or directory"
+        ));
+        assert!(!is_retryable_tool_error(
+            "research_web requires a topic argument"
+        ));
         assert!(!is_retryable_tool_error("Invalid research_web.purpose: x"));
     }
 }

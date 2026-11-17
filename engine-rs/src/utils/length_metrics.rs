@@ -83,7 +83,6 @@ pub fn is_outside_hard_range(count: u32, hard_min: u32, hard_max: u32) -> bool {
     count < hard_min || count > hard_max
 }
 
-
 /// 区间 delta 缩放：`max(1, floor(target * reference_delta / 2200))`。
 fn scale_range_delta(target: u32, reference_delta: u64) -> u32 {
     let scaled = (target as u64 * reference_delta) / REFERENCE_TARGET;

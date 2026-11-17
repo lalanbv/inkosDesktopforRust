@@ -131,7 +131,10 @@ impl CreativeEpisodeStore {
                 .query_map([], |row| row.get::<_, String>(1))?
                 .any(|name| name.as_deref() == Ok("owner_pid"));
             if !has_column {
-                conn.execute("ALTER TABLE creative_episodes ADD COLUMN owner_pid INTEGER", [])?;
+                conn.execute(
+                    "ALTER TABLE creative_episodes ADD COLUMN owner_pid INTEGER",
+                    [],
+                )?;
             }
             conn.execute_batch(
                 "CREATE INDEX IF NOT EXISTS creative_episode_event_work
@@ -218,10 +221,12 @@ impl CreativeEpisodeStore {
     ) -> Result<CreativeEpisodeEvent, String> {
         validate_harness_id(episode_id)?;
         let conn = self.lock();
-        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| e.to_string())?;
         let result = (|| {
             let exists: Option<String> = conn
-                .prepare("SELECT episode_id FROM creative_episodes WHERE episode_id = ?").map_err(|e| e.to_string())?
+                .prepare("SELECT episode_id FROM creative_episodes WHERE episode_id = ?")
+                .map_err(|e| e.to_string())?
                 .query_row([episode_id], |row| row.get::<_, String>("episode_id"))
                 .ok();
             if exists.is_none() {
@@ -299,9 +304,7 @@ impl CreativeEpisodeStore {
              FROM creative_episodes WHERE episode_id = ?",
             )
             .ok()?;
-        statement
-            .query_row([episode_id], parse_episode_row)
-            .ok()
+        statement.query_row([episode_id], parse_episode_row).ok()
     }
 
     pub fn require_episode(&self, episode_id: &str) -> Result<CreativeEpisode, String> {
@@ -320,10 +323,12 @@ impl CreativeEpisodeStore {
         validate_harness_id(episode_id)?;
         validate_work_resource_id(work_id)?;
         let conn = self.lock();
-        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| e.to_string())?;
         let result = (|| {
             let row: Option<(Option<String>, String)> = conn
-                .prepare("SELECT work_id, status FROM creative_episodes WHERE episode_id = ?").map_err(|e| e.to_string())?
+                .prepare("SELECT work_id, status FROM creative_episodes WHERE episode_id = ?")
+                .map_err(|e| e.to_string())?
                 .query_row([episode_id], |row| {
                     Ok((row.get("workId")?, row.get("status")?))
                 })
@@ -341,7 +346,9 @@ impl CreativeEpisodeStore {
                 return Ok(());
             }
             if status != "running" {
-                return Err(format!("Cannot bind terminal creative episode: {episode_id}"));
+                return Err(format!(
+                    "Cannot bind terminal creative episode: {episode_id}"
+                ));
             }
             let seq = Self::next_seq(&conn, episode_id).map_err(|e| e.to_string())?;
             let event = CreativeEpisodeEvent {
@@ -453,7 +460,8 @@ impl CreativeEpisodeStore {
         reason: &str,
     ) -> Result<u32, String> {
         let conn = self.lock();
-        conn.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| e.to_string())?;
         let result = (|| {
             let rows: Vec<(String, Option<String>)> = conn
                 .prepare(
@@ -462,7 +470,10 @@ impl CreativeEpisodeStore {
                 )
                 .map_err(|e| e.to_string())?
                 .query_map([], |row| {
-                    Ok((row.get::<_, String>("episode_id")?, row.get::<_, Option<String>>("work_id")?))
+                    Ok((
+                        row.get::<_, String>("episode_id")?,
+                        row.get::<_, Option<String>>("work_id")?,
+                    ))
                 })
                 .map_err(|e| e.to_string())?
                 .collect::<rusqlite::Result<_>>()
@@ -482,7 +493,10 @@ impl CreativeEpisodeStore {
                     work_id: work_id.clone(),
                     capability_id: None,
                     action_id: None,
-                    payload: serde_json::json!({ "reason": reason }).as_object().cloned().unwrap_or_default(),
+                    payload: serde_json::json!({ "reason": reason })
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
                 };
                 Self::insert_event(&conn, &event).map_err(|e| e.to_string())?;
                 conn.execute(

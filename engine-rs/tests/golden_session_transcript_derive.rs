@@ -8,8 +8,7 @@
 //! 双端同构不对称，详见向量 comment）、工具轮对话排除与 legacy 无 kind 轮 user
 //! 保留、空文本 assistant 丢弃。事件 wire JSON 双端解析必须同收。
 use inkos_engine::interaction::session_restore::{
-    committed_message_events, derive_book_session_from_transcript,
-    restore_committed_dialogue_scan,
+    committed_message_events, derive_book_session_from_transcript, restore_committed_dialogue_scan,
 };
 use inkos_engine::interaction::session_transcript::read_transcript_events;
 use serde_json::Value;
@@ -60,8 +59,11 @@ async fn golden_session_transcript_derive_replay() {
             .map(|event| serde_json::to_string(event).expect("event line"))
             .collect::<Vec<_>>()
             .join("\n");
-        std::fs::write(events_dir.join(format!("{session_id}.jsonl")), format!("{raw_lines}\n"))
-            .expect("write jsonl");
+        std::fs::write(
+            events_dir.join(format!("{session_id}.jsonl")),
+            format!("{raw_lines}\n"),
+        )
+        .expect("write jsonl");
 
         // 双端解析器同收：坏行跳过语义下，解析数 < 写入数即本测试红。
         let events = read_transcript_events(&root, session_id).await;
@@ -73,8 +75,10 @@ async fn golden_session_transcript_derive_replay() {
 
         let kind = case["deriveSessionKind"].as_str();
         let committed = committed_message_events(&events, kind);
-        let committed_uuids: Vec<&str> =
-            committed.iter().filter_map(|event| event.message_uuid()).collect();
+        let committed_uuids: Vec<&str> = committed
+            .iter()
+            .filter_map(|event| event.message_uuid())
+            .collect();
         let expected_uuids: Vec<&str> = case["expected"]["committedUuids"]
             .as_array()
             .unwrap()
@@ -87,7 +91,12 @@ async fn golden_session_transcript_derive_replay() {
         let scan_pairs: Vec<(String, String)> = scan
             .messages
             .iter()
-            .map(|message| (role_as_str(message.role).to_string(), message.content.clone()))
+            .map(|message| {
+                (
+                    role_as_str(message.role).to_string(),
+                    message.content.clone(),
+                )
+            })
             .collect();
         let expected_scan: Vec<(String, String)> = case["expected"]["scanMessages"]
             .as_array()
@@ -125,7 +134,10 @@ async fn golden_session_transcript_derive_replay() {
                 .messages
                 .iter()
                 .filter(|message| {
-                    message.get("toolExecutions").map(Value::is_array).unwrap_or(false)
+                    message
+                        .get("toolExecutions")
+                        .map(Value::is_array)
+                        .unwrap_or(false)
                 })
                 .count();
             assert_eq!(card_count as u64, expected_cards, "{name}: 工具卡消息数");

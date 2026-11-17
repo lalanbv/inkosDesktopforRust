@@ -6,9 +6,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use super::contracts::{
-    ArtifactManifest, ArtifactRevision, ArtifactRevisionStatus, WorkManifest,
-};
+use super::contracts::{ArtifactManifest, ArtifactRevision, ArtifactRevisionStatus, WorkManifest};
 use super::work_store::{save_work_manifest, WorkStoreError, WORKS_DIRECTORY};
 
 fn current_revision_id(manifest: &WorkManifest, artifact_id: &str) -> Option<String> {
@@ -50,14 +48,21 @@ pub struct StagedRevision {
 
 /// TS `stageArtifactRevision`：版本文件 + manifest 原子提交（promote=true 时
 /// 旧 current 翻 superseded、新版本即 current）。
-pub async fn stage_artifact_revision(input: &StageArtifactRevisionInput<'_>) -> Result<StagedRevision, WorkStoreError> {
+pub async fn stage_artifact_revision(
+    input: &StageArtifactRevisionInput<'_>,
+) -> Result<StagedRevision, WorkStoreError> {
     let manifest = clone_validated(input.manifest)?;
     let artifact_id = input.artifact_id.to_string();
     let revision_id = input.revision_id.to_string();
     let file_name = input.file_name;
     let extension = match file_name.rsplit_once('.') {
         // TS：extname + ^\.[a-z0-9._-]+$/i（extname 含点且非空）。
-        Some((_, ext)) if !ext.is_empty() && ext.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') => {
+        Some((_, ext))
+            if !ext.is_empty()
+                && ext
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-') =>
+        {
             format!(".{}", ext)
         }
         _ => {
@@ -114,7 +119,9 @@ pub async fn stage_artifact_revision(input: &StageArtifactRevisionInput<'_>) -> 
             revisions.push(revision.clone());
             revisions
         },
-        metadata: existing.map(|artifact| artifact.metadata).unwrap_or_default(),
+        metadata: existing
+            .map(|artifact| artifact.metadata)
+            .unwrap_or_default(),
     };
     // TS：ArtifactManifestSchema.parse(nextArtifact) 触发三条不变量校验。
     next_artifact.validate().map_err(WorkStoreError::Invalid)?;
@@ -123,7 +130,11 @@ pub async fn stage_artifact_revision(input: &StageArtifactRevisionInput<'_>) -> 
     next_manifest.updated_at = revision.created_at.clone();
     next_manifest.validate().map_err(WorkStoreError::Invalid)?;
 
-    let snapshot_absolute = input.project_root.join(WORKS_DIRECTORY).join(&manifest.id).join(&relative);
+    let snapshot_absolute = input
+        .project_root
+        .join(WORKS_DIRECTORY)
+        .join(&manifest.id)
+        .join(&relative);
     let commit = crate::utils::atomic_file_set::AtomicFileSet {
         root_dir: input.project_root,
         writes: vec![
@@ -132,7 +143,12 @@ pub async fn stage_artifact_revision(input: &StageArtifactRevisionInput<'_>) -> 
                 content: crate::utils::atomic_file_set::FileContent::Bytes(bytes),
             },
             crate::utils::atomic_file_set::AtomicFileWrite {
-                relative_path: format!("{}/{}/{}", WORKS_DIRECTORY, manifest.id, super::work_store::WORK_MANIFEST_FILE),
+                relative_path: format!(
+                    "{}/{}/{}",
+                    WORKS_DIRECTORY,
+                    manifest.id,
+                    super::work_store::WORK_MANIFEST_FILE
+                ),
                 content: crate::utils::atomic_file_set::FileContent::Text(
                     serde_json::to_string_pretty(&next_manifest)
                         .map_err(|e| WorkStoreError::Io(e.to_string()))?
@@ -169,7 +185,11 @@ pub async fn promote_artifact_revision(
             .iter_mut()
             .find(|artifact| artifact.id == artifact_id)
             .ok_or_else(|| WorkStoreError::Invalid(format!("Unknown artifact: {artifact_id}")))?;
-        if !artifact.revisions.iter().any(|revision| revision.id == revision_id) {
+        if !artifact
+            .revisions
+            .iter()
+            .any(|revision| revision.id == revision_id)
+        {
             return Err(WorkStoreError::Invalid(format!(
                 "Unknown artifact revision: {artifact_id}.{revision_id}"
             )));
@@ -207,10 +227,12 @@ pub async fn read_artifact_revision_bytes(
         .iter()
         .find(|revision| revision.id == revision_id)
         .ok_or_else(|| WorkStoreError::NotFound(format!("{artifact_id}.{revision_id}")))?;
-    let resolved = project_root
-        .join(WORKS_DIRECTORY)
-        .join(&manifest.id)
-        .join(revision.snapshot_path.clone().unwrap_or_else(|| revision.path.clone()));
+    let resolved = project_root.join(WORKS_DIRECTORY).join(&manifest.id).join(
+        revision
+            .snapshot_path
+            .clone()
+            .unwrap_or_else(|| revision.path.clone()),
+    );
     let bytes = tokio::fs::read(&resolved)
         .await
         .map_err(|error| WorkStoreError::Io(error.to_string()))?;
@@ -243,4 +265,3 @@ pub struct StageArtifactRevisionInput<'a> {
     pub created_at: Option<&'a str>,
     pub promote: bool,
 }
-

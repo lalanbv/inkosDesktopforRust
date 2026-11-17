@@ -159,24 +159,23 @@ pub async fn analyze_chapter(
         semantic_selector: None,
     })
     .await;
-    let chapter_summaries =
-        render_summary_snapshot(&memory_selection.summaries, resolved_language);
+    let chapter_summaries = render_summary_snapshot(&memory_selection.summaries, resolved_language);
 
     let governed_memory_blocks = input
         .context_package
         .map(|package| build_governed_memory_evidence_blocks(package, Some(resolved_language)));
 
     let hooks_working_set = match (governed_mode, input.context_package, input.chapter_intent) {
-        (true, Some(package), Some(intent)) => build_governed_hook_working_set(
-            &GovernedHookWorkingSetInput {
+        (true, Some(package), Some(intent)) => {
+            build_governed_hook_working_set(&GovernedHookWorkingSetInput {
                 hooks_markdown: &hooks,
                 context_package: package,
                 chapter_intent: Some(intent),
                 chapter_number: input.chapter_number,
                 language: resolved_language,
                 keep_recent: None,
-            },
-        ),
+            })
+        }
         _ => hooks.clone(),
     };
     let subplot_working_set = if governed_mode {
@@ -189,21 +188,17 @@ pub async fn analyze_chapter(
     } else {
         emotional_arcs.clone()
     };
-    let matrix_working_set = match (
-        governed_mode,
-        input.chapter_intent,
-        input.context_package,
-    ) {
-        (true, Some(intent), Some(package)) => build_governed_character_matrix_working_set(
-            &GovernedMatrixWorkingSetInput {
+    let matrix_working_set = match (governed_mode, input.chapter_intent, input.context_package) {
+        (true, Some(intent), Some(package)) => {
+            build_governed_character_matrix_working_set(&GovernedMatrixWorkingSetInput {
                 matrix_markdown: &character_matrix,
                 chapter_intent: intent,
                 context_package: package,
                 protagonist_name: book_rules
                     .and_then(|rules| rules.protagonist.as_ref())
                     .map(|protagonist| protagonist.name.as_str()),
-            },
-        ),
+            })
+        }
         _ => character_matrix.clone(),
     };
     let reduced_control_block = match (
@@ -312,7 +307,11 @@ pub async fn analyze_chapter(
         input.chapter_content,
         input.chapter_title,
         &current_state,
-        if genre_profile.numerical_system { ledger.as_str() } else { "" },
+        if genre_profile.numerical_system {
+            ledger.as_str()
+        } else {
+            ""
+        },
         &hooks_block,
         &summaries_block,
         &volume_summaries_block,
@@ -326,8 +325,18 @@ pub async fn analyze_chapter(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.3,
         )
@@ -347,7 +356,8 @@ pub async fn analyze_chapter(
 
     // LLM 没给出有效标题（等于默认形态）→ 用入参标题。
     if let Some(chapter_title) = input.chapter_title {
-        let is_default = output.title == default_chapter_title(input.chapter_number, resolved_language)
+        let is_default = output.title
+            == default_chapter_title(input.chapter_number, resolved_language)
             || output.title == format!("第{}章", input.chapter_number);
         if is_default {
             output.title = chapter_title.to_string();
@@ -559,11 +569,7 @@ pub fn find_outline_node(volume_outline: &str, chapter_number: u32) -> Option<St
     let next_line = lines.get(heading_index + 1).copied();
     match next_line {
         Some(next) if !next.starts_with('#') => Some(next.to_string()),
-        _ => Some(
-            heading_prefix_re()
-                .replace(heading, "")
-                .to_string(),
-        ),
+        _ => Some(heading_prefix_re().replace(heading, "").to_string()),
     }
 }
 
@@ -599,8 +605,14 @@ pub fn render_summary_snapshot(
             summary.hook_activity.clone(),
             summary.mood.clone(),
             summary.chapter_type.clone(),
-            summary.conflict_level.map(|v| v.to_string()).unwrap_or_default(),
-            summary.reveal_level.map(|v| v.to_string()).unwrap_or_default(),
+            summary
+                .conflict_level
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
+            summary
+                .reveal_level
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
         ];
         let escaped: Vec<String> = cells.iter().map(|c| escape_table_cell(c)).collect();
         lines.push(format!("| {} |", escaped.join(" | ")));
@@ -638,10 +650,7 @@ mod tests {
 
     #[test]
     fn memory_goal_joins_title_and_content() {
-        assert_eq!(
-            build_memory_goal(Some("夜探"), "正文。"),
-            "夜探\n\n正文。"
-        );
+        assert_eq!(build_memory_goal(Some("夜探"), "正文。"), "夜探\n\n正文。");
         assert_eq!(build_memory_goal(None, "正文。"), "正文。");
         assert_eq!(build_memory_goal(Some("  "), "正文。"), "正文。");
         assert_eq!(build_memory_goal(None, ""), "");
@@ -697,12 +706,10 @@ mod tests {
                 rank: None,
             }],
         };
-        let rule_stack = crate::utils::context_assembly::build_governed_rule_stack(
-            &["禁止降智".into()],
-            &[],
-            3,
-        );
-        let zh = build_reduced_control_block("意图文本", &package, &rule_stack, WritingLanguage::Zh);
+        let rule_stack =
+            crate::utils::context_assembly::build_governed_rule_stack(&["禁止降智".into()], &[], 3);
+        let zh =
+            build_reduced_control_block("意图文本", &package, &rule_stack, WritingLanguage::Zh);
         assert!(zh.contains("## 本章控制输入（由 Planner/Composer 编译）\n意图文本"));
         assert!(zh.contains("- story/current_focus.md: 焦点 | 聚焦夺符"));
         assert!(zh.contains("- 硬护栏："));
@@ -752,7 +759,8 @@ mod tests {
             "",
             "",
         );
-        assert!(en.starts_with("Analyze chapter 3 and update all tracking files.\n\n## Chapter Content"));
+        assert!(en
+            .starts_with("Analyze chapter 3 and update all tracking files.\n\n## Chapter Content"));
         assert!(en.ends_with("Please return the result strictly in the === TAG === format."));
     }
 

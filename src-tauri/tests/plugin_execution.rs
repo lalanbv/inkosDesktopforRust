@@ -52,7 +52,11 @@ async fn execute_echo_round_trip() {
 
     // 调用 plugin.echo：发什么 params 回什么
     let result = manager
-        .execute_plugin("hello-plugin", "plugin.echo", serde_json::json!({"hello": "world"}))
+        .execute_plugin(
+            "hello-plugin",
+            "plugin.echo",
+            serde_json::json!({"hello": "world"}),
+        )
         .await
         .expect("echo 调用失败");
 
@@ -137,7 +141,11 @@ async fn execute_unknown_method_returns_error() {
 
     // 未知方法：插件返回 JSON-RPC error，execute_plugin 应转成 Err
     let result = manager
-        .execute_plugin("hello-plugin", "plugin.nonexistent", serde_json::Value::Null)
+        .execute_plugin(
+            "hello-plugin",
+            "plugin.nonexistent",
+            serde_json::Value::Null,
+        )
         .await;
 
     assert!(result.is_err(), "未知方法应返回错误");

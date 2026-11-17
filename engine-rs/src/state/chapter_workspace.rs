@@ -74,7 +74,10 @@ const _: () = {
 fn version_id_re() -> &'static Regex {
     // TS: /^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$/
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$").expect("version id regex"))
+    R.get_or_init(|| {
+        Regex::new(r"^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$")
+            .expect("version id regex")
+    })
 }
 
 /// 读章节用户备注；缺失 → 空串。对齐 TS `readChapterUserBrief`。
@@ -84,7 +87,12 @@ pub async fn read_chapter_user_brief(
     chapter_number: u32,
 ) -> crate::Result<String> {
     let path = user_brief_path(book_dir, chapter_number);
-    Ok(store.read_to_string(&path).await?.unwrap_or_default().trim().to_string())
+    Ok(store
+        .read_to_string(&path)
+        .await?
+        .unwrap_or_default()
+        .trim()
+        .to_string())
 }
 
 /// 保存章节用户备注；空串则删除文件。对齐 TS `saveChapterUserBrief`。
@@ -103,7 +111,9 @@ pub async fn save_chapter_user_brief(
     store
         .mkdir_p(&join_path(&join_path(book_dir, "story"), "runtime"))
         .await?;
-    store.write_string(&path, &format!("{normalized}\n")).await?;
+    store
+        .write_string(&path, &format!("{normalized}\n"))
+        .await?;
     Ok(())
 }
 
@@ -113,7 +123,9 @@ pub async fn read_chapter_plan_document(
     book_dir: &str,
     chapter_number: u32,
 ) -> crate::Result<Option<String>> {
-    store.read_to_string(&plan_path(book_dir, chapter_number)).await
+    store
+        .read_to_string(&plan_path(book_dir, chapter_number))
+        .await
 }
 
 /// 归档章节版本，返回版本元信息。
@@ -130,10 +142,17 @@ pub async fn archive_chapter_version(
     created_at_iso: &str,
 ) -> crate::Result<ChapterVersion> {
     assert_chapter_number(chapter_number)?;
-    let id = format!("{}_{}_{}", now_millis, source.as_id_segment(), Uuid::new_v4());
+    let id = format!(
+        "{}_{}_{}",
+        now_millis,
+        source.as_id_segment(),
+        Uuid::new_v4()
+    );
     let dir = versions_dir(book_dir, chapter_number);
     store.mkdir_p(&dir).await?;
-    store.write_string(&join_path(&dir, &format!("{id}.md")), content).await?;
+    store
+        .write_string(&join_path(&dir, &format!("{id}.md")), content)
+        .await?;
     Ok(ChapterVersion {
         id,
         chapter_number,
@@ -158,7 +177,9 @@ pub async fn list_chapter_versions(
             continue;
         }
         let id = &file[..file.len() - 3];
-        let Some(parsed) = parse_version_id(id) else { continue };
+        let Some(parsed) = parse_version_id(id) else {
+            continue;
+        };
         let path = join_path(&dir, &file);
         let content = store.read_to_string(&path).await?.unwrap_or_default();
         versions.push(ChapterVersion {
@@ -187,7 +208,10 @@ pub async fn read_chapter_version(
             "Invalid chapter version id: {version_id}"
         )));
     }
-    let path = join_path(&versions_dir(book_dir, chapter_number), &format!("{version_id}.md"));
+    let path = join_path(
+        &versions_dir(book_dir, chapter_number),
+        &format!("{version_id}.md"),
+    );
     match store.read_to_string(&path).await? {
         Some(content) => Ok(content),
         None => Err(crate::EngineError::Constraint(format!(
@@ -202,7 +226,10 @@ fn user_brief_path(book_dir: &str, chapter_number: u32) -> String {
     assert_chapter_number(chapter_number).ok();
     join_path(
         &join_path(book_dir, "story"),
-        &format!("runtime/chapter-{}.user-brief.md", pad_chapter(chapter_number)),
+        &format!(
+            "runtime/chapter-{}.user-brief.md",
+            pad_chapter(chapter_number)
+        ),
     )
 }
 
@@ -214,7 +241,10 @@ fn plan_path(book_dir: &str, chapter_number: u32) -> String {
 }
 
 fn versions_dir(book_dir: &str, chapter_number: u32) -> String {
-    join_path(&join_path(book_dir, "chapters"), &format!(".versions/{}", pad_chapter(chapter_number)))
+    join_path(
+        &join_path(book_dir, "chapters"),
+        &format!(".versions/{}", pad_chapter(chapter_number)),
+    )
 }
 
 fn pad_chapter(chapter_number: u32) -> String {
@@ -308,16 +338,25 @@ mod tests {
     #[test]
     fn version_id_regex_rejects_malformed() {
         assert!(parse_version_id("not-an-id").is_none());
-        assert!(parse_version_id("1700000000000_unknown_550e8400-e29b-41d4-a716-446655440000").is_none());
+        assert!(
+            parse_version_id("1700000000000_unknown_550e8400-e29b-41d4-a716-446655440000")
+                .is_none()
+        );
         assert!(parse_version_id("1700000000000_manual_short").is_none());
     }
 
     #[test]
     fn millis_to_iso_matches_js_iso_format() {
         // 2023-01-01T00:00:00.000Z 的毫秒时间戳。
-        assert_eq!(millis_to_iso(1672531200000).as_deref(), Some("2023-01-01T00:00:00.000Z"));
+        assert_eq!(
+            millis_to_iso(1672531200000).as_deref(),
+            Some("2023-01-01T00:00:00.000Z")
+        );
         // 含毫秒。
-        assert_eq!(millis_to_iso(1672531200123).as_deref(), Some("2023-01-01T00:00:00.123Z"));
+        assert_eq!(
+            millis_to_iso(1672531200123).as_deref(),
+            Some("2023-01-01T00:00:00.123Z")
+        );
     }
 
     #[test]
@@ -332,20 +371,39 @@ mod tests {
     async fn user_brief_roundtrip_and_delete_on_empty() {
         let store = InMemoryStateStore::new();
         // 缺失 → 空串。
-        assert_eq!(read_chapter_user_brief(&store, "book", 1).await.unwrap(), "");
+        assert_eq!(
+            read_chapter_user_brief(&store, "book", 1).await.unwrap(),
+            ""
+        );
         // 写入。
-        save_chapter_user_brief(&store, "book", 1, "  hello  ").await.unwrap();
-        assert_eq!(read_chapter_user_brief(&store, "book", 1).await.unwrap(), "hello");
+        save_chapter_user_brief(&store, "book", 1, "  hello  ")
+            .await
+            .unwrap();
+        assert_eq!(
+            read_chapter_user_brief(&store, "book", 1).await.unwrap(),
+            "hello"
+        );
         // 空串 → 删除。
-        save_chapter_user_brief(&store, "book", 1, "   ").await.unwrap();
-        assert_eq!(read_chapter_user_brief(&store, "book", 1).await.unwrap(), "");
+        save_chapter_user_brief(&store, "book", 1, "   ")
+            .await
+            .unwrap();
+        assert_eq!(
+            read_chapter_user_brief(&store, "book", 1).await.unwrap(),
+            ""
+        );
     }
 
     #[tokio::test]
     async fn plan_document_none_when_absent() {
         let store = InMemoryStateStore::new();
-        assert_eq!(read_chapter_plan_document(&store, "book", 1).await.unwrap(), None);
-        store.set(&join_path(&join_path("book", "story"), "runtime/chapter-0001.plan.md"), "plan");
+        assert_eq!(
+            read_chapter_plan_document(&store, "book", 1).await.unwrap(),
+            None
+        );
+        store.set(
+            &join_path(&join_path("book", "story"), "runtime/chapter-0001.plan.md"),
+            "plan",
+        );
         assert_eq!(
             read_chapter_plan_document(&store, "book", 1).await.unwrap(),
             Some("plan".to_string())
@@ -371,7 +429,10 @@ mod tests {
         assert!(v.id.starts_with("1700000000000_agent_"));
         // 文件写入正确路径。
         let path = join_path(&versions_dir("book", 5), &format!("{}.md", v.id));
-        assert_eq!(store.read_to_string(&path).await.unwrap(), Some("章节内容".to_string()));
+        assert_eq!(
+            store.read_to_string(&path).await.unwrap(),
+            Some("章节内容".to_string())
+        );
     }
 
     #[tokio::test]
@@ -381,11 +442,23 @@ mod tests {
         let dir = versions_dir("book", 1);
         store.mkdir_p(&dir).await.unwrap();
         store
-            .write_string(&join_path(&dir, "1700000000000_manual_550e8400-e29b-41d4-a716-446655440000.md"), "a")
+            .write_string(
+                &join_path(
+                    &dir,
+                    "1700000000000_manual_550e8400-e29b-41d4-a716-446655440000.md",
+                ),
+                "a",
+            )
             .await
             .unwrap();
         store
-            .write_string(&join_path(&dir, "1700000001000_agent_660e8400-e29b-41d4-a716-446655440000.md"), "bb")
+            .write_string(
+                &join_path(
+                    &dir,
+                    "1700000001000_agent_660e8400-e29b-41d4-a716-446655440000.md",
+                ),
+                "bb",
+            )
             .await
             .unwrap();
         let versions = list_chapter_versions(&store, "book", 1).await.unwrap();
@@ -398,7 +471,9 @@ mod tests {
     #[tokio::test]
     async fn read_version_rejects_invalid_id() {
         let store = InMemoryStateStore::new();
-        let err = read_chapter_version(&store, "book", 1, "bad-id").await.unwrap_err();
+        let err = read_chapter_version(&store, "book", 1, "bad-id")
+            .await
+            .unwrap_err();
         assert!(matches!(err, crate::EngineError::Constraint(_)));
     }
 

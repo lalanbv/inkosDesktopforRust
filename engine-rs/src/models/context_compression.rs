@@ -11,7 +11,10 @@ use ts_rs::TS;
 /// 压缩类别。对齐 TS `"session_context" | "story_context"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"session_context\" | \"story_context\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"session_context\" | \"story_context\"")
+)]
 pub enum ContextCompressionCategory {
     #[serde(rename = "session_context")]
     SessionContext,
@@ -22,7 +25,10 @@ pub enum ContextCompressionCategory {
 /// 压缩阶段。对齐 TS `"start" | "end" | "error"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"start\" | \"end\" | \"error\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"start\" | \"end\" | \"error\"")
+)]
 pub enum ContextCompressionPhase {
     #[serde(rename = "start")]
     Start,

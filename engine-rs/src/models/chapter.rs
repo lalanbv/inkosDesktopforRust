@@ -14,7 +14,10 @@ use ts_rs::TS;
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"card-generated\" | \"drafting\" | \"drafted\" | \"auditing\" | \"audit-passed\" | \"audit-failed\" | \"state-degraded\" | \"revising\" | \"ready-for-review\" | \"approved\" | \"rejected\" | \"published\" | \"imported\" | \"needs-revision\"")
+    ts(
+        export,
+        type = "\"card-generated\" | \"drafting\" | \"drafted\" | \"auditing\" | \"audit-passed\" | \"audit-failed\" | \"state-degraded\" | \"revising\" | \"ready-for-review\" | \"approved\" | \"rejected\" | \"published\" | \"imported\" | \"needs-revision\""
+    )
 )]
 pub enum ChapterStatus {
     #[serde(rename = "card-generated")]
@@ -98,12 +101,20 @@ mod tests {
 
     #[test]
     fn status_roundtrips() {
-        for s in [ChapterStatus::Drafting, ChapterStatus::AuditPassed, ChapterStatus::ReadyForReview, ChapterStatus::Imported] {
+        for s in [
+            ChapterStatus::Drafting,
+            ChapterStatus::AuditPassed,
+            ChapterStatus::ReadyForReview,
+            ChapterStatus::Imported,
+        ] {
             let j = serde_json::to_string(&s).unwrap();
             let back: ChapterStatus = serde_json::from_str(&j).unwrap();
             assert_eq!(s, back);
         }
-        assert_eq!(serde_json::to_string(&ChapterStatus::CardGenerated).unwrap(), "\"card-generated\"");
+        assert_eq!(
+            serde_json::to_string(&ChapterStatus::CardGenerated).unwrap(),
+            "\"card-generated\""
+        );
     }
 
     #[test]
@@ -147,7 +158,11 @@ mod tests {
             detection_provider: Some("p".into()),
             detected_at: Some("t2".into()),
             length_telemetry: None,
-            token_usage: Some(TokenUsage { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 }),
+            token_usage: Some(TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                total_tokens: 150,
+            }),
         };
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["tokenUsage"]["totalTokens"], 150);

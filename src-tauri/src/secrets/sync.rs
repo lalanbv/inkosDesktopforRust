@@ -167,9 +167,7 @@ fn run_writeback_loop(
         Err(e) => {
             // watcher 初始化失败无法恢复 → eprintln log 并退出（不 panic）。
             // 调用方应观测日志；keychain 不再回写，但 sync_on_startup 已完成首启同步。
-            eprintln!(
-                "[secrets-writeback] notify watcher init failed: {e:#}; writeback disabled"
-            );
+            eprintln!("[secrets-writeback] notify watcher init failed: {e:#}; writeback disabled");
             return;
         }
     };
@@ -295,11 +293,7 @@ fn debounce_and_process(
 ///
 /// 此函数是 spawn_writeback 的可测核心（无 notify timing 依赖）：
 /// 测试可直接调用以验证防回环与 diff 回写语义。
-pub fn process_writeback(
-    store: &dyn SecretStore,
-    path: &Path,
-    syncing: &AtomicBool,
-) -> Result<()> {
+pub fn process_writeback(store: &dyn SecretStore, path: &Path, syncing: &AtomicBool) -> Result<()> {
     if !should_writeback(syncing) {
         return Ok(());
     }

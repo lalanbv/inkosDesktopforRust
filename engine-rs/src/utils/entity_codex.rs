@@ -136,8 +136,13 @@ pub fn revise_codex_card(base: &EntityCodexCard, revision: &CodexRevision) -> En
                 .map(|relation| CodexRelationship {
                     target: relation.target.clone(),
                     note: {
-                        let note = if relation.note.chars().count() > CODEX_LIMITS_RELATIONSHIP_NOTE {
-                            relation.note.chars().take(CODEX_LIMITS_RELATIONSHIP_NOTE).collect()
+                        let note = if relation.note.chars().count() > CODEX_LIMITS_RELATIONSHIP_NOTE
+                        {
+                            relation
+                                .note
+                                .chars()
+                                .take(CODEX_LIMITS_RELATIONSHIP_NOTE)
+                                .collect()
                         } else {
                             relation.note.clone()
                         };
@@ -182,7 +187,10 @@ pub fn match_codex_cards(text: &str, cards: &[EntityCodexCard]) -> Vec<CodexMatc
             }
         }
         if hits > 0 {
-            matches.push(CodexMatch { card: card.clone(), hits });
+            matches.push(CodexMatch {
+                card: card.clone(),
+                hits,
+            });
         }
     }
     matches.sort_by(|a, b| {
@@ -216,21 +224,28 @@ pub fn render_codex_block(
             }
             if !card.summary.is_empty() {
                 if card.summary.chars().count() > CODEX_EXCERPT_MAX {
-                    let clipped: String =
-                        card.summary.chars().take(CODEX_EXCERPT_MAX).collect();
+                    let clipped: String = card.summary.chars().take(CODEX_EXCERPT_MAX).collect();
                     lines.push(format!("{clipped}…"));
                 } else {
                     lines.push(card.summary.clone());
                 }
             }
             if !card.facts.is_empty() {
-                lines.push(if is_en { "Canon facts:".to_string() } else { "正典事实：".to_string() });
+                lines.push(if is_en {
+                    "Canon facts:".to_string()
+                } else {
+                    "正典事实：".to_string()
+                });
                 for fact in &card.facts {
                     lines.push(format!("- {fact}"));
                 }
             }
             if !card.relationships.is_empty() {
-                lines.push(if is_en { "Relationships:".to_string() } else { "关系：".to_string() });
+                lines.push(if is_en {
+                    "Relationships:".to_string()
+                } else {
+                    "关系：".to_string()
+                });
                 for relation in &card.relationships {
                     lines.push(format!("- {}: {}", relation.target, relation.note));
                 }

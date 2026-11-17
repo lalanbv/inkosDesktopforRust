@@ -24,7 +24,11 @@ use crate::utils::path::safe_child_path;
 pub struct CreationArtifactReference {
     pub work_id: String,
     pub artifact_id: String,
-    #[serde(rename = "revisionId", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "revisionId",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub revision_id: Option<String>,
 }
 
@@ -60,9 +64,15 @@ pub async fn load_creation_source(
     };
     // TS 歧义守卫：四形态至多一（`CREATION_SOURCE_CONFLICT`）。
     let present = [
-        sources.map(|_| "sources").filter(|_| sources.is_some_and(|list| !list.is_empty())),
-        source_text.map(|_| "sourceText").filter(|_| source_text.is_some_and(|t| !t.trim().is_empty())),
-        source_path.map(|_| "sourcePath").filter(|_| source_path.is_some_and(|p| !p.trim().is_empty())),
+        sources
+            .map(|_| "sources")
+            .filter(|_| sources.is_some_and(|list| !list.is_empty())),
+        source_text
+            .map(|_| "sourceText")
+            .filter(|_| source_text.is_some_and(|t| !t.trim().is_empty())),
+        source_path
+            .map(|_| "sourcePath")
+            .filter(|_| source_path.is_some_and(|p| !p.trim().is_empty())),
     ];
     if present.iter().filter(|item| item.is_some()).count() > 1 {
         return Err(coded(
@@ -91,9 +101,14 @@ pub async fn load_creation_source(
                 })
                 .and_then(|item| item.source_revision_id.clone())
         });
-        let resolved = read_artifact_revision(project_root, work_id, artifact_id, revision_id.or(pinned.as_deref()))
-            .await
-            .map_err(|error| coded(error.code, &error.message))?;
+        let resolved = read_artifact_revision(
+            project_root,
+            work_id,
+            artifact_id,
+            revision_id.or(pinned.as_deref()),
+        )
+        .await
+        .map_err(|error| coded(error.code, &error.message))?;
         // 975 号：xhtml 工件（章节文件，translation-create registered 源主形态）
         // 属合法文本面——content-type 集与 JSON 一并放行。
         if !resolved.revision.content_type.starts_with("text/")
@@ -128,19 +143,28 @@ pub async fn load_creation_source(
             .iter()
             .map(|item| {
                 serde_json::from_value(item.clone()).map_err(|error| {
-                    coded("WORK_RESOURCE_ID_INVALID", format!("invalid source reference: {error}"))
+                    coded(
+                        "WORK_RESOURCE_ID_INVALID",
+                        format!("invalid source reference: {error}"),
+                    )
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
         if references.is_empty() {
-            return Err(coded("CREATION_SOURCE_REQUIRED", "Select at least one source artifact."));
+            return Err(coded(
+                "CREATION_SOURCE_REQUIRED",
+                "Select at least one source artifact.",
+            ));
         }
         let identities: BTreeSet<String> = references
             .iter()
             .map(|reference| json!([reference.work_id, reference.artifact_id]).to_string())
             .collect();
         if identities.len() != references.len() {
-            return Err(coded("CREATION_SOURCE_CONFLICT", "Select each source artifact once."));
+            return Err(coded(
+                "CREATION_SOURCE_CONFLICT",
+                "Select each source artifact once.",
+            ));
         }
         let mut texts = Vec::new();
         let mut names: Vec<String> = Vec::new();
@@ -193,15 +217,14 @@ pub async fn load_creation_source(
                 "Creation sourcePath must be project-relative. Upload or ingest the file first.",
             ));
         }
-        let path: PathBuf = safe_child_path(
-            &project_root.to_string_lossy(),
-            path_text,
-        )
-        .map_err(|error| coded("CREATION_SOURCE_PATH_INVALID", error))?;
+        let path: PathBuf = safe_child_path(&project_root.to_string_lossy(), path_text)
+            .map_err(|error| coded("CREATION_SOURCE_PATH_INVALID", error))?;
         let parts: Vec<String> = path_text.split('/').map(str::to_string).collect();
         let mut reference: Option<(String, String)> = None;
         if parts.first().map(String::as_str) == Some("works") && parts.get(1).is_some() {
-            let work = load_work_manifest(project_root, &parts[1]).await.map_err(|error| error.to_string())?;
+            let work = load_work_manifest(project_root, &parts[1])
+                .await
+                .map_err(|error| error.to_string())?;
             let work_path = parts[2..].join("/");
             let artifact = work.artifacts.iter().find(|artifact| {
                 artifact.revisions.iter().any(|revision| {
@@ -210,7 +233,8 @@ pub async fn load_creation_source(
                             || previous.as_ref().is_some_and(|previous| {
                                 previous.lineage.iter().any(|item| {
                                     item.source_artifact_id.as_deref() == Some(artifact.id.as_str())
-                                        && item.source_revision_id.as_deref() == Some(revision.id.as_str())
+                                        && item.source_revision_id.as_deref()
+                                            == Some(revision.id.as_str())
                                 })
                             }))
                 })
@@ -226,7 +250,15 @@ pub async fn load_creation_source(
             }
         }
         if let Some((work_id, artifact_id)) = reference {
-            read_registered(project_root, previous.as_ref(), source_name, &work_id, &artifact_id, None).await?
+            read_registered(
+                project_root,
+                previous.as_ref(),
+                source_name,
+                &work_id,
+                &artifact_id,
+                None,
+            )
+            .await?
         } else {
             let filename_owned = path
                 .file_name()
@@ -236,7 +268,10 @@ pub async fn load_creation_source(
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .map(String::from)
-                .or_else(|| path.file_stem().map(|stem| stem.to_string_lossy().into_owned()));
+                .or_else(|| {
+                    path.file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                });
             // TS：readMaterialSource 传原始相对 sourcePath（非 safeChildPath 解析后的
             // 绝对路径——绝对路径二次 safe_child_path 在 Rust 逻辑归一下会 root+abs 拼接）。
             let material = ingest_material(
@@ -256,17 +291,21 @@ pub async fn load_creation_source(
             let text = tokio::fs::read_to_string(project_root.join(&material.markdown_path))
                 .await
                 .map_err(|e| e.to_string())?;
-            CreationSourceResolved { text, name: material.title, lineage: Vec::new() }
+            CreationSourceResolved {
+                text,
+                name: material.title,
+                lineage: Vec::new(),
+            }
         }
     };
 
     // TS 绑定校验：draft 已绑定 source-material.md 时，正文与 lineage 必须一致。
     if let Some(previous) = &previous {
         let Some(bound) = previous.artifacts.iter().find(|artifact| {
-            artifact
-                .revisions
-                .iter()
-                .any(|revision| revision.id == artifact.current_revision_id.as_deref().unwrap_or("") && revision.path == "source/source-material.md")
+            artifact.revisions.iter().any(|revision| {
+                revision.id == artifact.current_revision_id.as_deref().unwrap_or("")
+                    && revision.path == "source/source-material.md"
+            })
         }) else {
             return Ok(result);
         };
@@ -276,14 +315,30 @@ pub async fn load_creation_source(
         let pinned: Vec<String> = previous
             .lineage
             .iter()
-            .filter_map(|item| item.source_revision_id.as_ref().map(|_| format!("{}/{}/{}", item.source_work_id, item.source_artifact_id.clone().unwrap_or_default(), item.source_revision_id.clone().unwrap_or_default())))
+            .filter_map(|item| {
+                item.source_revision_id.as_ref().map(|_| {
+                    format!(
+                        "{}/{}/{}",
+                        item.source_work_id,
+                        item.source_artifact_id.clone().unwrap_or_default(),
+                        item.source_revision_id.clone().unwrap_or_default()
+                    )
+                })
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         let resolved_lineage: Vec<String> = result
             .lineage
             .iter()
-            .map(|item| format!("{}/{}/{}", item.source_work_id, item.source_artifact_id.clone().unwrap_or_default(), item.source_revision_id.clone().unwrap_or_default()))
+            .map(|item| {
+                format!(
+                    "{}/{}/{}",
+                    item.source_work_id,
+                    item.source_artifact_id.clone().unwrap_or_default(),
+                    item.source_revision_id.clone().unwrap_or_default()
+                )
+            })
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();

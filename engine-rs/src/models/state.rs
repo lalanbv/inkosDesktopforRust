@@ -87,7 +87,10 @@ pub struct PendingHook {
 /// 伏笔状态。对齐 TS `"open" | "progressing" | "resolved"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"open\" | \"progressing\" | \"resolved\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"open\" | \"progressing\" | \"resolved\"")
+)]
 pub enum PendingHookStatus {
     #[serde(rename = "open")]
     Open,

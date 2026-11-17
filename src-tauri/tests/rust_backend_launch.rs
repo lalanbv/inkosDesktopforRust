@@ -76,7 +76,9 @@ async fn rust_engine_serves_health_under_env_contract() {
         .expect("health 响应应为 JSON");
     assert_eq!(body["ok"], serde_json::json!(true));
     assert!(
-        body["version"].as_str().is_some_and(|v: &str| !v.is_empty()),
+        body["version"]
+            .as_str()
+            .is_some_and(|v: &str| !v.is_empty()),
         "version 不应为空: {body}"
     );
 
@@ -119,7 +121,10 @@ async fn rust_engine_serves_spa_when_static_dir_set() {
     // 轮询的却是先绑者的纯 API 404——实测踩中）。
     let port = supervisor::pick_free_port(5600).expect("无空闲端口");
     let spec = rustbin::build_launch(&paths, port, &bin, Some(&dist), None);
-    assert_eq!(spec.env.get("INKOS_STATIC_DIR").unwrap(), &dist.to_string_lossy().into_owned());
+    assert_eq!(
+        spec.env.get("INKOS_STATIC_DIR").unwrap(),
+        &dist.to_string_lossy().into_owned()
+    );
 
     let mut child = spawn(&spec).expect("spawn inkos-engine-server 失败");
 

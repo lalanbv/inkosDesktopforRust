@@ -21,8 +21,8 @@ use axum::Json;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::prompts::{builtin_prompt_packs, builtin_prompts, get_builtin_prompt, BuiltinPrompt};
 use crate::prompts::prompt_pack::prompt_override_path;
+use crate::prompts::{builtin_prompt_packs, builtin_prompts, get_builtin_prompt, BuiltinPrompt};
 use crate::server::books_routes::BooksRuntime;
 use crate::skills::external_loader::{
     list_project_skill_ids, load_available_agent_skills, parse_agent_skill_document,
@@ -74,8 +74,14 @@ fn project_skill_path(root: &Path, id: &str) -> PathBuf {
 /// `toPosixPath(relative(root, path))`：root 内相对路径的 posix 形态。
 fn to_posix_relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
-        .map(|rel| rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
-        .unwrap_or_else(|_| path.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
+        .map(|rel| {
+            rel.to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        })
+        .unwrap_or_else(|_| {
+            path.to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        })
 }
 
 // ── 响应形状 ───────────────────────────────────────────────────
@@ -103,7 +109,11 @@ fn skill_source_str(source: SkillSource) -> &'static str {
     }
 }
 
-fn to_studio_skill(skill: &AgentSkill, root: &Path, project_skill_ids: &HashSet<String>) -> StudioSkill {
+fn to_studio_skill(
+    skill: &AgentSkill,
+    root: &Path,
+    project_skill_ids: &HashSet<String>,
+) -> StudioSkill {
     let is_project = project_skill_ids.contains(&skill.id);
     let path = is_project.then(|| to_posix_relative(root, &project_skill_path(root, &skill.id)));
     StudioSkill {
@@ -140,11 +150,11 @@ struct StudioPromptPackPrompt {
 ///
 /// 对齐 `loadPromptPackPrompt({projectRoot})` 只传 project 层的行为（user 层不注入）；
 /// 读取任何失败均视为无覆盖（TS readTextIfExists catch 全部）。
-async fn to_studio_prompt_pack_prompt(root: &Path, prompt: &BuiltinPrompt) -> StudioPromptPackPrompt {
-    let override_path = PathBuf::from(prompt_override_path(
-        &root.to_string_lossy(),
-        prompt.id,
-    ));
+async fn to_studio_prompt_pack_prompt(
+    root: &Path,
+    prompt: &BuiltinPrompt,
+) -> StudioPromptPackPrompt {
+    let override_path = PathBuf::from(prompt_override_path(&root.to_string_lossy(), prompt.id));
     if let Ok(content) = tokio::fs::read_to_string(&override_path).await {
         return StudioPromptPackPrompt {
             id: prompt.id.to_string(),
@@ -205,8 +215,8 @@ fn internal_error_message(message: &str) -> ApiErrorResponse {
 // 注册在 :skillId 参数路由之前（matchit 静态段优先，双保险）。
 
 pub async fn list_skill_trust(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
-    let entries = crate::skills::trust_store::read_trusted_sources(runtime.state.project_root())
-        .await;
+    let entries =
+        crate::skills::trust_store::read_trusted_sources(runtime.state.project_root()).await;
     (StatusCode::OK, Json(json!({ "entries": entries })))
 }
 
@@ -261,8 +271,14 @@ pub async fn add_skill_trust(
     let result = crate::skills::trust_store::add_trusted_source(root, raw_path).await;
     match result {
         Ok(entries) => {
-            runtime.hub.broadcast("skills:change", &json!({ "reason": "trust-added" }));
-            (StatusCode::OK, Json(json!({ "ok": true, "entries": entries }))).into_response()
+            runtime
+                .hub
+                .broadcast("skills:change", &json!({ "reason": "trust-added" }));
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "entries": entries })),
+            )
+                .into_response()
         }
         Err(error) => internal_error_message(&error.to_string()).into_response(),
     }
@@ -272,18 +288,31 @@ pub async fn remove_skill_trust(
     State(runtime): State<BooksRuntime>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let raw_path = params.get("path").map(|value| value.trim()).unwrap_or_default();
+    let raw_path = params
+        .get("path")
+        .map(|value| value.trim())
+        .unwrap_or_default();
     if raw_path.is_empty() {
-        return api_error(StatusCode::BAD_REQUEST, "INVALID_SKILL_TRUST", "path query is required")
-            .into_response();
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            "INVALID_SKILL_TRUST",
+            "path query is required",
+        )
+        .into_response();
     }
     let result =
         crate::skills::trust_store::remove_trusted_source(runtime.state.project_root(), raw_path)
             .await;
     match result {
         Ok(entries) => {
-            runtime.hub.broadcast("skills:change", &json!({ "reason": "trust-removed" }));
-            (StatusCode::OK, Json(json!({ "ok": true, "entries": entries }))).into_response()
+            runtime
+                .hub
+                .broadcast("skills:change", &json!({ "reason": "trust-removed" }));
+            (
+                StatusCode::OK,
+                Json(json!({ "ok": true, "entries": entries })),
+            )
+                .into_response()
         }
         Err(error) => internal_error_message(&error.to_string()).into_response(),
     }
@@ -357,7 +386,10 @@ pub async fn put_prompt_pack(
         Err(response) => return response,
     };
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
-        return bad_request("INVALID_PROMPT_PACK_PAYLOAD", "Prompt pack payload must be JSON");
+        return bad_request(
+            "INVALID_PROMPT_PACK_PAYLOAD",
+            "Prompt pack payload must be JSON",
+        );
     };
     // TS：`payload && typeof payload === "object" && "content" in payload`（数组无 content 键）
     let Some(content) = payload
@@ -450,8 +482,7 @@ pub(crate) fn decode_base64_lenient(input: &str) -> Vec<u8> {
 /// payload（`(.*)` dotall）可含逗号与换行。273 号起委托 upload_common 的
 /// 带 mime 版本（同一实现），本文件只需字节。
 fn parse_data_url(data_url: &str) -> Result<Vec<u8>, ApiErrorResponse> {
-    crate::server::upload_common::parse_data_url_with_mime(data_url)
-        .map(|(bytes, _)| bytes)
+    crate::server::upload_common::parse_data_url_with_mime(data_url).map(|(bytes, _)| bytes)
 }
 
 struct SkillImportFile {
@@ -493,7 +524,10 @@ fn normalize_skill_import_path(value: Option<&Value>) -> Result<String, ApiError
         return Err(invalid(raw));
     }
     let parts: Vec<&str> = normalized.split('/').collect();
-    if parts.iter().any(|part| part.is_empty() || *part == "." || *part == "..") {
+    if parts
+        .iter()
+        .any(|part| part.is_empty() || *part == "." || *part == "..")
+    {
         return Err(invalid(raw));
     }
     Ok(parts.join("/"))
@@ -503,9 +537,12 @@ fn normalize_skill_import_path(value: Option<&Value>) -> Result<String, ApiError
 fn normalize_skill_import_files(
     value: Option<&Value>,
 ) -> Result<(Vec<SkillImportFile>, String), ApiErrorResponse> {
-    let arr = value
-        .and_then(Value::as_array)
-        .ok_or_else(|| bad_request("INVALID_SKILL_IMPORT", "Skill import requires at least one file"))?;
+    let arr = value.and_then(Value::as_array).ok_or_else(|| {
+        bad_request(
+            "INVALID_SKILL_IMPORT",
+            "Skill import requires at least one file",
+        )
+    })?;
     if arr.is_empty() {
         return Err(bad_request(
             "INVALID_SKILL_IMPORT",
@@ -524,9 +561,12 @@ fn normalize_skill_import_files(
     let mut seen_path_keys: HashSet<String> = HashSet::new();
     let mut total_bytes = 0usize;
     for item in arr {
-        let record = item
-            .as_object()
-            .ok_or_else(|| bad_request("INVALID_SKILL_IMPORT", "Each skill import entry must be an object"))?;
+        let record = item.as_object().ok_or_else(|| {
+            bad_request(
+                "INVALID_SKILL_IMPORT",
+                "Each skill import entry must be an object",
+            )
+        })?;
         let path = normalize_skill_import_path(record.get("path"))?;
         let path_key = path.to_lowercase();
         if !seen_path_keys.insert(path_key) {
@@ -538,7 +578,12 @@ fn normalize_skill_import_files(
         let data_url = record
             .get("dataUrl")
             .and_then(Value::as_str)
-            .ok_or_else(|| bad_request("INVALID_SKILL_IMPORT", format!("Missing dataUrl for {path}")))?;
+            .ok_or_else(|| {
+                bad_request(
+                    "INVALID_SKILL_IMPORT",
+                    format!("Missing dataUrl for {path}"),
+                )
+            })?;
         let buffer = parse_data_url(data_url)?;
         if buffer.len() > MAX_SKILL_IMPORT_FILE_BYTES {
             return Err(api_error(
@@ -593,9 +638,12 @@ async fn import_studio_skill_folder(
     root: &Path,
     payload: &Value,
 ) -> Result<AgentSkill, ApiErrorResponse> {
-    let record = payload
-        .as_object()
-        .ok_or_else(|| bad_request("INVALID_SKILL_IMPORT", "Skill import payload must be an object"))?;
+    let record = payload.as_object().ok_or_else(|| {
+        bad_request(
+            "INVALID_SKILL_IMPORT",
+            "Skill import payload must be an object",
+        )
+    })?;
     let (files, manifest_path) = normalize_skill_import_files(record.get("files"))?;
     let manifest = files
         .iter()
@@ -666,12 +714,16 @@ pub async fn import_skill(
     let root = runtime.state.project_root();
     // 273 号：TS 总限 8MB，base64 膨胀后 JSON body ~10.7MB——axum 默认 2MB
     // 提取器上限会先行截断，改手工读取（BODY_CAP_SKILL_IMPORT=16MB）。
-    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_SKILL_IMPORT).await {
+    let body = match crate::server::read_body_capped(req, crate::server::BODY_CAP_SKILL_IMPORT)
+        .await
+    {
         Ok(body) => body,
         Err(status) => {
             return (
                 status,
-                Json(json!({ "error": { "code": "INVALID_SKILL_IMPORT", "message": "Skill import payload too large" } })),
+                Json(
+                    json!({ "error": { "code": "INVALID_SKILL_IMPORT", "message": "Skill import payload too large" } }),
+                ),
             )
         }
     };
@@ -684,7 +736,9 @@ pub async fn import_skill(
     };
     // R44/566 号：skills:change 失效事件——UI 打开中的技能面板热刷新
     // （broadcast 为尽力而为观测面，不阻断响应）。
-    runtime.hub.broadcast("skills:change", &json!({ "reason": "imported" }));
+    runtime
+        .hub
+        .broadcast("skills:change", &json!({ "reason": "imported" }));
     let project_skill_ids: HashSet<String> = HashSet::from([skill.id.clone()]);
     (
         StatusCode::OK,
@@ -710,7 +764,11 @@ pub async fn list_skill_documents(
     let available = load_available_agent_skills(root, &env_dirs, home.as_deref()).await;
     let skill = available.skills.iter().find(|skill| skill.id == id);
     let Some(base_dir) = skill.and_then(|skill| skill.base_dir.clone()) else {
-        return api_error(StatusCode::NOT_FOUND, "SKILL_NOT_FOUND", "Skill documents unavailable");
+        return api_error(
+            StatusCode::NOT_FOUND,
+            "SKILL_NOT_FOUND",
+            "Skill documents unavailable",
+        );
     };
     let mut documents: Vec<(String, String)> = Vec::new();
     if let Err(response) = visit_skill_documents(Path::new(&base_dir), &mut documents).await {
@@ -801,10 +859,18 @@ pub async fn put_skill_documents(
     };
     // TS body.documents 缺失 → TypeError 无局部 catch → 500 固定文案。
     let Some(Json(body)) = body else {
-        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Unexpected server error.");
+        return api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "Unexpected server error.",
+        );
     };
     let Some(documents) = body.get("documents") else {
-        return api_error(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Unexpected server error.");
+        return api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "INTERNAL_ERROR",
+            "Unexpected server error.",
+        );
     };
     // TS：每条 {path, content} 包成 text/plain dataUrl 后走共享归一化。
     use base64::Engine as _;
@@ -830,7 +896,10 @@ pub async fn put_skill_documents(
         Err(response) => return response,
     };
     let Some(manifest) = files.iter().find(|file| file.path == "SKILL.md") else {
-        return bad_request("INVALID_SKILL_MANIFEST", "SKILL.md must be at the folder root");
+        return bad_request(
+            "INVALID_SKILL_MANIFEST",
+            "SKILL.md must be at the folder root",
+        );
     };
     let skill_path = project_skill_path(root, &id);
     // TS：parseAgentSkillDocument 抛错=普通 Error 无局部 catch → 500 固定文案
@@ -883,10 +952,7 @@ pub async fn put_skill_documents(
     let writes = files
         .iter()
         .map(|file| crate::utils::atomic_file_set::AtomicFileWrite {
-            relative_path: format!(
-                ".agents/skills/{id}/{}",
-                file.path.replace('\\', "/")
-            ),
+            relative_path: format!(".agents/skills/{id}/{}", file.path.replace('\\', "/")),
             content: crate::utils::atomic_file_set::FileContent::Bytes(file.buffer.clone()),
         })
         .collect();
@@ -907,7 +973,10 @@ pub async fn put_skill_documents(
 /// `normalizeStudioSkillId`：SkillIdSchema 校验（消息带 zod 默认文本）。
 fn normalize_studio_skill_id(value: &str, field: &str) -> Result<String, ApiErrorResponse> {
     normalize_skill_id_strict(value).map_err(|e| {
-        bad_request("INVALID_SKILL_ID", format!("Invalid {field}: {}", e.message()))
+        bad_request(
+            "INVALID_SKILL_ID",
+            format!("Invalid {field}: {}", e.message()),
+        )
     })
 }
 
@@ -933,6 +1002,8 @@ pub async fn delete_skill(
         return internal_error(&e);
     }
     // R44/566 号：skills:change 失效事件（同 import）。
-    runtime.hub.broadcast("skills:change", &json!({ "reason": "deleted" }));
+    runtime
+        .hub
+        .broadcast("skills:change", &json!({ "reason": "deleted" }));
     (StatusCode::OK, Json(json!({ "ok": true })))
 }

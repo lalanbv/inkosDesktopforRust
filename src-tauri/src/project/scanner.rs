@@ -60,11 +60,9 @@ impl ProjectScanner {
         let max_depth = self.max_depth;
         let exclude_dirs = self.exclude_dirs.clone();
 
-        tokio::task::spawn_blocking(move || {
-            Self::scan_sync(&root, max_depth, &exclude_dirs)
-        })
-        .await
-        .context("扫描任务失败")?
+        tokio::task::spawn_blocking(move || Self::scan_sync(&root, max_depth, &exclude_dirs))
+            .await
+            .context("扫描任务失败")?
     }
 
     /// 扫描单个项目（同步）
@@ -173,11 +171,7 @@ mod tests {
     #[test]
     fn test_scan_single_nodejs() {
         let temp = TempDir::new().unwrap();
-        fs::write(
-            temp.path().join("package.json"),
-            r#"{"name": "test-app"}"#,
-        )
-        .unwrap();
+        fs::write(temp.path().join("package.json"), r#"{"name": "test-app"}"#).unwrap();
 
         let scanner = ProjectScanner::new();
         let result = scanner.scan_single(temp.path()).unwrap();
@@ -224,12 +218,7 @@ mod tests {
             "Cargo.toml",
             "[package]\nname = \"proj2\"",
         );
-        create_test_project(
-            temp.path(),
-            "project3",
-            "requirements.txt",
-            "requests",
-        );
+        create_test_project(temp.path(), "project3", "requirements.txt", "requests");
 
         let scanner = ProjectScanner::new();
         let projects = scanner.scan(temp.path()).await.unwrap();

@@ -114,7 +114,11 @@ fn normalize_generated_path(
 ) -> Result<(String, PathBuf), ApiErrorResponse> {
     let invalid = |message: &str| api_error(StatusCode::BAD_REQUEST, code, message);
     let rel_path = decode_uri_path(raw_path).map_err(|_| {
-        api_error(StatusCode::BAD_REQUEST, code, "Invalid project artifact path")
+        api_error(
+            StatusCode::BAD_REQUEST,
+            code,
+            "Invalid project artifact path",
+        )
     })?;
     let rel_path = strip_leading_slashes(&rel_path);
     if rel_path.is_empty()
@@ -131,7 +135,10 @@ fn normalize_generated_path(
         "shorts/",
         "covers/",
     ];
-    if !ALLOWED_ROOTS.iter().any(|prefix| rel_path.starts_with(prefix)) {
+    if !ALLOWED_ROOTS
+        .iter()
+        .any(|prefix| rel_path.starts_with(prefix))
+    {
         return Err(invalid("Only generated writing artifacts can be opened"));
     }
     let resolved = resolve_within_root(root, rel_path)?;
@@ -170,7 +177,11 @@ pub(crate) fn resolve_project_image_file(
         ));
     }
     // TS：relPath.split(".").pop()?.toLowerCase()（无点时为整串）
-    let ext = rel_path.rsplit('.').next().unwrap_or_default().to_lowercase();
+    let ext = rel_path
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
     let content_type = match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -192,8 +203,13 @@ fn resolve_project_text_artifact_file(
     root: &Path,
     raw_path: &str,
 ) -> Result<(String, PathBuf, &'static str), ApiErrorResponse> {
-    let (rel_path, resolved) = normalize_generated_path(root, raw_path, "INVALID_PROJECT_ARTIFACT_PATH")?;
-    let ext = rel_path.rsplit('.').next().unwrap_or_default().to_lowercase();
+    let (rel_path, resolved) =
+        normalize_generated_path(root, raw_path, "INVALID_PROJECT_ARTIFACT_PATH")?;
+    let ext = rel_path
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
     let content_type = match ext.as_str() {
         "md" | "markdown" => "text/markdown; charset=utf-8",
         "txt" => "text/plain; charset=utf-8",
@@ -211,10 +227,7 @@ fn resolve_project_text_artifact_file(
 
 // ── GET /api/v1/project/files/*file ────────────────────────────
 
-pub async fn get_project_file(
-    State(runtime): State<BooksRuntime>,
-    req: Request,
-) -> Response {
+pub async fn get_project_file(State(runtime): State<BooksRuntime>, req: Request) -> Response {
     let root = runtime.state.project_root().to_path_buf();
     let raw = wildcard_tail(&req, "/api/v1/project/files/");
     let (resolved, content_type) = match resolve_project_image_file(&root, &raw) {
@@ -241,17 +254,13 @@ pub async fn get_project_file(
 
 // ── GET /api/v1/project/artifacts/*file ────────────────────────
 
-pub async fn get_project_artifact(
-    State(runtime): State<BooksRuntime>,
-    req: Request,
-) -> Response {
+pub async fn get_project_artifact(State(runtime): State<BooksRuntime>, req: Request) -> Response {
     let root = runtime.state.project_root().to_path_buf();
     let raw = wildcard_tail(&req, "/api/v1/project/artifacts/");
-    let (rel_path, resolved, content_type) =
-        match resolve_project_text_artifact_file(&root, &raw) {
-            Ok(file) => file,
-            Err(response) => return response.into_response(),
-        };
+    let (rel_path, resolved, content_type) = match resolve_project_text_artifact_file(&root, &raw) {
+        Ok(file) => file,
+        Err(response) => return response.into_response(),
+    };
     let content = match tokio::fs::read_to_string(&resolved).await {
         Ok(content) => content,
         Err(_) => {
@@ -273,17 +282,13 @@ pub async fn get_project_artifact(
 
 // ── PUT /api/v1/project/artifacts/*file ────────────────────────
 
-pub async fn put_project_artifact(
-    State(runtime): State<BooksRuntime>,
-    req: Request,
-) -> Response {
+pub async fn put_project_artifact(State(runtime): State<BooksRuntime>, req: Request) -> Response {
     let root = runtime.state.project_root().to_path_buf();
     let raw = wildcard_tail(&req, "/api/v1/project/artifacts/");
-    let (rel_path, resolved, content_type) =
-        match resolve_project_text_artifact_file(&root, &raw) {
-            Ok(file) => file,
-            Err(response) => return response.into_response(),
-        };
+    let (rel_path, resolved, content_type) = match resolve_project_text_artifact_file(&root, &raw) {
+        Ok(file) => file,
+        Err(response) => return response.into_response(),
+    };
     let body = match axum::body::to_bytes(req.into_body(), 16 * 1024 * 1024).await {
         Ok(bytes) => bytes,
         Err(_) => Bytes::new(),

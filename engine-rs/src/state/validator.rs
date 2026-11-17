@@ -34,14 +34,22 @@ pub struct ValidationInput {
 pub fn validate_runtime_state(input: &ValidationInput) -> Vec<RuntimeStateValidationIssue> {
     let mut issues: Vec<RuntimeStateValidationIssue> = Vec::new();
 
-    let manifest: Option<StateManifest> = parse_or_issue(
-        &input.manifest, &mut issues, "invalid_manifest", "manifest");
+    let manifest: Option<StateManifest> =
+        parse_or_issue(&input.manifest, &mut issues, "invalid_manifest", "manifest");
     let current_state: Option<CurrentStateState> = parse_or_issue(
-        &input.current_state, &mut issues, "invalid_current_state", "currentState");
-    let hooks: Option<HooksState> = parse_or_issue(
-        &input.hooks, &mut issues, "invalid_hooks_state", "hooks");
+        &input.current_state,
+        &mut issues,
+        "invalid_current_state",
+        "currentState",
+    );
+    let hooks: Option<HooksState> =
+        parse_or_issue(&input.hooks, &mut issues, "invalid_hooks_state", "hooks");
     let chapter_summaries: Option<ChapterSummariesState> = parse_or_issue(
-        &input.chapter_summaries, &mut issues, "invalid_chapter_summaries_state", "chapterSummaries");
+        &input.chapter_summaries,
+        &mut issues,
+        "invalid_chapter_summaries_state",
+        "chapterSummaries",
+    );
 
     if let Some(hooks) = &hooks {
         let mut seen = std::collections::HashSet::new();
@@ -151,7 +159,12 @@ mod tests {
             { "hookId": "dup", "startChapter": 1, "type": "plot", "status": "open", "lastAdvancedChapter": 1, "expectedPayoff": "", "notes": "" },
             { "hookId": "dup", "startChapter": 2, "type": "plot", "status": "open", "lastAdvancedChapter": 2, "expectedPayoff": "", "notes": "" }
         ] });
-        let input = ValidationInput { manifest: valid_manifest(), current_state: valid_current(), hooks, chapter_summaries: valid_summaries() };
+        let input = ValidationInput {
+            manifest: valid_manifest(),
+            current_state: valid_current(),
+            hooks,
+            chapter_summaries: valid_summaries(),
+        };
         let issues = validate_runtime_state(&input);
         assert!(issues.iter().any(|i| i.code == "duplicate_hook_id"));
     }
@@ -162,7 +175,12 @@ mod tests {
             { "chapter": 3, "title": "a", "characters": "", "events": "", "stateChanges": "", "hookActivity": "", "mood": "", "chapterType": "" },
             { "chapter": 3, "title": "b", "characters": "", "events": "", "stateChanges": "", "hookActivity": "", "mood": "", "chapterType": "" }
         ] });
-        let input = ValidationInput { manifest: valid_manifest(), current_state: valid_current(), hooks: valid_hooks(), chapter_summaries: summaries };
+        let input = ValidationInput {
+            manifest: valid_manifest(),
+            current_state: valid_current(),
+            hooks: valid_hooks(),
+            chapter_summaries: summaries,
+        };
         let issues = validate_runtime_state(&input);
         assert!(issues.iter().any(|i| i.code == "duplicate_summary_chapter"));
     }
@@ -176,6 +194,8 @@ mod tests {
             chapter_summaries: valid_summaries(),
         };
         let issues = validate_runtime_state(&input);
-        assert!(issues.iter().any(|i| i.code == "current_state_ahead_of_manifest"));
+        assert!(issues
+            .iter()
+            .any(|i| i.code == "current_state_ahead_of_manifest"));
     }
 }

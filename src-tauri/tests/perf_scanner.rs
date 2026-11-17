@@ -13,7 +13,11 @@ fn seed_projects(root: &std::path::Path, n: usize) {
     for i in 0..n {
         let dir = root.join(format!("proj-{i}"));
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("package.json"), format!(r#"{{"name":"proj-{i}"}}"#)).unwrap();
+        fs::write(
+            dir.join("package.json"),
+            format!(r#"{{"name":"proj-{i}"}}"#),
+        )
+        .unwrap();
     }
 }
 

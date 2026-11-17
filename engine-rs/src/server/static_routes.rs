@@ -24,7 +24,7 @@ use axum::routing::get;
 use axum::Router;
 
 use crate::server::sse::BroadcastHub;
-use crate::server::{AppState, write_next_route::WriteNextRuntime};
+use crate::server::{write_next_route::WriteNextRuntime, AppState};
 
 /// 静态面共享态：目录 + index.html mtime 校验缓存（445 号备案修复）。
 ///
@@ -51,7 +51,9 @@ pub fn with_static_face(router: Router, static_dir: Option<PathBuf>) -> Router {
         return router;
     };
     let index_path = dir.join("index.html");
-    let mtime = std::fs::metadata(&index_path).ok().and_then(|m| m.modified().ok());
+    let mtime = std::fs::metadata(&index_path)
+        .ok()
+        .and_then(|m| m.modified().ok());
     let body = std::fs::read(&index_path).ok().map(axum::body::Bytes::from);
     let face = std::sync::Arc::new(StaticFace {
         dir,
@@ -114,17 +116,28 @@ impl StaticFace {
     /// index.html 当前体（mtime 校验：未变化走缓存克隆，变化则重读）。
     fn index_body(&self) -> Option<axum::body::Bytes> {
         let index_path = self.dir.join("index.html");
-        let mtime = std::fs::metadata(&index_path).ok().and_then(|m| m.modified().ok());
+        let mtime = std::fs::metadata(&index_path)
+            .ok()
+            .and_then(|m| m.modified().ok());
         {
-            let cached = self.index.read().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let cached = self
+                .index
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             if cached.mtime == mtime {
                 return cached.body.clone();
             }
         }
         let body = std::fs::read(&index_path).ok().map(axum::body::Bytes::from);
-        let mut cached = self.index.write().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cached = self
+            .index
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if cached.mtime != mtime {
-            *cached = CachedIndex { mtime, body: body.clone() };
+            *cached = CachedIndex {
+                mtime,
+                body: body.clone(),
+            };
         }
         cached.body.clone()
     }
@@ -172,7 +185,10 @@ pub fn router_books_with_static(
     books: crate::server::books_routes::BooksRuntime,
     static_dir: Option<PathBuf>,
 ) -> Router {
-    with_static_face(crate::server::router_books(state, hub, write_next, audit, books), static_dir)
+    with_static_face(
+        crate::server::router_books(state, hub, write_next, audit, books),
+        static_dir,
+    )
 }
 
 #[cfg(test)]
@@ -183,13 +199,19 @@ mod tests {
     use tower::ServiceExt;
 
     fn base_router() -> Router {
-        crate::server::router(AppState { version: "test".into() })
+        crate::server::router(AppState {
+            version: "test".into(),
+        })
     }
 
     fn dist() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("assets")).unwrap();
-        std::fs::write(dir.path().join("index.html"), "<!doctype html><title>t</title>").unwrap();
+        std::fs::write(
+            dir.path().join("index.html"),
+            "<!doctype html><title>t</title>",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("assets").join("app.js"), b"console.log(1)").unwrap();
         std::fs::write(dir.path().join("assets").join("style.css"), b"body{}").unwrap();
         std::fs::write(dir.path().join("assets").join("logo.svg"), b"<svg/>").unwrap();
@@ -236,9 +258,12 @@ mod tests {
             ("logo.svg", "image/svg+xml"),
             ("data.bin", "application/octet-stream"),
         ] {
-            let (status, content_type, bytes) =
-                response_parts(&mut app, &axum::http::Method::GET, &format!("/assets/{name}"))
-                    .await;
+            let (status, content_type, bytes) = response_parts(
+                &mut app,
+                &axum::http::Method::GET,
+                &format!("/assets/{name}"),
+            )
+            .await;
             assert_eq!(status, 200, "{name}");
             assert_eq!(content_type.as_deref(), Some(expected), "{name}");
             assert!(!bytes.is_empty(), "{name}");
@@ -329,14 +354,16 @@ mod tests {
     async fn index_hot_reload_picks_up_rewrite_without_restart() {
         let dir = dist();
         let mut app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
-        let (status, _, body) =
-            response_parts(&mut app, &axum::http::Method::GET, "/").await;
+        let (status, _, body) = response_parts(&mut app, &axum::http::Method::GET, "/").await;
         assert_eq!(status, 200);
         assert_eq!(body, b"<!doctype html><title>t</title>".to_vec());
 
-        std::fs::write(dir.path().join("index.html"), "<!doctype html><title>t2</title>").unwrap();
-        let (status, _, body) =
-            response_parts(&mut app, &axum::http::Method::GET, "/").await;
+        std::fs::write(
+            dir.path().join("index.html"),
+            "<!doctype html><title>t2</title>",
+        )
+        .unwrap();
+        let (status, _, body) = response_parts(&mut app, &axum::http::Method::GET, "/").await;
         assert_eq!(status, 200);
         assert_eq!(body, b"<!doctype html><title>t2</title>".to_vec());
     }
@@ -351,9 +378,12 @@ mod tests {
         let (status, _, _) = response_parts(&mut app, &axum::http::Method::GET, "/").await;
         assert_eq!(status, 404);
 
-        std::fs::write(dir.path().join("index.html"), "<!doctype html><title>late</title>").unwrap();
-        let (status, _, body) =
-            response_parts(&mut app, &axum::http::Method::GET, "/").await;
+        std::fs::write(
+            dir.path().join("index.html"),
+            "<!doctype html><title>late</title>",
+        )
+        .unwrap();
+        let (status, _, body) = response_parts(&mut app, &axum::http::Method::GET, "/").await;
         assert_eq!(status, 200);
         assert_eq!(body, b"<!doctype html><title>late</title>".to_vec());
     }
@@ -367,27 +397,31 @@ mod tests {
         for uri in ["/assets/app.js", "/", "/editor/chapter/2"] {
             let response = app
                 .clone()
-                .oneshot(
-                    Request::builder()
-                        .uri(uri)
-                        .body(Body::empty())
-                        .unwrap(),
-                )
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
                 .await
                 .unwrap();
             assert_eq!(response.status().as_u16(), 200, "{uri}");
             assert_eq!(
-                response.headers().get(header::X_CONTENT_TYPE_OPTIONS).and_then(|v| v.to_str().ok()),
+                response
+                    .headers()
+                    .get(header::X_CONTENT_TYPE_OPTIONS)
+                    .and_then(|v| v.to_str().ok()),
                 Some("nosniff"),
                 "{uri}"
             );
             assert_eq!(
-                response.headers().get(header::REFERRER_POLICY).and_then(|v| v.to_str().ok()),
+                response
+                    .headers()
+                    .get(header::REFERRER_POLICY)
+                    .and_then(|v| v.to_str().ok()),
                 Some("no-referrer"),
                 "{uri}"
             );
             assert_eq!(
-                response.headers().get(header::X_FRAME_OPTIONS).and_then(|v| v.to_str().ok()),
+                response
+                    .headers()
+                    .get(header::X_FRAME_OPTIONS)
+                    .and_then(|v| v.to_str().ok()),
                 Some("DENY"),
                 "{uri}"
             );
@@ -412,17 +446,15 @@ mod tests {
         let dir = dist();
         let app = with_static_face(base_router(), Some(dir.path().to_path_buf()));
         let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(response.status().as_u16(), 200);
         assert_eq!(
-            response.headers().get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()),
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
             Some("no-store")
         );
     }

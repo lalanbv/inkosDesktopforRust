@@ -45,7 +45,10 @@ pub struct GovernedHookWorkingSetInput<'a> {
 /// hook；裁剪结果为空或反而变大时回退原文。
 pub fn build_governed_hook_working_set(params: &GovernedHookWorkingSetInput<'_>) -> String {
     let hooks_markdown = params.hooks_markdown;
-    if hooks_markdown.is_empty() || hooks_markdown == FILE_MISSING || hooks_markdown == FILE_NOT_CREATED {
+    if hooks_markdown.is_empty()
+        || hooks_markdown == FILE_MISSING
+        || hooks_markdown == FILE_NOT_CREATED
+    {
         return hooks_markdown.to_string();
     }
 
@@ -120,7 +123,8 @@ fn collect_hook_agenda_ids(chapter_intent: Option<&str>) -> HashSet<String> {
             break;
         }
 
-        if line == "### Must Advance" || line == "### Eligible Resolve" || line == "### Stale Debt" {
+        if line == "### Must Advance" || line == "### Eligible Resolve" || line == "### Stale Debt"
+        {
             capture_ids = true;
             continue;
         }
@@ -235,7 +239,10 @@ fn parse_sections(content: &str) -> ParsedSections {
         });
     }
 
-    ParsedSections { top_lines, sections }
+    ParsedSections {
+        top_lines,
+        sections,
+    }
 }
 
 /// 表格行 → 单元格数组。对齐 TS `parseRow`：`split("|").slice(1, -1).map(trim)`
@@ -274,11 +281,7 @@ fn pick_scaffold(primary: &[String], fallback: &[String]) -> Vec<String> {
 /// 按 key 列合并两张 markdown 表。对齐 TS `mergeTableMarkdownByKey`：
 /// 原表行为底、更新行按 key 覆盖或追加；任一侧无表或更新无数据行 → 原样返回
 /// updated；脚手架行（表头/分隔）优先取原表，原表无则取更新表。
-pub fn merge_table_markdown_by_key(
-    original: &str,
-    updated: &str,
-    key_columns: &[usize],
-) -> String {
+pub fn merge_table_markdown_by_key(original: &str, updated: &str, key_columns: &[usize]) -> String {
     let Some(original_table) = parse_single_table(original) else {
         return updated.to_string();
     };
@@ -354,10 +357,7 @@ pub fn merge_character_matrix_markdown(original: &str, updated: &str) -> String 
         });
     }
 
-    let mut lines = pick_scaffold(
-        &original_sections.top_lines,
-        &updated_sections.top_lines,
-    );
+    let mut lines = pick_scaffold(&original_sections.top_lines, &updated_sections.top_lines);
     lines.extend(
         merged_sections
             .iter()
@@ -380,7 +380,10 @@ pub fn build_governed_character_matrix_working_set(
     params: &GovernedMatrixWorkingSetInput<'_>,
 ) -> String {
     let matrix_markdown = params.matrix_markdown;
-    if matrix_markdown.is_empty() || matrix_markdown == FILE_MISSING || matrix_markdown == FILE_NOT_CREATED {
+    if matrix_markdown.is_empty()
+        || matrix_markdown == FILE_MISSING
+        || matrix_markdown == FILE_NOT_CREATED
+    {
         return matrix_markdown.to_string();
     }
 
@@ -536,7 +539,9 @@ fn matches_name(left: &str, right: &str) -> bool {
 }
 
 fn contains_cjk(value: &str) -> bool {
-    value.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    value
+        .chars()
+        .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
 }
 
 /// 对齐 TS `escapeRegExp`：仅转义 `[.*+?^${}()|[\]\\]`（regex::escape 转义集
@@ -628,7 +633,8 @@ mod tests {
 
     #[test]
     fn agenda_ids_capture_must_advance_only() {
-        let intent = "## Hook Agenda\n### Must Advance\n- H01\n- H02\n### Something\n- H03\n## Next\n- H04";
+        let intent =
+            "## Hook Agenda\n### Must Advance\n- H01\n- H02\n### Something\n- H03\n## Next\n- H04";
         let ids = collect_hook_agenda_ids(Some(intent));
         assert!(ids.contains("H01"));
         assert!(ids.contains("H02"));

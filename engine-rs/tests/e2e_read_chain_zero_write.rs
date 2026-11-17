@@ -34,11 +34,16 @@ fn snapshot(root: &Path) -> (BTreeMap<String, (u64, SystemTime)>, BTreeMap<Strin
         files: &mut BTreeMap<String, (u64, SystemTime)>,
         dirs: &mut BTreeMap<String, ()>,
     ) {
-        let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
+        let entries =
+            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()));
         for entry in entries {
             let entry = entry.expect("dir entry");
             let name = entry.file_name().to_string_lossy().into_owned();
-            let child_rel = if rel.is_empty() { name.clone() } else { format!("{rel}/{name}") };
+            let child_rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
             let ty = entry.file_type().expect("file_type");
             if ty.is_dir() {
                 dirs.insert(child_rel.clone(), ());
@@ -76,7 +81,9 @@ fn seed(root: &Path) {
     for i in 1..=12 {
         let title = format!("第{i}章 风起于青萍之末");
         std::fs::write(
-            book_dir.join("chapters").join(format!("{:04}_{}.md", i, title)),
+            book_dir
+                .join("chapters")
+                .join(format!("{:04}_{}.md", i, title)),
             format!("# {title}\n\n{body}\n"),
         )
         .expect("chapter file");
@@ -91,9 +98,16 @@ fn seed(root: &Path) {
         serde_json::to_string(&index_rows).expect("index"),
     )
     .expect("index.json");
-    std::fs::write(book_dir.join("story").join("brief.md"), "# 简介\n\n试炼之路。\n").expect("truth");
     std::fs::write(
-        book_dir.join("story").join("outline").join("story_frame.md"),
+        book_dir.join("story").join("brief.md"),
+        "# 简介\n\n试炼之路。\n",
+    )
+    .expect("truth");
+    std::fs::write(
+        book_dir
+            .join("story")
+            .join("outline")
+            .join("story_frame.md"),
         "# 故事框架\n\n三幕。\n",
     )
     .expect("outline");
@@ -113,24 +127,21 @@ fn assemble(root: &Path) -> axum::Router {
     let state = std::sync::Arc::new(inkos_engine::state::manager::StateManager::new(
         root.display().to_string().as_str(),
     ));
-    let agent_router = std::sync::Arc::new(
-        inkos_engine::llm::agent_router::AgentRouter::new(
-            inkos_engine::llm::agent_router::LlmEndpointConfig {
-                context_window_tokens: 128_000,
-                base_url: "http://127.0.0.1:9".into(),
-                api_key: "k".into(),
-                model: "m".into(),
-                max_tokens: 1024,
-                extra_headers: Default::default(),
-            },
-            Default::default(),
-        ),
-    );
-    let runner: inkos_engine::server::write_next_route::WriteNextRunner = std::sync::Arc::new(
-        |_state, _book, _target, _quality, _abort, _mode| {
-            Box::pin(async { Err("零写锁不触写链".to_string()) }) as WriteNextFuture
+    let agent_router = std::sync::Arc::new(inkos_engine::llm::agent_router::AgentRouter::new(
+        inkos_engine::llm::agent_router::LlmEndpointConfig {
+            context_window_tokens: 128_000,
+            base_url: "http://127.0.0.1:9".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            max_tokens: 1024,
+            extra_headers: Default::default(),
         },
-    );
+        Default::default(),
+    ));
+    let runner: inkos_engine::server::write_next_route::WriteNextRunner =
+        std::sync::Arc::new(|_state, _book, _target, _quality, _abort, _mode| {
+            Box::pin(async { Err("零写锁不触写链".to_string()) }) as WriteNextFuture
+        });
     let books = inkos_engine::server::books_routes::BooksRuntime {
         hub: hub.clone(),
         state: state.clone(),
@@ -151,7 +162,9 @@ fn assemble(root: &Path) -> axum::Router {
         project_root: root.to_path_buf(),
     };
     inkos_engine::server::router_books(
-        inkos_engine::server::AppState { version: "zero-write-lock".into() },
+        inkos_engine::server::AppState {
+            version: "zero-write-lock".into(),
+        },
         hub,
         write_next,
         audit,
@@ -208,7 +221,12 @@ async fn read_chain_get_endpoints_leave_project_tree_untouched() {
     // 相一：legacy 书 warmup——首读 ensure 物化四件（784 号行为面保持探针）。
     sweep(&app, endpoints).await;
     let state_dir = root.join("books/b1/story/state");
-    for file in ["manifest.json", "current_state.json", "hooks.json", "chapter_summaries.json"] {
+    for file in [
+        "manifest.json",
+        "current_state.json",
+        "hooks.json",
+        "chapter_summaries.json",
+    ] {
         assert!(
             state_dir.join(file).exists(),
             "legacy 书首读应 ensure 补齐 {file}（ensure 语义不得被快路径吞掉）"
@@ -228,5 +246,8 @@ async fn read_chain_get_endpoints_leave_project_tree_untouched() {
         files_before, files_after,
         "读链写盘现形：文件路径/长度/mtime 变化（steady-state 读端点不应落盘）"
     );
-    assert_eq!(dirs_before, dirs_after, "读链建目录现形（staging/tmp 残留等）");
+    assert_eq!(
+        dirs_before, dirs_after,
+        "读链建目录现形（staging/tmp 残留等）"
+    );
 }

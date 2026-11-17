@@ -13,9 +13,7 @@ use ts_rs::TS;
 use crate::models::input_governance::{
     ChapterTrace, ContextPackage, ContextSourceRank, TraceSourceTokens,
 };
-use crate::utils::context_assembly::{
-    estimate_context_source_tokens, is_protected_context_source,
-};
+use crate::utils::context_assembly::{estimate_context_source_tokens, is_protected_context_source};
 use crate::utils::context_source_tier::context_source_tier;
 
 pub const CONTEXT_LENS_VERSION: u32 = 1;

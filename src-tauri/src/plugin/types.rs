@@ -255,4 +255,3 @@ mod tests {
         assert_eq!(meta.capabilities.len(), 1);
     }
 }
-

@@ -40,59 +40,128 @@ enum Turn {
 
 fn script_full_flow() -> Vec<(&'static str, Turn)> {
     vec![
-        ("submit_short_outline", Turn::Tool("submit_short_outline", json!({
-            "storyTitle": "夜雨冒烟",
-            "planMarkdown": "## 总纲\n\n雨夜开局，双线收束。",
-            "chapter_1_plan": "开场",
-            "chapter_2_plan": "收束",
-        }))),
-        ("submit_short_draft_batch", Turn::Tool("submit_short_draft_batch", json!({
-            "storyTitle": "夜雨冒烟",
-            "chapter_1_title": "开场",
-            "chapter_1_content": "雨夜凶案发生，追查开始，压力逐层升级。",
-            "chapter_2_title": "收束",
-            "chapter_2_content": "真相收网，雨停天明，双线在此刻交汇。",
-        }))),
-        ("submit_short_fiction_review", Turn::Tool("record_review_observation", json!({
-            "code": "R-1", "summary": "有依据的观察。", "category": "quality",
-            "assessment": "observation",
-            "sourceRefs": [{ "sourceId": "outline", "startLine": 1, "endLine": 1 }],
-        }))),
-        ("submit_short_fiction_review", Turn::Tool("submit_short_fiction_review",
-            json!({ "summary": "一处观察。", "observationCodes": ["R-1"] }))),
-        ("submit_short_package", Turn::Tool("submit_short_package", json!({
-            "title": "夜雨冒烟", "intro": "雨夜凶案，双线追凶。",
-            "sellingPoints": ["节奏快"], "coverPrompt": "雨夜街口，灯下人影。",
-        }))),
-        ("submit_short_package_review", Turn::Tool("record_review_observation", json!({
-            "code": "P-1", "summary": "包装承诺核对。", "category": "quality",
-            "assessment": "observation",
-            "sourceRefs": [{ "sourceId": "package", "startLine": 1, "endLine": 1 }],
-        }))),
-        ("submit_short_package_review", Turn::Tool("submit_short_package_review",
-            json!({ "summary": "无硬伤。", "observationCodes": ["P-1"] }))),
+        (
+            "submit_short_outline",
+            Turn::Tool(
+                "submit_short_outline",
+                json!({
+                    "storyTitle": "夜雨冒烟",
+                    "planMarkdown": "## 总纲\n\n雨夜开局，双线收束。",
+                    "chapter_1_plan": "开场",
+                    "chapter_2_plan": "收束",
+                }),
+            ),
+        ),
+        (
+            "submit_short_draft_batch",
+            Turn::Tool(
+                "submit_short_draft_batch",
+                json!({
+                    "storyTitle": "夜雨冒烟",
+                    "chapter_1_title": "开场",
+                    "chapter_1_content": "雨夜凶案发生，追查开始，压力逐层升级。",
+                    "chapter_2_title": "收束",
+                    "chapter_2_content": "真相收网，雨停天明，双线在此刻交汇。",
+                }),
+            ),
+        ),
+        (
+            "submit_short_fiction_review",
+            Turn::Tool(
+                "record_review_observation",
+                json!({
+                    "code": "R-1", "summary": "有依据的观察。", "category": "quality",
+                    "assessment": "observation",
+                    "sourceRefs": [{ "sourceId": "outline", "startLine": 1, "endLine": 1 }],
+                }),
+            ),
+        ),
+        (
+            "submit_short_fiction_review",
+            Turn::Tool(
+                "submit_short_fiction_review",
+                json!({ "summary": "一处观察。", "observationCodes": ["R-1"] }),
+            ),
+        ),
+        (
+            "submit_short_package",
+            Turn::Tool(
+                "submit_short_package",
+                json!({
+                    "title": "夜雨冒烟", "intro": "雨夜凶案，双线追凶。",
+                    "sellingPoints": ["节奏快"], "coverPrompt": "雨夜街口，灯下人影。",
+                }),
+            ),
+        ),
+        (
+            "submit_short_package_review",
+            Turn::Tool(
+                "record_review_observation",
+                json!({
+                    "code": "P-1", "summary": "包装承诺核对。", "category": "quality",
+                    "assessment": "observation",
+                    "sourceRefs": [{ "sourceId": "package", "startLine": 1, "endLine": 1 }],
+                }),
+            ),
+        ),
+        (
+            "submit_short_package_review",
+            Turn::Tool(
+                "submit_short_package_review",
+                json!({ "summary": "无硬伤。", "observationCodes": ["P-1"] }),
+            ),
+        ),
     ]
 }
 
 fn script_revise() -> Vec<(&'static str, Turn)> {
     vec![
-        ("submit_short_author_scope", Turn::Tool("submit_short_author_scope", json!({
-            "wholeManuscript": false, "chapterNumbers": [1],
-            "opening": false, "outline": false,
-        }))),
-        ("submit_edit_location", Turn::Tool("submit_edit_location", json!({
-            "kind": "paragraphs", "boundary": "first", "count": 1, "targets": [],
-        }))),
-        ("submit_chapter_range_replacements", Turn::Tool("submit_chapter_range_replacements", json!({
-            "selection_0_text": "雨夜里少年提灯出门，第一层雾漫过河面。",
-        }))),
-        ("submit_short_fiction_review", Turn::Tool("record_review_observation", json!({
-            "code": "R-2", "summary": "修订后观察。", "category": "quality",
-            "assessment": "observation",
-            "sourceRefs": [{ "sourceId": "outline", "startLine": 1, "endLine": 1 }],
-        }))),
-        ("submit_short_fiction_review", Turn::Tool("submit_short_fiction_review",
-            json!({ "summary": "修订无硬伤。", "observationCodes": ["R-2"] }))),
+        (
+            "submit_short_author_scope",
+            Turn::Tool(
+                "submit_short_author_scope",
+                json!({
+                    "wholeManuscript": false, "chapterNumbers": [1],
+                    "opening": false, "outline": false,
+                }),
+            ),
+        ),
+        (
+            "submit_edit_location",
+            Turn::Tool(
+                "submit_edit_location",
+                json!({
+                    "kind": "paragraphs", "boundary": "first", "count": 1, "targets": [],
+                }),
+            ),
+        ),
+        (
+            "submit_chapter_range_replacements",
+            Turn::Tool(
+                "submit_chapter_range_replacements",
+                json!({
+                    "selection_0_text": "雨夜里少年提灯出门，第一层雾漫过河面。",
+                }),
+            ),
+        ),
+        (
+            "submit_short_fiction_review",
+            Turn::Tool(
+                "record_review_observation",
+                json!({
+                    "code": "R-2", "summary": "修订后观察。", "category": "quality",
+                    "assessment": "observation",
+                    "sourceRefs": [{ "sourceId": "outline", "startLine": 1, "endLine": 1 }],
+                }),
+            ),
+        ),
+        (
+            "submit_short_fiction_review",
+            Turn::Tool(
+                "submit_short_fiction_review",
+                json!({ "summary": "修订无硬伤。", "observationCodes": ["R-2"] }),
+            ),
+        ),
     ]
 }
 
@@ -111,16 +180,16 @@ impl RouterSmokeMock {
         let handler = mock.clone();
         let app = axum::Router::new().route(
             "/chat/completions",
-            axum::routing::post(
-                move |axum::Json(body): axum::Json<Value>| {
-                    let handler = handler.clone();
-                    async move { handler.handle(body).await }
-                },
-            ),
+            axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+                let handler = handler.clone();
+                async move { handler.handle(body).await }
+            }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         (mock, format!("http://{addr}"))
     }
 
@@ -141,7 +210,10 @@ impl RouterSmokeMock {
                     ] } }],
                     "usage": { "prompt_tokens": 7, "completion_tokens": 7, "total_tokens": 14 },
                 });
-                (axum::http::StatusCode::OK, serde_json::to_string(&response).unwrap())
+                (
+                    axum::http::StatusCode::OK,
+                    serde_json::to_string(&response).unwrap(),
+                )
             }
             _ => {
                 let front = self.queue.lock().unwrap().front().map(|(name, _)| *name);
@@ -264,7 +336,10 @@ fn seed_work(root: &std::path::Path, id: &str) {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("work.json"),
-        format!("{}\n", serde_json::to_string_pretty(&work_seed(id)).unwrap()),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&work_seed(id)).unwrap()
+        ),
     )
     .unwrap();
 }
@@ -288,7 +363,9 @@ async fn router_capability_smoke() {
     let app = router_runtime(&root, &llm);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
     let base = format!("http://{addr}");
 
     seed_work(&root, "smoke-a");
@@ -302,7 +379,10 @@ async fn router_capability_smoke() {
     )
     .await;
     assert_eq!(status, 200, "plan: {parsed}");
-    assert_eq!(parsed["details"]["kind"], "short_stage_completed", "plan: {parsed}");
+    assert_eq!(
+        parsed["details"]["kind"], "short_stage_completed",
+        "plan: {parsed}"
+    );
     let (status, parsed) = post_json(
         &base,
         "/api/v1/works/smoke-a/capabilities/short-fiction/draft_short_fiction",
@@ -341,8 +421,14 @@ async fn router_capability_smoke() {
         &std::fs::read_to_string(source.join("production-state.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(state["target"]["coverRequired"], false, "coverRequired 优先级: {state}");
-    assert_eq!(state["delivery"]["status"], "checks_passed", "state: {state}");
+    assert_eq!(
+        state["target"]["coverRequired"], false,
+        "coverRequired 优先级: {state}"
+    );
+    assert_eq!(
+        state["delivery"]["status"], "checks_passed",
+        "state: {state}"
+    );
     let full = std::fs::read_to_string(source.join("final/full.md")).unwrap();
     assert!(full.starts_with("# 夜雨冒烟"), "final 头: {full}");
     assert!(full.contains("## 第1章 开场"), "{full}");
@@ -356,9 +442,15 @@ async fn router_capability_smoke() {
     )
     .await;
     assert_eq!(status, 200, "revise: {parsed}");
-    assert_eq!(parsed["details"]["kind"], "short_fiction_revised", "revise: {parsed}");
+    assert_eq!(
+        parsed["details"]["kind"], "short_fiction_revised",
+        "revise: {parsed}"
+    );
     let final_json = std::fs::read_to_string(source.join("final/short-story.json")).unwrap();
-    assert!(final_json.contains("雨夜里少年提灯出门"), "revise 替换落稿: {final_json}");
+    assert!(
+        final_json.contains("雨夜里少年提灯出门"),
+        "revise 替换落稿: {final_json}"
+    );
 
     // ═══ ③ 错误三面（真实用户误操作形态；零 LLM 轮）═══
     let (status, parsed) = post_json(
@@ -368,7 +460,10 @@ async fn router_capability_smoke() {
     )
     .await;
     assert_eq!(status, 502, "空方向守卫: {parsed}");
-    assert_eq!(parsed["error"]["message"], "An outline needs a creative direction");
+    assert_eq!(
+        parsed["error"]["message"],
+        "An outline needs a creative direction"
+    );
     let (status, parsed) = post_json(
         &base,
         "/api/v1/works/smoke-a/capabilities/short-fiction/draft_short_fiction",
@@ -378,7 +473,8 @@ async fn router_capability_smoke() {
     assert_eq!(status, 502, "参数违约: {parsed}");
     let message = parsed["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains("params decode failed") && message.contains("/chapters: Expected integer >= 1"),
+        message.contains("params decode failed")
+            && message.contains("/chapters: Expected integer >= 1"),
         "{message}"
     );
     let (status, parsed) = post_json(
@@ -394,7 +490,12 @@ async fn router_capability_smoke() {
         .contains("Unknown short-fiction capability action"));
 
     // ═══ ④ 桌面确认流（agent 路由 short_run 全链）═══
-    let (status, _) = post_json(&base, "/api/v1/sessions", json!({ "sessionId": "1782994000096-smoke" })).await;
+    let (status, _) = post_json(
+        &base,
+        "/api/v1/sessions",
+        json!({ "sessionId": "1782994000096-smoke" }),
+    )
+    .await;
     assert_eq!(status, 200, "session 创建");
     let (status, parsed) = post_json(
         &base,
@@ -414,10 +515,13 @@ async fn router_capability_smoke() {
     let exec = &parsed["details"]["toolExecutions"][0];
     assert_eq!(exec["tool"], "short_fiction_run", "body: {parsed}");
     assert_eq!(exec["status"], "completed", "body: {parsed}");
-    assert!(parsed["response"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("Short fiction manuscript \"smoke-b\" saved with"), "response: {parsed}");
+    assert!(
+        parsed["response"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("Short fiction manuscript \"smoke-b\" saved with"),
+        "response: {parsed}"
+    );
 
     // ═══ ⑤ L1 读面 + mock 按序耗尽核验 ═══
     let (status, parsed) = get_json(&base, "/api/v1/works/smoke-a").await;

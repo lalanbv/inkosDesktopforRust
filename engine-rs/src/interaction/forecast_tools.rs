@@ -21,7 +21,11 @@ pub struct ForecastDeps<'a> {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 fn field_str<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
@@ -75,7 +79,10 @@ fn status_str(forecast: &NarrativeForecast) -> &'static str {
 }
 
 async fn forecast_agent(runtime: &BooksRuntime) -> RoutedAgent {
-    RoutedAgent { router: runtime.effective_router().await, agent: "forecast" }
+    RoutedAgent {
+        router: runtime.effective_router().await,
+        agent: "forecast",
+    }
 }
 
 /// `create_narrative_forecast`：正史上下文 + 分歧点 → 2-5 隔离候选分支。
@@ -283,7 +290,6 @@ pub fn forecast_tool_schemas() -> Vec<Value> {
     ]
 }
 
-
 // ── 注册模块（R38b）：预测三件——写 story/runtime/narrative-forecasts/
 //    （forecast.json、comparison.md、selected-branch-plan.md）→ ProjectWrite
 //    （canonical 零触碰，不在后台生产剔除名单）；schema 经同文件
@@ -293,15 +299,20 @@ crate::interaction::registry::tool_def!(
     ForecastCreate,
     "create_narrative_forecast",
     MutationKind::ProjectWrite,
-    ctx, args,
-    { {
-        let schemas = forecast_tool_schemas();
-        schema_description(&schemas, "create_narrative_forecast")
-    } },
-    { {
-        let schemas = forecast_tool_schemas();
-        schema_parameters(&schemas, "create_narrative_forecast")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = forecast_tool_schemas();
+            schema_description(&schemas, "create_narrative_forecast")
+        }
+    },
+    {
+        {
+            let schemas = forecast_tool_schemas();
+            schema_parameters(&schemas, "create_narrative_forecast")
+        }
+    },
     ctx.forecast_deps.is_some(),
     tool_create_narrative_forecast(ctx.forecast_deps.as_ref().expect("available 门控"), args).await
 );
@@ -310,15 +321,20 @@ crate::interaction::registry::tool_def!(
     ForecastGet,
     "get_narrative_forecast",
     MutationKind::ProjectWrite,
-    ctx, args,
-    { {
-        let schemas = forecast_tool_schemas();
-        schema_description(&schemas, "get_narrative_forecast")
-    } },
-    { {
-        let schemas = forecast_tool_schemas();
-        schema_parameters(&schemas, "get_narrative_forecast")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = forecast_tool_schemas();
+            schema_description(&schemas, "get_narrative_forecast")
+        }
+    },
+    {
+        {
+            let schemas = forecast_tool_schemas();
+            schema_parameters(&schemas, "get_narrative_forecast")
+        }
+    },
     ctx.forecast_deps.is_some(),
     tool_get_narrative_forecast(ctx.forecast_deps.as_ref().expect("available 门控"), args).await
 );
@@ -327,15 +343,20 @@ crate::interaction::registry::tool_def!(
     ForecastSelect,
     "select_narrative_branch",
     MutationKind::ProjectWrite,
-    ctx, args,
-    { {
-        let schemas = forecast_tool_schemas();
-        schema_description(&schemas, "select_narrative_branch")
-    } },
-    { {
-        let schemas = forecast_tool_schemas();
-        schema_parameters(&schemas, "select_narrative_branch")
-    } },
+    ctx,
+    args,
+    {
+        {
+            let schemas = forecast_tool_schemas();
+            schema_description(&schemas, "select_narrative_branch")
+        }
+    },
+    {
+        {
+            let schemas = forecast_tool_schemas();
+            schema_parameters(&schemas, "select_narrative_branch")
+        }
+    },
     ctx.forecast_deps.is_some(),
     tool_select_narrative_branch(ctx.forecast_deps.as_ref().expect("available 门控"), args).await
 );
@@ -362,7 +383,11 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec!["create_narrative_forecast", "get_narrative_forecast", "select_narrative_branch"]
+            vec![
+                "create_narrative_forecast",
+                "get_narrative_forecast",
+                "select_narrative_branch"
+            ]
         );
         assert_eq!(
             schemas[0]["function"]["parameters"]["required"],

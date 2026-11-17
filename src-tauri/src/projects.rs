@@ -46,8 +46,9 @@ impl RecentProjects {
                 Ok(p)
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e)
-                .with_context(|| format!("读取 projects.json 失败: {}", path.display())),
+            Err(e) => {
+                Err(e).with_context(|| format!("读取 projects.json 失败: {}", path.display()))
+            }
         }
     }
 
@@ -122,8 +123,7 @@ mod tests {
     fn write_read_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("projects.json");
-        let original =
-            RecentProjects::default().record_open("/tmp/proj1", "Proj1");
+        let original = RecentProjects::default().record_open("/tmp/proj1", "Proj1");
         original.write(&path).unwrap();
         let loaded = RecentProjects::read(&path).unwrap();
         assert_eq!(loaded, original);
@@ -163,16 +163,28 @@ mod tests {
     fn record_open_dedups_existing_path_to_front() {
         let base = RecentProjects {
             recent: vec![
-                RecentProject { path: "/tmp/a".into(), name: "A".into() },
-                RecentProject { path: "/tmp/b".into(), name: "B".into() },
-                RecentProject { path: "/tmp/c".into(), name: "C".into() },
+                RecentProject {
+                    path: "/tmp/a".into(),
+                    name: "A".into(),
+                },
+                RecentProject {
+                    path: "/tmp/b".into(),
+                    name: "B".into(),
+                },
+                RecentProject {
+                    path: "/tmp/c".into(),
+                    name: "C".into(),
+                },
             ],
             last_opened: Some("/tmp/a".into()),
         };
         // 重开 /tmp/b：应置顶，旧 b 条目移除，顺序 [b, a, c]。
         let next = base.record_open("/tmp/b", "B");
         assert_eq!(
-            next.recent.iter().map(|r| r.path.as_str()).collect::<Vec<_>>(),
+            next.recent
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
             vec!["/tmp/b", "/tmp/a", "/tmp/c"]
         );
     }

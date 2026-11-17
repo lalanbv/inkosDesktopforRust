@@ -14,12 +14,8 @@ use std::path::Path;
 use async_trait::async_trait;
 
 use crate::agents::ai_tells::{analyze_ai_tells, AITellIssue, AITellSeverity};
-use crate::agents::continuity::{
-    AuditChapterOptions, AuditIssue, AuditResult, AuditSeverity,
-};
-use crate::agents::sensitive_words::{
-    analyze_sensitive_words, SensitiveWordSeverity,
-};
+use crate::agents::continuity::{AuditChapterOptions, AuditIssue, AuditResult, AuditSeverity};
+use crate::agents::sensitive_words::{analyze_sensitive_words, SensitiveWordSeverity};
 use crate::utils::language::WritingLanguage;
 use crate::utils::long_span_fatigue::{analyze_long_span_fatigue, AnalyzeLongSpanFatigueInput};
 
@@ -85,7 +81,11 @@ pub async fn evaluate_merged_audit(
         .iter()
         .any(|f| f.severity == SensitiveWordSeverity::Block);
 
-    let ai_issues: Vec<AuditIssue> = ai_tells.issues.into_iter().map(ai_tell_issue_to_audit).collect();
+    let ai_issues: Vec<AuditIssue> = ai_tells
+        .issues
+        .into_iter()
+        .map(ai_tell_issue_to_audit)
+        .collect();
     let mut issues: Vec<AuditIssue> = Vec::with_capacity(
         llm_audit.issues.len() + ai_issues.len() + sensitive.issues.len() + fatigue.len(),
     );
@@ -93,7 +93,8 @@ pub async fn evaluate_merged_audit(
     issues.extend(ai_issues.iter().cloned());
     issues.extend(sensitive.issues.iter().cloned());
     // revisionBlockingIssues 按构造排除长跨度疲劳。
-    let revision_blocking_issues: Vec<AuditIssue> = issues[..llm_audit.issues.len() + ai_issues.len() + sensitive.issues.len()].to_vec();
+    let revision_blocking_issues: Vec<AuditIssue> =
+        issues[..llm_audit.issues.len() + ai_issues.len() + sensitive.issues.len()].to_vec();
     issues.extend(fatigue.into_iter().map(Into::into));
 
     let blocking_count = revision_blocking_issues
@@ -107,7 +108,11 @@ pub async fn evaluate_merged_audit(
 
     Ok(MergedAuditEvaluation {
         audit_result: AuditResult {
-            passed: if has_blocked_words { false } else { llm_audit.passed },
+            passed: if has_blocked_words {
+                false
+            } else {
+                llm_audit.passed
+            },
             issues,
             summary: llm_audit.summary,
             parse_failed: llm_audit.parse_failed,
@@ -130,7 +135,11 @@ pub fn restore_lost_audit_issues(previous: &AuditResult, next: &AuditResult) -> 
         passed: next.passed,
         issues: previous.issues.clone(),
         // TS `next.summary || previous.summary`：空串也回退（JS falsy）。
-        summary: if next.summary.is_empty() { previous.summary.clone() } else { next.summary.clone() },
+        summary: if next.summary.is_empty() {
+            previous.summary.clone()
+        } else {
+            next.summary.clone()
+        },
         parse_failed: next.parse_failed,
         overall_score: next.overall_score,
         token_usage: next.token_usage,
@@ -193,7 +202,11 @@ impl RevisionGate {
 
     /// 门控判定（L1520）：always 恒真；lenient 仅要求不变差；
     /// strict 额外要求 blocking 或 AI-tell 至少一项改善。
-    pub fn should_apply(self, before: &MergedAuditEvaluation, after: &MergedAuditEvaluation) -> bool {
+    pub fn should_apply(
+        self,
+        before: &MergedAuditEvaluation,
+        after: &MergedAuditEvaluation,
+    ) -> bool {
         let improved_blocking = after.blocking_count < before.blocking_count;
         let improved_ai_tells = after.ai_tell_count < before.ai_tell_count;
         let did_not_worsen = after.blocking_count <= before.blocking_count
@@ -216,7 +229,11 @@ mod tests {
 
     #[async_trait]
     impl LlmAuditPort for CannedAudit {
-        async fn audit(&self, _content: &str, _options: &AuditChapterOptions) -> Result<AuditResult, String> {
+        async fn audit(
+            &self,
+            _content: &str,
+            _options: &AuditChapterOptions,
+        ) -> Result<AuditResult, String> {
             Ok(self.0.clone())
         }
     }
@@ -354,10 +371,21 @@ mod tests {
             issues: vec![issue(AuditSeverity::Info, "对话")],
             ..previous.clone()
         };
-        assert_eq!(restore_lost_audit_issues(&previous, &next_has_issue).issues.len(), 1);
+        assert_eq!(
+            restore_lost_audit_issues(&previous, &next_has_issue)
+                .issues
+                .len(),
+            1
+        );
 
-        let next_passed = AuditResult { passed: true, issues: vec![], ..previous.clone() };
-        assert!(restore_lost_audit_issues(&previous, &next_passed).issues.is_empty());
+        let next_passed = AuditResult {
+            passed: true,
+            issues: vec![],
+            ..previous.clone()
+        };
+        assert!(restore_lost_audit_issues(&previous, &next_passed)
+            .issues
+            .is_empty());
     }
 
     #[test]
@@ -385,7 +413,15 @@ mod tests {
     fn gate_matrix_matches_ts_semantics() {
         let before = evaluation(false, vec![issue(AuditSeverity::Critical, "a")], 3, 1);
         // 变差：blocking 上升。
-        let worse = evaluation(false, vec![issue(AuditSeverity::Critical, "a"), issue(AuditSeverity::Warning, "b")], 3, 1);
+        let worse = evaluation(
+            false,
+            vec![
+                issue(AuditSeverity::Critical, "a"),
+                issue(AuditSeverity::Warning, "b"),
+            ],
+            3,
+            1,
+        );
         // 持平。
         let same = evaluation(false, vec![issue(AuditSeverity::Critical, "a")], 3, 1);
         // 改善：blocking 下降。

@@ -65,7 +65,8 @@ fn priority_ordering_matches_shared_vectors() {
             .map(|v| v.as_str().expect("source str").to_string())
             .collect();
         assert_eq!(
-            got, expected,
+            got,
+            expected,
             "order vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

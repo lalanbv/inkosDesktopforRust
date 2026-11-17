@@ -83,7 +83,9 @@ fn migration_compat_absent_routing_resolves_to_fallback() {
         });
         assert_eq!(got.model, model);
         assert!(
-            got.sources.iter().all(|entry| entry.source == RoutingFieldSource::Fallback),
+            got.sources
+                .iter()
+                .all(|entry| entry.source == RoutingFieldSource::Fallback),
             "all fields expected fallback"
         );
     }

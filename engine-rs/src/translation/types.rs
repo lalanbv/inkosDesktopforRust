@@ -206,7 +206,10 @@ pub struct ReviewChapterOutput {
 impl ReviewChapterOutput {
     /// TS 章节状态推进等价：有 issue 级发现 = 未通过（章停 translated）。
     pub fn passed(&self) -> bool {
-        !self.observations.iter().any(|observation| observation.assessment == Some(ObservationAssessment::Issue))
+        !self
+            .observations
+            .iter()
+            .any(|observation| observation.assessment == Some(ObservationAssessment::Issue))
     }
 }
 
@@ -269,13 +272,25 @@ pub struct RunTranslationProjectResult {
 }
 
 /// 967 号：章节已译段数（源段在译文中有非空 target 的个数——TS translatedSegments 语义）。
-pub fn count_translated_segments(source: &[TranslationSegment], translated: &[TranslationSegment]) -> usize {
+pub fn count_translated_segments(
+    source: &[TranslationSegment],
+    translated: &[TranslationSegment],
+) -> usize {
     let done: std::collections::HashSet<u32> = translated
         .iter()
-        .filter(|segment| segment.target.as_deref().map(str::trim).is_some_and(|t| !t.is_empty()))
+        .filter(|segment| {
+            segment
+                .target
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|t| !t.is_empty())
+        })
         .map(|segment| segment.index)
         .collect();
-    source.iter().filter(|segment| done.contains(&segment.index)).count()
+    source
+        .iter()
+        .filter(|segment| done.contains(&segment.index))
+        .count()
 }
 
 /// export 产物（TranslationExportResult）。971 号：+`exportSourcePaths`（TS 逐字——

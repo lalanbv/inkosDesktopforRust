@@ -45,7 +45,8 @@ fn parse_matches_shared_vectors() {
         });
         let got_json = serde_json::to_value(&metrics).unwrap();
         assert_eq!(
-            got_json, *expected,
+            got_json,
+            *expected,
             "parse vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -61,7 +62,8 @@ fn curve_matches_shared_vectors() {
         let got = build_tension_curve(&rows);
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "curve vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );
@@ -81,7 +83,8 @@ fn warnings_match_shared_vectors() {
         );
         let got_json = serde_json::to_value(&got).unwrap();
         assert_eq!(
-            got_json, vector["expected"],
+            got_json,
+            vector["expected"],
             "warning vector '{}' drifted",
             vector["name"].as_str().unwrap()
         );

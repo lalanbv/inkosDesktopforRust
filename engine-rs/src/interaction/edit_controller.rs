@@ -71,7 +71,11 @@ pub async fn execute_chapter_replace(
     .await
     .map_err(|e| e.to_string())?;
 
-    let normalized = if trimmed.ends_with('\n') { trimmed.to_string() } else { format!("{trimmed}\n") };
+    let normalized = if trimmed.ends_with('\n') {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}\n")
+    };
     crate::utils::atomic_file_set::write_file_atomic(&chapter_path, &normalized)
         .await
         .map_err(|e| e.to_string())?;
@@ -118,8 +122,7 @@ pub const MANUAL_REPLACEMENT_ISSUE: &str =
     "Manual chapter replacement requires review before continuation.";
 
 /// chapter-local-edit 的复核提示文案（TS 逐字）。
-pub const MANUAL_TEXT_EDIT_ISSUE: &str =
-    "Manual text edit requires review before continuation.";
+pub const MANUAL_TEXT_EDIT_ISSUE: &str = "Manual text edit requires review before continuation.";
 
 /// `entity-rename` 事务：全库内容替换 + 文件重命名规划。对齐 TS
 /// `executeEntityRename`——snapshots/点目录不可改写（冻结历史与废弃稿）；
@@ -224,7 +227,9 @@ pub async fn execute_chapter_local_edit(
         .map_err(|e| e.to_string())?;
     let next_content = replace_chapter_target_text(&content, target_text, replacement_text);
     if next_content == content {
-        return Err(format!("Target text was not found in chapter {chapter_number}."));
+        return Err(format!(
+            "Target text was not found in chapter {chapter_number}."
+        ));
     }
 
     let book_dir = root.to_string_lossy().into_owned();
@@ -404,7 +409,11 @@ fn flexible_whitespace_pattern(target_text: &str) -> Option<regex::Regex> {
 /// 近似段落定位（目标定位器，非语义改写引擎）：归一化 NFKC+lower+仅留
 /// 字母数字；段长 ≥24 且在目标 0.35x–3x 之间；dice 二元组相似度阈值
 /// 0.72（高分 0.86 或领先 0.06）。对齐 TS `replaceApproximateParagraph`。
-fn replace_approximate_paragraph(content: &str, target_text: &str, replacement_text: &str) -> String {
+fn replace_approximate_paragraph(
+    content: &str,
+    target_text: &str,
+    replacement_text: &str,
+) -> String {
     let target = normalize_approximate_text(target_text);
     let target_len = utf16_len(&target);
     if target_len < 24 {
@@ -421,7 +430,8 @@ fn replace_approximate_paragraph(content: &str, target_text: &str, replacement_t
             continue;
         }
         let normalized_len_f = normalized_len as f64;
-        if normalized_len_f < target_len as f64 * 0.35 || normalized_len_f > target_len as f64 * 3.0 {
+        if normalized_len_f < target_len as f64 * 0.35 || normalized_len_f > target_len as f64 * 3.0
+        {
             continue;
         }
         let score = approximate_text_score(&target, &normalized);
@@ -502,7 +512,10 @@ fn to_bigrams(text: &str) -> Vec<String> {
     if chars.len() < 2 {
         return chars.iter().map(|c| c.to_string()).collect();
     }
-    chars.windows(2).map(|w| format!("{}{}", w[0], w[1])).collect()
+    chars
+        .windows(2)
+        .map(|w| format!("{}{}", w[0], w[1]))
+        .collect()
 }
 
 fn dice_coefficient(left: &[String], right: &[String]) -> f64 {
@@ -534,7 +547,8 @@ fn dice_coefficient(left: &[String], right: &[String]) -> f64 {
 /// 正典优先），双形态下与索引重建 / 详情读侧改同一文件。
 async fn find_chapter_path(root: &Path, chapter_number: u32) -> Result<PathBuf, String> {
     let chapters_dir = root.join("chapters");
-    match crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number).await {
+    match crate::state::chapter_filename::resolve_chapter_file(&chapters_dir, chapter_number).await
+    {
         Some(file) => Ok(chapters_dir.join(file)),
         None => Err(format!("Chapter {chapter_number} not found.")),
     }
@@ -575,7 +589,9 @@ fn mark_chapter_for_manual_review(
                 chapter.status = ChapterStatus::AuditFailed;
                 chapter.updated_at = now_iso.to_string();
                 chapter.word_count = word_count;
-                chapter.audit_issues.retain(|existing| !existing.contains(issue));
+                chapter
+                    .audit_issues
+                    .retain(|existing| !existing.contains(issue));
                 chapter.audit_issues.push(format!("[warning] {issue}"));
             }
             chapter
@@ -614,11 +630,34 @@ mod tests {
 
     async fn fixture(root: &Path) {
         let book = root.join("books").join("b1");
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(book.join("story").join("runtime")).await.unwrap();
-        tokio::fs::write(book.join("chapters").join("0003_Demo.md"), "# 第3章 旧稿\n\n旧正文。").await.unwrap();
-        tokio::fs::write(book.join("story").join("runtime").join("chapter-0003.plan.md"), "plan").await.unwrap();
-        tokio::fs::write(book.join("story").join("runtime").join("chapter-0003.user-brief.md"), "brief").await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book.join("story").join("runtime"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            book.join("chapters").join("0003_Demo.md"),
+            "# 第3章 旧稿\n\n旧正文。",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            book.join("story")
+                .join("runtime")
+                .join("chapter-0003.plan.md"),
+            "plan",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(
+            book.join("story")
+                .join("runtime")
+                .join("chapter-0003.user-brief.md"),
+            "brief",
+        )
+        .await
+        .unwrap();
         tokio::fs::write(
             book.join("chapters").join("index.json"),
             r#"[{"number":3,"title":"Demo","status":"ready-for-review","wordCount":4,"createdAt":"2026-01-01T00:00:00.000Z","updatedAt":"2026-01-01T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]}]"#,
@@ -634,15 +673,32 @@ mod tests {
         let book = dir.path().join("books").join("b1");
         let chapters = book.join("chapters");
         tokio::fs::create_dir_all(&chapters).await.unwrap();
-        tokio::fs::write(chapters.join("0002-Legacy.md"), "legacy").await.unwrap();
-        tokio::fs::write(chapters.join("7_Import.md"), "import").await.unwrap();
-        tokio::fs::write(chapters.join("0001-Old.md"), "old").await.unwrap();
-        tokio::fs::write(chapters.join("0001_New.md"), "new").await.unwrap();
+        tokio::fs::write(chapters.join("0002-Legacy.md"), "legacy")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("7_Import.md"), "import")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0001-Old.md"), "old")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0001_New.md"), "new")
+            .await
+            .unwrap();
 
-        assert_eq!(find_chapter_path(&book, 2).await.unwrap(), chapters.join("0002-Legacy.md"));
-        assert_eq!(find_chapter_path(&book, 7).await.unwrap(), chapters.join("7_Import.md"));
+        assert_eq!(
+            find_chapter_path(&book, 2).await.unwrap(),
+            chapters.join("0002-Legacy.md")
+        );
+        assert_eq!(
+            find_chapter_path(&book, 7).await.unwrap(),
+            chapters.join("7_Import.md")
+        );
         // 双形态：正典 `_` 胜出（与索引重建 / 详情读侧同一文件），不按 read_dir 顺序。
-        assert_eq!(find_chapter_path(&book, 1).await.unwrap(), chapters.join("0001_New.md"));
+        assert_eq!(
+            find_chapter_path(&book, 1).await.unwrap(),
+            chapters.join("0001_New.md")
+        );
         // 前缀碰撞根除：7 不误配 0007x；缺章 → Err。
         assert!(find_chapter_path(&book, 70).await.is_err());
         assert!(find_chapter_path(&book, 9).await.is_err());
@@ -667,15 +723,23 @@ mod tests {
 
         assert_eq!(result.transaction_type, "chapter-replace");
         assert!(result.review_required);
-        assert_eq!(result.summary, "Replaced chapter 3 and marked it for review.");
+        assert_eq!(
+            result.summary,
+            "Replaced chapter 3 and marked it for review."
+        );
         // touchedFiles：章节文件 + runtime 工件（user-brief 保留）+ index。
         assert_eq!(result.touched_files[0], "chapters/0003_Demo.md");
-        assert_eq!(result.touched_files[1], "story/runtime/chapter-0003.plan.md");
+        assert_eq!(
+            result.touched_files[1],
+            "story/runtime/chapter-0003.plan.md"
+        );
         assert!(*result.touched_files.last().unwrap() == "chapters/index.json");
 
         let book = root.join("books").join("b1");
         // 正文覆写 + 补尾换行。
-        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md")).await.unwrap();
+        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md"))
+            .await
+            .unwrap();
         assert_eq!(content, "# 第3章 新稿\n\n人工修改后的正文。\n");
         // 旧稿归档（_manual_ 段 + 原 frontmatter/正文完整保留）。
         let versions_dir = book.join("chapters").join(".versions").join("0003");
@@ -686,19 +750,34 @@ mod tests {
         }
         assert_eq!(names.len(), 1);
         assert!(names[0].starts_with("1782864000000_manual_"));
-        let archived = tokio::fs::read_to_string(versions_dir.join(&names[0])).await.unwrap();
+        let archived = tokio::fs::read_to_string(versions_dir.join(&names[0]))
+            .await
+            .unwrap();
         assert_eq!(archived, "# 第3章 旧稿\n\n旧正文。");
         // runtime：plan 删除、user-brief 保留。
-        assert!(!book.join("story").join("runtime").join("chapter-0003.plan.md").exists());
-        assert!(book.join("story").join("runtime").join("chapter-0003.user-brief.md").exists());
+        assert!(!book
+            .join("story")
+            .join("runtime")
+            .join("chapter-0003.plan.md")
+            .exists());
+        assert!(book
+            .join("story")
+            .join("runtime")
+            .join("chapter-0003.user-brief.md")
+            .exists());
         // 索引：audit-failed + [warning] 注入 + updatedAt/wordCount 覆写。
         let index: Vec<ChapterMeta> = serde_json::from_str(
-            &tokio::fs::read_to_string(book.join("chapters").join("index.json")).await.unwrap(),
+            &tokio::fs::read_to_string(book.join("chapters").join("index.json"))
+                .await
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(index[0].status, ChapterStatus::AuditFailed);
         assert_eq!(index[0].updated_at, "2026-07-01T00:00:00.000Z");
-        assert_eq!(index[0].audit_issues, vec![format!("[warning] {MANUAL_REPLACEMENT_ISSUE}")]);
+        assert_eq!(
+            index[0].audit_issues,
+            vec![format!("[warning] {MANUAL_REPLACEMENT_ISSUE}")]
+        );
         assert_eq!(index[0].word_count, 9); // 标题行剥除，正文 9 个 CJK 码元
     }
 
@@ -738,7 +817,7 @@ mod tests {
     fn rough_length_strips_frontmatter_headings_and_whitespace() {
         let content = "---\ntitle: x\n---\n# 第1章 标题\n\n正文内容。\n## 小节\n尾部";
         assert_eq!(rough_chapter_length(content), 7); // 「正文内容。尾部」7 个码元
-        // 非 frontmatter 开头时首行 `---` 不剥离（TS ^--- 行首锚定）。
+                                                      // 非 frontmatter 开头时首行 `---` 不剥离（TS ^--- 行首锚定）。
         assert_eq!(rough_chapter_length("正文"), 2);
     }
 
@@ -747,21 +826,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let book = root.join("books").join("b1");
-        tokio::fs::create_dir_all(book.join("chapters")).await.unwrap();
-        tokio::fs::create_dir_all(book.join("story").join("roles").join("主要角色")).await.unwrap();
-        tokio::fs::create_dir_all(book.join("story").join("snapshots").join("1")).await.unwrap();
-        tokio::fs::write(book.join("chapters").join("0001_风起.md"), "林动走出青阳镇。").await.unwrap();
-        tokio::fs::write(book.join("story").join("current_state.md"), "主角：林动").await.unwrap();
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book.join("story").join("roles").join("主要角色"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(book.join("story").join("snapshots").join("1"))
+            .await
+            .unwrap();
         tokio::fs::write(
-            book.join("story").join("roles").join("主要角色").join("林动.md"),
+            book.join("chapters").join("0001_风起.md"),
+            "林动走出青阳镇。",
+        )
+        .await
+        .unwrap();
+        tokio::fs::write(book.join("story").join("current_state.md"), "主角：林动")
+            .await
+            .unwrap();
+        tokio::fs::write(
+            book.join("story")
+                .join("roles")
+                .join("主要角色")
+                .join("林动.md"),
             "# 林动\n主角。",
         )
         .await
         .unwrap();
         // snapshots 与 .trash 不可改写。
-        tokio::fs::write(book.join("story").join("snapshots").join("1").join("s.md"), "林动快照").await.unwrap();
+        tokio::fs::write(
+            book.join("story").join("snapshots").join("1").join("s.md"),
+            "林动快照",
+        )
+        .await
+        .unwrap();
 
-        let result = execute_entity_rename(&state(&root), "b1", "林动", "林震").await.unwrap();
+        let result = execute_entity_rename(&state(&root), "b1", "林动", "林震")
+            .await
+            .unwrap();
         assert_eq!(result.transaction_type, "entity-rename");
         assert!(!result.review_required);
         assert_eq!(
@@ -770,24 +872,45 @@ mod tests {
         );
         // 内容替换 + 索引键无 chapterNumber。
         assert_eq!(
-            tokio::fs::read_to_string(book.join("chapters").join("0001_风起.md")).await.unwrap(),
+            tokio::fs::read_to_string(book.join("chapters").join("0001_风起.md"))
+                .await
+                .unwrap(),
             "林震走出青阳镇。"
         );
         assert_eq!(
-            tokio::fs::read_to_string(book.join("story").join("snapshots").join("1").join("s.md")).await.unwrap(),
+            tokio::fs::read_to_string(book.join("story").join("snapshots").join("1").join("s.md"))
+                .await
+                .unwrap(),
             "林动快照"
         );
         // 文件重命名。
-        assert!(book.join("story").join("roles").join("主要角色").join("林震.md").is_file());
-        assert!(!book.join("story").join("roles").join("主要角色").join("林动.md").exists());
+        assert!(book
+            .join("story")
+            .join("roles")
+            .join("主要角色")
+            .join("林震.md")
+            .is_file());
+        assert!(!book
+            .join("story")
+            .join("roles")
+            .join("主要角色")
+            .join("林动.md")
+            .exists());
         let serialized = serde_json::to_value(&result).unwrap();
         assert!(serialized.get("chapterNumber").is_none());
 
         // 无命中 → 错误文案逐字。
-        let err = execute_entity_rename(&state(&root), "b1", "不存在的人", "新人").await.unwrap_err();
-        assert_eq!(err, "No occurrences of \"不存在的人\" were found in \"b1\".");
+        let err = execute_entity_rename(&state(&root), "b1", "不存在的人", "新人")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "No occurrences of \"不存在的人\" were found in \"b1\"."
+        );
         // 路径分隔符拒绝。
-        let err = execute_entity_rename(&state(&root), "b1", "林震", "../逃逸").await.unwrap_err();
+        let err = execute_entity_rename(&state(&root), "b1", "林震", "../逃逸")
+            .await
+            .unwrap_err();
         assert_eq!(
             err,
             "Invalid rename target \"../逃逸\": entity names cannot contain path separators."
@@ -814,20 +937,33 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.transaction_type, "chapter-local-edit");
-        assert_eq!(result.summary, "Patched chapter 3 and marked it for review.");
+        assert_eq!(
+            result.summary,
+            "Patched chapter 3 and marked it for review."
+        );
         assert_eq!(result.touched_files[0], "chapters/0003_Demo.md");
-        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md")).await.unwrap();
-        assert_eq!(content, "# 第3章 旧稿\n\n新正文。");
-        let index: Vec<ChapterMeta> = serde_json::from_str(
-            &tokio::fs::read_to_string(book.join("chapters").join("index.json")).await.unwrap(),
-        )
-        .unwrap();
-        assert_eq!(index[0].audit_issues, vec![format!("[warning] {MANUAL_TEXT_EDIT_ISSUE}")]);
-
-        // ② 弹性空白：内容空白形态与目标不同（多个空格 vs 换行缩进）仍命中。
-        tokio::fs::write(book.join("chapters").join("0003_Demo.md"), "# 第3章 旧稿\n\n新   正文。")
+        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md"))
             .await
             .unwrap();
+        assert_eq!(content, "# 第3章 旧稿\n\n新正文。");
+        let index: Vec<ChapterMeta> = serde_json::from_str(
+            &tokio::fs::read_to_string(book.join("chapters").join("index.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            index[0].audit_issues,
+            vec![format!("[warning] {MANUAL_TEXT_EDIT_ISSUE}")]
+        );
+
+        // ② 弹性空白：内容空白形态与目标不同（多个空格 vs 换行缩进）仍命中。
+        tokio::fs::write(
+            book.join("chapters").join("0003_Demo.md"),
+            "# 第3章 旧稿\n\n新   正文。",
+        )
+        .await
+        .unwrap();
         let result = execute_chapter_local_edit(
             &state(&root),
             "b1",
@@ -840,7 +976,9 @@ mod tests {
         .await
         .unwrap();
         assert!(result.summary.starts_with("Patched chapter 3"));
-        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md")).await.unwrap();
+        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md"))
+            .await
+            .unwrap();
         assert_eq!(content, "# 第3章 旧稿\n\n弹性正文。");
 
         // ③ 近似段落：目标为段落的近似改写（≥24 码元 + dice 阈值）。
@@ -862,15 +1000,26 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.transaction_type, "chapter-local-edit");
-        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md")).await.unwrap();
-        assert_eq!(content, "# 第3章 旧稿\n\n近似替换后的段落。\n\n第二段保持原样不动。");
+        let content = tokio::fs::read_to_string(book.join("chapters").join("0003_Demo.md"))
+            .await
+            .unwrap();
+        assert_eq!(
+            content,
+            "# 第3章 旧稿\n\n近似替换后的段落。\n\n第二段保持原样不动。"
+        );
 
         // 未命中 → 错误文案逐字；缺 targetText → 前置守卫。
-        let err = execute_chapter_local_edit(&state(&root), "b1", 3, "根本不存在的文字", "x", 0, "t")
+        let err =
+            execute_chapter_local_edit(&state(&root), "b1", 3, "根本不存在的文字", "x", 0, "t")
+                .await
+                .unwrap_err();
+        assert_eq!(err, "Target text was not found in chapter 3.");
+        let err = execute_chapter_local_edit(&state(&root), "b1", 3, "", "x", 0, "t")
             .await
             .unwrap_err();
-        assert_eq!(err, "Target text was not found in chapter 3.");
-        let err = execute_chapter_local_edit(&state(&root), "b1", 3, "", "x", 0, "t").await.unwrap_err();
-        assert_eq!(err, "Chapter-local edits require targetText and replacementText.");
+        assert_eq!(
+            err,
+            "Chapter-local edits require targetText and replacementText."
+        );
     }
 }

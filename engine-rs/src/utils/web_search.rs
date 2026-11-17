@@ -26,7 +26,10 @@ pub async fn search_web(
     max_results: usize,
     options: &WebSearchOptions,
 ) -> Result<Vec<SearchResult>, String> {
-    let env_name = options.api_key_env.clone().unwrap_or_else(|| "TAVILY_API_KEY".to_string());
+    let env_name = options
+        .api_key_env
+        .clone()
+        .unwrap_or_else(|| "TAVILY_API_KEY".to_string());
     let api_key = options
         .api_key
         .clone()
@@ -64,7 +67,11 @@ pub async fn search_web(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
-        return Err(format!("Tavily search failed: {} {}", status.as_u16(), body));
+        return Err(format!(
+            "Tavily search failed: {} {}",
+            status.as_u16(),
+            body
+        ));
     }
     let data: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
     Ok(data
@@ -74,9 +81,21 @@ pub async fn search_web(
             items
                 .iter()
                 .map(|item| SearchResult {
-                    title: item.get("title").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    url: item.get("url").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                    snippet: item.get("content").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                    title: item
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    url: item
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    snippet: item
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
                 })
                 .collect()
         })
@@ -87,7 +106,11 @@ pub async fn search_web(
 /// 截断按 UTF-16 码元（TS `slice`）。`allow_private_egress`：用户显式配置
 /// （inkos.json researchSearch.allowPrivateEgress——自建网关/内网知识库
 /// 部署语义，与 search_web base_url 不做校验同一理由；缺省 false 走防线）。
-pub async fn fetch_url(url: &str, max_chars: usize, allow_private_egress: bool) -> Result<String, String> {
+pub async fn fetch_url(
+    url: &str,
+    max_chars: usize,
+    allow_private_egress: bool,
+) -> Result<String, String> {
     if !allow_private_egress {
         assert_public_egress_host(url)
             .await
@@ -100,7 +123,10 @@ pub async fn fetch_url(url: &str, max_chars: usize, allow_private_egress: bool) 
         .map_err(|e| e.to_string())?;
     let response = client
         .get(url)
-        .header("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        )
         .header("Accept", "text/html, application/json, text/plain")
         .send()
         .await
@@ -118,13 +144,17 @@ pub async fn fetch_url(url: &str, max_chars: usize, allow_private_egress: bool) 
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
-    let text = response.text().await.map_err(|e| format!("Fetch failed: {e}"))?;
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("Fetch failed: {e}"))?;
     if content_type.contains("html") {
         static SCRIPT_STYLE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
         static TAG: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
         static BLANKS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        let script_style = SCRIPT_STYLE
-            .get_or_init(|| regex::Regex::new(r"(?i)<script[\s\S]*?</script>|<style[\s\S]*?</style>").unwrap());
+        let script_style = SCRIPT_STYLE.get_or_init(|| {
+            regex::Regex::new(r"(?i)<script[\s\S]*?</script>|<style[\s\S]*?</style>").unwrap()
+        });
         let tag = TAG.get_or_init(|| regex::Regex::new(r"<[^>]*>").unwrap());
         let blanks = BLANKS.get_or_init(|| regex::Regex::new(r"\s+").unwrap());
         let stripped = script_style.replace_all(&text, "");
@@ -162,7 +192,9 @@ fn truncate_utf16(value: &str, max: usize) -> String {
 
 /// 从 URL 提取 host（仅 http/https；userinfo/端口剥除，IPv6 取方括号内）。
 fn url_host(url: &str) -> Option<&str> {
-    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))?;
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..authority_end];
     let host_port = authority.rsplit('@').next().unwrap_or(authority);
@@ -171,7 +203,11 @@ fn url_host(url: &str) -> Option<&str> {
         return if host.is_empty() { None } else { Some(host) };
     }
     let host = host_port.split(':').next()?;
-    if host.is_empty() { None } else { Some(host) }
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
 }
 
 /// 本地域名字面（解析前快筛）：localhost 全族与 .local（mDNS）。
@@ -259,7 +295,10 @@ mod tests {
     #[test]
     fn url_host_extracts_authority() {
         assert_eq!(url_host("http://example.com/a"), Some("example.com"));
-        assert_eq!(url_host("https://user:pw@Example.com:8443/x?y#z"), Some("Example.com"));
+        assert_eq!(
+            url_host("https://user:pw@Example.com:8443/x?y#z"),
+            Some("Example.com")
+        );
         assert_eq!(url_host("http://127.0.0.1:3000/"), Some("127.0.0.1"));
         assert_eq!(url_host("http://[::1]:8080/x"), Some("::1"));
         assert_eq!(url_host("ftp://example.com"), None);
@@ -269,16 +308,33 @@ mod tests {
 
     #[test]
     fn egress_guard_blocks_local_literals_and_private_ips() {
-        for host in ["localhost", "a.localhost", "svc.local", "LOCALHOST", "host.local."] {
+        for host in [
+            "localhost",
+            "a.localhost",
+            "svc.local",
+            "LOCALHOST",
+            "host.local.",
+        ] {
             assert!(is_blocked_host_literal(host), "{host}");
         }
         assert!(!is_blocked_host_literal("example.com"));
         assert!(!is_blocked_host_literal("notlocal.io"));
 
         for ip in [
-            "127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1",
-            "169.254.1.1", "0.0.0.0", "255.255.255.255", "::1", "fc00::1", "fd12::1",
-            "fe80::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1",
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.255",
+            "192.168.1.1",
+            "169.254.1.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "::1",
+            "fc00::1",
+            "fd12::1",
+            "fe80::1",
+            "::ffff:10.0.0.1",
+            "::ffff:127.0.0.1",
         ] {
             assert!(is_blocked_ip(ip.parse().unwrap()), "{ip}");
         }
@@ -289,11 +345,23 @@ mod tests {
 
     #[tokio::test]
     async fn egress_guard_blocks_before_any_network_use() {
-        assert!(assert_public_egress_host("http://127.0.0.1/x").await.is_err());
-        assert!(assert_public_egress_host("http://localhost/x").await.is_err());
-        assert!(assert_public_egress_host("http://[::1]:8080/x").await.is_err());
-        assert!(assert_public_egress_host("ftp://example.com/x").await.is_err());
-        assert!(assert_public_egress_host("http://169.254.169.254/latest/meta-data").await.is_err());
+        assert!(assert_public_egress_host("http://127.0.0.1/x")
+            .await
+            .is_err());
+        assert!(assert_public_egress_host("http://localhost/x")
+            .await
+            .is_err());
+        assert!(assert_public_egress_host("http://[::1]:8080/x")
+            .await
+            .is_err());
+        assert!(assert_public_egress_host("ftp://example.com/x")
+            .await
+            .is_err());
+        assert!(
+            assert_public_egress_host("http://169.254.169.254/latest/meta-data")
+                .await
+                .is_err()
+        );
         // 公网 IP 字面量纯本地判定放行（不发起真实请求）。
         assert!(assert_public_egress_host("http://8.8.8.8/x").await.is_ok());
     }

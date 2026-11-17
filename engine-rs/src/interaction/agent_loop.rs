@@ -18,7 +18,15 @@ pub trait LoopEvents: Send + Sync {
     /// 工具开始（tool:start）。
     fn on_tool_start(&self, _id: &str, _tool: &str, _args: &Value) {}
     /// 工具结束（tool:end）。
-    fn on_tool_end(&self, _id: &str, _tool: &str, _result_text: &str, _details: Option<&Value>, _is_error: bool) {}
+    fn on_tool_end(
+        &self,
+        _id: &str,
+        _tool: &str,
+        _result_text: &str,
+        _details: Option<&Value>,
+        _is_error: bool,
+    ) {
+    }
 }
 
 /// 无操作回调。
@@ -95,7 +103,11 @@ pub trait LoopChat: Send + Sync {
 /// 项目根——trait 让 loop 与具体工具面解耦）。
 #[async_trait::async_trait]
 pub trait LoopToolExecutor: Send + Sync {
-    async fn execute(&self, name: &str, args: &Value) -> crate::interaction::project_tools::ToolResult;
+    async fn execute(
+        &self,
+        name: &str,
+        args: &Value,
+    ) -> crate::interaction::project_tools::ToolResult;
 
     /// 最近一次 [`Self::execute`] 的管线正交观测（R39）。缺省 None——
     /// 未接管三段管线的执行器（文件工具兜底链等）零成本适配；接管方
@@ -136,9 +148,12 @@ pub async fn run_agent_loop(
             .unwrap_or(false)
     };
 
-    let mut messages = vec![
-        LLMMessage { role: LLMRole::System, content: system_prompt.to_string(), tool_calls: None, tool_call_id: None },
-    ];
+    let mut messages = vec![LLMMessage {
+        role: LLMRole::System,
+        content: system_prompt.to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    }];
     // R41/563 号：计量开局入表（当前请求面 = system + 历史 + 指令）。
     if let Some(m) = meter {
         m.append(system_prompt);
@@ -152,7 +167,12 @@ pub async fn run_agent_loop(
     if let Some(m) = meter {
         m.append(instruction);
     }
-    messages.push(LLMMessage { role: LLMRole::User, content: instruction.to_string(), tool_calls: None, tool_call_id: None });
+    messages.push(LLMMessage {
+        role: LLMRole::User,
+        content: instruction.to_string(),
+        tool_calls: None,
+        tool_call_id: None,
+    });
     let mut executions: Vec<LoopToolExecution> = Vec::new();
     // G8a/333 号：AI 实况——多轮 usage 累加 + 首包（首个文本输出）计时。
     let started_ms = crate::interaction::session::utc_now_ms();
@@ -166,7 +186,10 @@ pub async fn run_agent_loop(
                 tool_executions: executions,
                 aborted: true,
                 usage: total_usage,
-                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
+                timings: LoopTimings {
+                    first_token_ms,
+                    total_ms: crate::interaction::session::utc_now_ms() - started_ms,
+                },
             });
         }
         // 624 号：abort 不能只在轮间检查——单轮 LLM 调用可能挂起或长流，
@@ -202,7 +225,12 @@ pub async fn run_agent_loop(
         // R41/563 号：usage 入锚（权威值校准比）；assistant 面入表（内容 +
         // tool_calls 参数串 = 下一请求将新增的面）。
         if let Some(m) = meter {
-            m.note_usage(usage.model.as_deref(), usage.input, usage.output, usage.total_tokens);
+            m.note_usage(
+                usage.model.as_deref(),
+                usage.input,
+                usage.output,
+                usage.total_tokens,
+            );
             m.append(&content);
             for (_, _, arguments_json) in &tool_calls {
                 m.append(arguments_json);
@@ -220,7 +248,10 @@ pub async fn run_agent_loop(
                 tool_executions: executions,
                 aborted: false,
                 usage: total_usage,
-                timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
+                timings: LoopTimings {
+                    first_token_ms,
+                    total_ms: crate::interaction::session::utc_now_ms() - started_ms,
+                },
             });
         }
 
@@ -247,11 +278,19 @@ pub async fn run_agent_loop(
             let observation = tool_exec.last_observation();
             let is_error = result.is_error
                 || (result.details.is_none()
-                    && result.text.starts_with(|c: char| !c.is_ascii_alphanumeric())
+                    && result
+                        .text
+                        .starts_with(|c: char| !c.is_ascii_alphanumeric())
                     && result.text.contains("escapes"))
                 || result.text.contains("failed:")
                 || result.text.starts_with("Unknown tool");
-            events.on_tool_end(id, name, &result.text, (!is_error).then_some(result.details.as_ref()).flatten(), is_error);
+            events.on_tool_end(
+                id,
+                name,
+                &result.text,
+                (!is_error).then_some(result.details.as_ref()).flatten(),
+                is_error,
+            );
             executions.push(LoopToolExecution {
                 id: id.clone(),
                 tool: name.clone(),
@@ -285,7 +324,10 @@ pub async fn run_agent_loop(
         tool_executions: executions,
         aborted: false,
         usage: total_usage,
-        timings: LoopTimings { first_token_ms, total_ms: crate::interaction::session::utc_now_ms() - started_ms },
+        timings: LoopTimings {
+            first_token_ms,
+            total_ms: crate::interaction::session::utc_now_ms() - started_ms,
+        },
     })
 }
 
@@ -302,9 +344,16 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LoopChat for ScriptedChat {
-        async fn chat(&self, _messages: &[LLMMessage], _tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
+        async fn chat(
+            &self,
+            _messages: &[LLMMessage],
+            _tools: Option<&Value>,
+        ) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
             let index = {
-                let mut calls = self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut calls = self
+                    .calls
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 let index = calls.len();
                 calls.push(index);
                 index
@@ -325,43 +374,95 @@ mod tests {
                 (
                     "让我看看文件".into(),
                     vec![("call_1".into(), "read".into(), r#"{"path":"a.md"}"#.into())],
-                    LoopUsage { input: 100, output: 20, total_tokens: 120, model: None },
+                    LoopUsage {
+                        input: 100,
+                        output: 20,
+                        total_tokens: 120,
+                        model: None,
+                    },
                 ),
                 (
                     "文件内容是 hello agent。".into(),
                     vec![],
-                    LoopUsage { input: 150, output: 30, total_tokens: 180, model: None },
+                    LoopUsage {
+                        input: 150,
+                        output: 30,
+                        total_tokens: 180,
+                        model: None,
+                    },
                 ),
             ],
             calls: Mutex::new(vec![]),
         };
         let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
-        let outcome = run_agent_loop(&chat, &executor, "sys", Vec::new(), "读一下", Some(&crate::interaction::project_tools::tools_payload()), None, &NoopEvents, None)
-            .await
-            .unwrap();
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            Vec::new(),
+            "读一下",
+            Some(&crate::interaction::project_tools::tools_payload()),
+            None,
+            &NoopEvents,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(outcome.response_text, "文件内容是 hello agent。");
         assert_eq!(outcome.tool_executions.len(), 1);
         assert_eq!(outcome.tool_executions[0].tool, "read");
         assert_eq!(outcome.tool_executions[0].status, "completed");
-        assert!(outcome.tool_executions[0].result.as_deref().unwrap().contains("hello agent"));
+        assert!(outcome.tool_executions[0]
+            .result
+            .as_deref()
+            .unwrap()
+            .contains("hello agent"));
         // G8a/333 号：多轮 usage 累加 + 计时非负。
-        assert_eq!(outcome.usage, LoopUsage { input: 250, output: 50, total_tokens: 300, model: None });
+        assert_eq!(
+            outcome.usage,
+            LoopUsage {
+                input: 250,
+                output: 50,
+                total_tokens: 300,
+                model: None
+            }
+        );
         assert!(outcome.timings.total_ms < u64::MAX);
     }
 
     #[tokio::test]
     async fn abort_stops_before_first_round() {
         let dir = tempfile::tempdir().unwrap();
-        let chat = ScriptedChat { rounds: vec![("x".into(), vec![], LoopUsage::default())], calls: Mutex::new(vec![]) };
+        let chat = ScriptedChat {
+            rounds: vec![("x".into(), vec![], LoopUsage::default())],
+            calls: Mutex::new(vec![]),
+        };
         let abort: AbortHandle = Arc::new(Mutex::new(true));
         let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
-        let outcome = run_agent_loop(&chat, &executor, "sys", Vec::new(), "hi", None, Some(&abort), &NoopEvents, None)
-            .await
-            .unwrap();
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            Vec::new(),
+            "hi",
+            None,
+            Some(&abort),
+            &NoopEvents,
+            None,
+        )
+        .await
+        .unwrap();
         assert!(outcome.aborted);
         assert!(outcome.response_text.is_empty());
         assert_eq!(outcome.usage, LoopUsage::default(), "abort 后无 usage 累加");
-        assert_eq!(chat.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).len(), 0, "abort 后未发起 LLM 调用");
+        assert_eq!(
+            chat.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            0,
+            "abort 后未发起 LLM 调用"
+        );
     }
 
     /// 624 号：模拟在飞 LLM 调用——chat() 内部置位 abort（用户点停止）后
@@ -372,8 +473,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LoopChat for InflightAbortChat {
-        async fn chat(&self, _messages: &[LLMMessage], _tools: Option<&Value>) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
-            *self.abort.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        async fn chat(
+            &self,
+            _messages: &[LLMMessage],
+            _tools: Option<&Value>,
+        ) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
+            *self
+                .abort
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
             std::future::pending::<()>().await;
             unreachable!("pending future 不应解析")
         }
@@ -383,19 +491,35 @@ mod tests {
     async fn abort_interrupts_inflight_llm_call() {
         let dir = tempfile::tempdir().unwrap();
         let abort: AbortHandle = Arc::new(Mutex::new(false));
-        let chat = InflightAbortChat { abort: abort.clone() };
+        let chat = InflightAbortChat {
+            abort: abort.clone(),
+        };
         let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
         // 旧代码（轮间才检查）会挂死整个测试，timeout 保证可证伪地转红。
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            run_agent_loop(&chat, &executor, "sys", Vec::new(), "hi", None, Some(&abort), &NoopEvents, None),
+            run_agent_loop(
+                &chat,
+                &executor,
+                "sys",
+                Vec::new(),
+                "hi",
+                None,
+                Some(&abort),
+                &NoopEvents,
+                None,
+            ),
         )
         .await
         .expect("在飞中止必须取消 LLM 调用，而非等到调用自然结束")
         .unwrap();
         assert!(outcome.aborted);
         assert!(outcome.response_text.is_empty());
-        assert_eq!(outcome.usage, LoopUsage::default(), "在飞中止后无 usage 累加");
+        assert_eq!(
+            outcome.usage,
+            LoopUsage::default(),
+            "在飞中止后无 usage 累加"
+        );
     }
 
     #[tokio::test]
@@ -403,17 +527,35 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let chat = ScriptedChat {
             rounds: vec![
-                ("".into(), vec![("call_1".into(), "nope".into(), "{}".into())], LoopUsage::default()),
+                (
+                    "".into(),
+                    vec![("call_1".into(), "nope".into(), "{}".into())],
+                    LoopUsage::default(),
+                ),
                 ("done".into(), vec![], LoopUsage::default()),
             ],
             calls: Mutex::new(vec![]),
         };
         let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
-        let outcome = run_agent_loop(&chat, &executor, "sys", Vec::new(), "hi", None, None, &NoopEvents, None)
-            .await
-            .unwrap();
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            Vec::new(),
+            "hi",
+            None,
+            None,
+            &NoopEvents,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(outcome.tool_executions[0].status, "error");
-        assert!(outcome.tool_executions[0].error.as_deref().unwrap().contains("Unknown tool"));
+        assert!(outcome.tool_executions[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Unknown tool"));
     }
 
     /// R41/563 号：计量挂线——开局入表（system+历史+指令）、每轮 usage 入锚、
@@ -427,12 +569,22 @@ mod tests {
                 (
                     "让我看看文件".into(),
                     vec![("call_1".into(), "read".into(), r#"{"path":"a.md"}"#.into())],
-                    LoopUsage { input: 100, output: 20, total_tokens: 120, model: Some("m1".into()) },
+                    LoopUsage {
+                        input: 100,
+                        output: 20,
+                        total_tokens: 120,
+                        model: Some("m1".into()),
+                    },
                 ),
                 (
                     "文件内容是 hello agent。".into(),
                     vec![],
-                    LoopUsage { input: 150, output: 30, total_tokens: 180, model: None },
+                    LoopUsage {
+                        input: 150,
+                        output: 30,
+                        total_tokens: 180,
+                        model: None,
+                    },
                 ),
             ],
             calls: Mutex::new(vec![]),
@@ -445,9 +597,19 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
         }];
-        let outcome = run_agent_loop(&chat, &executor, "sys", history, "读一下", None, None, &NoopEvents, Some(&meter))
-            .await
-            .unwrap();
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            history,
+            "读一下",
+            None,
+            None,
+            &NoopEvents,
+            Some(&meter),
+        )
+        .await
+        .unwrap();
         assert!(!outcome.aborted);
         let snap = meter.measure();
         // 两轮 usage 都入过锚：最后 accepted 的是第二轮（usage.model None 仍成立）。

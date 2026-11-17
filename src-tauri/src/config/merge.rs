@@ -154,7 +154,6 @@ impl Default for ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_config_manager_default() {
@@ -219,8 +218,8 @@ mod tests {
         mgr.set_project(project_cfg);
 
         let merged = mgr.merged();
-        assert_eq!(merged.logging.level, "trace");      // 工作区覆盖用户
-        assert_eq!(merged.updates.channel, "beta");     // 用户保留（未被更高层覆盖）
+        assert_eq!(merged.logging.level, "trace"); // 工作区覆盖用户
+        assert_eq!(merged.updates.channel, "beta"); // 用户保留（未被更高层覆盖）
         assert_eq!(
             merged.network.proxy,
             Some("http://proj-proxy:9090".to_string())
@@ -256,10 +255,10 @@ mod tests {
         mgr.set_project(project_cfg);
 
         let merged = mgr.merged();
-        assert_eq!(merged.logging.level, "trace");          // 项目覆盖
-        assert_eq!(merged.updates.channel, "beta");         // 工作区保留
+        assert_eq!(merged.logging.level, "trace"); // 项目覆盖
+        assert_eq!(merged.updates.channel, "beta"); // 工作区保留
         assert_eq!(merged.network.proxy, Some("http://proxy:8080".to_string())); // 项目覆盖
-        assert_eq!(merged.network.timeout_seconds, 30);     // 系统默认
+        assert_eq!(merged.network.timeout_seconds, 30); // 系统默认
     }
 
     #[test]

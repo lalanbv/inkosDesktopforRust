@@ -48,7 +48,12 @@ pub async fn tool_use_skill(
     disabled: &[String],
     args: &Value,
 ) -> ToolResult {
-    let Some(raw_id) = args.get("skillId").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else {
+    let Some(raw_id) = args
+        .get("skillId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
         return error_result("use_skill requires skillId.");
     };
     let Ok(skill_id) = normalize_skill_id_strict(raw_id) else {
@@ -70,7 +75,9 @@ pub async fn tool_use_skill(
         .filter(|s| !s.is_empty())
     {
         let Some(base_dir) = skill.base_dir.as_deref() else {
-            return error_result(format!("Skill has no readable resource directory: {skill_id}"));
+            return error_result(format!(
+                "Skill has no readable resource directory: {skill_id}"
+            ));
         };
         let full_path = match crate::utils::path::safe_child_path(base_dir, resource_path) {
             Ok(path) => path,
@@ -92,9 +99,7 @@ pub async fn tool_use_skill(
                 resource = Some((resource_path.to_string(), body));
             }
             Ok(_) => {
-                return error_result(format!(
-                    "Skill resource is not UTF-8 text: {resource_path}"
-                ));
+                return error_result(format!("Skill resource is not UTF-8 text: {resource_path}"));
             }
             Err(e) => return error_result(format!("read failed: {e}")),
         }
@@ -110,14 +115,20 @@ pub async fn tool_use_skill(
             .filter(|s| !s.is_empty())
         {
             let Some(base_dir) = skill.base_dir.as_deref() else {
-                return error_result(format!("Skill has no readable resource directory: {skill_id}"));
+                return error_result(format!(
+                    "Skill has no readable resource directory: {skill_id}"
+                ));
             };
             retrieved = retrieve_skill_resources(&skill_id, base_dir, query).await;
         }
     }
 
     let body = skill.body.trim();
-    let body = if body.is_empty() { skill.description.as_str() } else { body };
+    let body = if body.is_empty() {
+        skill.description.as_str()
+    } else {
+        body
+    };
     let mut text = vec![
         format!("Skill activated: {}", skill.id),
         format!("Purpose: {}", skill.description),
@@ -143,7 +154,10 @@ pub async fn tool_use_skill(
                     .map(|h| format!(" \u{b7} {h}"))
                     .unwrap_or_default(),
             );
-            text.push(format!("## {header}\n{}", item["body"].as_str().unwrap_or_default()));
+            text.push(format!(
+                "## {header}\n{}",
+                item["body"].as_str().unwrap_or_default()
+            ));
         }
     }
     text.push(String::new());
@@ -159,7 +173,13 @@ pub async fn tool_use_skill(
     if let Some((path, _)) = &resource {
         details["resourcePath"] = json!(path);
     }
-    if args.get("query").and_then(Value::as_str).map(str::trim).map(|q| !q.is_empty()).unwrap_or(false) {
+    if args
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(|q| !q.is_empty())
+        .unwrap_or(false)
+    {
         details["query"] = json!(args["query"].as_str().unwrap_or_default().trim());
         details["retrievedResources"] = json!(retrieved);
     }
@@ -180,13 +200,15 @@ pub async fn tool_use_skill(
         .unwrap_or_else(|| {
             retrieved
                 .iter()
-                .map(|item| crate::skills::production_bindings::ActivatedSkillResource {
-                    path: item["path"].as_str().unwrap_or_default().to_string(),
-                    heading: item["heading"].as_str().map(str::to_string),
-                    body: item["body"].as_str().unwrap_or_default().to_string(),
-                    char_start: item["charStart"].as_u64().unwrap_or(0) as usize,
-                    char_end: item["charEnd"].as_u64().unwrap_or(0) as usize,
-                })
+                .map(
+                    |item| crate::skills::production_bindings::ActivatedSkillResource {
+                        path: item["path"].as_str().unwrap_or_default().to_string(),
+                        heading: item["heading"].as_str().map(str::to_string),
+                        body: item["body"].as_str().unwrap_or_default().to_string(),
+                        char_start: item["charStart"].as_u64().unwrap_or(0) as usize,
+                        char_end: item["charEnd"].as_u64().unwrap_or(0) as usize,
+                    },
+                )
                 .collect()
         });
     crate::skills::production_bindings::activate_turn_skill(
@@ -200,11 +222,7 @@ pub async fn tool_use_skill(
 }
 
 /// `retrieveSkillResources`：skill 目录文本分段 → 内存 BM25 → top-4 段。
-async fn retrieve_skill_resources(
-    skill_id: &str,
-    base_dir: &str,
-    query: &str,
-) -> Vec<Value> {
+async fn retrieve_skill_resources(skill_id: &str, base_dir: &str, query: &str) -> Vec<Value> {
     let files = list_skill_text_files(base_dir).await;
     let mut documents: Vec<crate::utils::local_search::SearchDocument> = Vec::new();
     for path in &files {
@@ -344,7 +362,11 @@ async fn list_skill_text_files(base_dir: &str) -> Vec<String> {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 /// TS `serializeSkillCatalog`：目录 JSON（`<`/`>` 转义防提示注入）。
@@ -362,7 +384,6 @@ pub fn serialize_skill_catalog(skills: &[(String, String, String)]) -> String {
     serde_json::to_string(&entries).unwrap_or_default()
 }
 
-
 // ── 注册模块（R38b）：use_skill 单件——激活注入纯读返回（ReadOnly，
 //    TS 剔除名单不含）；available = 技能注册表在场（allow_intent_skill_selection
 //    分支的装配对应面）。 ──
@@ -371,14 +392,17 @@ crate::interaction::registry::tool_def!(
     UseSkill,
     "use_skill",
     MutationKind::ReadOnly,
-    ctx, args,
+    ctx,
+    args,
     { schema_description(&[use_skill_schema()], "use_skill") },
     schema_parameters(&[use_skill_schema()], "use_skill"),
     ctx.skill_deps.is_some(),
-    { {
-        let (registry, disabled) = ctx.skill_deps.expect("available 门控");
-        tool_use_skill(registry, disabled, args).await
-    } }
+    {
+        {
+            let (registry, disabled) = ctx.skill_deps.expect("available 门控");
+            tool_use_skill(registry, disabled, args).await
+        }
+    }
 );
 
 /// 注册表汇聚口（registry 装配序 = 原 ChatToolRouter 分发链序）。
@@ -399,9 +423,9 @@ mod tests {
             body: "## 规则\n\n以静制动。".into(),
             source: SkillSource::Project,
             base_dir: None,
-        disable_model_invocation: None,
-        user_invocable: None,
-        rank: None,
+            disable_model_invocation: None,
+            user_invocable: None,
+            rank: None,
         }])
     }
 
@@ -420,12 +444,21 @@ mod tests {
         let registry = registry();
         let result = tool_use_skill(&registry, &[], &json!({ "skillId": "combat-tactics" })).await;
         assert!(!result.is_error);
-        assert!(result.text.contains("Skill activated: combat-tactics"), "{}", result.text);
+        assert!(
+            result.text.contains("Skill activated: combat-tactics"),
+            "{}",
+            result.text
+        );
         assert!(result.text.contains("Purpose: 战斗策略"));
         assert!(result.text.contains("以静制动"));
-        assert!(result.text.contains("This skill provides instructions only."));
+        assert!(result
+            .text
+            .contains("This skill provides instructions only."));
         assert_eq!(result.details.as_ref().unwrap()["kind"], "skill_activated");
-        assert_eq!(result.details.as_ref().unwrap()["skillId"], "combat-tactics");
+        assert_eq!(
+            result.details.as_ref().unwrap()["skillId"],
+            "combat-tactics"
+        );
     }
 
     /// 532 号：回合作用域内 use_skill 激活写回回合集（同轮 sub_agent 可见）；
@@ -439,7 +472,8 @@ mod tests {
         assert!(crate::skills::production_bindings::turn_skill_activations().is_empty());
 
         crate::skills::production_bindings::scope_turn_skills(Vec::new(), async {
-            let result = tool_use_skill(&registry, &[], &json!({ "skillId": "combat-tactics" })).await;
+            let result =
+                tool_use_skill(&registry, &[], &json!({ "skillId": "combat-tactics" })).await;
             assert!(!result.is_error);
             let activated = crate::skills::production_bindings::turn_skill_activations();
             assert_eq!(
@@ -448,7 +482,10 @@ mod tests {
             );
         })
         .await;
-        assert!(crate::skills::production_bindings::turn_skill_activations().is_empty(), "轮末丢弃");
+        assert!(
+            crate::skills::production_bindings::turn_skill_activations().is_empty(),
+            "轮末丢弃"
+        );
     }
 
     #[tokio::test]
@@ -469,11 +506,7 @@ mod tests {
 
     #[test]
     fn catalog_escapes_angle_brackets() {
-        let catalog = serialize_skill_catalog(&[(
-            "x".into(),
-            "<script>".into(),
-            "desc".into(),
-        )]);
+        let catalog = serialize_skill_catalog(&[("x".into(), "<script>".into(), "desc".into())]);
         // JSON 文本层：内容中的反斜杠被 stringify 转义为 `\\`（TS JSON.stringify 同款）。
         assert!(catalog.contains("\\\\u003cscript\\\\u003e"), "{catalog}");
     }
@@ -531,18 +564,34 @@ mod query_retrieval_tests {
         assert_eq!(details["query"], "开篇 核心冲突 布局");
         let resources = details["retrievedResources"].as_array().unwrap();
         assert!(!resources.is_empty(), "应至少召回 opening.md 分段");
-        assert!(resources.iter().any(|r| {
-            r["body"].as_str().unwrap_or_default().contains("核心冲突")
-        }), "{resources:?}");
+        assert!(
+            resources
+                .iter()
+                .any(|r| { r["body"].as_str().unwrap_or_default().contains("核心冲突") }),
+            "{resources:?}"
+        );
         // 534 号：段级元数据随命中透出（对齐 TS metadata 面）——
         // heading 为分段标题、charStart/charEnd 为文件内字符区间（非全长 0..len）。
-        assert!(resources.iter().all(|r| r["path"].as_str().unwrap_or_default().ends_with(".md")), "{resources:?}");
-        assert!(resources.iter().any(|r| r["heading"].as_str() == Some("开局布局")), "{resources:?}");
-        assert!(resources.iter().any(|r| {
-            let start = r["charStart"].as_u64().unwrap_or(0);
-            let end = r["charEnd"].as_u64().unwrap_or(0);
-            end > start && (start > 0 || end < 400)
-        }), "{resources:?}");
+        assert!(
+            resources
+                .iter()
+                .all(|r| r["path"].as_str().unwrap_or_default().ends_with(".md")),
+            "{resources:?}"
+        );
+        assert!(
+            resources
+                .iter()
+                .any(|r| r["heading"].as_str() == Some("开局布局")),
+            "{resources:?}"
+        );
+        assert!(
+            resources.iter().any(|r| {
+                let start = r["charStart"].as_u64().unwrap_or(0);
+                let end = r["charEnd"].as_u64().unwrap_or(0);
+                end > start && (start > 0 || end < 400)
+            }),
+            "{resources:?}"
+        );
         assert!(
             result.text.contains("Relevant static references:"),
             "{}",
@@ -572,7 +621,9 @@ mod memory_selector_contract_tests {
         ) -> Result<crate::agents::continuity::ChatOutcome, String> {
             // 契约断言：system/user 形态 + 温度/ token 上限。
             assert_eq!(messages.len(), 2);
-            assert!(messages[0].content.contains("semantic story-memory selector"));
+            assert!(messages[0]
+                .content
+                .contains("semantic story-memory selector"));
             assert!(messages[1].content.contains("BM25 candidates:"));
             Ok(crate::agents::continuity::ChatOutcome {
                 content: self.response.clone(),

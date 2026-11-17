@@ -146,7 +146,8 @@ crate::interaction::registry::tool_def!(
     FilmAddVariable,
     "add_variable",
     MutationKind::ProjectWrite,
-    ctx, args,
+    ctx,
+    args,
     "interactive-film authoring: add/update a variable. Applies immediately.",
     json!({
         "type": "object",
@@ -159,7 +160,11 @@ crate::interaction::registry::tool_def!(
         "required": ["name", "type", "default"]
     }),
     ctx.film_authoring_deps.is_some(),
-    tool_add_variable(ctx.film_authoring_deps.as_ref().expect("available 门控"), args).await
+    tool_add_variable(
+        ctx.film_authoring_deps.as_ref().expect("available 门控"),
+        args
+    )
+    .await
 );
 
 crate::interaction::registry::tool_def!(
@@ -205,7 +210,8 @@ crate::interaction::registry::tool_def!(
     FilmReviseNode,
     "revise_node",
     MutationKind::ProjectWrite,
-    ctx, args,
+    ctx,
+    args,
     "interactive-film authoring: revise one existing node per instruction. Applies immediately.",
     json!({
         "type": "object",
@@ -216,7 +222,12 @@ crate::interaction::registry::tool_def!(
         "required": ["nodeId", "instruction"]
     }),
     ctx.film_authoring_deps.is_some(),
-    tool_fill_or_revise_node(ctx.film_authoring_deps.as_ref().expect("available 门控"), args, NodeWriteKind::Revise).await
+    tool_fill_or_revise_node(
+        ctx.film_authoring_deps.as_ref().expect("available 门控"),
+        args,
+        NodeWriteKind::Revise
+    )
+    .await
 );
 
 crate::interaction::registry::tool_def!(
@@ -255,7 +266,11 @@ pub(crate) fn defs() -> Vec<Box<dyn ToolDef>> {
 }
 
 fn text_result(text: impl Into<String>, details: Option<Value>) -> ToolResult {
-    ToolResult { text: text.into(), details, is_error: false }
+    ToolResult {
+        text: text.into(),
+        details,
+        is_error: false,
+    }
 }
 
 fn error_result(text: impl Into<String>) -> ToolResult {
@@ -273,19 +288,20 @@ async fn apply_delta(
     delta: film::StoryGraphDelta,
     phase: Option<&'static str>,
 ) -> Result<i64, String> {
-    crate::server::interactive_film_routes::apply_graph_delta(deps.root, deps.project_id, &delta, phase)
-        .await
-        .map(|(_, rev)| rev)
+    crate::server::interactive_film_routes::apply_graph_delta(
+        deps.root,
+        deps.project_id,
+        &delta,
+        phase,
+    )
+    .await
+    .map(|(_, rev)| rev)
 }
 
 // ── set_world_anchor ──────────────────────────────────────────────
 
 async fn tool_set_world_anchor(deps: &FilmAuthoringDeps<'_>, args: &Value) -> ToolResult {
-    let opt_str = |key: &str| {
-        args.get(key)
-            .and_then(Value::as_str)
-            .map(str::to_string)
-    };
+    let opt_str = |key: &str| args.get(key).and_then(Value::as_str).map(str::to_string);
     let patch = film::WorldAnchorDelta {
         story_core: opt_str("storyCore"),
         theme: opt_str("theme"),
@@ -326,7 +342,10 @@ async fn tool_upsert_characters(deps: &FilmAuthoringDeps<'_>, args: &Value) -> T
     // motivation / voice 事实（跨节点口吻一致性的检索面）。story/ 目录由
     // open 前建好（MemoryDb::open 不建父目录）。
     let book_dir = deps.root.join("interactive-films").join(deps.project_id);
-    if tokio::fs::create_dir_all(book_dir.join("story")).await.is_ok() {
+    if tokio::fs::create_dir_all(book_dir.join("story"))
+        .await
+        .is_ok()
+    {
         // 764 号：sqlite 事实写入移出 runtime 线程（chars 克隆跨线程，
         // 失败不中断工具结果——与原 if-let-Ok 吞错语义一致）。
         let chars_for_facts = chars.clone();
@@ -432,7 +451,10 @@ async fn tool_define_ending(deps: &FilmAuthoringDeps<'_>, args: &Value) -> ToolR
     else {
         return error_result("define_ending: type must be one of good/bad/neutral/secret");
     };
-    let description = args.get("description").and_then(Value::as_str).unwrap_or("");
+    let description = args
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let ending = film::Ending {
         id: id.to_string(),
         node_id: node_id.to_string(),
@@ -462,7 +484,11 @@ const NODE_SYSTEM_ZH: &str = "你是互动影游编剧。根据当前图上下�
 const NODE_SYSTEM_EN: &str = "You are an interactive film scriptwriter. Using the current graph context and the instruction, write the requested node's complete scene, dialogue, choices, and image direction. Every choices[].targetNodeId must point to an existing node id. Finish by calling submit_story_node.";
 
 fn node_system_prompt(language: &str) -> &'static str {
-    if language == "en" { NODE_SYSTEM_EN } else { NODE_SYSTEM_ZH }
+    if language == "en" {
+        NODE_SYSTEM_EN
+    } else {
+        NODE_SYSTEM_ZH
+    }
 }
 
 /// prompt-pack 附加段（107 号出口同款：失败回原提示词）。
@@ -480,7 +506,9 @@ async fn append_prompt_pack(base: &str, prompt_id: &str, root: &Path) -> String 
     .unwrap_or_else(|_| base.to_string())
 }
 
-async fn load_authoring_context(deps: &FilmAuthoringDeps<'_>) -> (Option<film::StoryGraph>, String) {
+async fn load_authoring_context(
+    deps: &FilmAuthoringDeps<'_>,
+) -> (Option<film::StoryGraph>, String) {
     match film::load_story_graph(deps.root, deps.project_id).await {
         Ok(Some(graph)) => {
             let context = film::build_film_authoring_context(&graph);
@@ -540,8 +568,18 @@ async fn tool_fill_or_revise_node(
         .chat(
             "film-authoring",
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.6,
             Some(4000),
@@ -564,7 +602,10 @@ async fn tool_fill_or_revise_node(
     let delta = film::StoryGraphDelta {
         world_anchor: None,
         characters: None,
-        nodes: Some(film::UpsertRemove { upsert: vec![node], remove: Vec::new() }),
+        nodes: Some(film::UpsertRemove {
+            upsert: vec![node],
+            remove: Vec::new(),
+        }),
         variables: None,
         endings: None,
         notes: Vec::new(),
@@ -645,7 +686,8 @@ async fn tool_generate_node_image(deps: &FilmAuthoringDeps<'_>, args: &Value) ->
         Ok(request) => request,
         Err(message) => return error_result(message),
     };
-    let image = match crate::llm::cover::generate_image_from_prompt(&request, &prompt, &size).await {
+    let image = match crate::llm::cover::generate_image_from_prompt(&request, &prompt, &size).await
+    {
         Ok(image) => image,
         Err(message) => return error_result(message),
     };
@@ -656,7 +698,8 @@ async fn tool_generate_node_image(deps: &FilmAuthoringDeps<'_>, args: &Value) ->
             return error_result(e.to_string());
         }
     }
-    if let Err(e) = crate::utils::atomic_file_set::write_file_atomic_bytes(&abs, &image.bytes).await {
+    if let Err(e) = crate::utils::atomic_file_set::write_file_atomic_bytes(&abs, &image.bytes).await
+    {
         return error_result(e.to_string());
     }
     // buildSetImageRefDelta：upsert 节点 + imageSlot {prompt, assetRef}。
@@ -696,11 +739,7 @@ mod tests {
     use super::*;
     /// 注册表路由测试通道（R38b）：与生产同路径（find→execute），替代原
     /// match 分发壳——装配错名在此红。
-    async fn route(
-        deps: &FilmAuthoringDeps<'_>,
-        name: &str,
-        args: &Value,
-    ) -> Option<ToolResult> {
+    async fn route(deps: &FilmAuthoringDeps<'_>, name: &str, args: &Value) -> Option<ToolResult> {
         let mut ctx = crate::interaction::registry::ToolCtx::root_only(deps.root);
         ctx.film_authoring_deps = Some(deps);
         let def = crate::interaction::registry::ToolRegistry::global().find(name, &ctx)?;
@@ -724,17 +763,18 @@ mod tests {
         llm: &'a dyn FilmAuthoringLLM,
         language: &'a str,
     ) -> FilmAuthoringDeps<'a> {
-        FilmAuthoringDeps { root, project_id: "p", language, llm }
+        FilmAuthoringDeps {
+            root,
+            project_id: "p",
+            language,
+            llm,
+        }
     }
 
     fn save_graph(root: &Path, graph: &film::StoryGraph) {
         let path = film::story_graph_path(root, "p");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(
-            path,
-            serde_json::to_string_pretty(graph).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(path, serde_json::to_string_pretty(graph).unwrap()).unwrap();
     }
 
     fn sample_graph() -> film::StoryGraph {
@@ -756,7 +796,13 @@ mod tests {
         struct Reject;
         #[async_trait::async_trait]
         impl FilmAuthoringLLM for Reject {
-            async fn chat(&self, _: &str, _: Vec<LLMMessage>, _: f64, _: Option<u32>) -> Result<String, String> {
+            async fn chat(
+                &self,
+                _: &str,
+                _: Vec<LLMMessage>,
+                _: f64,
+                _: Option<u32>,
+            ) -> Result<String, String> {
                 Err("should not be called".to_string())
             }
         }
@@ -854,10 +900,11 @@ mod tests {
         assert_eq!(result.text, "Upserted 2 character(s) (rev 1).");
 
         let db = MemoryDb::open(root.join("interactive-films").join("p")).unwrap();
-        let facts = db
-            .get_facts_for_characters(&["林夏".to_string()])
-            .unwrap();
-        let motivations: Vec<_> = facts.iter().filter(|f| f.predicate == "motivation").collect();
+        let facts = db.get_facts_for_characters(&["林夏".to_string()]).unwrap();
+        let motivations: Vec<_> = facts
+            .iter()
+            .filter(|f| f.predicate == "motivation")
+            .collect();
         let voices: Vec<_> = facts.iter().filter(|f| f.predicate == "voice").collect();
         assert_eq!(motivations.len(), 1);
         assert_eq!(motivations[0].object, "找回失踪的妹妹");
@@ -899,7 +946,10 @@ mod tests {
                 .map(|m| m.content.clone())
                 .collect::<Vec<_>>()
                 .join("\n---\n");
-            self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((system, user));
+            self.calls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((system, user));
             Ok(self.response.clone())
         }
     }
@@ -917,7 +967,10 @@ mod tests {
             "choices": [{ "id": "ch1", "text": "追问", "targetNodeId": "e" }]
         })
         .to_string();
-        let llm = ScriptedLLM { calls: Mutex::new(Vec::new()), response };
+        let llm = ScriptedLLM {
+            calls: Mutex::new(Vec::new()),
+            response,
+        };
         let deps = deps_for(&root, &llm, "zh");
 
         let result = route(
@@ -932,7 +985,11 @@ mod tests {
         assert_eq!(details["promptPacks"], json!(["interactive-film.script"]));
         assert_eq!(details["skillIds"], json!([]));
 
-        let (system, user) = llm.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].clone();
+        let (system, user) = llm
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())[0]
+            .clone();
         assert!(system.contains("你是互动影游编剧"), "zh system: {system}");
         assert!(user.contains("要填的节点 id：n1"));
         assert!(user.contains("指令：写抉择场景"));
@@ -958,7 +1015,11 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.text, "Node n1 filled (rev 2).");
-        let (system, user) = llm.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[1].clone();
+        let (system, user) = llm
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())[1]
+            .clone();
         assert!(system.contains("You are an interactive film scriptwriter"));
         assert!(!system.contains("你是互动影游编剧"));
         assert!(user.contains("Node id to fill: n1"));
@@ -985,14 +1046,21 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.text, "Node n1 revised (rev 1).");
-        let (system, user) = llm.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].clone();
+        let (system, user) = llm
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())[0]
+            .clone();
         assert!(system.contains("你是互动影游编剧"));
         assert!(user.contains("要修改的节点 id：n1"));
         assert!(user.contains("现有内容："));
         assert!(user.contains("修改指令：收紧对白"));
 
         // LLM 无 JSON → 错误结果。
-        let llm_bad = ScriptedLLM { calls: Mutex::new(Vec::new()), response: "纯散文回复".to_string() };
+        let llm_bad = ScriptedLLM {
+            calls: Mutex::new(Vec::new()),
+            response: "纯散文回复".to_string(),
+        };
         let deps_bad = deps_for(&root, &llm_bad, "zh");
         let result = route(
             &deps_bad,
@@ -1005,7 +1073,10 @@ mod tests {
         assert!(result.text.contains("fill_node: LLM returned no JSON"));
 
         // LLM 坏 JSON 结构 → invalid node。
-        let llm_invalid = ScriptedLLM { calls: Mutex::new(Vec::new()), response: "{\"id\":1}".to_string() };
+        let llm_invalid = ScriptedLLM {
+            calls: Mutex::new(Vec::new()),
+            response: "{\"id\":1}".to_string(),
+        };
         let deps_invalid = deps_for(&root, &llm_invalid, "zh");
         let result = route(
             &deps_invalid,
@@ -1035,21 +1106,18 @@ mod tests {
         .await
         .unwrap();
         assert!(result.is_error);
-        assert!(result.text.contains("size must be one of"), "text: {}", result.text);
+        assert!(
+            result.text.contains("size must be one of"),
+            "text: {}",
+            result.text
+        );
 
         // 图谱缺失。
-        let result = route(
-            &deps,
-            "generate_node_image",
-            &json!({ "nodeId": "n1" }),
-        )
-        .await
-        .unwrap();
+        let result = route(&deps, "generate_node_image", &json!({ "nodeId": "n1" }))
+            .await
+            .unwrap();
         assert!(result.is_error);
-        assert_eq!(
-            result.text,
-            "interactive-film project p has no story graph"
-        );
+        assert_eq!(result.text, "interactive-film project p has no story graph");
 
         // 节点缺失。
         save_graph(&root, &sample_graph());
@@ -1064,13 +1132,9 @@ mod tests {
         assert_eq!(result.text, "node missing not found");
 
         // 无 prompt 无 sceneDesc。
-        let result = route(
-            &deps,
-            "generate_node_image",
-            &json!({ "nodeId": "n1" }),
-        )
-        .await
-        .unwrap();
+        let result = route(&deps, "generate_node_image", &json!({ "nodeId": "n1" }))
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert_eq!(
             result.text,

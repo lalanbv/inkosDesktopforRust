@@ -16,7 +16,11 @@ use crate::utils::language::WritingLanguage;
 /// 审核 chat 端口。
 #[async_trait::async_trait]
 pub trait FoundationReviewerChat: Send + Sync {
-    async fn chat(&self, messages: Vec<LLMMessage>, temperature: f64) -> Result<ChatOutcome, String>;
+    async fn chat(
+        &self,
+        messages: Vec<LLMMessage>,
+        temperature: f64,
+    ) -> Result<ChatOutcome, String>;
 }
 
 const PASS_THRESHOLD: i64 = 80;
@@ -73,7 +77,9 @@ pub async fn review_foundation(
         .unwrap_or_default();
 
     let dimensions: Vec<String> = match params.mode {
-        FoundationReviewMode::Original => original_dimensions(params.language, params.target_chapters),
+        FoundationReviewMode::Original => {
+            original_dimensions(params.language, params.target_chapters)
+        }
         FoundationReviewMode::Fanfic | FoundationReviewMode::Series => {
             derivative_dimensions(params.language, params.mode)
         }
@@ -110,8 +116,18 @@ pub async fn review_foundation(
     let response = chat
         .chat(
             vec![
-                LLMMessage { role: LLMRole::System, content: system_prompt, tool_calls: None, tool_call_id: None },
-                LLMMessage { role: LLMRole::User, content: user_prompt, tool_calls: None, tool_call_id: None },
+                LLMMessage {
+                    role: LLMRole::System,
+                    content: system_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
+                LLMMessage {
+                    role: LLMRole::User,
+                    content: user_prompt,
+                    tool_calls: None,
+                    tool_call_id: None,
+                },
             ],
             0.3,
         )
@@ -150,10 +166,18 @@ fn original_dimensions(language: WritingLanguage, target_chapters: Option<u32>) 
 fn derivative_dimensions(language: WritingLanguage, mode: FoundationReviewMode) -> Vec<String> {
     let mode_label = match mode {
         FoundationReviewMode::Fanfic => {
-            if language == WritingLanguage::En { "Fan Fiction" } else { "同人" }
+            if language == WritingLanguage::En {
+                "Fan Fiction"
+            } else {
+                "同人"
+            }
         }
         _ => {
-            if language == WritingLanguage::En { "Series" } else { "系列" }
+            if language == WritingLanguage::En {
+                "Series"
+            } else {
+                "系列"
+            }
         }
     };
     if language == WritingLanguage::En {
@@ -167,7 +191,8 @@ fn derivative_dimensions(language: WritingLanguage, mode: FoundationReviewMode) 
     } else {
         vec![
             format!("原作DNA保留（{mode_label}是否尊重原作的世界规则、角色性格、已确立事实？）"),
-            "新叙事空间（是否有明确的分岔点或新领域，让故事有原创空间，而非复述原作？）".to_string(),
+            "新叙事空间（是否有明确的分岔点或新领域，让故事有原创空间，而非复述原作？）"
+                .to_string(),
             "核心冲突（新故事的核心冲突是否有足够张力且区别于原作？）".to_string(),
             "开篇节奏（前5章能否形成翻页驱动力，不需要3章铺垫？）".to_string(),
             "节奏可行性（卷纲是否避免了重走原作剧情节拍的陷阱？）".to_string(),
@@ -217,27 +242,42 @@ fn parse_review_result(content: &str, dimensions: &[String]) -> FoundationReview
         .map(|c| c[1].trim().to_string())
         .unwrap_or_else(|| "(parse failed)".to_string());
 
-    FoundationReviewResult { passed, total_score, dimensions: parsed, overall_feedback }
+    FoundationReviewResult {
+        passed,
+        total_score,
+        dimensions: parsed,
+        overall_feedback,
+    }
 }
 
 fn overall_re() -> &'static Regex {
     // TS: /=== OVERALL ===[\s\S]*?(?:总评|Summary)[：:]\s*([\s\S]*?)$/
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"=== OVERALL ===[\s\S]*?(?:总评|Summary)[：:]\s*([\s\S]*?)$").expect("overall regex")
+        Regex::new(r"=== OVERALL ===[\s\S]*?(?:总评|Summary)[：:]\s*([\s\S]*?)$")
+            .expect("overall regex")
     })
 }
 
 /// 审核反馈拼接（重生成时的 reviewFeedback）。对齐 TS `buildFoundationReviewFeedback`。
-pub fn build_foundation_review_feedback(review: &FoundationReviewResult, language: WritingLanguage) -> String {
+pub fn build_foundation_review_feedback(
+    review: &FoundationReviewResult,
+    language: WritingLanguage,
+) -> String {
     let dimension_lines = review
         .dimensions
         .iter()
         .map(|dimension| {
             if language == WritingLanguage::En {
-                format!("- {} [{}]: {}", dimension.name, dimension.score, dimension.feedback)
+                format!(
+                    "- {} [{}]: {}",
+                    dimension.name, dimension.score, dimension.feedback
+                )
             } else {
-                format!("- {}（{}分）：{}", dimension.name, dimension.score, dimension.feedback)
+                format!(
+                    "- {}（{}分）：{}",
+                    dimension.name, dimension.score, dimension.feedback
+                )
             }
         })
         .collect::<Vec<_>>()
@@ -246,13 +286,21 @@ pub fn build_foundation_review_feedback(review: &FoundationReviewResult, languag
         format!(
             "## Overall Feedback\n{}\n\n## Dimension Notes\n{}",
             review.overall_feedback,
-            if dimension_lines.is_empty() { "- none".to_string() } else { dimension_lines }
+            if dimension_lines.is_empty() {
+                "- none".to_string()
+            } else {
+                dimension_lines
+            }
         )
     } else {
         format!(
             "## 总评\n{}\n\n## 分维度意见\n{}",
             review.overall_feedback,
-            if dimension_lines.is_empty() { "- 无".to_string() } else { dimension_lines }
+            if dimension_lines.is_empty() {
+                "- 无".to_string()
+            } else {
+                dimension_lines
+            }
         )
     }
 }

@@ -65,7 +65,10 @@ fn merge_matches_shared_vectors() {
             "bookNames": got.book.iter().map(|card| card.name.clone()).collect::<Vec<_>>(),
             "series": got.series,
         });
-        assert_eq!(got_json, vector["expected"], "merge vector '{name}' drifted");
+        assert_eq!(
+            got_json, vector["expected"],
+            "merge vector '{name}' drifted"
+        );
     }
 }
 
@@ -76,7 +79,8 @@ fn render_matches_shared_vectors() {
         let name = vector["name"].as_str().expect("vector name");
         let matches: Vec<CodexMatch> =
             serde_json::from_value(vector["matches"].clone()).expect("matches input");
-        let got = render_series_codex_block(&matches, language_of(vector["language"].as_str().unwrap()));
+        let got =
+            render_series_codex_block(&matches, language_of(vector["language"].as_str().unwrap()));
         let expected = vector.get("expected").expect("render expected");
         if expected.is_null() {
             assert!(got.is_none(), "render vector '{name}' should be none");

@@ -54,8 +54,10 @@ async fn health_probe_times_out_when_no_server() {
 #[ignore]
 async fn real_inkos_sidecar_serves_spa() {
     use inkos_desktop::{
-        config, engine::resolve_engine_dir, paths::AppPaths,
-        supervisor::{build_launch, spawn, health_probe, kill_tree},
+        config,
+        engine::resolve_engine_dir,
+        paths::AppPaths,
+        supervisor::{build_launch, health_probe, kill_tree, spawn},
     };
     use std::net::TcpListener;
 
@@ -81,8 +83,7 @@ async fn real_inkos_sidecar_serves_spa() {
     // auto-init」真能拉起 SPA。用独立名字避免与 demo 目录冲突（demo 目录可能
     // 已被 `cargo run` 创建）。
     let project_root = std::env::temp_dir().join("inkos-m1-demo-realtest");
-    std::fs::create_dir_all(&project_root)
-        .expect("创建 temp project_root 失败");
+    std::fs::create_dir_all(&project_root).expect("创建 temp project_root 失败");
     let paths = AppPaths::new(project_root, launch_engine).expect("AppPaths 解析失败");
     let port = config::DEFAULT_STUDIO_PORT;
 

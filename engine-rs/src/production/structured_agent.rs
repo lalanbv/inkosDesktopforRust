@@ -66,11 +66,17 @@ pub struct StructuredToolError {
 
 impl StructuredToolError {
     pub fn plain(message: impl Into<String>) -> Self {
-        Self { code: None, message: message.into() }
+        Self {
+            code: None,
+            message: message.into(),
+        }
     }
 
     pub fn coded(code: &str, message: impl Into<String>) -> Self {
-        Self { code: Some(code.to_string()), message: message.into() }
+        Self {
+            code: Some(code.to_string()),
+            message: message.into(),
+        }
     }
 }
 
@@ -159,7 +165,9 @@ pub struct ChatTurnError {
 }
 
 pub type ChatTurnFn = Arc<
-    dyn Fn(ChatTurnRequest) -> Pin<Box<dyn Future<Output = Result<ChatTurnResponse, ChatTurnError>> + Send>>
+    dyn Fn(
+            ChatTurnRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<ChatTurnResponse, ChatTurnError>> + Send>>
         + Send
         + Sync,
 >;
@@ -211,7 +219,10 @@ pub async fn run_structured_tool(
     system_parts.push(finish_by_calling_text(&result_name));
     let base_system = system_parts.join("\n\n");
     // TS：promptMessages 非空守卫（system 不计入）。
-    if !messages.iter().any(|message| message.role != LLMRole::System) {
+    if !messages
+        .iter()
+        .any(|message| message.role != LLMRole::System)
+    {
         return Err(StructuredAgentError {
             code: "WORKER_EMPTY_PROMPT".into(),
             message: "Structured Worker Agent requires at least one non-system message".into(),
@@ -397,22 +408,20 @@ pub async fn run_structured_tool(
                     continue;
                 }
                 match validate.as_ref() {
-                    Some(validate) => {
-                        match validate(arguments).await {
-                            Ok(value) => {
-                                submitted = Some(value);
-                                tool_results.push((
-                                    call.id.clone(),
-                                    STRUCTURED_RESULT_RECEIVED.to_string(),
-                                    false,
-                                ));
-                            }
-                            Err(error) => {
-                                last_validation = Some(error.clone());
-                                tool_results.push((call.id.clone(), error.message, true));
-                            }
+                    Some(validate) => match validate(arguments).await {
+                        Ok(value) => {
+                            submitted = Some(value);
+                            tool_results.push((
+                                call.id.clone(),
+                                STRUCTURED_RESULT_RECEIVED.to_string(),
+                                false,
+                            ));
                         }
-                    }
+                        Err(error) => {
+                            last_validation = Some(error.clone());
+                            tool_results.push((call.id.clone(), error.message, true));
+                        }
+                    },
                     None => {
                         submitted = Some(arguments);
                         tool_results.push((
@@ -516,12 +525,17 @@ pub async fn run_structured_tool(
 
 /// `ChatTurnError` 的生产映射（StreamError 分类：OutputLimit→output_limit，
 /// 其余→WORKER_MODEL_ERROR 面）。
-pub fn chat_turn_error_from_stream(error: crate::llm::streaming_client::StreamError) -> ChatTurnError {
+pub fn chat_turn_error_from_stream(
+    error: crate::llm::streaming_client::StreamError,
+) -> ChatTurnError {
     let output_limit = matches!(
         error,
         crate::llm::streaming_client::StreamError::OutputLimit(_)
     );
-    ChatTurnError { message: error.to_string(), output_limit }
+    ChatTurnError {
+        message: error.to_string(),
+        output_limit,
+    }
 }
 
 /// 生产 ChatTurnFn：AgentRouter 按 `agent` 角色路由（resolve→client 缓存），
@@ -599,15 +613,23 @@ mod tests {
     use std::sync::Mutex;
 
     const RESULT_TOOL: &str = "submit_state";
-    const RESULT_SCHEMA: &str =
-        r#"{"type":"object","properties":{"label":{"type":"string"},"status":{"type":"string"}},"required":["label","status"],"additionalProperties":false}"#;
+    const RESULT_SCHEMA: &str = r#"{"type":"object","properties":{"label":{"type":"string"},"status":{"type":"string"}},"required":["label","status"],"additionalProperties":false}"#;
 
     fn llm(role: LLMRole, content: &str) -> LLMMessage {
-        LLMMessage { role, content: content.into(), tool_calls: None, tool_call_id: None }
+        LLMMessage {
+            role,
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
 
     fn call(id: &str, name: &str, arguments: &str) -> ChatTurnToolCall {
-        ChatTurnToolCall { id: id.into(), name: name.into(), arguments: arguments.into() }
+        ChatTurnToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments: arguments.into(),
+        }
     }
 
     fn response(tool_calls: Vec<ChatTurnToolCall>, tokens: u64) -> ChatTurnResponse {
@@ -676,16 +698,28 @@ mod tests {
                     .map(|message| message.content.clone())
                     .collect();
                 Box::pin(async move {
-                    me.captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(CapturedRequest {
-                        system_content,
-                        tools,
-                        tool_choice,
-                        user_contents,
-                    });
-                    if let Some(error) = me.errors.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).pop() {
+                    me.captured
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .push(CapturedRequest {
+                            system_content,
+                            tools,
+                            tool_choice,
+                            user_contents,
+                        });
+                    if let Some(error) = me
+                        .errors
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .pop()
+                    {
                         return Err(error);
                     }
-                    let next = me.script.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).pop_front();
+                    let next = me
+                        .script
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .pop_front();
                     match next {
                         Some(response) => Ok(response),
                         // 脚本耗尽 = 模型继续空转（应已被预算闸拦住）。
@@ -696,7 +730,10 @@ mod tests {
         }
 
         fn captured(&self) -> Vec<CapturedRequest> {
-            self.captured.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+            self.captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
         }
     }
 
@@ -710,11 +747,17 @@ mod tests {
     }
 
     fn defaults() -> StructuredDefaults {
-        StructuredDefaults { temperature: 0.7, max_tokens: 4096 }
+        StructuredDefaults {
+            temperature: 0.7,
+            max_tokens: 4096,
+        }
     }
 
     fn base_messages() -> Vec<LLMMessage> {
-        vec![llm(LLMRole::System, "你是角色状态记录员。"), llm(LLMRole::User, "登记当前角色状态")]
+        vec![
+            llm(LLMRole::System, "你是角色状态记录员。"),
+            llm(LLMRole::User, "登记当前角色状态"),
+        ]
     }
 
     #[tokio::test]
@@ -723,7 +766,11 @@ mod tests {
         // schema + tool_choice required（TS worker-agent.test.ts toolChoice 断言
         // 的 Rust 对应面）。
         let fake = FakeChat::new(vec![response(
-            vec![call("c1", RESULT_TOOL, r#"{"label":"母亲","status":"等待退烧药"}"#)],
+            vec![call(
+                "c1",
+                RESULT_TOOL,
+                r#"{"label":"母亲","status":"等待退烧药"}"#,
+            )],
             10,
         )]);
         let outcome = run_structured_tool(
@@ -752,7 +799,9 @@ mod tests {
             "finish-by-calling 逐字追加：{}",
             captured[0].system_content
         );
-        assert!(captured[0].system_content.starts_with("你是角色状态记录员。\n\n"));
+        assert!(captured[0]
+            .system_content
+            .starts_with("你是角色状态记录员。\n\n"));
         // TS tools: [tool, ...supporting]——单工具时首位即 result schema。
         let tools = &captured[0].tools;
         assert_eq!(tools[0]["function"]["name"], RESULT_TOOL);
@@ -769,22 +818,22 @@ mod tests {
     async fn validate_always_red_exhausts_budget_and_surfaces_last_code() {
         // 变异证明（888 号验收核心）：validate 恒红 → 预算耗尽必红，
         // code 透传最后一次校验错误、attempts = max_turns。
-        let fake = FakeChat::new((1..=5)
-            .map(|index| {
-                response(
-                    vec![call(
-                        format!("c{index}").leak() as &'static str,
-                        RESULT_TOOL,
-                        r#"{"label":"x","status":"y"}"#,
-                    )],
-                    1,
-                )
-            })
-            .collect());
+        let fake = FakeChat::new(
+            (1..=5)
+                .map(|index| {
+                    response(
+                        vec![call(
+                            format!("c{index}").leak() as &'static str,
+                            RESULT_TOOL,
+                            r#"{"label":"x","status":"y"}"#,
+                        )],
+                        1,
+                    )
+                })
+                .collect(),
+        );
         let validate: ValidateFn = Arc::new(|_value: Value| {
-            Box::pin(async {
-                Err(StructuredToolError::coded("SHORT_CHAPTER_TOO_LONG", "超长"))
-            })
+            Box::pin(async { Err(StructuredToolError::coded("SHORT_CHAPTER_TOO_LONG", "超长")) })
         });
         let error = run_structured_tool(
             fake.chat_fn(),
@@ -798,7 +847,10 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(error.code, "SHORT_CHAPTER_TOO_LONG", "末次校验码透传：{error:?}");
+        assert_eq!(
+            error.code, "SHORT_CHAPTER_TOO_LONG",
+            "末次校验码透传：{error:?}"
+        );
         assert_eq!(error.attempts, Some(3));
         assert_eq!(error.result_tool.as_deref(), Some(RESULT_TOOL));
         assert_eq!(error.message, "超长");
@@ -818,15 +870,27 @@ mod tests {
                 ],
                 1,
             ),
-            response(vec![call("c2", RESULT_TOOL, r#"{"label":"母亲","status":"等待退烧药"}"#)], 2),
+            response(
+                vec![call(
+                    "c2",
+                    RESULT_TOOL,
+                    r#"{"label":"母亲","status":"等待退烧药"}"#,
+                )],
+                2,
+            ),
         ]);
         let supporting = vec![SupportingToolSpec {
             name: "lookup_status".into(),
             description: "查询当前状态。".into(),
             parameters_schema: serde_json::json!({ "type": "object", "properties": {} }),
-            execute: Arc::new(|_args: Value| -> Pin<Box<dyn Future<Output = Result<Value, StructuredToolError>> + Send>> {
-                Box::pin(async { Ok(serde_json::json!({ "status": "等待退烧药" })) })
-            }),
+            execute:
+                Arc::new(
+                    |_args: Value| -> Pin<
+                        Box<dyn Future<Output = Result<Value, StructuredToolError>> + Send>,
+                    > {
+                        Box::pin(async { Ok(serde_json::json!({ "status": "等待退烧药" })) })
+                    },
+                ),
         }];
         let outcome = run_structured_tool(
             fake.chat_fn(),
@@ -884,7 +948,14 @@ mod tests {
         // TS：未调用 result tool → 一次性补轮 prompt（金标准文本进 user 消息）。
         let fake = FakeChat::new(vec![
             text_response("我先想想……"),
-            response(vec![call("c1", RESULT_TOOL, r#"{"label":"母亲","status":"等待退烧药"}"#)], 3),
+            response(
+                vec![call(
+                    "c1",
+                    RESULT_TOOL,
+                    r#"{"label":"母亲","status":"等待退烧药"}"#,
+                )],
+                3,
+            ),
         ]);
         let outcome = run_structured_tool(
             fake.chat_fn(),
@@ -909,10 +980,13 @@ mod tests {
     #[tokio::test]
     async fn output_limit_error_maps_to_model_output_limit_code() {
         let fake = FakeChat::new(Vec::new());
-        fake.errors.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(ChatTurnError {
-            message: "model reached the output limit (length)".into(),
-            output_limit: true,
-        });
+        fake.errors
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(ChatTurnError {
+                message: "model reached the output limit (length)".into(),
+                output_limit: true,
+            });
         let error = run_structured_tool(
             fake.chat_fn(),
             "test-model",
@@ -951,7 +1025,14 @@ mod tests {
         // 参数非法 JSON → WORKER_SCHEMA_INVALID 回喂 → 下一轮合法提交成功。
         let fake = FakeChat::new(vec![
             response(vec![call("c1", RESULT_TOOL, "{broken json")], 1),
-            response(vec![call("c2", RESULT_TOOL, r#"{"label":"母亲","status":"等待退烧药"}"#)], 2),
+            response(
+                vec![call(
+                    "c2",
+                    RESULT_TOOL,
+                    r#"{"label":"母亲","status":"等待退烧药"}"#,
+                )],
+                2,
+            ),
         ]);
         let outcome = run_structured_tool(
             fake.chat_fn(),

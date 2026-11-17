@@ -26,12 +26,16 @@ fn test_config_three_layer_merge() {
     let mut proj_cfg = AppConfig::default();
     proj_cfg.logging.level = "trace".to_string();
     proj_cfg.updates.channel = "beta".to_string();
-    loader.save_project_config(&project_root, &proj_cfg).unwrap();
-    loader.apply_project_config(&mut mgr, &project_root).unwrap();
+    loader
+        .save_project_config(&project_root, &proj_cfg)
+        .unwrap();
+    loader
+        .apply_project_config(&mut mgr, &project_root)
+        .unwrap();
 
     // 验证三层合并
     let merged = mgr.merged();
-    assert_eq!(merged.logging.level, "trace");  // 项目层覆盖
+    assert_eq!(merged.logging.level, "trace"); // 项目层覆盖
     assert_eq!(merged.updates.channel, "beta"); // 项目层覆盖
 }
 
@@ -96,8 +100,12 @@ fn test_config_clear_layers() {
     std::fs::create_dir(&project_root).unwrap();
     let mut proj_cfg = AppConfig::default();
     proj_cfg.logging.level = "trace".to_string();
-    loader.save_project_config(&project_root, &proj_cfg).unwrap();
-    loader.apply_project_config(&mut mgr, &project_root).unwrap();
+    loader
+        .save_project_config(&project_root, &proj_cfg)
+        .unwrap();
+    loader
+        .apply_project_config(&mut mgr, &project_root)
+        .unwrap();
 
     assert_eq!(mgr.merged().logging.level, "trace");
 
@@ -140,11 +148,15 @@ fn test_config_paths() {
 
     // 系统配置路径
     let system_path = paths.system_config();
-    assert!(system_path.to_string_lossy().contains("config/default.toml"));
+    assert!(system_path
+        .to_string_lossy()
+        .contains("config/default.toml"));
 
     // 工作区配置路径
     let ws_path = paths.workspace_config("ws-123");
-    assert!(ws_path.to_string_lossy().contains("workspace-ws-123/config.toml"));
+    assert!(ws_path
+        .to_string_lossy()
+        .contains("workspace-ws-123/config.toml"));
 
     // 项目配置路径
     let proj_path = ConfigPaths::project_config(&temp.path().join("my-project"));

@@ -78,7 +78,11 @@ pub fn evaluate_goal_repeat(
     let threshold = threshold.unwrap_or(GOAL_REPEAT_SIMILARITY_THRESHOLD);
     let normalized_goal = normalize_goal_repeat_text(goal);
     if normalized_goal.is_empty() || reference_texts.is_empty() {
-        return GoalRepeatVerdict { repeat: false, max_similarity: 0.0, exact_match: false };
+        return GoalRepeatVerdict {
+            repeat: false,
+            max_similarity: 0.0,
+            exact_match: false,
+        };
     }
     let mut max_similarity = 0.0f64;
     let mut exact_match = false;

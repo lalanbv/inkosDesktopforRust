@@ -74,7 +74,11 @@ pub fn resolve_resume_advice(input: &ResumeAdviceInput) -> ResumeAdvice {
         return ResumeAdvice {
             action: ResumeAction::StartFresh,
             resume_from: None,
-            title: if is_en { "Start fresh".into() } else { "全新开始".into() },
+            title: if is_en {
+                "Start fresh".into()
+            } else {
+                "全新开始".into()
+            },
             detail: if is_en {
                 "No chapters saved yet — start writing from chapter 1.".into()
             } else {
@@ -112,7 +116,9 @@ pub fn resolve_resume_advice(input: &ResumeAdviceInput) -> ResumeAdvice {
         } else {
             (
                 "重写最后一章".to_string(),
-                format!("第 {saved} 章疑似不完整——建议重写该章（resumeFrom={saved}），此前章节保留。"),
+                format!(
+                    "第 {saved} 章疑似不完整——建议重写该章（resumeFrom={saved}），此前章节保留。"
+                ),
             )
         };
         return ResumeAdvice {

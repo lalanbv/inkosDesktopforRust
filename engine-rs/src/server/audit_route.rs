@@ -64,9 +64,10 @@ pub async fn audit_chapter(
         );
     };
 
-    runtime
-        .hub
-        .broadcast("audit:start", &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }));
+    runtime.hub.broadcast(
+        "audit:start",
+        &serde_json::json!({ "bookId": book_id, "chapter": chapter_number }),
+    );
 
     match run_audit_flow(&runtime, &book_id, chapter_number, body.temperature).await {
         Ok(result) => {
@@ -74,7 +75,10 @@ pub async fn audit_chapter(
                 "audit:complete",
                 &serde_json::json!({ "bookId": book_id, "chapter": chapter_number, "passed": result.passed }),
             );
-            (StatusCode::OK, Json(serde_json::to_value(&result).unwrap_or_default()))
+            (
+                StatusCode::OK,
+                Json(serde_json::to_value(&result).unwrap_or_default()),
+            )
         }
         Err(error) => {
             let message = error.to_string();
@@ -222,7 +226,10 @@ mod tests {
         fixture(dir.path());
         let runtime = fixture_with_empty_chapters(dir.path());
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/audit/:chapter", axum::routing::post(audit_chapter))
+            .route(
+                "/api/v1/books/:id/audit/:chapter",
+                axum::routing::post(audit_chapter),
+            )
             .with_state(runtime);
 
         let response = app
@@ -236,9 +243,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(parsed["error"].as_str().unwrap().contains("Chapter not found"));
+        assert!(parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("Chapter not found"));
     }
 
     fn fixture_with_empty_chapters(root: &std::path::Path) -> AuditRuntime {
@@ -280,7 +292,10 @@ mod tests {
         let hub = runtime.hub.clone();
         let mut subscriber = hub.subscribe();
         let app = axum::Router::new()
-            .route("/api/v1/books/:id/audit/:chapter", axum::routing::post(audit_chapter))
+            .route(
+                "/api/v1/books/:id/audit/:chapter",
+                axum::routing::post(audit_chapter),
+            )
             .with_state(runtime);
 
         let response = app

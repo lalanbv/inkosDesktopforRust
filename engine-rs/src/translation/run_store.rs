@@ -33,7 +33,10 @@ async fn migrate_legacy_dir(project_root: &Path, project_id: &str) -> Option<()>
     {
         return None;
     }
-    let work_json = project_root.join("works").join(project_id).join("work.json");
+    let work_json = project_root
+        .join("works")
+        .join(project_id)
+        .join("work.json");
     if tokio::fs::try_exists(&work_json).await.unwrap_or(true) {
         return None;
     }
@@ -56,7 +59,9 @@ async fn migrate_legacy_dir(project_root: &Path, project_id: &str) -> Option<()>
     }
     // 迁移收尾：合成 work.json（TS works/<id> 恒有 work.json——列表扫描
     // `profileId=translation` 过滤依赖它；970 前纯 Rust 项目无此文件）。
-    let manifest_raw = tokio::fs::read_to_string(target.join("manifest.json")).await.ok()?;
+    let manifest_raw = tokio::fs::read_to_string(target.join("manifest.json"))
+        .await
+        .ok()?;
     let manifest: serde_json::Value = serde_json::from_str(&manifest_raw).ok()?;
     let work = serde_json::json!({
         "version": 2,
@@ -76,8 +81,14 @@ async fn migrate_legacy_dir(project_root: &Path, project_id: &str) -> Option<()>
         "updatedAt": crate::utils::utc_time::utc_now_iso(),
     });
     crate::utils::atomic_file_set::write_file_atomic(
-        &project_root.join("works").join(project_id).join("work.json"),
-        &format!("{}\n", serde_json::to_string_pretty(&work).unwrap_or_default()),
+        &project_root
+            .join("works")
+            .join(project_id)
+            .join("work.json"),
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&work).unwrap_or_default()
+        ),
     )
     .await
     .ok()?;
@@ -138,7 +149,10 @@ pub async fn save_translation_manifest(
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let payload = format!("{}\n", serde_json::to_string_pretty(manifest).unwrap_or_default());
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(manifest).unwrap_or_default()
+    );
     crate::utils::atomic_file_set::write_file_atomic(&path, &payload).await
 }
 
@@ -159,9 +173,14 @@ pub async fn save_translation_chapter(
 ) -> Result<(), String> {
     let path = project_root.join(chapter_path);
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    let payload = format!("{}\n", serde_json::to_string_pretty(chapter).unwrap_or_default());
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string_pretty(chapter).unwrap_or_default()
+    );
     crate::utils::atomic_file_set::write_file_atomic(&path, &payload)
         .await
         .map_err(|e| e.to_string())
@@ -272,7 +291,11 @@ pub fn merge_glossary_terms(terms: &[TranslationGlossaryTerm]) -> Vec<Translatio
         if key.is_empty() {
             continue;
         }
-        let note = term.note.as_deref().map(str::trim).filter(|n| !n.is_empty());
+        let note = term
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty());
         map.insert(
             key,
             TranslationGlossaryTerm {
@@ -293,11 +316,12 @@ pub fn to_posix_path(project_root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-
 #[cfg(test)]
 mod progress_tests {
     use super::*;
-    use crate::translation::types::{TranslationChapterFile, TranslationGlossaryTerm, TranslationSegment};
+    use crate::translation::types::{
+        TranslationChapterFile, TranslationGlossaryTerm, TranslationSegment,
+    };
 
     fn chapter() -> TranslationChapterFile {
         TranslationChapterFile {
@@ -318,8 +342,16 @@ mod progress_tests {
     async fn progress_writes_chapter_and_glossary_atomically() {
         let dir = tempfile::tempdir().unwrap();
         let terms = vec![
-            TranslationGlossaryTerm { source: "patrol".into(), target: "巡逻".into(), note: None },
-            TranslationGlossaryTerm { source: "Patrol".into(), target: "巡逻（覆盖）".into(), note: None },
+            TranslationGlossaryTerm {
+                source: "patrol".into(),
+                target: "巡逻".into(),
+                note: None,
+            },
+            TranslationGlossaryTerm {
+                source: "Patrol".into(),
+                target: "巡逻（覆盖）".into(),
+                note: None,
+            },
         ];
         save_translation_progress(
             dir.path(),
@@ -330,16 +362,13 @@ mod progress_tests {
         )
         .await
         .unwrap();
-        let chapter_raw = std::fs::read_to_string(
-            dir.path().join("works/proj/source/translated/0003.json"),
-        )
-        .unwrap();
+        let chapter_raw =
+            std::fs::read_to_string(dir.path().join("works/proj/source/translated/0003.json"))
+                .unwrap();
         assert!(chapter_raw.ends_with("}\n"), "pretty + 尾换行");
         assert!(chapter_raw.contains("\"title\": \"夜巡\""));
-        let glossary_raw = std::fs::read_to_string(
-            dir.path().join("works/proj/source/glossary.json"),
-        )
-        .unwrap();
+        let glossary_raw =
+            std::fs::read_to_string(dir.path().join("works/proj/source/glossary.json")).unwrap();
         assert!(glossary_raw.ends_with("}\n"));
         assert!(
             glossary_raw.contains("\"target\": \"巡逻（覆盖）\""),
@@ -355,14 +384,8 @@ mod progress_tests {
     #[tokio::test]
     async fn progress_rejects_escape_paths_with_zero_writes() {
         let dir = tempfile::tempdir().unwrap();
-        let err = save_translation_progress(
-            dir.path(),
-            "proj",
-            "../escape.json",
-            &chapter(),
-            &[],
-        )
-        .await;
+        let err =
+            save_translation_progress(dir.path(), "proj", "../escape.json", &chapter(), &[]).await;
         assert!(err.is_err(), "越界路径必须拒：{err:?}");
         assert!(!dir.path().join("translations").exists(), "零写入");
     }

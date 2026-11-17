@@ -46,7 +46,8 @@ fn test_atomic_replace() {
     let health_check = |path: &std::path::Path| path.join("manifest.json").exists();
 
     // 4. 原子替换
-    let result = engine::atomic_replace_with_rollback(&engine_dir, &bak_dir, &new_dir, &health_check);
+    let result =
+        engine::atomic_replace_with_rollback(&engine_dir, &bak_dir, &new_dir, &health_check);
     assert!(result.is_ok(), "原子替换应该成功: {:?}", result);
 
     // 5. 验证新版本
@@ -79,7 +80,8 @@ fn test_atomic_replace_rollback_on_failure() {
     let health_check = |path: &std::path::Path| path.join("manifest.json").exists();
 
     // 4. 尝试替换应失败并回滚
-    let result = engine::atomic_replace_with_rollback(&engine_dir, &bak_dir, &new_dir, &health_check);
+    let result =
+        engine::atomic_replace_with_rollback(&engine_dir, &bak_dir, &new_dir, &health_check);
     assert!(result.is_err(), "损坏的 engine 应触发回滚");
 
     // 5. 验证回滚：原版本仍完整
@@ -104,7 +106,8 @@ fn test_atomic_replace_first_install() {
     let health_check = |path: &std::path::Path| path.join("manifest.json").exists();
 
     // 4. 原子替换（首装，无备份步骤）
-    let result = engine::atomic_replace_with_rollback(&engine_dir, &bak_dir, &new_dir, &health_check);
+    let result =
+        engine::atomic_replace_with_rollback(&engine_dir, &bak_dir, &new_dir, &health_check);
     assert!(result.is_ok(), "首次安装应该成功");
 
     // 5. 验证新版本

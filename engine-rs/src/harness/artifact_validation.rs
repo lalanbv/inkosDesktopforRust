@@ -38,8 +38,7 @@ pub struct ArtifactValidationError {
 
 impl ArtifactValidationError {
     fn into_action_error(self) -> ActionError {
-        let mut error =
-            ActionError::coded(self.message, self.code);
+        let mut error = ActionError::coded(self.message, self.code);
         if let Some(authority) = self.authority_path {
             // TS ArtifactValidationError 以 authorityPath 属性挂载——failure facts
             // 不提取它（actionFailureFacts 白名单外），仅 Display 层可见。
@@ -56,16 +55,26 @@ fn write_for(work: &WorkManifest, path: &str, content: String) -> AtomicFileWrit
     }
 }
 
-fn profile_schema<'a>(profile: Option<&'a super::contracts::WorkProfile>, path: &str) -> Option<&'a str> {
+fn profile_schema<'a>(
+    profile: Option<&'a super::contracts::WorkProfile>,
+    path: &str,
+) -> Option<&'a str> {
     profile
         .and_then(|p| p.artifact_schemas.get(path))
         .and_then(|value| value.as_str())
 }
 
-fn has_short_manuscript(work: &WorkManifest, profile: Option<&super::contracts::WorkProfile>) -> bool {
+fn has_short_manuscript(
+    work: &WorkManifest,
+    profile: Option<&super::contracts::WorkProfile>,
+) -> bool {
     work.profile_id == "short-fiction"
         || profile
-            .map(|p| p.artifact_schemas.values().any(|v| v.as_str() == Some("short-manuscript")))
+            .map(|p| {
+                p.artifact_schemas
+                    .values()
+                    .any(|v| v.as_str() == Some("short-manuscript"))
+            })
             .unwrap_or(false)
 }
 
@@ -102,7 +111,9 @@ pub fn validated_artifact_writes(
             artifact
                 .revisions
                 .iter()
-                .find(|revision| Some(revision.id.as_str()) == artifact.current_revision_id.as_deref())
+                .find(|revision| {
+                    Some(revision.id.as_str()) == artifact.current_revision_id.as_deref()
+                })
                 .map(|revision| revision.path.clone())
         });
         let recovery = match original.and_then(|artifact| artifact.current_revision_id.clone()) {
@@ -151,10 +162,9 @@ pub fn validated_artifact_writes(
         match schema {
             "short-manuscript" => {
                 if let Some(document) = &document {
-                    if let Err(error) =
-                        serde_json::from_value::<crate::production::short_fiction::ShortFictionBatchDraft>(
-                            document.clone(),
-                        )
+                    if let Err(error) = serde_json::from_value::<
+                        crate::production::short_fiction::ShortFictionBatchDraft,
+                    >(document.clone())
                     {
                         return Err(ActionError::coded(
                             format!("Error: {error}"),
@@ -165,7 +175,8 @@ pub fn validated_artifact_writes(
             }
             "short-package" => {
                 if let Some(document) = &document {
-                    if crate::production::short_fiction::check_short_package_tool(document).is_err() {
+                    if crate::production::short_fiction::check_short_package_tool(document).is_err()
+                    {
                         return Err(ActionError::coded(
                             "Error: Invalid short package",
                             "ARTIFACT_INVALID",
@@ -173,7 +184,10 @@ pub fn validated_artifact_writes(
                     }
                 }
             }
-            "translation-manifest" | "translation-glossary" | "translation-chapter" | "story-graph" => {
+            "translation-manifest"
+            | "translation-glossary"
+            | "translation-chapter"
+            | "story-graph" => {
                 // 884 号 fail-closed 边界残余（范围已收窄：短篇两支 887 号兑换）。
                 return Err(domain_projection_unavailable(schema));
             }
@@ -236,16 +250,17 @@ pub fn validated_artifact_writes(
                     Some(path),
                 ));
             }
-            let language =
-                if work.language == "en" { WritingLanguage::En } else { WritingLanguage::Zh };
+            let language = if work.language == "en" {
+                WritingLanguage::En
+            } else {
+                WritingLanguage::Zh
+            };
             let mut sales = document.clone();
-            let rendered = crate::production::short_fiction::render_sales_package_from_value(
-                &sales,
-                language,
-            )
-            .map_err(|error| {
-                artifact_validation_error("ARTIFACT_INVALID", error, Some(path))
-            })?;
+            let rendered =
+                crate::production::short_fiction::render_sales_package_from_value(&sales, language)
+                    .map_err(|error| {
+                        artifact_validation_error("ARTIFACT_INVALID", error, Some(path))
+                    })?;
             if let Value::Object(map) = &mut sales {
                 map.insert("rawContent".into(), Value::String(rendered));
             }
@@ -358,11 +373,15 @@ fn regenerate_short_manuscript_projections(
     document: &Value,
 ) -> Result<Vec<AtomicFileWrite>, String> {
     let authority = "source/final/short-story.json";
-    let language = if work.language == "en" { WritingLanguage::En } else { WritingLanguage::Zh };
+    let language = if work.language == "en" {
+        WritingLanguage::En
+    } else {
+        WritingLanguage::Zh
+    };
 
     let run = || -> Result<Vec<AtomicFileWrite>, String> {
-        let mut draft: ShortFictionBatchDraft = serde_json::from_value(document.clone())
-            .map_err(|error| error.to_string())?;
+        let mut draft: ShortFictionBatchDraft =
+            serde_json::from_value(document.clone()).map_err(|error| error.to_string())?;
         let mode = resolve_length_counting_mode(language);
         for chapter in &mut draft.chapters {
             chapter.char_count = count_chapter_length(&chapter.content, mode);
@@ -391,25 +410,24 @@ fn regenerate_short_manuscript_projections(
 
         // 投影族：current 修订中以 source/final/*.md 注册、排除 chapters/ 与三
         // 豁免、排除 full.md 本身（TS 同款 filter）。
-        let projections: Vec<String> = work
-            .artifacts
-            .iter()
-            .flat_map(|artifact| {
-                artifact
-                    .revisions
-                    .iter()
-                    .filter(|revision| Some(&revision.id) == artifact.current_revision_id.as_ref())
-            })
-            .map(|revision| &revision.path)
-            .filter(|path| {
-                path.starts_with("source/final/")
-                    && path.ends_with(".md")
-                    && !path.contains("/chapters/")
-                    && !SHORT_FICTION_EXEMPT_FINAL_MD.contains(&path.as_str())
-                    && path.as_str() != "source/final/full.md"
-            })
-            .cloned()
-            .collect();
+        let projections: Vec<String> =
+            work.artifacts
+                .iter()
+                .flat_map(|artifact| {
+                    artifact.revisions.iter().filter(|revision| {
+                        Some(&revision.id) == artifact.current_revision_id.as_ref()
+                    })
+                })
+                .map(|revision| &revision.path)
+                .filter(|path| {
+                    path.starts_with("source/final/")
+                        && path.ends_with(".md")
+                        && !path.contains("/chapters/")
+                        && !SHORT_FICTION_EXEMPT_FINAL_MD.contains(&path.as_str())
+                        && path.as_str() != "source/final/full.md"
+                })
+                .cloned()
+                .collect();
 
         let draft_json = serde_json::to_string_pretty(&draft).map_err(|error| error.to_string())?;
         let mut writes = vec![

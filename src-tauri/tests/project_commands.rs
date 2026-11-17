@@ -70,11 +70,23 @@ fn toggle_favorite_persists_across_cache_clear() {
     // 换一个 manager 重新打开同一数据库：验证写的是磁盘而非内存缓存
     drop(manager);
     let reopened = ProjectManager::new(&db_path).unwrap();
-    assert!(reopened.get_project(&added.id).unwrap().unwrap().is_favorite);
+    assert!(
+        reopened
+            .get_project(&added.id)
+            .unwrap()
+            .unwrap()
+            .is_favorite
+    );
 
     // 再翻一次回到未收藏
     reopened.toggle_favorite(&added.id).unwrap();
-    assert!(!reopened.get_project(&added.id).unwrap().unwrap().is_favorite);
+    assert!(
+        !reopened
+            .get_project(&added.id)
+            .unwrap()
+            .unwrap()
+            .is_favorite
+    );
 }
 
 /// open_project 命令：last_opened_at 落盘，且进入 list_recent。

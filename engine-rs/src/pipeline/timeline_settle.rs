@@ -73,22 +73,28 @@ mod tests {
     #[async_trait::async_trait]
     impl TimelineBeatsChat for MockBeats {
         async fn beats(&self, req: BeatsRequest<'_>) -> Result<Vec<PlotlineBeat>, String> {
-            self.requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push((
-                req.chapter_number,
-                req.plotlines.to_vec(),
-            ));
+            self.requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push((req.chapter_number, req.plotlines.to_vec()));
             self.result.clone()
         }
     }
 
     fn beat(id: &str, title: &str) -> PlotlineBeat {
-        PlotlineBeat { plotline_id: id.into(), title: Some(title.into()), note: Some("节拍".into()) }
+        PlotlineBeat {
+            plotline_id: id.into(),
+            title: Some(title.into()),
+            note: Some("节拍".into()),
+        }
     }
 
     async fn write_timeline(dir: &Path, body: &str) {
         let story = dir.join("story");
         tokio::fs::create_dir_all(&story).await.unwrap();
-        tokio::fs::write(story.join("timeline.json"), body).await.unwrap();
+        tokio::fs::write(story.join("timeline.json"), body)
+            .await
+            .unwrap();
     }
 
     fn timeline_json() -> String {
@@ -118,21 +124,39 @@ mod tests {
         .unwrap();
         assert_eq!(applied, Some(1));
         // 名册透传给端口（测试传参 = 生产传参：id+name 全量）。
-        assert_eq!(mock.requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner())[0].1, vec![("main".into(), "主线".into())]);
-        let raw = tokio::fs::read_to_string(dir.path().join("story/timeline.json")).await.unwrap();
+        assert_eq!(
+            mock.requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())[0]
+                .1,
+            vec![("main".into(), "主线".into())]
+        );
+        let raw = tokio::fs::read_to_string(dir.path().join("story/timeline.json"))
+            .await
+            .unwrap();
         let timeline: Timeline = serde_json::from_str(&raw).unwrap();
-        assert_eq!(timeline.plotlines[0].cells[0].title.as_deref(), Some("风起"));
+        assert_eq!(
+            timeline.plotlines[0].cells[0].title.as_deref(),
+            Some("风起")
+        );
     }
 
     #[tokio::test]
     async fn missing_timeline_is_silent_skip() {
         let dir = tempfile::tempdir().unwrap();
-        let mock = MockBeats { result: Ok(vec![]), requests: Mutex::new(Vec::new()) };
+        let mock = MockBeats {
+            result: Ok(vec![]),
+            requests: Mutex::new(Vec::new()),
+        };
         let applied = settle_beats_for_chapter(dir.path(), &mock, 1, "t", "s", WritingLanguage::Zh)
             .await
             .unwrap();
         assert_eq!(applied, None);
-        assert!(mock.requests.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty()); // 未发起 LLM 调用
+        assert!(mock
+            .requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty()); // 未发起 LLM 调用
     }
 
     #[tokio::test]
@@ -143,7 +167,10 @@ mod tests {
             r#"{"version":1,"bookId":"b1","updatedAt":"t","plotlines":[]}"#,
         )
         .await;
-        let mock = MockBeats { result: Ok(vec![]), requests: Mutex::new(Vec::new()) };
+        let mock = MockBeats {
+            result: Ok(vec![]),
+            requests: Mutex::new(Vec::new()),
+        };
         let applied = settle_beats_for_chapter(dir.path(), &mock, 1, "t", "s", WritingLanguage::Zh)
             .await
             .unwrap();
@@ -154,8 +181,12 @@ mod tests {
     async fn unparseable_timeline_is_error_not_panic() {
         let dir = tempfile::tempdir().unwrap();
         write_timeline(dir.path(), "{ broken").await;
-        let mock = MockBeats { result: Ok(vec![]), requests: Mutex::new(Vec::new()) };
-        let result = settle_beats_for_chapter(dir.path(), &mock, 1, "t", "s", WritingLanguage::Zh).await;
+        let mock = MockBeats {
+            result: Ok(vec![]),
+            requests: Mutex::new(Vec::new()),
+        };
+        let result =
+            settle_beats_for_chapter(dir.path(), &mock, 1, "t", "s", WritingLanguage::Zh).await;
         assert!(result.is_err());
     }
 
@@ -163,11 +194,17 @@ mod tests {
     async fn chat_failure_propagates_for_caller_warning() {
         let dir = tempfile::tempdir().unwrap();
         write_timeline(dir.path(), &timeline_json()).await;
-        let mock = MockBeats { result: Err("llm down".into()), requests: Mutex::new(Vec::new()) };
-        let result = settle_beats_for_chapter(dir.path(), &mock, 1, "t", "s", WritingLanguage::Zh).await;
+        let mock = MockBeats {
+            result: Err("llm down".into()),
+            requests: Mutex::new(Vec::new()),
+        };
+        let result =
+            settle_beats_for_chapter(dir.path(), &mock, 1, "t", "s", WritingLanguage::Zh).await;
         assert_eq!(result.unwrap_err(), "llm down");
         // 失败不改写原文件（仍为空 cells）。
-        let raw = tokio::fs::read_to_string(dir.path().join("story/timeline.json")).await.unwrap();
+        let raw = tokio::fs::read_to_string(dir.path().join("story/timeline.json"))
+            .await
+            .unwrap();
         let timeline: Timeline = serde_json::from_str(&raw).unwrap();
         assert!(timeline.plotlines[0].cells.is_empty());
     }

@@ -13,25 +13,43 @@ use ts_rs::TS;
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(
     feature = "export-bindings",
-    ts(export, type = "\"openai-completions\" | \"openai-responses\" | \"anthropic-messages\" | \"google-generative-ai\"")
+    ts(
+        export,
+        type = "\"openai-completions\" | \"openai-responses\" | \"anthropic-messages\" | \"google-generative-ai\""
+    )
 )]
 pub enum ApiProtocol {
-    #[serde(rename = "openai-completions")] OpenaiCompletions,
-    #[serde(rename = "openai-responses")] OpenaiResponses,
-    #[serde(rename = "anthropic-messages")] AnthropicMessages,
-    #[serde(rename = "google-generative-ai")] GoogleGenerativeAi,
+    #[serde(rename = "openai-completions")]
+    OpenaiCompletions,
+    #[serde(rename = "openai-responses")]
+    OpenaiResponses,
+    #[serde(rename = "anthropic-messages")]
+    AnthropicMessages,
+    #[serde(rename = "google-generative-ai")]
+    GoogleGenerativeAi,
 }
 
 /// UI 分组。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"overseas\" | \"china\" | \"aggregator\" | \"local\" | \"codingPlan\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(
+        export,
+        type = "\"overseas\" | \"china\" | \"aggregator\" | \"local\" | \"codingPlan\""
+    )
+)]
 pub enum EndpointGroup {
-    #[serde(rename = "overseas")] Overseas,
-    #[serde(rename = "china")] China,
-    #[serde(rename = "aggregator")] Aggregator,
-    #[serde(rename = "local")] Local,
-    #[serde(rename = "codingPlan")] CodingPlan,
+    #[serde(rename = "overseas")]
+    Overseas,
+    #[serde(rename = "china")]
+    China,
+    #[serde(rename = "aggregator")]
+    Aggregator,
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "codingPlan")]
+    CodingPlan,
 }
 
 /// 模型能力。
@@ -82,12 +100,22 @@ pub struct InkosModel {
 /// 模型生命周期状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"active\" | \"deprecated\" | \"disabled\" | \"nonText\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(
+        export,
+        type = "\"active\" | \"deprecated\" | \"disabled\" | \"nonText\""
+    )
+)]
 pub enum ModelStatus {
-    #[serde(rename = "active")] Active,
-    #[serde(rename = "deprecated")] Deprecated,
-    #[serde(rename = "disabled")] Disabled,
-    #[serde(rename = "nonText")] NonText,
+    #[serde(rename = "active")]
+    Active,
+    #[serde(rename = "deprecated")]
+    Deprecated,
+    #[serde(rename = "disabled")]
+    Disabled,
+    #[serde(rename = "nonText")]
+    NonText,
 }
 
 /// provider 兼容层标记。
@@ -120,10 +148,15 @@ pub struct ProviderTransportDefaults {
 /// 传输层 apiFormat（chat/responses，与 ApiProtocol 不同——这是 config 层）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"chat\" | \"responses\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"chat\" | \"responses\"")
+)]
 pub enum TransportApiFormat {
-    #[serde(rename = "chat")] Chat,
-    #[serde(rename = "responses")] Responses,
+    #[serde(rename = "chat")]
+    Chat,
+    #[serde(rename = "responses")]
+    Responses,
 }
 
 /// provider endpoint（元数据 + models 数组）。lookupModel/getEndpoint 的返回类型。
@@ -187,7 +220,13 @@ mod tests {
                 temperature: None,
                 status: Some(ModelStatus::Active),
                 replacement: None,
-                capabilities: Some(ModelCapabilities { text: Some(true), tools: Some(true), image_input: None, image_output: None, reasoning: None }),
+                capabilities: Some(ModelCapabilities {
+                    text: Some(true),
+                    tools: Some(true),
+                    image_input: None,
+                    image_output: None,
+                    reasoning: None,
+                }),
             }],
         };
         let json = serde_json::to_string(&ep).unwrap();
@@ -199,6 +238,9 @@ mod tests {
 
     #[test]
     fn api_protocol_serializes() {
-        assert_eq!(serde_json::to_string(&ApiProtocol::AnthropicMessages).unwrap(), "\"anthropic-messages\"");
+        assert_eq!(
+            serde_json::to_string(&ApiProtocol::AnthropicMessages).unwrap(),
+            "\"anthropic-messages\""
+        );
     }
 }

@@ -133,7 +133,9 @@ data: [DONE]
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
     format!("http://{addr}")
 }
 
@@ -160,15 +162,17 @@ async fn spawn_backfill_mock_llm() -> String {
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
     format!("http://{addr}")
 }
 
 /// Rust engine 进程内全量路由（bin 同款装配）。
 async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
+    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::books_routes::BooksRuntime;
     use inkos_engine::server::write_next_route::WriteNextRuntime;
-    use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     let hub = std::sync::Arc::new(inkos_engine::server::sse::BroadcastHub::new());
     let state = std::sync::Arc::new(inkos_engine::state::manager::StateManager::new(
         root.to_path_buf(),
@@ -184,21 +188,20 @@ async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
         },
         std::collections::HashMap::new(),
     ));
-    let runner: inkos_engine::server::write_next_route::WriteNextRunner =
-        std::sync::Arc::new(
-            |_state: std::sync::Arc<inkos_engine::state::manager::StateManager>,
-             _book_id: String,
-             _word_count: Option<u32>,
-             _temperature: Option<f64>,
-             _abort: inkos_engine::interaction::agent_loop::AbortHandle,
-             _context: Option<String>| {
-                Box::pin(async move {
-                    Err::<inkos_engine::pipeline::write_next::ChapterPipelineResult, String>(
-                        "duel: write face not exercised".to_string(),
-                    )
-                })
-            },
-        );
+    let runner: inkos_engine::server::write_next_route::WriteNextRunner = std::sync::Arc::new(
+        |_state: std::sync::Arc<inkos_engine::state::manager::StateManager>,
+         _book_id: String,
+         _word_count: Option<u32>,
+         _temperature: Option<f64>,
+         _abort: inkos_engine::interaction::agent_loop::AbortHandle,
+         _context: Option<String>| {
+            Box::pin(async move {
+                Err::<inkos_engine::pipeline::write_next::ChapterPipelineResult, String>(
+                    "duel: write face not exercised".to_string(),
+                )
+            })
+        },
+    );
     let write_next = WriteNextRuntime {
         hub: hub.clone(),
         state: state.clone(),
@@ -229,7 +232,9 @@ async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
     format!("http://{addr}")
 }
 
@@ -287,14 +292,24 @@ async fn spawn_ts_sidecar(root: &Path, port: u16) -> TsSidecar {
     }
     let command = std::process::Command::new("node")
         .process_group(0)
-        .arg(studio.join("node_modules").join("tsx").join("dist").join("cli.mjs"))
+        .arg(
+            studio
+                .join("node_modules")
+                .join("tsx")
+                .join("dist")
+                .join("cli.mjs"),
+        )
         .arg(studio.join("src").join("api").join("index.ts"))
         .arg(root)
         .env("INKOS_STUDIO_PORT", port.to_string())
         .env("INKOS_PROJECT_ROOT", root)
         .current_dir(&studio)
-        .stdout(std::process::Stdio::from(std::fs::File::create("/tmp/duel-tsx-out.log").unwrap()))
-        .stderr(std::process::Stdio::from(std::fs::File::create("/tmp/duel-tsx-err.log").unwrap()))
+        .stdout(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-tsx-out.log").unwrap(),
+        ))
+        .stderr(std::process::Stdio::from(
+            std::fs::File::create("/tmp/duel-tsx-err.log").unwrap(),
+        ))
         .spawn()
         .expect("node+tsx 起动失败（先确认 packages/studio 依赖已安装）");
     TsSidecar {
@@ -319,7 +334,12 @@ async fn get_json(base: &str, path: &str) -> (u16, Value) {
 /// 波动键归一（递归剥除）：时间戳/版本/路径前缀类。
 fn normalize(value: &mut Value) {
     const VOLATILE: [&str; 6] = [
-        "startedAt", "completedAt", "timestamp", "updatedAt", "createdAt", "version",
+        "startedAt",
+        "completedAt",
+        "timestamp",
+        "updatedAt",
+        "createdAt",
+        "version",
     ];
     if let Value::Object(map) = value {
         for key in VOLATILE {
@@ -467,10 +487,10 @@ async fn strangler_cross_write_read_duel() {
             .get("chapters")
             .and_then(|chapters| chapters.as_array())
             .is_some_and(|chapters| {
-                chapters
-                    .iter()
-                    .any(|chapter| chapter.get("number").and_then(Value::as_u64) == Some(1)
-                        && chapter.get("status").and_then(Value::as_str) == Some("approved"))
+                chapters.iter().any(|chapter| {
+                    chapter.get("number").and_then(Value::as_u64) == Some(1)
+                        && chapter.get("status").and_then(Value::as_str) == Some("approved")
+                })
             });
         assert!(approved, "approve 未跨端可见：base={base} body={body}");
     }
@@ -488,12 +508,15 @@ async fn strangler_cross_write_read_duel() {
     for base in [&rust, &ts.base] {
         let (status, body) = get_json(base, "/api/v1/books/b1/chapter-review-mode").await;
         if status != 200 {
-            let written = std::fs::read_to_string(root.join("books").join("b1").join("book.json")).unwrap_or_default();
+            let written = std::fs::read_to_string(root.join("books").join("b1").join("book.json"))
+                .unwrap_or_default();
             eprintln!("review-mode 读失败 base={base} book.json={written}");
         }
         assert_eq!(status, 200, "base={base} body={body}");
         assert!(
-            serde_json::to_string(&body).unwrap_or_default().contains("manual"),
+            serde_json::to_string(&body)
+                .unwrap_or_default()
+                .contains("manual"),
             "review-mode 未跨端可见：base={base} body={body}"
         );
     }
@@ -524,7 +547,10 @@ async fn strangler_cross_write_read_duel() {
         }
     }
     assert!(diffs.is_empty(), "写后只读复跑差异：{diffs:?}");
-    eprintln!("跨端写读对跑通过：Rust 写 approve / TS 写 review-mode 双向可见，写后 {} 端点复跑全一致", endpoints.len());
+    eprintln!(
+        "跨端写读对跑通过：Rust 写 approve / TS 写 review-mode 双向可见，写后 {} 端点复跑全一致",
+        endpoints.len()
+    );
 }
 
 /// 119 号：会话域跨端对跑——A) Rust 建会话（绑书）→ 双端 GET 全等价；
@@ -554,12 +580,15 @@ async fn strangler_session_domain_duel() {
     let response = client
         .post(format!("{rust}/api/v1/sessions"))
         .header("content-type", "application/json")
-        .body(format!(r#"{{"sessionId":"{rust_session}","bookId":"b1","sessionKind":"book"}}"#))
+        .body(format!(
+            r#"{{"sessionId":"{rust_session}","bookId":"b1","sessionKind":"book"}}"#
+        ))
         .send()
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 200);
-    let (rust_status, mut rust_body) = get_json(&rust, &format!("/api/v1/sessions/{rust_session}")).await;
+    let (rust_status, mut rust_body) =
+        get_json(&rust, &format!("/api/v1/sessions/{rust_session}")).await;
     let (ts_status, mut ts_body) = get_json(&ts, &format!("/api/v1/sessions/{rust_session}")).await;
     assert_eq!(rust_status, 200, "rust body={rust_body}");
     assert_eq!(ts_status, 200, "TS 读不到 Rust 会话：{ts_body}");
@@ -609,7 +638,8 @@ async fn strangler_session_domain_duel() {
         let text = response.text().await.unwrap_or_default();
         panic!("TS 聊天回合失败: {text}");
     }
-    let (rust_status, mut rust_body) = get_json(&rust, &format!("/api/v1/sessions/{ts_session}")).await;
+    let (rust_status, mut rust_body) =
+        get_json(&rust, &format!("/api/v1/sessions/{ts_session}")).await;
     let (ts_status, mut ts_body) = get_json(&ts, &format!("/api/v1/sessions/{ts_session}")).await;
     assert_eq!(rust_status, 200);
     assert_eq!(ts_status, 200);
@@ -649,9 +679,7 @@ async fn strangler_services_domain_duel() {
     normalize(&mut rust_body);
     normalize(&mut ts_body);
     if rust_body != ts_body {
-        eprintln!(
-            "服务列表差异（备案观察面）：\n  rust: {rust_body}\n  ts:   {ts_body}"
-        );
+        eprintln!("服务列表差异（备案观察面）：\n  rust: {rust_body}\n  ts:   {ts_body}");
     }
 
     // B) 密钥跨端写读：Rust 写 → TS 读；TS 写 → Rust 读。
@@ -679,16 +707,19 @@ async fn strangler_services_domain_duel() {
     // C) 深链探测（inline baseUrl 指同一 mock；无 apiFormat 偏好 → 双端
     // 计划 [chat 非流式, responses 非流式]，chat 先中）。
     let body = format!(r#"{{"apiKey":"k","baseUrl":"{llm}","model":"duel-model"}}"#);
-    let (rust_status, mut rust_probe) = post_json(&rust, "/api/v1/services/deepseek/test", &body).await;
+    let (rust_status, mut rust_probe) =
+        post_json(&rust, "/api/v1/services/deepseek/test", &body).await;
     let (ts_status, mut ts_probe) = post_json(&ts, "/api/v1/services/deepseek/test", &body).await;
     assert_eq!(rust_status, 200, "rust probe: {rust_probe}");
     assert_eq!(ts_status, 200, "ts probe: {ts_probe}");
     normalize(&mut rust_probe);
     normalize(&mut ts_probe);
     if rust_probe != ts_probe {
-        panic!("深链探测双端不等价：
+        panic!(
+            "深链探测双端不等价：
   rust: {rust_probe}
-  ts:   {ts_probe}");
+  ts:   {ts_probe}"
+        );
     }
 
     eprintln!("模型配置域对跑通过：服务列表面观察 / 密钥双向跨端写读 / 深链探测等价");
@@ -705,7 +736,10 @@ async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {
         .expect("POST 失败");
     let status = response.status().as_u16();
     let text = response.text().await.unwrap_or_default();
-    (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(Value::String(text)),
+    )
 }
 
 /// 121 号：全量灰度模拟（runbook 第五步终验收）——同根双进程**共存**下按
@@ -743,12 +777,7 @@ async fn strangler_full_grey_simulation() {
         "/api/v1/sessions",
         "/api/v1/logs",
     ];
-    async fn assert_readonly_equivalent(
-        rust: &str,
-        ts: &str,
-        readonly: &[&str],
-        step: usize,
-    ) {
+    async fn assert_readonly_equivalent(rust: &str, ts: &str, readonly: &[&str], step: usize) {
         for endpoint in readonly {
             let (rust_status, mut rust_body) = get_json(rust, endpoint).await;
             let (ts_status, mut ts_body) = get_json(ts, endpoint).await;
@@ -795,7 +824,9 @@ async fn strangler_full_grey_simulation() {
     let response = client
         .post(format!("{ts}/api/v1/agent"))
         .header("content-type", "application/json")
-        .body(format!(r#"{{"instruction":"灰度回合","sessionId":"{grey_session}"}}"#))
+        .body(format!(
+            r#"{{"instruction":"灰度回合","sessionId":"{grey_session}"}}"#
+        ))
         .send()
         .await
         .unwrap();
@@ -815,9 +846,7 @@ async fn strangler_full_grey_simulation() {
 
 /// 123 号：计数 mock LLM——每次请求原子计数并按双形态回包（触达证明用；
 /// 回包内容 "OK" 不驱动链路走完，仅证明配置源指向）。
-async fn spawn_counting_mock_llm(
-    hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-) -> String {
+async fn spawn_counting_mock_llm(hits: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> String {
     let app = axum::Router::new().route(
         "/chat/completions",
         axum::routing::post(
@@ -850,7 +879,9 @@ data: [DONE]
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
     format!("http://{addr}")
 }
 
@@ -878,8 +909,19 @@ async fn bin_process_write_next_llm_resolution() {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
         .env("INKOS_PROJECT_ROOT", &root)
         .env("INKOS_PORT", port.to_string())
-        .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
-        .env("INKOS_BUILTIN_SKILLS_DIR", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("packages").join("core").join("skills"))
+        .env(
+            "INKOS_BUILTIN_GENRES_DIR",
+            root.join("assets").join("genres"),
+        )
+        .env(
+            "INKOS_BUILTIN_SKILLS_DIR",
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("packages")
+                .join("core")
+                .join("skills"),
+        )
         // 启动 env 指向另一 mock：write-next 若误走启动 router（123 号前缺陷），
         // project_hits 恒 0 且本 mock 被触达——两端皆可判。
         .env("INKOS_LLM_BASE_URL", &env_llm)
@@ -981,10 +1023,7 @@ async fn bin_process_static_face_duel() {
     // 无 wait 的丢弃路径消除；跳过态还省一次引擎冷启）。
     wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
-    let dist = repo_root()
-        .join("packages")
-        .join("studio")
-        .join("dist");
+    let dist = repo_root().join("packages").join("studio").join("dist");
     std::fs::create_dir_all(dist.join("assets")).unwrap();
     std::fs::write(dist.join("assets").join("app.js"), "console.log('duel')").unwrap();
 
@@ -993,8 +1032,19 @@ async fn bin_process_static_face_duel() {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
         .env("INKOS_PROJECT_ROOT", &root)
         .env("INKOS_PORT", bin_port.to_string())
-        .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
-        .env("INKOS_BUILTIN_SKILLS_DIR", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("packages").join("core").join("skills"))
+        .env(
+            "INKOS_BUILTIN_GENRES_DIR",
+            root.join("assets").join("genres"),
+        )
+        .env(
+            "INKOS_BUILTIN_SKILLS_DIR",
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("packages")
+                .join("core")
+                .join("skills"),
+        )
         .env("INKOS_STATIC_DIR", &dist)
         .stdout(std::process::Stdio::from(
             std::fs::File::create("/tmp/duel-bin-static-out.log").unwrap(),
@@ -1007,7 +1057,12 @@ async fn bin_process_static_face_duel() {
     let bin = format!("http://127.0.0.1:{bin_port}");
     wait_ready(&bin).await;
 
-    for path in ["/", "/editor/chapter/2", "/assets/app.js", "/assets/missing.js"] {
+    for path in [
+        "/",
+        "/editor/chapter/2",
+        "/assets/app.js",
+        "/assets/missing.js",
+    ] {
         let (bin_status, bin_type, bin_body) = get_raw(&bin, path).await;
         let (ts_status, ts_type, ts_body) = get_raw(&ts, path).await;
         assert_eq!(
@@ -1065,7 +1120,10 @@ async fn bin_process_static_face_duel() {
             .unwrap();
         assert_eq!(response.status().as_u16(), 403, "{base} 远端 Origin 应 403");
         assert!(
-            response.headers().get("access-control-allow-origin").is_none(),
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none(),
             "{base} 403 响应不应携带 ACAO"
         );
         let response = client
@@ -1114,9 +1172,16 @@ async fn bin_process_static_face_duel() {
             .send()
             .await
             .unwrap();
-        assert_eq!(response.status().as_u16(), 403, "{base} 远端 preflight 应被守卫 403");
+        assert_eq!(
+            response.status().as_u16(),
+            403,
+            "{base} 远端 preflight 应被守卫 403"
+        );
         assert!(
-            response.headers().get("access-control-allow-origin").is_none(),
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none(),
             "{base} 远端 preflight 不应携带 ACAO"
         );
     }
@@ -1128,7 +1193,11 @@ async fn bin_process_static_face_duel() {
 
 /// SSE 流事件采集：连接 → 触发聊天回合 → 等待终态事件后收束。
 /// 返回原始 (event, payload JSON) 序列（ping/task:snapshot 已滤）。
-async fn sse_chat_turn_events(base: &str, session_id: &str, instruction: &str) -> Vec<(String, Value)> {
+async fn sse_chat_turn_events(
+    base: &str,
+    session_id: &str,
+    instruction: &str,
+) -> Vec<(String, Value)> {
     let events: std::sync::Arc<std::sync::Mutex<Vec<(String, Value)>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = events.clone();
@@ -1278,8 +1347,19 @@ async fn sse_event_face_duel() {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
         .env("INKOS_PROJECT_ROOT", &root)
         .env("INKOS_PORT", bin_port.to_string())
-        .env("INKOS_BUILTIN_GENRES_DIR", root.join("assets").join("genres"))
-        .env("INKOS_BUILTIN_SKILLS_DIR", std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("packages").join("core").join("skills"))
+        .env(
+            "INKOS_BUILTIN_GENRES_DIR",
+            root.join("assets").join("genres"),
+        )
+        .env(
+            "INKOS_BUILTIN_SKILLS_DIR",
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("packages")
+                .join("core")
+                .join("skills"),
+        )
         .stdout(std::process::Stdio::from(
             std::fs::File::create("/tmp/duel-bin-sse-out.log").unwrap(),
         ))
@@ -1404,7 +1484,10 @@ async fn strangler_timeline_duel() {
             .await
             .unwrap();
         if ok.status().as_u16() != 200 {
-            diffs.push(format!("timeline PUT 合法 {base} [{:x}]", ok.status().as_u16()));
+            diffs.push(format!(
+                "timeline PUT 合法 {base} [{:x}]",
+                ok.status().as_u16()
+            ));
         }
         let mut bad = valid_timeline.clone();
         bad["version"] = json!(2);
@@ -1415,7 +1498,10 @@ async fn strangler_timeline_duel() {
             .await
             .unwrap();
         if bad_response.status().as_u16() != 400 {
-            diffs.push(format!("timeline PUT 非法 {base} [{:x}]", bad_response.status().as_u16()));
+            diffs.push(format!(
+                "timeline PUT 非法 {base} [{:x}]",
+                bad_response.status().as_u16()
+            ));
         }
     }
 
@@ -1466,7 +1552,14 @@ async fn strangler_series_backfill_duel() {
         r#"{"id":"b2","title":"回填新书","platform":"other","genre":"xianxia","status":"active","targetChapters":10,"chapterWordCount":300,"language":"zh","createdAt":"2026-09-07T00:00:00.000Z","updatedAt":"2026-09-07T00:00:00.000Z"}"#,
     )
     .unwrap();
-    std::fs::write(root.join("books").join("b2").join("story").join("story_bible.md"), "新书圣经").unwrap();
+    std::fs::write(
+        root.join("books")
+            .join("b2")
+            .join("story")
+            .join("story_bible.md"),
+        "新书圣经",
+    )
+    .unwrap();
 
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts_port = next_sidecar_port().await;
@@ -1486,7 +1579,10 @@ async fn strangler_series_backfill_duel() {
             .await
             .unwrap();
         if response.status().as_u16() != 400 {
-            diffs.push(format!("apply 无草稿 {base} [{:x}]", response.status().as_u16()));
+            diffs.push(format!(
+                "apply 无草稿 {base} [{:x}]",
+                response.status().as_u16()
+            ));
         }
     }
 
@@ -1499,7 +1595,10 @@ async fn strangler_series_backfill_duel() {
             .await
             .unwrap();
         if response.status().as_u16() != 400 {
-            diffs.push(format!("extract 缺参 {base} [{:x}]", response.status().as_u16()));
+            diffs.push(format!(
+                "extract 缺参 {base} [{:x}]",
+                response.status().as_u16()
+            ));
         }
     }
 
@@ -1518,7 +1617,10 @@ async fn strangler_series_backfill_duel() {
         drafts.push((status, body));
     }
     if drafts[0].0 != 200 || drafts[1].0 != 200 {
-        diffs.push(format!("extract 非双 200：{:?} / {:?}", drafts[0].0, drafts[1].0));
+        diffs.push(format!(
+            "extract 非双 200：{:?} / {:?}",
+            drafts[0].0, drafts[1].0
+        ));
     } else {
         let rust_items = drafts[0].1["draft"]["items"].clone();
         let ts_items = drafts[1].1["draft"]["items"].clone();

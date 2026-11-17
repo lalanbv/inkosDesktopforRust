@@ -77,9 +77,9 @@ fn probe_watcher_ready(store: &Store, path: &Arc<std::path::PathBuf>) -> String 
     for round in 0..PROBE_ROUNDS {
         let val = format!("p{round}");
         write_secrets_content(path, &[(PROBE_KEY, &val)]);
-        if let Some(all) =
-            wait_until(store, |m| m.get(PROBE_KEY).map(String::as_str) == Some(val.as_str()))
-        {
+        if let Some(all) = wait_until(store, |m| {
+            m.get(PROBE_KEY).map(String::as_str) == Some(val.as_str())
+        }) {
             assert_eq!(
                 all.get(PROBE_KEY).unwrap(),
                 &val,

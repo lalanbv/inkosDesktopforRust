@@ -57,8 +57,10 @@ pub fn build_governed_memory_evidence_blocks(
     let summary_entries = filter_by_prefix(selected, "story/chapter_summaries.md#");
     let volume_summary_entries = filter_by_prefix(selected, "story/volume_summaries.md#");
     let title_history_entries = filter_exact(selected, "story/chapter_summaries.md#recent_titles");
-    let mood_trail_entries =
-        filter_exact(selected, "story/chapter_summaries.md#recent_mood_type_trail");
+    let mood_trail_entries = filter_exact(
+        selected,
+        "story/chapter_summaries.md#recent_mood_type_trail",
+    );
     let canon_entries = filter_any_exact(
         selected,
         &["story/parent_canon.md", "story/fanfic_canon.md"],
@@ -71,37 +73,61 @@ pub fn build_governed_memory_evidence_blocks(
             .then(|| render_hook_debt_block("Hook Debt Briefs", hook_debt_entries)),
         hooks_block: (!hook_entries.is_empty()).then(|| {
             render_evidence_block(
-                if is_en { "Selected Hook Evidence" } else { "已选伏笔证据" },
+                if is_en {
+                    "Selected Hook Evidence"
+                } else {
+                    "已选伏笔证据"
+                },
                 hook_entries,
             )
         }),
         summaries_block: (!summary_entries.is_empty()).then(|| {
             render_evidence_block(
-                if is_en { "Selected Chapter Summary Evidence" } else { "已选章节摘要证据" },
+                if is_en {
+                    "Selected Chapter Summary Evidence"
+                } else {
+                    "已选章节摘要证据"
+                },
                 summary_entries,
             )
         }),
         volume_summaries_block: (!volume_summary_entries.is_empty()).then(|| {
             render_evidence_block(
-                if is_en { "Selected Volume Summary Evidence" } else { "已选卷级摘要证据" },
+                if is_en {
+                    "Selected Volume Summary Evidence"
+                } else {
+                    "已选卷级摘要证据"
+                },
                 volume_summary_entries,
             )
         }),
         title_history_block: (!title_history_entries.is_empty()).then(|| {
             render_evidence_block(
-                if is_en { "Recent Title History" } else { "近期标题历史" },
+                if is_en {
+                    "Recent Title History"
+                } else {
+                    "近期标题历史"
+                },
                 title_history_entries,
             )
         }),
         mood_trail_block: (!mood_trail_entries.is_empty()).then(|| {
             render_evidence_block(
-                if is_en { "Recent Mood / Chapter Type Trail" } else { "近期情绪/章节类型轨迹" },
+                if is_en {
+                    "Recent Mood / Chapter Type Trail"
+                } else {
+                    "近期情绪/章节类型轨迹"
+                },
                 mood_trail_entries,
             )
         }),
         canon_block: (!canon_entries.is_empty()).then(|| {
             render_evidence_block(
-                if is_en { "Canon Evidence" } else { "正典约束证据" },
+                if is_en {
+                    "Canon Evidence"
+                } else {
+                    "正典约束证据"
+                },
                 canon_entries,
             )
         }),
@@ -120,7 +146,10 @@ fn filter_exact<'a>(entries: &'a [ContextSource], source: &str) -> Vec<&'a Conte
 }
 
 fn filter_any_exact<'a>(entries: &'a [ContextSource], sources: &[&str]) -> Vec<&'a ContextSource> {
-    entries.iter().filter(|e| sources.contains(&e.source.as_str())).collect()
+    entries
+        .iter()
+        .filter(|e| sources.contains(&e.source.as_str()))
+        .collect()
 }
 
 /// hook 债块（无 source 前缀）。逐字移植 TS `renderHookDebtBlock`：
@@ -167,11 +196,19 @@ mod tests {
         ContextPackage {
             chapter: 7,
             selected_context: vec![
-                src("story/pending_hooks.md#h-mentor", "伏笔债", Some("导师欠款未回收")),
+                src(
+                    "story/pending_hooks.md#h-mentor",
+                    "伏笔债",
+                    Some("导师欠款未回收"),
+                ),
                 src("runtime/hook_debt#h-mentor", "hook 债", Some("受阻 3 章")),
                 src("story/chapter_summaries.md#c5", "第 5 章摘要", None),
                 src("story/chapter_summaries.md#recent_titles", "标题历史", None),
-                src("story/chapter_summaries.md#recent_mood_type_trail", "情绪轨迹", None),
+                src(
+                    "story/chapter_summaries.md#recent_mood_type_trail",
+                    "情绪轨迹",
+                    None,
+                ),
                 src("story/volume_summaries.md#v1", "卷摘要", Some("第一卷收束")),
                 src("story/parent_canon.md", "正传正典", Some("力量上限")),
                 src("story/fanfic_canon.md", "同人正典", None),
@@ -214,12 +251,32 @@ mod tests {
     fn builds_all_blocks_en_headings() {
         let blocks =
             build_governed_memory_evidence_blocks(&full_package(), Some(WritingLanguage::En));
-        assert!(blocks.hooks_block.as_deref().unwrap().contains("## Selected Hook Evidence"));
-        assert!(blocks.summaries_block.as_deref().unwrap().contains("## Selected Chapter Summary Evidence"));
-        assert!(blocks.title_history_block.as_deref().unwrap().contains("## Recent Title History"));
-        assert!(blocks.canon_block.as_deref().unwrap().contains("## Canon Evidence"));
+        assert!(blocks
+            .hooks_block
+            .as_deref()
+            .unwrap()
+            .contains("## Selected Hook Evidence"));
+        assert!(blocks
+            .summaries_block
+            .as_deref()
+            .unwrap()
+            .contains("## Selected Chapter Summary Evidence"));
+        assert!(blocks
+            .title_history_block
+            .as_deref()
+            .unwrap()
+            .contains("## Recent Title History"));
+        assert!(blocks
+            .canon_block
+            .as_deref()
+            .unwrap()
+            .contains("## Canon Evidence"));
         // hook 债块标题两语言相同（TS 原文如此）。
-        assert!(blocks.hook_debt_block.as_deref().unwrap().contains("## Hook Debt Briefs"));
+        assert!(blocks
+            .hook_debt_block
+            .as_deref()
+            .unwrap()
+            .contains("## Hook Debt Briefs"));
     }
 
     #[test]
@@ -237,7 +294,11 @@ mod tests {
         // （TS 同样双计入：前缀桶不排除全等桶，逐字保留）。
         let pkg = ContextPackage {
             chapter: 1,
-            selected_context: vec![src("story/chapter_summaries.md#recent_titles", "标题", None)],
+            selected_context: vec![src(
+                "story/chapter_summaries.md#recent_titles",
+                "标题",
+                None,
+            )],
         };
         let blocks = build_governed_memory_evidence_blocks(&pkg, None);
         assert!(blocks.summaries_block.is_some());

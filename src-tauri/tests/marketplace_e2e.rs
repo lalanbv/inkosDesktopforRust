@@ -70,8 +70,7 @@ signature = "{bundle_sig}"
 capabilities = []
 "#,
     );
-    let registry_sig =
-        sig::encode_hex(&signing.sign(registry_toml.as_bytes()).to_bytes());
+    let registry_sig = sig::encode_hex(&signing.sign(registry_toml.as_bytes()).to_bytes());
 
     // 4. mock 传输：registry_url → registry_toml；{url}.sig → registry_sig
     let registry_url = "https://registry.example.com/registry.toml";
@@ -105,8 +104,7 @@ capabilities = []
 
     // 6. 安全解压到临时目录
     let install_temp = tempfile::tempdir().unwrap();
-    registry::safe_extract_tar_gz(&bundle, install_temp.path())
-        .expect("安全解压应成功");
+    registry::safe_extract_tar_gz(&bundle, install_temp.path()).expect("安全解压应成功");
     assert!(install_temp.path().join("plugin.toml").exists());
     assert!(install_temp.path().join("plugin.wasm").exists());
 
@@ -172,7 +170,10 @@ async fn marketplace_update_overwrites_installed() {
             "[plugin]\nid=\"up\"\nname=\"Up\"\nversion=\"{ver}\"\ndescription=\"\"\n\
 author=\"\"\nlicense=\"MIT\"\nabi_version=\"1\"\nentrypoint=\"plugin.wasm\"\n"
         );
-        build_tar_gz(&[("plugin.toml", toml.as_bytes()), ("plugin.wasm", ver.as_bytes())])
+        build_tar_gz(&[
+            ("plugin.toml", toml.as_bytes()),
+            ("plugin.wasm", ver.as_bytes()),
+        ])
     };
     let v1_temp = tempfile::tempdir().unwrap();
     let v2_temp = tempfile::tempdir().unwrap();
@@ -209,7 +210,10 @@ async fn marketplace_install_resolves_dependencies() {
             "[plugin]\nid=\"{id}\"\nname=\"{id}\"\nversion=\"{ver}\"\ndescription=\"\"\n\
 author=\"\"\nlicense=\"MIT\"\nabi_version=\"1\"\nentrypoint=\"plugin.wasm\"\n"
         );
-        build_tar_gz(&[("plugin.toml", toml.as_bytes()), ("plugin.wasm", id.as_bytes())])
+        build_tar_gz(&[
+            ("plugin.toml", toml.as_bytes()),
+            ("plugin.wasm", id.as_bytes()),
+        ])
     };
     let sha = "0".repeat(64);
     let sig = "0".repeat(128);

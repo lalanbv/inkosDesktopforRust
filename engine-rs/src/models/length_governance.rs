@@ -15,7 +15,10 @@ use ts_rs::TS;
 /// 章节长度计量模式。对齐 TS `"zh_chars" | "en_words"`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
-#[cfg_attr(feature = "export-bindings", ts(export, type = "\"zh_chars\" | \"en_words\""))]
+#[cfg_attr(
+    feature = "export-bindings",
+    ts(export, type = "\"zh_chars\" | \"en_words\"")
+)]
 pub enum LengthCountingMode {
     #[serde(rename = "zh_chars")]
     ZhChars,
