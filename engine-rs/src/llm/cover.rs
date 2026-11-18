@@ -522,7 +522,10 @@ pub fn extract_gemini_image_base64(payload: &Value) -> Option<(String, &'static 
 }
 
 /// url 下载（401/403 时带 Bearer 重试；仅 provider 同源携带凭据）。
-async fn download_generated_cover_image(
+/// 1578 号起 pub：回环代理谓词面活体（tests/cover_loopback_no_proxy_live.rs，
+/// 独立进程防 env 污染——单测进程内与同键 EXTRA_ORIGINS 既有测试并行互踩）
+/// 需要跨 crate 直调；签名与行为不变。
+pub async fn download_generated_cover_image(
     url: &str,
     api_key: &str,
     provider_base_url: &str,
