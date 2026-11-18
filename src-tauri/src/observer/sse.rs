@@ -70,8 +70,14 @@ pub struct SseClient {
 impl SseClient {
     /// 构造客户端：URL + 共享 `reqwest::Client`（连接池/TLS 会话在重连间复用，C8）。
     /// Client 构建失败向上传播（极少见：通常仅 TLS backend 初始化失败）。
+    ///
+    /// `.no_proxy()`：订阅目标恒为本机 sidecar（`127.0.0.1:{port}`）。reqwest 默认
+    /// 启用系统代理（macOS System Configuration）；系统代理开启且豁免名单未含
+    /// `127.0.0.1` 时连接被送进代理 → SSE 恒连不上（1572 号同族实证，见
+    /// [`crate::supervisor::health_probe`] 文档）。
     pub fn new(url: String) -> Self {
         let client = reqwest::Client::builder()
+            .no_proxy()
             .build()
             .expect("[observer] reqwest::Client 构建失败（TLS backend 初始化错误）");
         Self { url, client }

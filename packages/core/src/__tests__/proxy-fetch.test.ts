@@ -75,4 +75,57 @@ describe("proxy fetch helpers", () => {
       { headers: { Authorization: "Bearer test" } },
     );
   });
+
+  // 1572 号同族回归锁：回环目标恒旁路代理（本地 Ollama/LM Studio 与 HTTPS_PROXY
+  // 共存时，代理无法回连本机回环端口 → 本地推理端点恒挂）。Rust 腿先例见
+  // src-tauri supervisor::health_probe 文档。
+  it("bypasses proxy for 127.0.0.1 loopback target even with proxy env set", async () => {
+    const { fetchWithProxy } = await import("../utils/proxy-fetch.js");
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const env = { HTTPS_PROXY: "http://standard-proxy:9910" };
+    await fetchWithProxy("http://127.0.0.1:11434/v1/models", {}, undefined, env);
+
+    expect(proxyAgentMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:11434/v1/models",
+      expect.not.objectContaining({ dispatcher: expect.anything() }),
+    );
+  });
+
+  it("bypasses proxy for localhost and [::1] targets including URL-object and explicit-proxy forms", async () => {
+    const { fetchWithProxy } = await import("../utils/proxy-fetch.js");
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const env = { HTTPS_PROXY: "http://standard-proxy:9910" };
+    for (const input of [
+      "http://localhost:1234/v1/models",
+      "http://[::1]:11434/v1/models",
+      new URL("http://localhost:4567/api/v1/health"),
+    ]) {
+      await fetchWithProxy(input, {}, "http://explicit-proxy:9910", env);
+    }
+
+    expect(proxyAgentMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("still proxies non-loopback private addresses (bypass scope is loopback-only)", async () => {
+    const { fetchWithProxy } = await import("../utils/proxy-fetch.js");
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const env = { HTTPS_PROXY: "http://standard-proxy:9910" };
+    await fetchWithProxy("http://192.168.1.10:8080/v1/models", {}, undefined, env);
+
+    expect(proxyAgentMock).toHaveBeenCalledWith("http://standard-proxy:9910");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://192.168.1.10:8080/v1/models",
+      expect.objectContaining({
+        dispatcher: { kind: "proxy-agent", url: "http://standard-proxy:9910" },
+      }),
+    );
+  });
 });

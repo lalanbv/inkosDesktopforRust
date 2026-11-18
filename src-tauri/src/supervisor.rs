@@ -204,11 +204,17 @@ pub fn kill_tree(child: &std::process::Child) -> anyhow::Result<()> {
 /// 单次请求 timeout=2s，避免 reqwest 默认行为把整个 `timeout` 预算耗在一个连不上的端口。
 /// 间隔由 [`crate::config::HEALTH_PROBE_INTERVAL`] 决定（默认 200ms）。
 /// 任何 reqwest 错误都按"未就绪"处理（连接拒绝、TLS 失败、解析失败等），返回 false 继续轮询。
+///
+/// `.no_proxy()`：目标恒为本机回环 sidecar，绝不可经代理。reqwest 默认启用系统代理
+/// （macOS 经 System Configuration 读全局代理）；当用户系统代理开启且豁免名单未含
+/// `127.0.0.1`（只写 `localhost` 时不覆盖字面 IP），探活请求会被送进代理——代理无法
+/// 回连本机临时端口 → 恒超时 → 启动门误判 sidecar 不健康（1572 号实证）。
 pub async fn health_probe(port: u16, timeout: std::time::Duration, probe_path: &str) -> bool {
     let url = format!("http://127.0.0.1:{port}{probe_path}");
     let deadline = std::time::Instant::now() + timeout;
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
+        .no_proxy()
         .build()
     {
         Ok(c) => c,
@@ -256,10 +262,14 @@ pub async fn health_probe(port: u16, timeout: std::time::Duration, probe_path: &
 ///
 /// 与 [`health_probe`] 共享判活语义（2xx=活；任何错误=死），但只发一次、
 /// 2s 超时——watcher 周期（`RESUPERVISE_INTERVAL`）自带节律，无需内部轮询。
+///
+/// `.no_proxy()` 同 [`health_probe`]：回环目标被系统代理劫持时，watcher 会把
+/// 健康 sidecar 恒判为死 → 误触发 kill/重启风暴。
 pub async fn probe_once(port: u16, probe_path: &str) -> bool {
     let url = format!("http://127.0.0.1:{port}{probe_path}");
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
+        .no_proxy()
         .build()
     {
         Ok(c) => c,
