@@ -218,7 +218,9 @@ mod tests {
             crate::pipeline::detection_runner::ENV_DETECT_HTTP_TIMEOUT_MS,
             "100",
         );
-        let client = crate::pipeline::detection_runner::detection_http_client();
+        let client = crate::pipeline::detection_runner::detection_http_client(&format!(
+            "http://{addr}/detect"
+        ));
         let started = std::time::Instant::now();
         let result = detect_gptzero(
             &client,

@@ -298,7 +298,15 @@ pub async fn embed_batch(
     if texts.is_empty() {
         return Ok(Vec::new());
     }
-    let client = reqwest::Client::new();
+    // 1575：嵌入端点可为本地推理网关（Ollama `127.0.0.1:11434` 主场景）——
+    // reqwest 默认读 env/系统代理，代理降级窗口回环嵌入全灭；回环旁路、远端
+    // 保留代理（边界表测见 utils/loopback_proxy）。
+    let client = crate::utils::loopback_proxy::no_proxy_if_loopback(
+        reqwest::Client::builder(),
+        &config.base_url,
+    )
+    .build()
+    .unwrap_or_default();
     let timeout =
         std::time::Duration::from_millis(config.timeout_ms.unwrap_or(DEFAULT_EMBEDDING_TIMEOUT_MS));
     let url = match config.provider {

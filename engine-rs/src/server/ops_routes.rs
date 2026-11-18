@@ -624,8 +624,8 @@ async fn run_detection(
         .await
         .map_err(|e| e.to_string())?;
     // 925 号：检测链换有界客户端（零超时 Client::new() 为无界请求族漏网
-    // 面——检测端点挂起=写作任务检测段无限挂死）。
-    let client = crate::pipeline::detection_runner::detection_http_client();
+    // 面——检测端点挂起=写作任务检测段无限挂死）；1575 谓词钉实际请求目标。
+    let client = crate::pipeline::detection_runner::detection_http_client(&config.api_url);
     let det = crate::pipeline::detection_runner::detect_chapter(
         &client,
         config,
@@ -2204,10 +2204,13 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
         let endpoint = runtime.effective_router().await.resolve("radar");
         let base = endpoint.base_url.trim_end_matches('/').to_string();
         let url = format!("{base}/models");
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .unwrap_or_default();
+        // 1575：谓词钉实际请求目标——原无条件 no_proxy 对远端端点过度旁路
+        // （强制代理环境下 models 腿恒败、深链兜底前的语义漂移），与 probe.rs
+        // 正式探测路径对齐：回环旁路、远端保留代理。
+        let client =
+            crate::utils::loopback_proxy::no_proxy_if_loopback(reqwest::Client::builder(), &base)
+                .build()
+                .unwrap_or_default();
         let mut request = client.get(&url);
         if !endpoint.api_key.is_empty() {
             request = request.bearer_auth(&endpoint.api_key);

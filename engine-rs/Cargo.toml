@@ -101,3 +101,6 @@ tower = { version = "0.5", features = ["util"] }
 # parent-watchdog 进程级活体：cargo_bin 装配真实产物（1459 号；与 src-tauri
 # e2e_startup 同款形态）
 assert_cmd = "2.0"
+# 1575 号回环旁路活体：控制红直接构造默认 reqwest::Client 证 env 代理在效
+# （与主依赖同 spec，不引入第二版本）
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }

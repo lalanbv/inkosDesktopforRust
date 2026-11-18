@@ -27,11 +27,15 @@ pub fn detection_http_timeout_ms() -> u64 {
         .unwrap_or(DEFAULT_DETECT_HTTP_TIMEOUT_MS)
 }
 
-pub fn detection_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_millis(detection_http_timeout_ms()))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+/// 1575：`base_url` = 实际请求的检测端点（`DetectionConfig.api_url`）——端点可
+/// 自建于本机，回环旁路同族收口；远端检测服务保留代理（925 号有界预算不动）。
+pub fn detection_http_client(base_url: &str) -> reqwest::Client {
+    crate::utils::loopback_proxy::no_proxy_if_loopback(
+        reqwest::Client::builder().timeout(Duration::from_millis(detection_http_timeout_ms())),
+        base_url,
+    )
+    .build()
+    .unwrap_or_else(|_| reqwest::Client::new())
 }
 use crate::agents::reviser::{
     revise_chapter as reviser_revise_chapter, ReviseMode, ReviseOptions, ReviserChat, ReviserCtx,
