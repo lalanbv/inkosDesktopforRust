@@ -247,6 +247,51 @@ mod tests {
         assert_eq!(parse_gptzero_score(&data), 0.87);
     }
 
+    /// 1579 号：HTTP 错误臂行为级——上游 5xx 必须产出 `DetectError::Http`
+    /// （provider/status/body 三元组完整保留），不得静默走解析分支产出
+    /// score=0 的「判过」假结果。挂起端点测试（925 号）只覆盖传输错误臂，
+    /// 本测补 status 检查分支。
+    #[tokio::test]
+    async fn detect_gptzero_maps_5xx_to_http_error_with_status() {
+        let app = axum::Router::new().route(
+            "/detect",
+            axum::routing::post(|| async {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "upstream boom",
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = crate::pipeline::detection_runner::detection_http_client(&format!(
+            "http://{addr}/detect"
+        ));
+        let result = detect_gptzero(
+            &client,
+            &format!("http://{addr}/detect"),
+            "test-key",
+            "正文内容",
+            "2026-11-19T00:00:00Z",
+        )
+        .await;
+        match result {
+            Err(DetectError::Http {
+                provider,
+                status,
+                body,
+            }) => {
+                assert_eq!(provider, "GPTZero");
+                assert_eq!(status, 500);
+                assert_eq!(body, "upstream boom");
+            }
+            other => panic!("5xx 必须映射 DetectError::Http，实测 {other:?}"),
+        }
+    }
+
     #[test]
     fn parse_gptzero_score_defaults_zero_on_missing() {
         assert_eq!(parse_gptzero_score(&serde_json::json!({})), 0.0);
