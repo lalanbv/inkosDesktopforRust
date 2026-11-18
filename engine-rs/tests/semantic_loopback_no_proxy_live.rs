@@ -102,3 +102,71 @@ async fn detect_chapter_via(
     // 只由 score 驱动——红路语义聚焦连通性。
     inkos_engine::pipeline::detection_runner::detect_chapter(client, config, "正文内容", 1).await
 }
+
+/// 1578 号逐功能补测：embed_batch 的 **Ollama 分支**行为级锁定（1575 号活体
+/// 只覆盖了 OpenAICompatible 分支）。三面：URL 拼法 `/api/embed`（mock 路由
+/// 即证）、Ollama 响应形态 `{"embeddings":[[...]]}`（非 OpenAI 的
+/// `data[].embedding`）解析正确、多输入行数守恒。
+#[tokio::test]
+async fn embed_batch_ollama_branch_url_and_response_shape() {
+    std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:1");
+    std::env::set_var("HTTP_PROXY", "http://127.0.0.1:1");
+
+    let app = axum::Router::new().route(
+        "/api/embed",
+        axum::routing::post(|| async {
+            axum::Json(serde_json::json!({
+                "embeddings": [[0.4, 0.5], [0.6, 0.7]]
+            }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let config = EmbeddingConfig {
+        provider: EmbeddingProvider::Ollama,
+        base_url: format!("http://{addr}"),
+        model: "mock-embed".to_string(),
+        api_key_env: None,
+        timeout_ms: Some(5_000),
+    };
+    let vectors = embed_batch(&config, &["甲".to_string(), "乙".to_string()], None)
+        .await
+        .expect("Ollama 分支必须在死代理 env 下直连成功且解析 embeddings 形态");
+    assert_eq!(
+        vectors,
+        vec![vec![0.4, 0.5], vec![0.6, 0.7]],
+        "Ollama embeddings[][] 形态解析 + 输入 2 行输出 2 行守恒"
+    );
+}
+
+/// 1578 号：embed_batch 错误传播面——上游 5xx 必须报错而非静默空列表
+/// （调用方按降级契约回退 FTS5，错误路径是被依赖的契约面）。
+#[tokio::test]
+async fn embed_batch_error_path_propagates() {
+    std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:1");
+    std::env::set_var("HTTP_PROXY", "http://127.0.0.1:1");
+
+    let app = axum::Router::new().route(
+        "/embeddings",
+        axum::routing::post(|| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let config = EmbeddingConfig {
+        provider: EmbeddingProvider::OpenAICompatible,
+        base_url: format!("http://{addr}"),
+        model: "mock-embed".to_string(),
+        api_key_env: None,
+        timeout_ms: Some(5_000),
+    };
+    let result = embed_batch(&config, &["正文".to_string()], None).await;
+    assert!(result.is_err(), "上游 5xx 必须报错（降级契约依赖错误面）");
+}
