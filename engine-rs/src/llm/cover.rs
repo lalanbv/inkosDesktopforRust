@@ -546,7 +546,9 @@ async fn download_generated_cover_image(
     let provider_origin = url::Url::parse(provider_base_url)
         .ok()
         .map(|p| p.origin().unicode_serialization());
-    let client = http_client(provider_base_url);
+    // 1574：代理谓词钉在实际请求目标上（非 provider 基址）——跨源下载
+    // （回环 provider + 远端 CDN）不再被误判为回环而误旁路代理。
+    let client = http_client(url);
     let response = client
         .get(url)
         .send()

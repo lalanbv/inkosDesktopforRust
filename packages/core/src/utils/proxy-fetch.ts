@@ -59,6 +59,15 @@ export function resolveProxyUrl(explicitProxyUrl?: string, env: ProxyEnv = proce
   return candidate;
 }
 
+/**
+ * 构造带代理 dispatcher 的 fetch init（导出面契约，1573 起仅供直连消费者使用；
+ * `fetchWithProxy` 代理路径已改走版本一致配对，不再经过本函数）。
+ *
+ * ⚠️ dispatcher 处理协议跨 major 不稳定（1573 号实证）：本函数产出的 init
+ * 只可与**同版本** undici 的 fetch 配对（`import { fetch } from "undici"`）；
+ * 配全局 fetch 在 Node 26 上同步抛 "invalid onError"（内置 undici 版本与 npm
+ * 版本错位）。直连消费方请优先用 `fetchWithProxy`（含回环旁路）。
+ */
 export function buildProxyFetchInit(
   init: RequestInit = {},
   explicitProxyUrl?: string,
