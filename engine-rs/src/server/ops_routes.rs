@@ -2135,6 +2135,26 @@ pub async fn get_quality_debts(
     }
 }
 
+/// DOCTOR `/models` 快探腿（1576 号从 handler 内联抽出为可测单元——1575 谓词
+/// 化的行为级验证补齐）。谓词钉实际请求目标：回环端点旁路直连、远端端点保留
+/// 代理（`loopback_proxy` 17 案表测覆盖判定面，活体测试覆盖两臂行为）。
+pub async fn doctor_models_probe(base: &str, api_key: &str) -> bool {
+    let url = format!("{base}/models");
+    let client =
+        crate::utils::loopback_proxy::no_proxy_if_loopback(reqwest::Client::builder(), base)
+            .build()
+            .unwrap_or_default();
+    let mut request = client.get(&url);
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    request
+        .send()
+        .await
+        .map(|response| response.status().is_success())
+        .unwrap_or(false)
+}
+
 pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
     let root = runtime.state.project_root();
     let global_env = std::env::var("HOME")
@@ -2203,24 +2223,10 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
     let probe = tokio::time::timeout(Duration::from_secs(9), async {
         let endpoint = runtime.effective_router().await.resolve("radar");
         let base = endpoint.base_url.trim_end_matches('/').to_string();
-        let url = format!("{base}/models");
         // 1575：谓词钉实际请求目标——原无条件 no_proxy 对远端端点过度旁路
         // （强制代理环境下 models 腿恒败、深链兜底前的语义漂移），与 probe.rs
         // 正式探测路径对齐：回环旁路、远端保留代理。
-        let client =
-            crate::utils::loopback_proxy::no_proxy_if_loopback(reqwest::Client::builder(), &base)
-                .build()
-                .unwrap_or_default();
-        let mut request = client.get(&url);
-        if !endpoint.api_key.is_empty() {
-            request = request.bearer_auth(&endpoint.api_key);
-        }
-        if request
-            .send()
-            .await
-            .map(|response| response.status().is_success())
-            .unwrap_or(false)
-        {
+        if doctor_models_probe(&base, &endpoint.api_key).await {
             return true;
         }
         // 深链回退：候选 = 端点模型；计划 = llm.apiFormat × llm.stream 的

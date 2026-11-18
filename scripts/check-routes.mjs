@@ -27,12 +27,14 @@ const registered = new Set(
     .map((m) => m[1].split("::").pop()),
 );
 
-// 已人工核实的白名单（413 号）：非漏挂（内部工具函数误匹配 / 备用 API）。
-const ALLOWLIST = new Set([
-  "effective_router",   // books_routes 内部缓存辅助（正则误匹配）
-  "save_radar_scan",    // 备用 API（组合 scan 入口的内部包装）
-  "peek_create_status", // 备用 API（建书状态轮询，前端走 SSE/session）
-]);
+// 1576 号勘误：413 号白名单三项（effective_router/save_radar_scan/
+// peek_create_status）实为下述正则吞尾误匹配的产物——旧裸 `.*?` 从它们的
+// 括号跨行吞到下一个真 handler 的 `-> impl IntoResponse` 尾部闭合（一对五
+// 对称实证：save_radar_scan→post_radar_scan、doctor_models_probe→
+// get_doctor、effective_router+draft→plan+revise、peek_create_status→
+// create_book），五个真 handler 的注册核验在旧正则下从未生效。正则收紧后
+// 白名单已无命中对象，删除（历史上从未有「真未注册边缘形态」经白名单豁免）。
+const ALLOWLIST = new Set([]);
 
 const modules = [
   "ops_routes", "books_routes", "books_state_routes",
@@ -48,7 +50,11 @@ for (const m of modules) {
   if (!existsSync(path)) continue;
   const src = readFileSync(path, "utf-8");
   // handler 形态：pub async fn 名( ... ) -> impl IntoResponse（跨行非贪婪）。
-  for (const match of src.matchAll(/pub\s+async\s+fn\s+([a-z_0-9]+)\s*\(.*?\)\s*->\s*impl\s+IntoResponse/gs)) {
+  // 1576 号收紧：签名段禁 `;{}`——裸 `.*?` 会从「签名不含 impl IntoResponse
+  // 的普通 pub async fn」的括号跨行吞到下一个真 handler 的尾部（返回 bool
+  // 的 doctor_models_probe 被误匹配为 handler 形态，413 号 effective_router
+  // 白名单项同款根因）；真 handler 签名（参数类型列表）不含这三个字符。
+  for (const match of src.matchAll(/pub\s+async\s+fn\s+([a-z_0-9]+)\s*\([^;{}]*?\)\s*->\s*impl\s+IntoResponse/gs)) {
     total += 1;
     const name = match[1];
     if (!registered.has(name) && !ALLOWLIST.has(name)) orphans.push({ module: m, name });
