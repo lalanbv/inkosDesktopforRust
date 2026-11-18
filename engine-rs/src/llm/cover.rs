@@ -267,11 +267,15 @@ fn resolve_cover_api_key(api_key_env: &str) -> Result<String, String> {
 
 // ── 生成（generateImageFromPrompt 三 API） ───────────────────────
 
-fn http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .unwrap_or_default()
+/// 端点可配（`request.base_url` 可指向本地推理服务）→ 回环旁路代理
+/// （1573，同 [`crate::utils::loopback_proxy`]）。
+fn http_client(base_url: &str) -> reqwest::Client {
+    crate::utils::loopback_proxy::no_proxy_if_loopback(
+        reqwest::Client::builder().timeout(Duration::from_secs(300)),
+        base_url,
+    )
+    .build()
+    .unwrap_or_default()
 }
 
 #[derive(Debug)]
@@ -306,7 +310,7 @@ async fn generate_images_cover(
             request.base_url.trim_end_matches('/')
         )
     });
-    let response = http_client()
+    let response = http_client(&request.base_url)
         .post(&endpoint)
         .header("Content-Type", "application/json")
         .bearer_auth(&request.api_key)
@@ -347,7 +351,7 @@ async fn generate_responses_cover(
         .endpoint
         .clone()
         .unwrap_or_else(|| format!("{}/responses", request.base_url.trim_end_matches('/')));
-    let response = http_client()
+    let response = http_client(&request.base_url)
         .post(&endpoint)
         .header("Content-Type", "application/json")
         .bearer_auth(&request.api_key)
@@ -387,7 +391,7 @@ async fn generate_gemini_cover(
         "{}/models/{model_encoded}:generateContent?key={key_encoded}",
         request.base_url.trim_end_matches('/')
     );
-    let response = http_client()
+    let response = http_client(&request.base_url)
         .post(&endpoint)
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -542,7 +546,7 @@ async fn download_generated_cover_image(
     let provider_origin = url::Url::parse(provider_base_url)
         .ok()
         .map(|p| p.origin().unicode_serialization());
-    let client = http_client();
+    let client = http_client(provider_base_url);
     let response = client
         .get(url)
         .send()
@@ -1319,7 +1323,7 @@ async fn generate_images_cover_with_reference(
         .text("n", "1")
         .text("size", size.to_string())
         .part("image", part);
-    let response = http_client()
+    let response = http_client(&request.base_url)
         .post(&endpoint)
         .bearer_auth(&request.api_key)
         .multipart(form)
@@ -1527,7 +1531,7 @@ async fn generate_gemini_cover_with_reference(
         "mimeType": reference.mime_type,
         "data": base64_encode(&reference.bytes),
     });
-    let response = http_client()
+    let response = http_client(&request.base_url)
         .post(&endpoint)
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
@@ -1575,7 +1579,7 @@ async fn generate_responses_cover_with_reference(
         reference.mime_type,
         base64_encode(&reference.bytes)
     );
-    let response = http_client()
+    let response = http_client(&request.base_url)
         .post(&endpoint)
         .header("Content-Type", "application/json")
         .bearer_auth(&request.api_key)

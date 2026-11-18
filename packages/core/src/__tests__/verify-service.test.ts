@@ -1,12 +1,21 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { verifyService } from "../llm/providers/verify.js";
 
+// 1573：代理模式走 undici 自家 fetch（版本一致配对），故代理缝在此 mock undici
+// 模块的 fetch 导出；直连路径仍走全局 fetch（不受影响）。
+const undiciFetchMock = vi.fn();
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return { ...actual, fetch: (...args: unknown[]) => undiciFetchMock(...args) };
+});
+
 describe("verifyService (B9)", () => {
   const originalFetch = global.fetch;
 
   afterEach(() => {
     global.fetch = originalFetch;
     vi.restoreAllMocks();
+    undiciFetchMock.mockReset();
   });
 
   it("probe 成功 → probe.ok=true + chat 字段非 null（chat 步骤被执行）", async () => {
@@ -47,18 +56,17 @@ describe("verifyService (B9)", () => {
     expect(result.probe.error).toContain("ECONNREFUSED");
   });
 
-  it("probe 使用显式 proxyUrl 连接 /models", async () => {
-    const fetchMock = vi.fn()
+  it("probe 使用显式 proxyUrl 连接 /models（走 undici 自家 fetch，1573 版本一致配对）", async () => {
+    undiciFetchMock
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ data: [{ id: "gpt-4o" }] }),
       } as any)
       .mockRejectedValue(new Error("test: no real chat backend"));
-    global.fetch = fetchMock as typeof fetch;
 
     const result = await verifyService("openai", "test-key-test", { proxyUrl: "http://127.0.0.1:9910" });
     expect(result.probe.ok).toBe(true);
-    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+    expect(undiciFetchMock.mock.calls[0]?.[1]).toMatchObject({
       dispatcher: expect.any(Object),
     });
   });

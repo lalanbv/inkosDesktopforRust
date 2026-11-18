@@ -53,6 +53,7 @@ pub mod llm_env;
 pub mod local_search;
 pub mod log_file;
 pub mod long_span_fatigue;
+pub mod loopback_proxy;
 pub mod markdown_table;
 pub mod memory_retrieval;
 pub mod narrative_control;

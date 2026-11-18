@@ -92,7 +92,7 @@ pub async fn send_webhook(
         return Ok(());
     }
     let body = serde_json::to_string(payload).map_err(|e| e.to_string())?;
-    let client = notify_client();
+    let client = notify_client(url);
     let mut request = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -128,15 +128,19 @@ pub fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
 /// 收尾路径拖住分钟级。10s 足够外部 IM API 响应。
 const NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn notify_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(NOTIFY_TIMEOUT)
-        .build()
-        .unwrap_or_default()
+/// webhook URL 用户可配（本地 ntfy/Apprise 常见）→ 回环旁路代理
+/// （1573，同 [`crate::utils::loopback_proxy`]）。
+fn notify_client(url: &str) -> reqwest::Client {
+    crate::utils::loopback_proxy::no_proxy_if_loopback(
+        reqwest::Client::builder().timeout(NOTIFY_TIMEOUT),
+        url,
+    )
+    .build()
+    .unwrap_or_default()
 }
 
 async fn post_and_expect_ok(url: &str, payload: Value, label: &str) -> Result<(), String> {
-    let client = notify_client();
+    let client = notify_client(url);
     let response = client
         .post(url)
         .header("Content-Type", "application/json")

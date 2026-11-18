@@ -40,9 +40,12 @@ pub async fn probe_models_from_upstream(
         return Vec::new();
     }
     let models_url = format!("{}/models", base_url.trim_end_matches('/'));
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_millis(timeout_ms))
-        .build()
+    // 1573：回环端点旁路代理（同 [`crate::utils::loopback_proxy`]）。
+    let client = match crate::utils::loopback_proxy::no_proxy_if_loopback(
+        reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms)),
+        base_url,
+    )
+    .build()
     {
         Ok(client) => client,
         Err(_) => return Vec::new(),

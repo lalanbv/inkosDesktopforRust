@@ -475,9 +475,22 @@ impl StreamingChatClient {
         api_key: impl Into<String>,
         extra_headers: HashMap<String, String>,
     ) -> Self {
+        let base_url = base_url.into();
+        // 1573：回环端点（Ollama/LM Studio）旁路代理——reqwest auto_sys_proxy
+        // 恒读 env/系统代理，代理守护进程降级窗口会把本地推理拖死（详见
+        // [`crate::utils::loopback_proxy`] 模块文档）。
+        // 1573：回环端点（Ollama/LM Studio）旁路代理——reqwest auto_sys_proxy
+        // 恒读 env/系统代理，代理守护进程降级窗口会把本地推理拖死（详见
+        // [`crate::utils::loopback_proxy`] 模块文档）。
+        let http = crate::utils::loopback_proxy::no_proxy_if_loopback(
+            reqwest::Client::builder(),
+            &base_url,
+        )
+        .build()
+        .unwrap_or_default();
         StreamingChatClient {
-            http: reqwest::Client::new(),
-            base_url: base_url.into(),
+            http,
+            base_url,
             api_key: api_key.into(),
             extra_headers,
         }
