@@ -80,6 +80,40 @@ describe("resolveEffectiveLLMConfig", () => {
     expect(entry?.service).toBe("custom");
   });
 
+  // 1601 号同族勘误：顶层 services 的 object-map 形态（Rust serde 无
+  // deny_unknown_fields=忽略任意形态顶层键，同文件 Rust 绿）——原归一化条件
+  // Array.isArray 使非数组顶层形态不归一不删键，被 strict schema unrecognized
+  // key 拒（studio server 拒启）。688 号只修了顶层数组形态。
+  it("顶层 object-map services 展平回填 llm.services 且顶层键消隐", async () => {
+    root = await mkdtemp(join(tmpdir(), "inkos-effective-llm-"));
+    await writeFile(join(root, "inkos.json"), JSON.stringify({
+      name: "effective-project",
+      version: "0.1.0",
+      language: "zh",
+      services: {
+        "custom:Legacy": {
+          service: "custom",
+          baseUrl: "http://127.0.0.1:9",
+          apiFormat: "chat",
+          stream: true,
+        },
+      },
+      notify: [],
+    }), "utf-8");
+    const result = await resolveEffectiveLLMConfig({
+      consumer: "studio",
+      projectRoot: root,
+      envLayers: { global: {}, project: {}, process: {} },
+      requireApiKey: false,
+    });
+    const services = result.config.llm?.services;
+    expect(Array.isArray(services)).toBe(true);
+    const entry = (services as Array<Record<string, unknown>>).find(
+      (candidate) => (candidate.name as string | undefined) === "Legacy",
+    );
+    expect(entry).toBeDefined();
+  });
+
 
   async function writeProject(llm: Record<string, unknown>) {
     root = await mkdtemp(join(tmpdir(), "inkos-effective-llm-"));

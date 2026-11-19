@@ -129,9 +129,13 @@ export async function resolveEffectiveLLMConfig(
   // 688 号 legacy 兼容：fork 时代 inkos.json 允许顶层 `services`（duel/contract-diff
   // 夹具即此形态）。ProjectConfigSchema 为 strict，未知顶层键会拒——归一化进
   // llm.services（llm.services 在场时以 llm 层优先，顶层仅作缺省回填）。
-  if (Array.isArray(config.services)) {
+  // 1601 号同族勘误：条件从 Array.isArray 放宽为「键在场」——顶层 object-map
+  //（Rust serde 无 deny_unknown_fields=忽略任意形态顶层键，同文件 Rust 绿）
+  // 原样漏到 strict schema 被 unrecognized key 拒；normalizeServiceEntries 统一
+  // 处理数组/object-map 两形态后回填，顶层键一律消隐。
+  if (config.services !== undefined) {
     if (!Array.isArray(llm.services)) {
-      llm.services = config.services;
+      llm.services = normalizeServiceEntries(config.services);
     }
     delete config.services; // strict schema 不容未知顶层键
   }
