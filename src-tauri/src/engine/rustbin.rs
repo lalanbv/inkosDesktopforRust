@@ -61,6 +61,11 @@ pub fn resolve_server_bin(
         for profile in ["release", "debug"] {
             let candidate = target.join(profile).join(RUST_SERVER_BIN_NAME);
             if candidate.is_file() {
+                // 1588：dev 分支同盖陈旧告警——1587 实证 dev release bin 停
+                // 数日前（wasmtime36 旧代码）被零信号消费（warn_if_stale 此前
+                // 只盖 resource_dir 分支）。debug bin 常新于 src（每次 cargo
+                // test 重编）天然不告警；release bin 迭代中常旧=本告警主目标。
+                warn_if_stale(&candidate, _dev_repo_root);
                 return Some(candidate);
             }
         }
