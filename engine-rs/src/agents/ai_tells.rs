@@ -85,6 +85,18 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
     let is_english = language == WritingLanguage::En;
     let joiner = if is_english { ", " } else { "、" };
 
+    // 1586 号 0GC：EN 路径整文 to_lowercase 单源化——dim21/22 共 13 词每词
+    // 一次整文分配（720 号免了 regex 编译漏了这层；实测 scan_en 53.6µs 里
+    // 14 次 3KB 级 lowercase 分配+折叠为主成本）。词表纯 ASCII 小写（720 号
+    // 注释锚定）：lowered 文本 × 词原文 ≡ 原 lower(content) × lower(word)。
+    let lowered;
+    let count_source: &str = if is_english {
+        lowered = content.to_lowercase();
+        lowered.as_str()
+    } else {
+        content
+    };
+
     let paragraphs: Vec<String> = paragraph_split_re()
         .split(content)
         .map(|p| p.trim().to_string())
@@ -132,7 +144,7 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
         };
         let hedge_count: usize = hedge_words
             .iter()
-            .map(|w| count_word(content, w, is_english))
+            .map(|w| count_word(count_source, w, false))
             .sum();
         let hedge_density = hedge_count as f64 / (total_chars as f64 / 1000.0);
         if hedge_density > 3.0 {
@@ -161,7 +173,7 @@ pub fn analyze_ai_tells<C: AsRef<str>>(content: C, language: WritingLanguage) ->
     };
     let mut transition_counts: Vec<(String, usize)> = Vec::new();
     for word in transition_words {
-        let count = count_word(content, word, is_english);
+        let count = count_word(count_source, word, false);
         if count > 0 {
             let key = if is_english {
                 word.to_lowercase()

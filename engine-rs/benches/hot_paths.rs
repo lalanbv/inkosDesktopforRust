@@ -146,6 +146,37 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
     });
     group.finish();
 
+    // AI 痕迹扫描（写后审计链 merged_audit 每章必经；1586 号入闸——EN 路径
+    // count_word 每词一次整文 to_lowercase 的分配面此前无观测）。
+    let mut group = c.benchmark_group("ai_tells");
+    let zh_body = content.clone();
+    // EN 夹具：~450 词 / ~3KB，段落化+少量 hedge/transition 命中形态。
+    let en_body = {
+        let sentence = "The old man walked slowly through the market, perhaps looking \
+                        for something he had lost years ago among the crowded stalls.";
+        let mut body = String::new();
+        for paragraph in 0..12 {
+            body.push_str(&format!("Chapter {paragraph} begins here.\n\n"));
+            for _ in 0..6 {
+                body.push_str(sentence);
+                body.push(' ');
+                body.push_str("However, the crowd seemed indifferent to his search.\n");
+            }
+            body.push('\n');
+        }
+        body
+    };
+    group.throughput(Throughput::Bytes(zh_body.len() as u64));
+    group.sample_size(30);
+    group.bench_function("scan_3000zh", |b| {
+        b.iter(|| inkos_engine::agents::ai_tells::analyze_ai_tells(&zh_body, WritingLanguage::Zh))
+    });
+    group.throughput(Throughput::Bytes(en_body.len() as u64));
+    group.bench_function("scan_en", |b| {
+        b.iter(|| inkos_engine::agents::ai_tells::analyze_ai_tells(&en_body, WritingLanguage::En))
+    });
+    group.finish();
+
     // 章节索引反序列化（200 条 camelCase ChapterMeta）。
     let index_json = {
         use inkos_engine::models::chapter::{ChapterMeta, ChapterStatus};
