@@ -739,11 +739,19 @@ fn regex_escape(word: &str) -> String {
 
 // ── 段落形状 ──
 
+// 1584 号 0GC 单遍化：原形态 utf16_len 三遍扫描（short 过滤/average 求和/
+// 连续短段循环）+ 短段/段落两处全量 String clone——而消费面只有计数
+// （paragraphs.len()/short_paragraphs.len()，本文件内私有消费，grep 实证
+// 无外部消费方）；1.100 工具链代码生成差异使三遍扫描成本显性化
+// （detect_shape_3000zh 1.72→2.6µs），反模式本底修复归零。语义保持锚点：
+// ①max_consecutive 只看叙述段序列——对话段 skip 且**不重置**连续计数
+// （narrative_paragraphs 过滤后迭代的原语义，对话段在序列中不可见）；
+// ②average 分母=全部段落（含对话段）；③filter 链合取顺序无关。
 #[derive(Debug, Clone)]
 struct ParagraphShape {
-    paragraphs: Vec<String>,
+    paragraph_count: usize,
     short_threshold: usize,
-    short_paragraphs: Vec<String>,
+    short_count: usize,
     short_ratio: f64,
     average_length: f64,
     max_consecutive_short: usize,
@@ -764,13 +772,13 @@ fn append_paragraph_shape_warnings(
     language: WritingLanguage,
 ) {
     let shape = analyze_paragraph_shape(content, language);
-    if shape.paragraphs.len() < 4 {
+    if shape.paragraph_count < 4 {
         return;
     }
 
-    if shape.short_paragraphs.len() >= 4 && shape.short_ratio >= 0.6 {
-        let total = shape.paragraphs.len();
-        let short = shape.short_paragraphs.len();
+    if shape.short_count >= 4 && shape.short_ratio >= 0.6 {
+        let total = shape.paragraph_count;
+        let short = shape.short_count;
         let threshold = shape.short_threshold;
         violations.push(if language == WritingLanguage::En {
             PostWriteViolation {
@@ -821,32 +829,33 @@ fn is_dialogue_paragraph(paragraph: &str) -> bool {
 }
 
 fn analyze_paragraph_shape(content: &str, language: WritingLanguage) -> ParagraphShape {
-    let paragraphs = extract_paragraphs(content);
-    let narrative_paragraphs: Vec<&String> = paragraphs
-        .iter()
-        .filter(|p| !is_dialogue_paragraph(p))
-        .collect();
     let short_threshold = if language == WritingLanguage::En {
         120
     } else {
         35
     };
-    let short_paragraphs: Vec<String> = narrative_paragraphs
-        .iter()
-        .filter(|p| utf16_len(p.as_str()) < short_threshold)
-        .map(|p| (*p).clone())
-        .collect();
-    let average_length = if !paragraphs.is_empty() {
-        let total: usize = paragraphs.iter().map(|p| utf16_len(p.as_str())).sum();
-        total as f64 / paragraphs.len() as f64
-    } else {
-        0.0
-    };
-
+    let mut paragraph_count = 0usize;
+    let mut narrative_count = 0usize;
+    let mut short_count = 0usize;
+    let mut total_utf16 = 0usize;
     let mut max_consecutive_short = 0usize;
     let mut current_consecutive = 0usize;
-    for paragraph in &narrative_paragraphs {
-        if utf16_len(paragraph.as_str()) < short_threshold {
+    for paragraph in paragraph_split_re()
+        .split(content)
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "---" && !p.starts_with('#'))
+    {
+        paragraph_count += 1;
+        let len = utf16_len(paragraph);
+        total_utf16 += len;
+        if is_dialogue_paragraph(paragraph) {
+            // 对话段不进叙述序列（原 narrative_paragraphs 过滤语义）：
+            // 不参与 short 判定/计数，也不重置连续短段计数（序列中不可见）。
+            continue;
+        }
+        narrative_count += 1;
+        if len < short_threshold {
+            short_count += 1;
             current_consecutive += 1;
             max_consecutive_short = max_consecutive_short.max(current_consecutive);
         } else {
@@ -854,31 +863,25 @@ fn analyze_paragraph_shape(content: &str, language: WritingLanguage) -> Paragrap
         }
     }
 
-    let short_ratio = if !narrative_paragraphs.is_empty() {
-        short_paragraphs.len() as f64 / narrative_paragraphs.len() as f64
+    let average_length = if paragraph_count > 0 {
+        total_utf16 as f64 / paragraph_count as f64
+    } else {
+        0.0
+    };
+    let short_ratio = if narrative_count > 0 {
+        short_count as f64 / narrative_count as f64
     } else {
         0.0
     };
 
     ParagraphShape {
-        paragraphs,
+        paragraph_count,
         short_threshold,
-        short_paragraphs,
+        short_count,
         short_ratio,
         average_length,
         max_consecutive_short,
     }
-}
-
-fn extract_paragraphs(content: &str) -> Vec<String> {
-    paragraph_split_re()
-        .split(content)
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .filter(|p| *p != "---")
-        .filter(|p| !p.starts_with('#'))
-        .map(str::to_string)
-        .collect()
 }
 
 // ── 跨章重复 ──
@@ -1005,7 +1008,7 @@ pub fn detect_paragraph_length_drift(
     let current = analyze_paragraph_shape(current_content, language);
     let recent = analyze_paragraph_shape(recent_chapters_content, language);
 
-    if current.paragraphs.len() < 4 || recent.paragraphs.len() < 4 {
+    if current.paragraph_count < 4 || recent.paragraph_count < 4 {
         return Vec::new();
     }
     if recent.average_length <= 0.0 || current.average_length <= 0.0 {
