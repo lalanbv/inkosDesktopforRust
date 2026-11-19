@@ -49,9 +49,9 @@ pub fn pick_free_port(start: u16) -> Option<u16> {
 /// 根据路径解析器与端口构造 `LaunchSpec`。
 ///
 /// - `program` = `node_bin`
-/// - `args` = `[<launch_engine>/dist/cli/index.js, "studio", "--port", <port>]`
+/// - `args` = `[<launch_engine>/dist/index.js, "studio", "--port", <port>]`
 ///   （`launch_engine_dir` 由 [`crate::engine::resolve_engine_dir`] 在 main 决定：
-///   prod=resource_dir/engine，dev=repo_root/engine；CLI_ENTRY_REL="dist/cli/index.js"）
+///   prod=resource_dir/engine，dev=repo_root/engine；CLI_ENTRY_REL="dist/index.js"）
 /// - `env` 注入 `INKOS_STUDIO_PORT`；**不**注入 `INKOS_PROJECT_ROOT`——
 ///   该 env 与 cwd 在本路径下**等价**（见架构 §6.1/§14 Q4：studio 服务
 ///   `api/index.ts` 解析链 `argv[2] ?? process.env.INKOS_PROJECT_ROOT ?? process.cwd()`，
