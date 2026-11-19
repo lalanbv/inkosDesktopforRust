@@ -16,9 +16,12 @@ use serde::Serialize;
 use std::sync::OnceLock;
 
 use crate::models::chapter::{ChapterMeta, ChapterStatus};
+// 1585 号：私有 utf16_len 副本删除——「JS parity 基准」必须单源，双实现
+// 将来漂移即静默分歧（同名私有 fn 遮蔽 glob 引用的同族形态）。
 use crate::state::chapter_workspace::{archive_chapter_version, ChapterVersionSource};
 use crate::state::manager::StateManager;
 use crate::state::store::FsStateStore;
+use crate::utils::language::utf16_len;
 
 /// 事务执行结果。对齐 TS `ExecutedEditTransaction`（camelCase 序列化；
 /// chapterNumber 仅章级事务存在——entity-rename 无此键）。
@@ -492,10 +495,6 @@ fn normalize_approximate_text(text: &str) -> String {
         .chars()
         .filter(|c| c.is_alphabetic() || c.is_numeric())
         .collect()
-}
-
-fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
 }
 
 fn approximate_text_score(target: &str, candidate: &str) -> f64 {

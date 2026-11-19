@@ -1725,4 +1725,45 @@ mod tests {
         assert_eq!(r.title, "全新标题");
         assert!(r.issues.is_empty());
     }
+
+    // 1584 号 0GC 单遍化的语义锚点直接锁定（此前仅经 violations 间接覆盖，
+    // 重构面无直接断言=锁定缺口）。
+    #[test]
+    fn paragraph_shape_counts_dialogue_and_average() {
+        // 长叙(40) 短叙(4) 对话(5) 短叙(4) 对话(5) 短叙(4)。
+        // 口径锁：paragraph_count 含对话段；average 分母=全部段落含对话段；
+        // short 判定/计数与 short_ratio 分母只含叙述段（对话段不进分母）。
+        let content = format!(
+            "{}\n\n{}\n\n{}\n\n{}\n\n{}\n\n{}",
+            "他".repeat(40) + "。",
+            "他吃了。",
+            "「你好。」",
+            "他喝了。",
+            "「再见。」",
+            "他走了。"
+        );
+        let shape = analyze_paragraph_shape(&content, WritingLanguage::Zh);
+        assert_eq!(shape.paragraph_count, 6);
+        assert_eq!(shape.short_count, 3);
+        // short_ratio = 3 叙述短段 / 4 叙述段（两个对话段不进分母）。
+        assert!((shape.short_ratio - 0.75).abs() < 1e-9);
+        // average = 全部 6 段 utf16 总和 / 6 = (41+4+5+4+5+4)/6（长叙段
+        // 40 个「他」加句号 = 41 码元）。
+        assert!((shape.average_length - 63.0 / 6.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn paragraph_shape_dialogue_does_not_reset_consecutive() {
+        // 锚点①：短叙,对话,短叙,对话,短叙 → 叙述序列连续 3 短段（对话段在
+        // narrative_paragraphs 过滤后的序列中不可见——若错误实现把对话段当
+        // 重置点则 max=1）。≥3 触发「连续短段」告警的面由此锁定。
+        let content = "他吃了。\n\n「你好。」\n\n他喝了。\n\n「再见。」\n\n他走了。";
+        let shape = analyze_paragraph_shape(content, WritingLanguage::Zh);
+        assert_eq!(shape.max_consecutive_short, 3);
+        let v = detect_paragraph_shape_warnings(content, WritingLanguage::Zh);
+        assert!(
+            v.iter().any(|violation| violation.rule == "连续短段"),
+            "跨对话段连续 3 短叙应触发连续短段告警: {v:?}"
+        );
+    }
 }
