@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BookConfigSchema, ProjectConfigSchema, StateManager } from "../index.js";
+import { DetectionConfigSchema } from "../models/project.js";
 
 /**
  * 709 号：写键自由面回归锁——Rust BookConfig（engine-rs models/book.rs）与
@@ -135,5 +136,82 @@ describe("book/project config writing keys tolerance (709)", () => {
     };
     expect(ProjectConfigSchema.safeParse(base).success).toBe(true);
     expect(ProjectConfigSchema.safeParse({ ...base, someFutureLegacyKey: true }).success).toBe(false);
+  });
+
+  // 1602 号：系统性键面差集清偿——Rust ProjectConfig 序列化树与 TS strict
+  // schema 全对照（models/project.rs 为真源）后发现三处「Rust 反序列化面接受 /
+  // TS strict 拒」残留：顶层 foundation（Rust 无 skip_serializing_if 必带）、
+  // daemon.qualityGates（Rust 必序列化，TS 2.0 strict 化时随段裁掉只剩注释
+  // 化石）、detection 四键（threshold/autoRewrite/maxRetries/protectedNames，
+  // G4/340 专名表等）。schema 向 Rust 模型收敛（709 先例），strict 根与
+  // 未列入键的护栏不松动。
+  it("ProjectConfigSchema：foundation 段（Rust FoundationConfig 镜像）容忍且缺省不变", () => {
+    const base = {
+      name: "x", version: "0.1.0",
+      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: TEST_KEY, model: "m" },
+      researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
+    };
+    const config = ProjectConfigSchema.parse({ ...base, foundation: { reviewRetries: 2 } });
+    expect(config.foundation?.reviewRetries).toBe(2);
+
+    // 非法子值仍拒；缺省省略语义不变
+    expect(ProjectConfigSchema.safeParse({ ...base, foundation: { reviewRetries: -1 } }).success).toBe(false);
+    expect(ProjectConfigSchema.safeParse(base).success).toBe(true);
+  });
+
+  it("ProjectConfigSchema：daemon.qualityGates 容忍且缺省投影与 Rust DaemonConfig::default 对齐", () => {
+    const base = {
+      name: "x", version: "0.1.0",
+      llm: { provider: "custom", baseUrl: "http://x/v1", apiKey: TEST_KEY, model: "m" },
+      researchSearch: { enabled: false, provider: "tavily", allowPrivateEgress: false },
+    };
+    // Rust 必序列化形态（qualityGates 全键在位）
+    const config = ProjectConfigSchema.parse({
+      ...base,
+      daemon: {
+        schedule: { radarCron: "0 */6 * * *", writeCron: "*/15 * * * *" },
+        maxConcurrentBooks: 3,
+        qualityGates: { maxAuditRetries: 2, pauseAfterConsecutiveFailures: 3, retryTemperatureStep: 0.1 },
+      },
+    });
+    expect(config.daemon.qualityGates?.maxAuditRetries).toBe(2);
+    expect(config.daemon.qualityGates?.retryTemperatureStep).toBe(0.1);
+
+    // 缺 daemon 段时 default 投影含 qualityGates（540 号 {2,3,0.1} 口径，
+    // 与 Rust DaemonConfig::default 序列化形状对齐——689 教训：default 字面量
+    // 必须与新增键同步，否则缺段投影形状漂移）
+    const defaulted = ProjectConfigSchema.parse(base);
+    expect(defaulted.daemon.qualityGates).toEqual({
+      maxAuditRetries: 2,
+      pauseAfterConsecutiveFailures: 3,
+      retryTemperatureStep: 0.1,
+    });
+
+    // 非法子值仍拒
+    expect(ProjectConfigSchema.safeParse({
+      ...base,
+      daemon: { schedule: { radarCron: "x", writeCron: "y" }, qualityGates: { maxAuditRetries: -1 } },
+    }).success).toBe(false);
+  });
+
+  it("DetectionConfigSchema：Rust 四键（threshold/autoRewrite/maxRetries/protectedNames）容忍且 PUT 往返保真", () => {
+    // Rust DetectionConfig 完整形态（models/project.rs:211，G4/340 专名表）
+    const rustShape = {
+      provider: "custom",
+      apiUrl: "https://detector.example.com/v1",
+      apiKeyEnv: "DETECTOR_API_KEY",
+      enabled: true,
+      threshold: 0.8,
+      autoRewrite: true,
+      maxRetries: 3,
+      protectedNames: ["林动", "青檀"],
+    };
+    const parsed = DetectionConfigSchema.parse(rustShape);
+    // PUT 往返保真（684 纪律：schema 补键后 parsed.data 全键保留）
+    expect(parsed).toEqual(rustShape);
+
+    // 非法子值仍拒；strict 键集护栏不松动
+    expect(DetectionConfigSchema.safeParse({ ...rustShape, threshold: "high" }).success).toBe(false);
+    expect(DetectionConfigSchema.safeParse({ ...rustShape, someFutureKey: 1 }).success).toBe(false);
   });
 });

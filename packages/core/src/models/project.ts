@@ -71,6 +71,14 @@ export const DetectionConfigSchema = z.object({
   apiUrl: z.string().url(),
   apiKeyEnv: z.string().min(1),
   enabled: z.boolean().default(false),
+  // 1602 号键面差集补齐（Rust DetectionConfig 镜像，models/project.rs:211——
+  // serde default 同水位全可选；此前 strict 四键拒 Rust 侧合法形态，
+  // project/detection PUT safeParse 同拒=用户无法保存）。
+  threshold: z.number().optional(),
+  autoRewrite: z.boolean().optional(),
+  maxRetries: z.number().int().min(0).optional(),
+  /** G4/340 号：参考作品专名表——仿写正文泄露检测。 */
+  protectedNames: z.array(z.string()).optional(),
 }).strict();
 
 export type DetectionConfig = z.infer<typeof DetectionConfigSchema>;
@@ -123,6 +131,17 @@ export const ProjectConfigSchema = z.object({
     retryDelayMs: z.number().int().min(0).default(30_000),
     cooldownAfterChapterMs: z.number().int().min(0).default(10_000),
     maxChaptersPerDay: z.number().int().min(1).default(50),
+    // 1602 号键面差集补齐：Rust DaemonConfig 必序列化 quality_gates（无
+    // skip_serializing_if，models/project.rs:408；QualityGates={maxAuditRetries:2,
+    // pauseAfterConsecutiveFailures:3, retryTemperatureStep:0.1} 与 540 号手动
+    // Default 同源）——strict 六键拒含 qualityGates 的 daemon 段。子键可选=
+    // serde default 同水位；689 教训：strict().default 字面量同步补全键，
+    // 投影形状与 Rust DaemonConfig::default 序列化对齐。
+    qualityGates: z.object({
+      maxAuditRetries: z.number().int().min(0).optional(),
+      pauseAfterConsecutiveFailures: z.number().int().min(0).optional(),
+      retryTemperatureStep: z.number().optional(),
+    }).optional(),
   }).strict().default({
     schedule: {
       radarCron: "0 */6 * * *",
@@ -133,6 +152,11 @@ export const ProjectConfigSchema = z.object({
     retryDelayMs: 30_000,
     cooldownAfterChapterMs: 10_000,
     maxChaptersPerDay: 50,
+    qualityGates: {
+      maxAuditRetries: 2,
+      pauseAfterConsecutiveFailures: 3,
+      retryTemperatureStep: 0.1,
+    },
   }),
   // ── 709 号：writing 段复位（Rust WritingConfig 镜像，models/project.rs）──
   // 2.0 strict 化时裁掉的 fork 段。Rust 引擎把 reviewMode/revisionGate/
@@ -158,6 +182,14 @@ export const ProjectConfigSchema = z.object({
   // z.unknown().optional() 不冻结已死管线的历史值域（Rust serde 未知键
   // 忽略同语义）。写回面直读 raw JSON 不经 schema，零写面副作用。
   inputGovernanceMode: z.unknown().optional(),
+  // ── 1602 号：foundation 段复位（Rust FoundationConfig 镜像，models/project.rs:
+  // 292={reviewRetries(serde default 2)}）──Rust ProjectConfig 有此字段且无
+  // skip_serializing_if（凡 serde struct 序列化路径必带）；legacy/上游 1.x 项目
+  // inkos.json 带此键时 TS strict 根 unrecognized key 拒（boot 崩同 706/1429 型，
+  // Rust 同文件绿）。子键可选=serde default 同水位（709 writing 先例）。
+  foundation: z.object({
+    reviewRetries: z.number().int().min(0).optional(),
+  }).optional(),
 }).strict();
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
