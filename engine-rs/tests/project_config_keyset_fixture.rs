@@ -15,14 +15,38 @@ use inkos_engine::models::project::ProjectConfig;
 
 #[test]
 fn project_config_serialized_value_matches_fixture() {
+    // 1605 号：覆盖面加深——services 全字段条目/cover 对象（非 null 形态）/
+    // defaultModel/notify 四变体（telegram/wechat-work/feishu/webhook 含
+    // secret+events 可选键）进 fixture，段内键集全量进 parity（1602 的
+    // detection 四键证明段内键漂移有真实抓虫产出）。
     let minimal = r#"{
         "name": "fixture",
         "version": "0.1.0",
         "llm": {
             "provider": "custom",
             "baseUrl": "http://127.0.0.1:9",
-            "model": "m"
+            "model": "m",
+            "services": [{
+                "service": "custom",
+                "name": "FixtureSvc",
+                "baseUrl": "https://svc.example.com/v1",
+                "temperature": 0.5,
+                "apiFormat": "chat",
+                "stream": true
+            }],
+            "defaultModel": "fixture-model",
+            "cover": {
+                "service": "kkaiapi",
+                "model": "fixture-cover-model",
+                "baseUrl": "https://cover.example.com/v1"
+            }
         },
+        "notify": [
+            { "type": "telegram", "botToken": "fixture-placeholder", "chatId": "fixture-chat", "format": "markdown" },
+            { "type": "wechat-work", "webhookUrl": "https://wechat.example.com/hook", "format": "markdown" },
+            { "type": "feishu", "webhookUrl": "https://feishu.example.com/hook", "format": "markdown" },
+            { "type": "webhook", "url": "https://webhook.example.com/hook", "secret": "fixture-secret", "events": ["chapter"], "format": "markdown" }
+        ],
         "detection": {
             "apiUrl": "https://detector.example.com/v1",
             "apiKeyEnv": "DETECTOR_API_KEY"

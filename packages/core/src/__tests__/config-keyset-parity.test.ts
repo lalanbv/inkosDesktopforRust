@@ -72,11 +72,30 @@ describe("ProjectConfig 键面 parity（Rust fixture ↔ TS zod schema）", () =
   it("fixture 全文 parse 通过（值面活体：null/默认值形态与 zod 容值对齐）", () => {
     // 1604 抓虫面：Rust Option 无 skip_serializing_if 序列化 cover:null，
     // zod .optional() 只容 undefined——nullable 补齐后此处才绿。
+    // 1605 号：fixture cover 扩展为对象形态（三键全量进 parity），null 形态
+    // 回归锁移至下方独立用例（两形态都锁）。
     const parsed = ProjectConfigSchema.parse(fixture);
     expect(parsed.name).toBe("fixture");
-    expect(parsed.llm.cover).toBeNull();
+    expect(parsed.llm.cover?.service).toBe("kkaiapi");
+    expect(parsed.llm.cover?.model).toBe("fixture-cover-model");
+    expect(parsed.llm.services?.[0]?.name).toBe("FixtureSvc");
     expect(parsed.daemon.qualityGates?.maxAuditRetries).toBe(2);
     expect(parsed.foundation?.reviewRetries).toBe(2);
     expect(parsed.detection?.protectedNames).toEqual([]);
+    expect(parsed.notify?.map((channel) => channel.type)).toEqual([
+      "telegram",
+      "wechat-work",
+      "feishu",
+      "webhook",
+    ]);
+  });
+
+  it("cover:null 形态仍容（1604 nullable 回归锁，Rust Option 序列化形态）", () => {
+    const withNullCover = {
+      ...fixture,
+      llm: { ...(fixture.llm as Record<string, unknown>), cover: null },
+    };
+    const parsed = ProjectConfigSchema.parse(withNullCover);
+    expect(parsed.llm.cover).toBeNull();
   });
 });

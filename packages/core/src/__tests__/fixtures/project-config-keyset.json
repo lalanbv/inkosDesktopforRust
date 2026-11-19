@@ -34,17 +34,58 @@
     "apiKey": "",
     "baseUrl": "http://127.0.0.1:9",
     "configSource": "env",
-    "cover": null,
+    "cover": {
+      "baseUrl": "https://cover.example.com/v1",
+      "model": "fixture-cover-model",
+      "service": "kkaiapi"
+    },
+    "defaultModel": "fixture-model",
     "model": "m",
     "provider": "custom",
     "service": "custom",
+    "services": [
+      {
+        "apiFormat": "chat",
+        "baseUrl": "https://svc.example.com/v1",
+        "name": "FixtureSvc",
+        "service": "custom",
+        "stream": true,
+        "temperature": 0.5
+      }
+    ],
     "stream": true,
     "temperature": 0.7,
     "thinkingBudget": 0
   },
   "modelOverrides": {},
   "name": "fixture",
-  "notify": [],
+  "notify": [
+    {
+      "botToken": "fixture-placeholder",
+      "chatId": "fixture-chat",
+      "format": "markdown",
+      "type": "telegram"
+    },
+    {
+      "format": "markdown",
+      "type": "wechat-work",
+      "webhookUrl": "https://wechat.example.com/hook"
+    },
+    {
+      "format": "markdown",
+      "type": "feishu",
+      "webhookUrl": "https://feishu.example.com/hook"
+    },
+    {
+      "events": [
+        "chapter"
+      ],
+      "format": "markdown",
+      "secret": "fixture-secret",
+      "type": "webhook",
+      "url": "https://webhook.example.com/hook"
+    }
+  ],
   "researchSearch": {
     "enabled": false,
     "provider": "tavily"
