@@ -131,10 +131,9 @@ pub fn read_chapter_heading(line: &str) -> Option<(u32, String, WritingLanguage)
     let captures = re.captures(line.trim())?;
     let (ordinal_text, is_zh) = if let Some(ordinal) = captures.get(1) {
         (ordinal.as_str().to_string(), true)
-    } else if let Some(ordinal) = captures.get(4) {
-        (ordinal.as_str().to_string(), false)
     } else {
-        return None;
+        let ordinal = captures.get(4)?;
+        (ordinal.as_str().to_string(), false)
     };
     let number = if is_zh {
         parse_chinese_ordinal(&ordinal_text)?

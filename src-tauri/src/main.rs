@@ -641,13 +641,11 @@ fn main() {
             // 激活但窗口不现——0.1.0「关闭窗口后再也显示不出来」的主因之一。
             #[cfg(target_os = "macos")]
             RunEvent::Reopen {
-                has_visible_windows,
+                has_visible_windows: false,
                 ..
             } => {
-                if !has_visible_windows {
-                    // 全路径调用（仅此 macOS 分支使用，避免其它平台的 unused import）。
-                    inkos_desktop::lifecycle::show_main_window(app_handle);
-                }
+                // 全路径调用（仅此 macOS 分支使用，避免其它平台的 unused import）。
+                inkos_desktop::lifecycle::show_main_window(app_handle);
             }
             _ => {}
         });

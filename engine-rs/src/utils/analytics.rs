@@ -165,7 +165,7 @@ pub fn compute_analytics(book_id: &str, chapters: &[AnalyticsChapter]) -> Analyt
             }
         }
     }
-    category_counts.sort_by(|a, b| b.1.cmp(&a.1));
+    category_counts.sort_by_key(|c| std::cmp::Reverse(c.1));
     let top_issue_categories: Vec<IssueCategoryCount> = category_counts
         .into_iter()
         .take(10)
@@ -177,7 +177,7 @@ pub fn compute_analytics(book_id: &str, chapters: &[AnalyticsChapter]) -> Analyt
         .iter()
         .filter(|c| !c.audit_issues.is_empty())
         .collect();
-    with_issues.sort_by(|a, b| (b.audit_issues.len() as u32).cmp(&(a.audit_issues.len() as u32)));
+    with_issues.sort_by_key(|c| std::cmp::Reverse(c.audit_issues.len() as u32));
     let chapters_with_most_issues: Vec<ChapterIssueCount> = with_issues
         .into_iter()
         .take(5)

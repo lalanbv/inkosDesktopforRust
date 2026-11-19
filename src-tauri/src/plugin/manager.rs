@@ -471,7 +471,8 @@ impl PluginManager {
             exec_count: count,
             exec_total_us: total_us,
             exec_failures: failures,
-            avg_us: if count > 0 { total_us / count } else { 0 },
+            // 1.100 manual_checked_ops：checked_div 同义（count=0 → None → 0）。
+            avg_us: total_us.checked_div(count).unwrap_or(0),
             auto_disabled_count: self.exec_auto_disabled.load(Relaxed),
             per_plugin,
             recently_auto_disabled: self.recently_auto_disabled.iter().cloned().collect(),

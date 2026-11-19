@@ -431,7 +431,7 @@ fn apply_summary_delta(
     let mut rows: Vec<ChapterSummaryRow> = state.rows.to_vec();
     match &delta.chapter_summary {
         None => {
-            rows.sort_by(|a, b| a.chapter.cmp(&b.chapter));
+            rows.sort_by_key(|a| a.chapter);
             ChapterSummariesState { rows }
         }
         Some(summary) => {
@@ -439,7 +439,7 @@ fn apply_summary_delta(
                 rows.retain(|r| r.chapter != summary.chapter);
             }
             rows.push(summary.clone());
-            rows.sort_by(|a, b| a.chapter.cmp(&b.chapter));
+            rows.sort_by_key(|a| a.chapter);
             ChapterSummariesState { rows }
         }
     }

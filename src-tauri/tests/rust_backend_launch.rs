@@ -34,6 +34,13 @@ fn find_server_bin() -> Option<PathBuf> {
 
 fn probe_client() -> reqwest::Client {
     reqwest::Client::builder()
+        // 1583 号：默认构造无条件读 env/系统代理（auto_sys_proxy→macOS
+        // SCDynamicStore，不读 ExceptionsList）——probe 过（health_probe 谓词
+        // 面已旁路）而本 client 的 GET 被劫持去 127.0.0.1:1082：代理转发回环
+        // 成功时绿（劫持不可见），代理对回环 RST 时假红（ConnectionReset 的
+        // "peer" 是代理不是引擎）。测试目标恒回环——同 health_probe（1572）
+        // 语义，.no_proxy() 恒直连。
+        .no_proxy()
         .timeout(Duration::from_secs(2))
         .build()
         .expect("reqwest Client 构建失败")
@@ -66,14 +73,21 @@ async fn rust_engine_serves_health_under_env_contract() {
     );
 
     // 响应体契约：{"ok":true,"version":"..."}（145 号修复后的编译期版本宏）。
-    let body: serde_json::Value = probe_client()
+    // 失败分支打印引擎进程状态（1583 号：probe 200 后 GET 瞬时 ConnectionReset
+    // 一次——死因三分类：Some(exit 0)=自退（watchdog/serve Err）、Some(signal)
+    // =外部杀、None=仍运行（纯网络竞态）。stdio null 化（1431）令引擎自报
+    // 不可达，此观测面是死因唯一直观面。
+    let body: serde_json::Value = match probe_client()
         .get(format!("http://127.0.0.1:{port}/api/v1/health"))
         .send()
         .await
-        .expect("health 请求失败")
-        .json()
-        .await
-        .expect("health 响应应为 JSON");
+    {
+        Ok(resp) => resp.json().await.expect("health 响应应为 JSON"),
+        Err(e) => {
+            let status = child.try_wait().ok().flatten();
+            panic!("health 请求失败: {e}; 引擎进程状态: {status:?}（None=仍运行）");
+        }
+    };
     assert_eq!(body["ok"], serde_json::json!(true));
     assert!(
         body["version"]
@@ -150,7 +164,14 @@ async fn rust_engine_serves_spa_when_static_dir_set() {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    assert!(spa_ok, "静态面模式 / 应返回 SPA index（text/html）");
+    // 死因观测面（1583 号，同测试 A）：超时失败时区分引擎已亡（自退/外部杀）
+    // 与仍运行（静态面未就绪竞态）。stderr null 化下这是死因唯一直观面。
+    if !spa_ok {
+        let status = child.try_wait().ok().flatten();
+        panic!(
+            "静态面模式 / 应返回 SPA index（text/html）; 引擎进程状态: {status:?}（None=仍运行）"
+        );
+    }
 
     kill_tree(&child).expect("kill_tree 失败");
     let _ = child.wait();

@@ -307,7 +307,8 @@ impl ProjectManager {
             health_count: count,
             health_total_us: total_us,
             health_failures: failures,
-            avg_us: if count > 0 { total_us / count } else { 0 },
+            // 1.100 manual_checked_ops：checked_div 同义（count=0 → None → 0）。
+            avg_us: total_us.checked_div(count).unwrap_or(0),
         }
     }
 

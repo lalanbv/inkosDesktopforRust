@@ -329,7 +329,7 @@ impl StateManager {
                 token_usage: None,
             });
         }
-        rows.sort_by(|a, b| a.number.cmp(&b.number));
+        rows.sort_by_key(|a| a.number);
         rows
     }
 

@@ -75,9 +75,12 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 # M6c：项目扫描器（文件系统遍历）。
 walkdir = "2.5"
 # M7a：WASM 插件运行时（Wasmtime 27+ 稳定 API + Component Model 支持）。
-wasmtime = { version = "36.0.14", features = ["component-model", "cranelift"] }
+# 1583 号：36.0.21 → 50 清偿 RUSTSEC-2026-0567/0573（abort 类 DoS，2026-11-16
+# 公告；36 系无修复版——修复线 48.0.9+/49.0.6+/50.0.2+，跨 major 升级）。
+# 50 系 MSRV 1.97：配套升本机 stable 工具链 1.94→1.100（1.94 为 2026-03 版）。
+wasmtime = { version = "50.0.2", features = ["component-model", "cranelift"] }
 # M7a：WASI 环境支持（文件系统、环境变量等）。
-wasmtime-wasi = "36.0.14"
+wasmtime-wasi = "50.0.2"
 # Phase 6.1：增量更新——bsdiff 二进制 delta（纯 Rust，safe Rust，无 C 依赖）。
 # 客户端用 patch 应用 delta，配合 sha256 校验，显著减小 engine bundle 更新体积。
 bsdiff = "0.2"

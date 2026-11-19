@@ -1959,6 +1959,9 @@ fn parse_data_url(data_url: &str) -> Option<(String, Vec<u8>)> {
 /// 解码 + 落盘 `.inkos/uploads/{safeSession}/{ts}-{i}-{filename}` + 三类
 /// 分支（image 内联 base64 / text 注入校验 ≤120k 码元 / 其余仅存）。
 /// 多模态消息注入面见 93 号偏差备案（LLMMessage 无 image 内容形态）。
+// 1.100 result_large_err：Err=Response（axum handler 惯用形，体积大）——
+// Box 化非 axum 惯例且改动面大，handler 路径冷（1583 号定性）。
+#[allow(clippy::result_large_err)]
 async fn normalize_agent_attachments(
     root: &std::path::Path,
     session_id: &str,

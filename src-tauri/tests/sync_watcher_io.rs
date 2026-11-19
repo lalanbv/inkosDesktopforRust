@@ -240,10 +240,14 @@ fn watcher_shutdown_flag_exits_thread_cleanly() {
     let started = Instant::now();
     handle.join().expect("watcher thread must not panic");
     let elapsed = started.elapsed();
-    // 名义界 = 3×POLL（切片检查点 + 一次 flush）；×10 吸收满载调度尾——sweep
-    // 语境（lib 重套件刚跑完 + 并行走查负载）实测过一次 620ms（988 号），结构面
-    // 无白等路径（窗内等待已按 poll 切片），超出 1s 才可能是真挂。
-    let bound = POLL_TIMEOUT_MS * 10;
+    // 名义界 = 3×POLL（切片检查点 + 一次 flush）；×25 吸收满载调度尾。×10 界
+    // 被 1583 号满载+同腿三枚并行语境实证不足（sweep lib 重套件余波下实测
+    // 1.18s/1.73s 破界，重跑/轻载/满载单跑即绿 = 线程正常退出非真挂）；988 号
+    // 当时实测 620ms 定 ×10，满载下事件投递/切片唤醒/join 唤醒各环节放大数倍
+    // 会越过 1s。结构面无白等路径（窗内等待已按 poll 切片），真挂形态=永久挂
+    // ——由 sweep 腿预算哨兵兜底，本界只需覆盖调度噪声带（2.5s > 实测峰
+    // 1.73s 的 44% 余量）。
+    let bound = POLL_TIMEOUT_MS * 25;
     assert!(
         elapsed <= Duration::from_millis(bound),
         "shutdown 后线程应在 ≤ {bound}ms 内退出（含尾随 flush-on-shutdown），实际 {elapsed:?}"

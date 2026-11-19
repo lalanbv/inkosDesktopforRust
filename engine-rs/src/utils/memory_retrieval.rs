@@ -833,7 +833,7 @@ fn select_relevant_summaries(
         .iter()
         .filter(|(summary, _, _)| summary.chapter >= chapter_number_u32 as i64 - 3)
         .collect();
-    recent.sort_by(|left, right| right.0.chapter.cmp(&left.0.chapter));
+    recent.sort_by_key(|item| std::cmp::Reverse(&item.0.chapter));
     let recent: Vec<StoredSummary> = recent
         .iter()
         .take(3)
@@ -983,7 +983,7 @@ fn select_relevant_facts(
         .filter(|(_, score, retrieved)| *retrieved || *score >= 14)
         .collect();
 
-    ranked.sort_by(|left, right| right.1.cmp(&left.1));
+    ranked.sort_by_key(|item| std::cmp::Reverse(item.1));
     ranked.truncate(4);
     ranked.into_iter().map(|(fact, _, _)| fact).collect()
 }
@@ -1015,7 +1015,7 @@ fn select_relevant_volume_summaries(
         .collect();
 
     let mut selected = ranked;
-    selected.sort_by(|left, right| right.2.cmp(&left.2));
+    selected.sort_by_key(|item| std::cmp::Reverse(item.2));
     selected.truncate(2);
     selected.sort_by_key(|(index, _, _, _)| *index);
     selected

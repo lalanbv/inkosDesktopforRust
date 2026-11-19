@@ -138,13 +138,13 @@ pub async fn load_planning_seed_materials(
             .into_iter()
             .filter(|summary| summary.chapter < i64::from(chapter_number))
             .collect();
-    chapter_summaries.sort_by(|left, right| right.chapter.cmp(&left.chapter));
+    chapter_summaries.sort_by_key(|s| std::cmp::Reverse(s.chapter));
     let previous_ending_hook = chapter_summaries
         .first()
         .map(|summary| summary.hook_activity.clone())
         .filter(|activity| !activity.is_empty());
     chapter_summaries.truncate(4);
-    chapter_summaries.sort_by(|left, right| left.chapter.cmp(&right.chapter));
+    chapter_summaries.sort_by_key(|left| left.chapter);
 
     PlanningSeedMaterials {
         story_dir,

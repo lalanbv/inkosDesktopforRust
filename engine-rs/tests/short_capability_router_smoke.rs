@@ -295,8 +295,19 @@ fn router_runtime(root: &std::path::Path, llm: &str) -> axum::Router {
     )
 }
 
+/// 回环直连 client（1583 号）：默认构造（`Client::new()`）无条件读 env/系统
+/// 代理（auto_sys_proxy → macOS SCDynamicStore，不读 ExceptionsList），回环
+/// 目标被劫持去本机代理——代理转发成功时绿（劫持不可见），代理对回环 RST
+/// 时假红。目标恒回环：恒直连（同 health_probe 1572 号谓词语义）。
+fn loopback_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("reqwest Client 构建失败")
+}
+
 async fn post_json(base: &str, path: &str, body: Value) -> (u16, Value) {
-    let client = reqwest::Client::new();
+    let client = loopback_client();
     let response = client
         .post(format!("{base}{path}"))
         .json(&body)
@@ -309,7 +320,7 @@ async fn post_json(base: &str, path: &str, body: Value) -> (u16, Value) {
 }
 
 async fn get_json(base: &str, path: &str) -> (u16, Value) {
-    let client = reqwest::Client::new();
+    let client = loopback_client();
     let response = client
         .get(format!("{base}{path}"))
         .send()

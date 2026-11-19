@@ -1162,7 +1162,8 @@ async fn build_recent_chapter_trail_entries(
         .into_iter()
         .filter(|summary| summary.chapter < i64::from(chapter_number))
         .collect();
-    recent.sort_by(|left, right| right.chapter.cmp(&left.chapter));
+    // 1.100 manual_sort_by：降序比较 → Reverse 键（稳定排序语义不变）。
+    recent.sort_by_key(|s| std::cmp::Reverse(s.chapter));
     recent.truncate(5);
     if recent.is_empty() {
         return Vec::new();
@@ -1286,7 +1287,7 @@ async fn build_recent_ending_trail(story_dir: &Path, chapter_number: u32) -> Opt
             }
         }
     }
-    chapter_files.sort_by(|a, b| b.1.cmp(&a.1));
+    chapter_files.sort_by_key(|f| std::cmp::Reverse(f.1));
     chapter_files.truncate(3);
     chapter_files.reverse();
 

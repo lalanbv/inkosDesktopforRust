@@ -1241,14 +1241,10 @@ fn is_cross_volume(
         }
     }
     // Case C：endgame / slow-burn 回收节奏 + 早卷种子。
-    if matches!(
+    matches!(
         hook.payoff_timing,
         Some(HookPayoffTiming::Endgame) | Some(HookPayoffTiming::SlowBurn)
     ) && (seed_volume as usize) < boundaries.len() - 1
-    {
-        return true;
-    }
-    false
 }
 
 fn find_volume_index(boundaries: &[PromotionVolumeBoundary], chapter: u32) -> i32 {

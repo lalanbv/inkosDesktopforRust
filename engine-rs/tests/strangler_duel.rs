@@ -318,8 +318,21 @@ async fn spawn_ts_sidecar(root: &Path, port: u16) -> TsSidecar {
     }
 }
 
+/// 回环直连 client（1583 号）：默认构造（`Client::new()`）无条件读 env/系统
+/// 代理（auto_sys_proxy → macOS SCDynamicStore，不读 ExceptionsList），回环
+/// 目标被劫持去本机代理——代理转发回环成功时绿（劫持不可见），代理对回环
+/// RST 时假红（ConnectionReset 的 "peer" 是代理不是被测服务）。本文件全部
+/// mock/引擎都在 127.0.0.1：恒直连（同 src-tauri health_probe 1572 号谓词语
+/// 义，1594 口诀「探活本机 no_proxy」）。
+fn loopback_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .expect("reqwest Client 构建失败")
+}
+
 async fn get_json(base: &str, path: &str) -> (u16, Value) {
-    let client = reqwest::Client::new();
+    let client = loopback_client();
     let response = client
         .get(format!("{base}{path}"))
         .send()
@@ -358,7 +371,14 @@ fn normalize(value: &mut Value) {
 async fn wait_ready(base: &str) {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if let Ok(response) = reqwest::get(format!("{base}/api/v1/books")).await {
+        // 1583 号补：顶层便捷函数 `reqwest::get()` 内部构造默认 Client（读
+        // env/系统代理）——与本文件 `Client::new()` 站点同族漏网（死代理 env
+        // 下探活 60s 全败实证），统一走 loopback_client 恒直连。
+        if let Ok(response) = loopback_client()
+            .get(format!("{base}/api/v1/books"))
+            .send()
+            .await
+        {
             if response.status().is_success() {
                 return;
             }
@@ -470,7 +490,7 @@ async fn strangler_cross_write_read_duel() {
     wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
 
-    let client = reqwest::Client::new();
+    let client = loopback_client();
 
     // A) Rust 写：approve 第 1 章。
     let response = client
@@ -573,7 +593,7 @@ async fn strangler_session_domain_duel() {
     wait_ready(&rust).await;
     wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
-    let client = reqwest::Client::new();
+    let client = loopback_client();
 
     // A) Rust 建会话（book 绑定）→ 双端 GET 等价。
     let rust_session = "1783099000012-d119";
@@ -669,7 +689,7 @@ async fn strangler_services_domain_duel() {
     wait_ready(&rust).await;
     wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
-    let client = reqwest::Client::new();
+    let client = loopback_client();
 
     // A) 服务列表读面（fixture 服务项 + secrets 键集）。
     let (rust_status, mut rust_body) = get_json(&rust, "/api/v1/services").await;
@@ -726,7 +746,7 @@ async fn strangler_services_domain_duel() {
 }
 
 async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {
-    let client = reqwest::Client::new();
+    let client = loopback_client();
     let response = client
         .post(format!("{base}{path}"))
         .header("content-type", "application/json")
@@ -763,7 +783,7 @@ async fn strangler_full_grey_simulation() {
     wait_ready(&rust).await;
     wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
-    let client = reqwest::Client::new();
+    let client = loopback_client();
 
     let readonly = [
         "/api/v1/books",
@@ -950,7 +970,7 @@ async fn bin_process_write_next_llm_resolution() {
     assert_eq!(status, 200);
 
     // fire-and-forget write-next：后台链首个 LLM 调用应打 inkos.json 服务端点。
-    let client = reqwest::Client::new();
+    let client = loopback_client();
     let response = client
         .post(format!("{base}/api/v1/books/b1/write-next"))
         .header("content-type", "application/json")
@@ -986,7 +1006,7 @@ async fn bin_process_write_next_llm_resolution() {
 /// 原始 GET（状态码 + content-type + body）——静态面比 JSON 面多一个
 /// content-type 维度。
 async fn get_raw(base: &str, path: &str) -> (u16, Option<String>, String) {
-    let response = reqwest::Client::new()
+    let response = loopback_client()
         .get(format!("{base}{path}"))
         .send()
         .await
@@ -1093,7 +1113,7 @@ async fn bin_process_static_face_duel() {
     // Origin（vite dev 形态）双端反射 ACAO=Origin；远端 Origin 被守卫
     // 403 且无 CORS 头（bin/TS 侧守卫均在 CORS 之外先行短路）；preflight
     // （回环）双端 2xx 且反射 + 方法/头语义一致。
-    let client = reqwest::Client::new();
+    let client = loopback_client();
     for base in [&bin, &ts.base] {
         // GET 用双端同位的 /api/v1/books（TS 侧无 /api/v1/health——404 面
         // 不在本 duel 断言范围）。
@@ -1203,7 +1223,12 @@ async fn sse_chat_turn_events(
     let sink = events.clone();
     let target = base.to_string();
     let collector = tokio::spawn(async move {
-        let response = match reqwest::get(format!("{target}/api/v1/events")).await {
+        // 1583 号：顶层便捷函数同族漏网（读 env/系统代理）——恒直连。
+        let response = match loopback_client()
+            .get(format!("{target}/api/v1/events"))
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(_) => return,
         };
@@ -1242,7 +1267,7 @@ async fn sse_chat_turn_events(
     });
 
     // 建会话（已存在则忽略结果）+ 聊天回合。
-    let client = reqwest::Client::new();
+    let client = loopback_client();
     let _ = client
         .post(format!("{base}/api/v1/sessions"))
         .header("content-type", "application/json")
@@ -1461,7 +1486,7 @@ async fn strangler_timeline_duel() {
 
     // A) 缺文件 → 双端 200 + timeline:null。
     for base in [&rust, &ts.base] {
-        let response = reqwest::Client::new()
+        let response = loopback_client()
             .get(format!("{base}/api/v1/books/b1/timeline"))
             .send()
             .await
@@ -1476,7 +1501,7 @@ async fn strangler_timeline_duel() {
 
     // B) PUT 合法 → 双端 200 ok；PUT 非法 version → 双端 400。
     for base in [&rust, &ts.base] {
-        let client = reqwest::Client::new();
+        let client = loopback_client();
         let ok = client
             .put(format!("{base}/api/v1/books/b1/timeline"))
             .json(&valid_timeline)
@@ -1508,7 +1533,7 @@ async fn strangler_timeline_duel() {
     // C) roundtrip：双端 GET（normalize 后等价——plotlines/cells 结构一致）。
     let mut bodies: Vec<(u16, Value)> = Vec::new();
     for base in [&rust, &ts.base] {
-        let response = reqwest::Client::new()
+        let response = loopback_client()
             .get(format!("{base}/api/v1/books/b1/timeline"))
             .send()
             .await
@@ -1572,7 +1597,7 @@ async fn strangler_series_backfill_duel() {
 
     // A) apply 无草稿 → 双端 400。
     for base in [&rust, &ts.base] {
-        let response = reqwest::Client::new()
+        let response = loopback_client()
             .post(format!("{base}/api/v1/books/b1/series-backfill/apply"))
             .json(&json!({}))
             .send()
@@ -1588,7 +1613,7 @@ async fn strangler_series_backfill_duel() {
 
     // B) extract 缺 sourceBookId → 双端 400。
     for base in [&rust, &ts.base] {
-        let response = reqwest::Client::new()
+        let response = loopback_client()
             .post(format!("{base}/api/v1/books/b1/series-backfill/extract"))
             .json(&json!({}))
             .send()
@@ -1605,7 +1630,7 @@ async fn strangler_series_backfill_duel() {
     // C) extract 合法（走 mock LLM）→ 双端 200，草稿 normalize 后等价。
     let mut drafts: Vec<(u16, Value)> = Vec::new();
     for base in [&rust, &ts.base] {
-        let response = reqwest::Client::new()
+        let response = loopback_client()
             .post(format!("{base}/api/v1/books/b2/series-backfill/extract"))
             .json(&json!({ "sourceBookId": "b1" }))
             .send()
@@ -1639,7 +1664,7 @@ async fn strangler_series_backfill_duel() {
 
     // D) apply 勾选子集 → 双端 200 + applied:1。
     for base in [&rust, &ts.base] {
-        let response = reqwest::Client::new()
+        let response = loopback_client()
             .post(format!("{base}/api/v1/books/b2/series-backfill/apply"))
             .json(&json!({ "itemIds": ["it-1"] }))
             .send()

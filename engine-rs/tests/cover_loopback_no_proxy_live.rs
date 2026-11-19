@@ -27,10 +27,9 @@ async fn spawn_marker_proxy() -> (std::net::SocketAddr, Arc<AtomicUsize>) {
             tokio::spawn(async move {
                 let mut buf = vec![0u8; 8192];
                 let mut total = 0usize;
-                loop {
-                    let Ok(n) = sock.read(&mut buf[total..]).await else {
-                        break;
-                    };
+                // 1.100 while_let_loop：loop+let-else+零长守卫 → while let
+                // （Ok(0)=对端关闭照旧 break，语义不变）。
+                while let Ok(n) = sock.read(&mut buf[total..]).await {
                     if n == 0 {
                         break;
                     }

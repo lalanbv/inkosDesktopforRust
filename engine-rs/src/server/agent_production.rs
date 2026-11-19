@@ -3028,6 +3028,10 @@ pub struct ProductionError {
 /// 确认式生产任务分支主链：预留 → 快照检查 → 建书预备广播 → user 先写 →
 /// 执行（快照 + tool:start/end）→ 建书迁移 → 收尾助手消息。任务终态后必然
 /// 释放预留与 abort 注册（对应 TS finally）。
+// 1.100 result_large_err：ProductionError 体积大（>128B 阈值）——错误路径冷
+// （任务失败面非热路径），Box 化需改全部构造/消费点，收益不成比例（1583 号
+// 工具链升级清偿定性）。
+#[allow(clippy::result_large_err)]
 pub async fn run_confirmed_production(
     runtime: &BooksRuntime,
     request: ProductionRequest<'_>,
@@ -3083,6 +3087,8 @@ fn busy_error(lang: StudioLang) -> ProductionError {
     }
 }
 
+// 1.100 result_large_err：同 run_confirmed_production 定性（1583 号）。
+#[allow(clippy::result_large_err)]
 #[allow(clippy::too_many_lines)]
 async fn run_confirmed_production_locked(
     runtime: &BooksRuntime,
@@ -4358,12 +4364,12 @@ async fn run_confirmed_production_locked(
 
     // 终态持久化前 drain 进度写入（保证快照终态不被滞后的进度快照覆盖）。
     {
-        let handles: Vec<_> = sink
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .1
-            .drain(..)
-            .collect();
+        let handles: Vec<_> = std::mem::take(
+            &mut sink
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .1,
+        );
         for handle in handles {
             let _ = handle.await;
         }

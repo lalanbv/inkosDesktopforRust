@@ -319,10 +319,8 @@ pub fn serialize_conversation(messages: &[LLMMessage]) -> String {
                     parts.push(format!("[User]: {}", message.content));
                 }
             }
-            crate::llm::provider::LLMRole::Assistant => {
-                if !message.content.is_empty() {
-                    parts.push(format!("[Assistant]: {}", message.content));
-                }
+            crate::llm::provider::LLMRole::Assistant if !message.content.is_empty() => {
+                parts.push(format!("[Assistant]: {}", message.content));
             }
             _ => {}
         }

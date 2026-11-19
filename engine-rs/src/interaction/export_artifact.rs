@@ -376,7 +376,7 @@ fn build_epub(title: &str, lang: &str, book_id: &str, chapters: &[(String, Strin
 
     let modified = format!(
         "{}Z",
-        &crate::utils::utc_time::utc_now_iso()
+        crate::utils::utc_time::utc_now_iso()
             .get(..19)
             .unwrap_or("1970-01-01T00:00:00")
     );

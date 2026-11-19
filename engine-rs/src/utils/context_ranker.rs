@@ -112,7 +112,7 @@ pub fn rank_entries_for_composition(
             None => tiers.push((precedence, vec![entry.clone()])),
         }
     }
-    tiers.sort_by(|a, b| b.0.cmp(&a.0));
+    tiers.sort_by_key(|t| std::cmp::Reverse(t.0));
     let mut ordered: Vec<RankedEntry> = Vec::new();
     for (_, items) in &tiers {
         ordered.extend(rank_within_tier(items, weights));

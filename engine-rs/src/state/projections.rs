@@ -190,7 +190,7 @@ pub fn render_chapter_summaries_projection(
     };
 
     let mut sorted: Vec<_> = state.rows.iter().collect();
-    sorted.sort_by(|a, b| a.chapter.cmp(&b.chapter));
+    sorted.sort_by_key(|a| a.chapter);
 
     let rows: Vec<String> = sorted
         .iter()

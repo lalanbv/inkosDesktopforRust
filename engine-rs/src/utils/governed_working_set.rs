@@ -350,10 +350,11 @@ pub fn merge_character_matrix_markdown(original: &str, updated: &str) -> String 
         });
     }
 
-    for index in original_sections.sections.len()..updated_sections.sections.len() {
+    // 1.100 needless_range_loop：range 索引仅用于下标 → 迭代器切片。
+    for section in &updated_sections.sections[original_sections.sections.len()..] {
         merged_sections.push(MarkdownSection {
-            heading: updated_sections.sections[index].heading.clone(),
-            body: updated_sections.sections[index].body.clone(),
+            heading: section.heading.clone(),
+            body: section.body.clone(),
         });
     }
 

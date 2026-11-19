@@ -149,7 +149,7 @@ pub fn analyze_style(
         .partition(|(key, _)| js_array_index(key).is_some());
     top_patterns.sort_by_key(|(key, _)| js_array_index(key));
     top_patterns.extend(insertion_ordered);
-    top_patterns.sort_by(|a, b| b.1.cmp(&a.1));
+    top_patterns.sort_by_key(|p| std::cmp::Reverse(p.1));
     let top_patterns: Vec<String> = top_patterns
         .into_iter()
         .take(5)

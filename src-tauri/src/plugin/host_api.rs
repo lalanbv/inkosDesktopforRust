@@ -360,8 +360,9 @@ impl HostContext {
         }
 
         // 累计配额检查（单次上限之上的第二道）：单次 8 MiB 合法，但 1000 次循环
-        // 写入 = 8 GiB。fetch_update 做 CAS 原子「检查+累加」——先 load 再 store
-        // 的两步写法在并发调用下可双双通过检查后超额（TOCTOU）。
+        // 写入 = 8 GiB。try_update（1.100 前名 fetch_update）做 CAS 原子「检查+
+        // 累加」——先 load 再 store 的两步写法在并发调用下可双双通过检查后超额
+        // （TOCTOU）。
         //
         // 只在**实际写入前**累加：写失败不应消耗配额。但若写入失败，已累加的字节
         // 需回滚——见下方 fetch_sub。
@@ -370,7 +371,7 @@ impl HostContext {
         let quota = self.write_quota;
         if self
             .written_bytes
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
                 let next = cur.saturating_add(content_len);
                 (next <= quota).then_some(next)
             })
@@ -971,7 +972,7 @@ impl HostContext {
         let req_quota = self.http_request_quota;
         if self
             .http_requests
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
                 (cur < req_quota).then(|| cur + 1)
             })
             .is_err()

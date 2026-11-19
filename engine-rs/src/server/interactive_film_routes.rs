@@ -514,6 +514,9 @@ pub async fn get_project_export(
 
 // ── 校验 / 分析 ─────────────────────────────────────────────────
 
+// 1.100 result_large_err：Err=Response（axum handler 惯用形）——同
+// normalize_agent_attachments 定性（1583 号）。
+#[allow(clippy::result_large_err)]
 async fn loaded_graph(runtime: &BooksRuntime, id: &str) -> Result<StoryGraph, Response> {
     match film::load_story_graph(runtime.state.project_root(), id).await {
         Ok(Some(graph)) => Ok(graph),

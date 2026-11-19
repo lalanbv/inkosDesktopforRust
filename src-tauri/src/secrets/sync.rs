@@ -115,9 +115,9 @@ pub const THREAD_NAME: &str = "secrets-writeback";
 ///
 /// 100ms 让 shutdown 检查延迟保持低（用户感知 < 200ms），同时避免 busy-loop。
 ///
-/// `pub` 是因为外部集成测（`tests/sync_unit.rs`）需引用此常量断言 shutdown 延迟
-/// （`watcher_shutdown_flag_exits_thread_cleanly` 用 `POLL_TIMEOUT_MS * 3` 作为
-/// 等待窗口）。
+/// `pub` 是因为外部集成测（`tests/sync_watcher_io.rs`，988 号自 `sync_unit.rs`
+/// 拆出）需引用此常量断言 shutdown 延迟（`watcher_shutdown_flag_exits_thread_cleanly`
+/// 用 `POLL_TIMEOUT_MS * 25` 作为退出上界——吸收满载调度尾，1583 号实测数据）。
 pub const POLL_TIMEOUT_MS: u64 = 100;
 
 /// 启动 secrets.json 文件监听 + diff 回写 keychain 的 watcher 线程。
