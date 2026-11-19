@@ -1,0 +1,58 @@
+{
+  "daemon": {
+    "chaptersPerCycle": 1,
+    "cooldownAfterChapterMs": 10000,
+    "maxChaptersPerDay": 50,
+    "maxConcurrentBooks": 3,
+    "qualityGates": {
+      "maxAuditRetries": 2,
+      "pauseAfterConsecutiveFailures": 3,
+      "retryTemperatureStep": 0.1
+    },
+    "retryDelayMs": 30000,
+    "schedule": {
+      "radarCron": "0 */6 * * *",
+      "writeCron": "*/15 * * * *"
+    }
+  },
+  "detection": {
+    "apiKeyEnv": "DETECTOR_API_KEY",
+    "apiUrl": "https://detector.example.com/v1",
+    "autoRewrite": false,
+    "enabled": false,
+    "maxRetries": 3,
+    "protectedNames": [],
+    "provider": "custom",
+    "threshold": 0.5
+  },
+  "foundation": {
+    "reviewRetries": 2
+  },
+  "language": "zh",
+  "llm": {
+    "apiFormat": "chat",
+    "apiKey": "",
+    "baseUrl": "http://127.0.0.1:9",
+    "configSource": "env",
+    "cover": null,
+    "model": "m",
+    "provider": "custom",
+    "service": "custom",
+    "stream": true,
+    "temperature": 0.7,
+    "thinkingBudget": 0
+  },
+  "modelOverrides": {},
+  "name": "fixture",
+  "notify": [],
+  "researchSearch": {
+    "enabled": false,
+    "provider": "tavily"
+  },
+  "version": "0.1.0",
+  "writing": {
+    "reviewMode": "auto",
+    "reviewRetries": 1,
+    "revisionGate": "strict"
+  }
+}

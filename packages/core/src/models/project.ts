@@ -33,7 +33,10 @@ export const LLMConfigSchema = z.object({
   stream: z.boolean().default(true),
   services: z.array(LLMServiceEntrySchema).optional(),
   defaultModel: z.string().min(1).optional(),
-  cover: LLMCoverConfigSchema,
+  // 1604 号：.nullable() 补齐——Rust LLMConfig.cover 是 Option 无
+  // skip_serializing_if（models/project.rs），struct 序列化恒产出 "cover":null
+  //（keyset fixture 活体）；zod .optional() 只容 undefined 不容 null。
+  cover: LLMCoverConfigSchema.nullable(),
 }).strict();
 
 export type LLMConfig = z.infer<typeof LLMConfigSchema>;

@@ -544,7 +544,14 @@ fn pending_session_aborts() -> &'static std::sync::Mutex<std::collections::HashM
 /// 契约 Rust 独占——TS 2.0 无队列，忙到达即 409 拒绝）。
 pub fn mark_pending_session_abort(project_root: &std::path::Path, session_id: &str) {
     const PENDING_ABORTS_CAP: usize = 64;
-    let seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    // 1604 号：marked_seq 从 1 起（fetch_add 旧值 +1）——0 是合法的 enqueued_seq
+    //（进程启动后首个请求捕获到 fresh 计数器旧值 0），take 的裁决
+    // `enqueued_seq < marked_seq` 在 marked_seq=0 时 `0 < 0` 恒 false=首请求
+    // 在飞取消丢失（marker_keys 单跑红暴露：模块内其它测试先 mark 把计数器
+    // 推到 ≥1 时绿=顺序依赖假绿；testgate 并行调度本测先执行即红）。+1 只抬
+    // mark 值域下界，相对序仍由 fetch 先后决定不受影响；enqueued 侧（953）
+    // 保持原值域，两值域交叠部分的序一致性由同一计数器单调性保证。
+    let seq = SESSION_QUEUE_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     let key = format!("{}\0{}", project_root.display(), session_id);
     let mut map = pending_session_aborts()
         .lock()
