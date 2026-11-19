@@ -31,6 +31,56 @@ describe("resolveEffectiveLLMConfig", () => {
     root = "";
   });
 
+  // 1600 号：空 object-map（`llm.services: {}`）是 Rust serde HashMap 合法形态
+  //（同文件 Rust 腿绿）——归一出的空数组须回写消掉 object 残留，否则 strict
+  // array schema 拒（修复前 studio server 拒启=Node 回退腿对该项目失效）。
+  it("空 object-map services 归一回写后过 strict schema，不残留 object 形态", async () => {
+    await writeProject({ services: {} });
+    try {
+      const result = await resolveEffectiveLLMConfig({
+        consumer: "studio",
+        projectRoot: root,
+        envLayers: { global: {}, project: {}, process: {} },
+        requireApiKey: false,
+      });
+      const services = result.config.llm?.services;
+      expect(services === undefined || Array.isArray(services)).toBe(true);
+    } catch (error) {
+      // 业务层配置错误（无服务/缺 key）允许；schema 形态错误（ZodError）不允许。
+      expect((error as Error).name).not.toBe("ZodError");
+    }
+  });
+
+  // 688 号行为补锚定：非空 object-map（duel 夹具形态）展平为数组且 custom: 键
+  // 回填 name/service（serviceEntryKey 与 secrets 查找键据此保持一致）。
+  it("非空 object-map services 展平为数组且 custom: 键回填身份", async () => {
+    await writeProject({
+      services: {
+        "custom:Duel": {
+          service: "custom",
+          baseUrl: "http://127.0.0.1:9",
+          apiFormat: "chat",
+          stream: true,
+        },
+      },
+      defaultModel: "duel-model",
+    });
+    const result = await resolveEffectiveLLMConfig({
+      consumer: "studio",
+      projectRoot: root,
+      envLayers: { global: {}, project: {}, process: {} },
+      requireApiKey: false,
+    });
+    const services = result.config.llm?.services;
+    expect(Array.isArray(services)).toBe(true);
+    const entry = (services as Array<Record<string, unknown>>).find(
+      (candidate) => (candidate.name as string | undefined) === "Duel",
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.service).toBe("custom");
+  });
+
+
   async function writeProject(llm: Record<string, unknown>) {
     root = await mkdtemp(join(tmpdir(), "inkos-effective-llm-"));
     await writeFile(join(root, "inkos.json"), JSON.stringify({

@@ -86,7 +86,12 @@ export async function resolveEffectiveLLMConfig(
     warnings: [],
   };
 
-  if (services.length > 0) {
+  // 1600 号：回写条件改为「原始值在场即回写」——原 `services.length > 0` 使空
+  // object-map（`llm.services: {}`，Rust 侧 serde HashMap 合法形态）归一出的空
+  // 数组不回写，原始 object 留守 config.llm.services 被下方 strict array schema
+  // 拒（studio server 拒启=Node 回退腿对该项目失效；Rust 腿同文件绿=双端漂移）。
+  // 非空 map（duel 夹具）与原生 array 形态行为不变；undefined 仍不回写（缺省）。
+  if (llm.services !== undefined) {
     llm.services = services;
   }
 
