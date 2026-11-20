@@ -81,7 +81,14 @@ describe("ProjectConfig 键面 parity（Rust fixture ↔ TS zod schema）", () =
     expect(parsed.llm.services?.[0]?.name).toBe("FixtureSvc");
     expect(parsed.daemon.qualityGates?.maxAuditRetries).toBe(2);
     expect(parsed.foundation?.reviewRetries).toBe(2);
-    expect(parsed.detection?.protectedNames).toEqual([]);
+    // 1606 号：detection/researchSearch/modelOverrides 非默认值形态值面断言
+    expect(parsed.detection?.threshold).toBe(0.8);
+    expect(parsed.detection?.autoRewrite).toBe(true);
+    expect(parsed.detection?.maxRetries).toBe(3);
+    expect(parsed.detection?.protectedNames).toEqual(["fixture-name"]);
+    expect(parsed.researchSearch?.enabled).toBe(true);
+    expect(parsed.researchSearch?.apiKeyEnv).toBe("SEARCH_API_KEY");
+    expect(parsed.modelOverrides?.reviser).toBe("fixture-model-b");
     expect(parsed.notify?.map((channel) => channel.type)).toEqual([
       "telegram",
       "wechat-work",

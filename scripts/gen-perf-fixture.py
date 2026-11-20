@@ -18,12 +18,26 @@ chaptersWritten——单用户桌面上百本书场景才会显化（500 章×10
 import json
 import os
 import random
+import re
 import sys
+
+
+def _safe_book_dir(root: str, book_id: str) -> str:
+    """1606 号（Mimosa L3 定性）：book_id 来自 argv 直接拼路径——先做纯净性
+    校验（字母/数字/下划线/连字符），再以 realpath containment 断言越界防线
+    （book 目录不得越出项目根）。本地 CLI 工具威胁模型下的健壮性提升。"""
+    if not re.fullmatch(r"[\w-]+", book_id, re.UNICODE):
+        raise SystemExit(f"book_id 只允许字母/数字/下划线/连字符（收到 {book_id!r}）")
+    book = os.path.join(root, "books", book_id)
+    resolved_root = os.path.realpath(root) + os.sep
+    if not (os.path.realpath(book) + os.sep).startswith(resolved_root):
+        raise SystemExit("book 路径越出项目根")
+    return book
 
 
 def main() -> None:
     root, book_id, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
-    book = os.path.join(root, "books", book_id)
+    book = _safe_book_dir(root, book_id)
     ch = os.path.join(book, "chapters")
     os.makedirs(ch, exist_ok=True)
     os.makedirs(os.path.join(book, "story", "runtime"), exist_ok=True)

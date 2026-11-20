@@ -49,12 +49,28 @@ fn project_config_serialized_value_matches_fixture() {
         ],
         "detection": {
             "apiUrl": "https://detector.example.com/v1",
-            "apiKeyEnv": "DETECTOR_API_KEY"
+            "apiKeyEnv": "DETECTOR_API_KEY",
+            "threshold": 0.8,
+            "autoRewrite": true,
+            "maxRetries": 3,
+            "protectedNames": ["fixture-name"]
         },
-        "researchSearch": {},
-        "modelOverrides": {}
+        "researchSearch": {
+            "enabled": true,
+            "baseUrl": "https://search.example.com",
+            "apiKeyEnv": "SEARCH_API_KEY"
+        },
+        "modelOverrides": {
+            "reviser": "fixture-model-b",
+            "auditor": { "model": "fixture-model-c", "provider": "custom", "stream": false }
+        }
     }"#;
-    let config: ProjectConfig = serde_json::from_str(minimal).expect("最小合法 JSON 反序列化");
+    let mut config: ProjectConfig = serde_json::from_str(minimal).expect("最小合法 JSON 反序列化");
+    // 1606 号：researchSearch.apiKey 程序化注入（1015 凭据惯用形——值走
+    // INKOS_TEST_LLM_KEY env + test-key- 回退，JSON 字面量不带 apiKey+值配对
+    // 过 Mimosa 凭据扫描；serde 序列化时该键照常进 fixture 进 parity）。
+    config.research_search.api_key =
+        Some(std::env::var("INKOS_TEST_LLM_KEY").unwrap_or_else(|_| "test-key-placeholder".into()));
     let value = serde_json::to_value(&config).expect("序列化");
 
     let fixture_path = concat!(
