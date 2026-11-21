@@ -90,6 +90,13 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
     }
     setSplitting(true);
     try {
+      // 1646 号审查修复：拆分事务读盘上版本——编辑未保存即拆=拆旧稿+编辑
+      // 丢失（所见非所得）。先落盘当前编辑内容再拆，保证拆分对象=所见。
+      await fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: editContent }),
+      });
       await postApi(`/books/${bookId}/chapters/${chapterNumber}/split`, { offset });
       setEditing(false);
       nav.toBook(bookId);

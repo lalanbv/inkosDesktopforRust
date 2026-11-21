@@ -29,7 +29,9 @@ use crate::state::manager::StateManager;
 use crate::state::store::FsStateStore;
 use crate::utils::atomic_file_set::write_file_atomic;
 
-const STAGING_DIR: &str = ".tmp-structure";
+/// staging 目录前缀（R48a 固定名 `.tmp-structure` 在 Rust 无锁面下并发
+/// 双结构操作互撞——1646 号审查修复改 per-op UUID 后缀，restore 参数化）。
+const STAGING_PREFIX: &str = ".tmp-structure-";
 const TRASH_DIR: &str = ".trash";
 const REVISION_CONFLICT_MESSAGE: &str = "Chapter set changed since last read (revision conflict).";
 pub const REVISION_CONFLICT_CODE: &str = "CHAPTER_SET_CONFLICT";
@@ -263,19 +265,22 @@ async fn stage_affected(
     chapter_files: &BTreeMap<u32, ChapterFile>,
     artifacts: &[(PathBuf, String)],
 ) -> Result<PathBuf, StructureError> {
-    let staging = chapters_dir.join(STAGING_DIR);
-    let _ = tokio::fs::remove_dir_all(&staging).await;
+    // 1646 号审查修复：per-op 唯一名——Rust 侧结构操作无跨进程锁（manager
+    // 暂缓件备案），固定名在并发双操作下互撞（第二个 stage 前置清场会破坏
+    // 第一个的已入 staging 面）。UUID 后缀隔离，restore 参数化回收。
+    let staging = chapters_dir.join(format!("{STAGING_PREFIX}{}", uuid::Uuid::new_v4().simple()));
     tokio::fs::create_dir_all(&staging)
         .await
         .map_err(|e| StructureError::bad_request(format!("staging mkdir failed: {e}")))?;
     let staging_runtime = staging.join("runtime");
     let staging_drafts = staging.join("drafts");
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let staging_for_rollback = staging.clone();
     let rollback = |staged: Vec<(PathBuf, PathBuf)>| async move {
         for (from, to) in staged {
             let _ = tokio::fs::rename(&from, &to).await;
         }
-        let _ = tokio::fs::remove_dir_all(chapters_dir.join(STAGING_DIR)).await;
+        let _ = tokio::fs::remove_dir_all(&staging_for_rollback).await;
     };
     for file in chapter_files.values() {
         let dest = staging.join(&file.file_name);
@@ -308,11 +313,10 @@ async fn stage_affected(
 }
 
 /// 失败还原：staging 全量回原位 + 清 staging（索引在最后才写，零落盘）。
-async fn restore_from_staging(chapters_dir: &Path) {
-    let staging = chapters_dir.join(STAGING_DIR);
+async fn restore_from_staging(chapters_dir: &Path, staging: &Path) {
     for sub in ["", "runtime", "drafts"] {
         let dir = if sub.is_empty() {
-            staging.clone()
+            staging.to_path_buf()
         } else {
             staging.join(sub)
         };
@@ -320,6 +324,11 @@ async fn restore_from_staging(chapters_dir: &Path) {
             continue;
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
+            // 1646 号审查修复：staging 根段跳过子目录（runtime/drafts 留给
+            // 对应段处理——否则子目录被整体 rename 进 chapters/ 产物错位）。
+            if sub.is_empty() && entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
             let name = entry.file_name().to_string_lossy().into_owned();
             let dest = if sub.is_empty() {
                 chapters_dir.join(&name)
@@ -329,10 +338,15 @@ async fn restore_from_staging(chapters_dir: &Path) {
                     .map(|root| root.join("story").join(sub).join(&name))
                     .unwrap_or_else(|| entry.path())
             };
+            // 回位父目录可能已被外部删除（活体注入实证）——restore 必须
+            // 自建父目录，否则还原失败=数据卡 staging。
+            if let Some(parent) = dest.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
             let _ = tokio::fs::rename(entry.path(), dest).await;
         }
     }
-    let _ = tokio::fs::remove_dir_all(&staging).await;
+    let _ = tokio::fs::remove_dir_all(staging).await;
 }
 
 /// 索引行重编号应用：映射 number + updatedAt 刷新 + （可选）字数覆写。
@@ -442,6 +456,9 @@ pub async fn split_chapter(
     let mut written: Vec<PathBuf> = Vec::new();
     let mut renumbered: Vec<RenumberedEntry> = Vec::new();
     // 受影响章：旧号本身保留原名（内容截断覆写），其余回名新号。
+    // 1646 号审查修复：已执行 rename 台账（dest→staged 源）——中断时逆序
+    // 撤销回 staging（restore 只能回收 staging 内文件，已回名章不可达）。
+    let mut executed_renames: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (old, file) in affected.iter() {
         let Some(&new) = mapping.get(old) else {
             continue;
@@ -451,7 +468,9 @@ pub async fn split_chapter(
         if old != &new {
             match tokio::fs::rename(&staged_path, &dest).await {
                 Ok(()) => {
-                    written.push(dest.clone());
+                    // dest 归 executed_renames 撤销面（逆序 rename 回 staging），
+                    // 不入 written 删除面——先删后撤顺序会丢已回名章内容。
+                    executed_renames.push((dest.clone(), staged_path.clone()));
                     renumbered.push(RenumberedEntry {
                         from: *old,
                         to: new,
@@ -521,11 +540,14 @@ pub async fn split_chapter(
         }
     }
     if let Some(error) = rename_fail {
-        // 还原：删本轮新写文件 → staging 全量回原位。
+        // 还原：删本轮新写文件 → 逆序撤销已回名 rename → staging 全量回原位。
         for path in &written {
             let _ = tokio::fs::remove_file(path).await;
         }
-        restore_from_staging(&chapters_dir).await;
+        for (dest, staged_src) in executed_renames.iter().rev() {
+            let _ = tokio::fs::rename(dest, staged_src).await;
+        }
+        restore_from_staging(&chapters_dir, &staging).await;
         return Err(StructureError::bad_request(format!(
             "split transaction aborted (no changes persisted): {error}"
         )));
@@ -662,13 +684,19 @@ pub async fn merge_chapter(
     let trash_dir = chapters_dir.join(TRASH_DIR);
     let _ = tokio::fs::create_dir_all(&trash_dir).await;
     let trash_name = pick_available_name(&trash_dir, &removed_file.file_name).await;
+    let mut executed_renames: Vec<(PathBuf, PathBuf)> = Vec::new();
     match tokio::fs::rename(
         &staging.join(&removed_file.file_name),
         trash_dir.join(&trash_name),
     )
     .await
     {
-        Ok(()) => {}
+        Ok(()) => {
+            executed_renames.push((
+                trash_dir.join(&trash_name),
+                staging.join(&removed_file.file_name),
+            ));
+        }
         Err(e) => rename_fail = Some(e.to_string()),
     }
     for (old, file) in affected.iter() {
@@ -750,6 +778,10 @@ pub async fn merge_chapter(
         for path in &written {
             let _ = tokio::fs::remove_file(path).await;
         }
+        // 1646 号审查修复：逆序撤销已回名 rename（含 trash 首步）后再 restore。
+        for (dest, staged_src) in executed_renames.iter().rev() {
+            let _ = tokio::fs::rename(dest, staged_src).await;
+        }
         // trash 内本轮移入的产物移回 staging 对应子目录（零丢失），再整体还原。
         for sub in ["runtime", "drafts"] {
             let trash_sub = trash_dir.join(sub);
@@ -767,7 +799,7 @@ pub async fn merge_chapter(
             staging.join(&removed_file.file_name),
         )
         .await;
-        restore_from_staging(&chapters_dir).await;
+        restore_from_staging(&chapters_dir, &staging).await;
         return Err(StructureError::bad_request(format!(
             "merge transaction aborted (no changes persisted): {error}"
         )));
@@ -831,6 +863,7 @@ pub async fn reorder_chapters(
     let mapping: BTreeMap<u32, u32> = renumber.iter().copied().collect();
     let mut rename_fail: Option<String> = None;
     let mut renumbered: Vec<RenumberedEntry> = Vec::new();
+    let mut executed_renames: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (old, file) in files.iter() {
         let Some(&new) = mapping.get(old) else {
             continue;
@@ -838,10 +871,13 @@ pub async fn reorder_chapters(
         let staged_path = staging.join(&file.file_name);
         let dest = chapters_dir.join(canonical_file_name(new, &file.meta.title));
         match tokio::fs::rename(&staged_path, &dest).await {
-            Ok(()) => renumbered.push(RenumberedEntry {
-                from: *old,
-                to: new,
-            }),
+            Ok(()) => {
+                executed_renames.push((dest.clone(), staged_path.clone()));
+                renumbered.push(RenumberedEntry {
+                    from: *old,
+                    to: new,
+                });
+            }
             Err(e) => {
                 rename_fail = Some(e.to_string());
                 break;
@@ -883,7 +919,10 @@ pub async fn reorder_chapters(
         }
     }
     if let Some(error) = rename_fail {
-        restore_from_staging(&chapters_dir).await;
+        for (dest, staged_src) in executed_renames.iter().rev() {
+            let _ = tokio::fs::rename(dest, staged_src).await;
+        }
+        restore_from_staging(&chapters_dir, &staging).await;
         return Err(StructureError::bad_request(format!(
             "reorder transaction aborted (no changes persisted): {error}"
         )));
@@ -1122,7 +1161,14 @@ mod tests {
         let versions = chapters.join(".versions");
         assert!(versions.join("0002").read_dir().unwrap().count() >= 1);
         assert!(versions.join("0003").read_dir().unwrap().count() >= 1);
-        assert!(!chapters.join(".tmp-structure").exists(), "staging 清理");
+        assert!(
+            !chapters.read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".tmp-structure")),
+            "staging 清理（per-op 唯一名无残留）"
+        );
         // 索引：4 行（1/2/3/4），3 号=拆出新章（同 title）、4 号=原 3 号。
         let index = state.load_chapter_index("b1").await.unwrap();
         assert_eq!(
@@ -1236,32 +1282,72 @@ mod tests {
         assert_eq!(err.status, 400);
     }
 
-    /// 事务中断原子性（活体注入）：staging 建立失败 → 零落盘（索引未写、
-    /// 原文件原位、产物原位、无补偿残留）。
+    /// 事务中断原子性（1646 号审查修复后的活体注入）：新章回写位被预放
+    /// **同名目录**（同 title 撞名，candidate_wins 择文件为胜者→staging 不收
+    /// 目录）→ 新章覆写 write_file_atomic(目录位) 失败 → 中断 → restore
+    /// 回位 → 零落盘（索引未写、章文件回原位、产物原位、staging 无残留）。
+    /// 旧固定名预占注入在 per-op UUID 名下失效，故换此确定性注入。
     #[tokio::test]
-    async fn split_aborts_atomically_when_staging_unavailable() {
+    async fn split_aborts_atomically_when_new_chapter_slot_occupied() {
         let dir = tempfile::tempdir().unwrap();
         let state = seed_book(dir.path()).await;
-        let blocker = dir.path().join("books/b1/chapters/.tmp-structure");
-        tokio::fs::write(&blocker, "occupied").await.unwrap();
+        // 注入：3 号新章回写位（0003_灵脉.md，与 2 号章同 title=拆分新章名）
+        // 预放为目录——candidate_wins 择 0003_收束.md 文件为 3 号胜者，
+        // 该目录不被 staging 收走，覆写必失败。
+        let chapters = dir.path().join("books/b1/chapters");
+        tokio::fs::create_dir(chapters.join("0003_灵脉.md"))
+            .await
+            .unwrap();
         let index_before = state.load_chapter_index("b1").await.unwrap();
+
         let err = split_chapter(&state, "b1", 2, 8, None, 1, "now")
             .await
             .unwrap_err();
         assert_eq!(err.status, 400);
-        let chapters = dir.path().join("books/b1/chapters");
-        assert!(chapters.join("0001_风起.md").exists());
-        assert!(chapters.join("0002_灵脉.md").exists());
-        assert!(chapters.join("0003_收束.md").exists());
+        assert!(
+            err.message.contains("aborted"),
+            "中断语义文案: {}",
+            err.message
+        );
+
+        // restore 完整性：受影响章回原位、索引零变更、产物原位、staging 无残留。
+        assert!(chapters.join("0002_灵脉.md").exists(), "2 号章回原位");
+        assert!(chapters.join("0003_收束.md").exists(), "3 号章回原位");
         let index_after = state.load_chapter_index("b1").await.unwrap();
         assert_eq!(
             chapter_set_revision(&index_before),
             chapter_set_revision(&index_after),
             "索引零变更"
         );
-        assert!(dir
-            .path()
-            .join("books/b1/story/runtime/chapter-0002.plan.md")
-            .exists());
+        let runtime_listing: Vec<String> =
+            std::fs::read_dir(dir.path().join("books/b1/story/runtime"))
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+        eprintln!(
+            "DEBUG runtime={runtime_listing:?} staging_exists={}",
+            chapters.read_dir().unwrap().any(|e| e
+                .ok()
+                .map(|e| e
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".tmp-structure"))
+                .unwrap_or(false))
+        );
+        assert!(
+            dir.path()
+                .join("books/b1/story/runtime/chapter-0002.plan.md")
+                .exists(),
+            "产物原位"
+        );
+        assert!(
+            !chapters.read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".tmp-structure")),
+            "staging 无残留（per-op 唯一名回收）"
+        );
     }
 }

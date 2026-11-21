@@ -959,6 +959,7 @@ pub(crate) async fn import_chapters_chain_with_resume(
             updated_at: now,
             audit_issues: Vec::new(),
             length_warnings: Vec::new(),
+            volume_id: None,
             review_note: None,
             detection_score: None,
             detection_provider: None,

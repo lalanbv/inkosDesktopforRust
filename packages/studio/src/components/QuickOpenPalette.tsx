@@ -182,7 +182,10 @@ export function QuickOpenPalette({ open, onOpenChange, books, sessions, activeBo
           placeholder={tr("跳转到…", "Jump to…")}
         />
         <CommandList>
-          {filtered.length === 0 ? (
+          {/* R49 后审查修复（1646 号）：正文命中档置顶不受标题索引空态遮蔽
+              ——「灵气」在标题无匹配但正文有命中时，CommandEmpty 会独占渲染
+              吞掉 match 组（IAB 走查实证）。 */}
+          {filtered.length === 0 && matchItems.length === 0 ? (
             <CommandEmpty>{tr("没有匹配的内容", "No matching content")}</CommandEmpty>
           ) : (
             grouped.map(([kind, entries]) => (

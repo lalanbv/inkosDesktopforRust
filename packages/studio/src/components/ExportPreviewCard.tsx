@@ -29,9 +29,10 @@ export function ExportPreviewCard({
   chapters: ReadonlyArray<ChapterRow>;
 }) {
   const [format, setFormat] = useState<ExportFormatChoice>("md-zip");
-  const [selected, setSelected] = useState<ReadonlySet<number>>(
-    () => new Set(chapters.map((chapter) => chapter.number)),
-  );
+  // R49 后审查修复（1646 号）：勾选语义反转——存「已取消集」而非「已选集」。
+  // 此前 selected 惰性初始化只取 mount 时 chapters（异步到时为空）→ 数据到达
+  // 后新章全部不选，「缺省全选」破坏。反转后新章默认入选、用户取消态保留。
+  const [deselected, setDeselected] = useState<ReadonlySet<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
 
@@ -39,10 +40,14 @@ export function ExportPreviewCard({
     () => [...chapters].sort((a, b) => a.number - b.number),
     [chapters],
   );
+  const selected = useMemo(
+    () => new Set(ordered.map((chapter) => chapter.number).filter((n) => !deselected.has(n))),
+    [ordered, deselected],
+  );
   const selectedCount = selected.size;
 
   const toggle = (number: number) => {
-    setSelected((prev) => {
+    setDeselected((prev) => {
       const next = new Set(prev);
       if (next.has(number)) next.delete(number);
       else next.add(number);
@@ -62,7 +67,9 @@ export function ExportPreviewCard({
       query.set("chapters", [...selected].sort((a, b) => a - b).join(","));
       const response = await fetch(`/api/v1/books/${encodeURIComponent(bookId)}/export?${query.toString()}`);
       if (!response.ok) {
-        setNotice(tr("导出失败", "Export failed"));
+        // 409（index 与源文件不一致）错误体含 details——透传而非笼统失败。
+        const errorBody = (await response.json().catch(() => null)) as { error?: string } | null;
+        setNotice(errorBody?.error ?? tr("导出失败", "Export failed"));
         return;
       }
       const blob = await response.blob();

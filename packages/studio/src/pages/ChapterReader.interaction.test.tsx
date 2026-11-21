@@ -103,6 +103,28 @@ describe("ChapterReader 动作链（458 号）", () => {
 // ── R48b/1643 号：编辑态光标拆分（R48a split 事务消费面）────────────
 // 光标 UTF-16 偏移 = textarea.selectionStart（splitUtf16 契约同语义）；
 // 光标在边界（0/文本尾）→ 提示不发请求；合法中段 → postApi 两参形态。
+// ── R47/1640 号焦点链回归（1646 号走查 #9 定性面）：⌘P 命中→跳章→
+// data-search-hit 段落高亮——同组件实例 chapterNumber 变化的 effect 链。
+describe("ChapterReader 焦点高亮链（1646 号走查定性）", () => {
+  it("chapterNumber 切换后 takeChapterFocus 定位命中段落", async () => {
+    const { setChapterFocus } = await import("../lib/chapter-focus");
+    setChapterFocus("b1", 2, "后续");
+    render(<ChapterReader bookId="b1" chapterNumber={2} nav={nav} theme="light" t={t} />);
+    // 分段探针：先证正文渲染面（命中段落存在），再证焦点属性面。
+    await vi.waitFor(() => {
+      expect(document.querySelector("article p")?.textContent).toContain("后续正文");
+    }, { timeout: 3000 });
+    await vi.waitFor(
+      () => {
+        expect(document.querySelector('[data-search-hit="true"]')).not.toBeNull();
+      },
+      { timeout: 3000 },
+    );
+    const hit = document.querySelector('[data-search-hit="true"]');
+    expect(hit?.textContent).toContain("后续正文");
+  });
+});
+
 describe("ChapterReader 光标拆分（R48b/1643 号）", () => {
   function renderChapter1() {
     return render(<ChapterReader bookId="b1" chapterNumber={1} nav={nav} theme="light" t={t} />);
