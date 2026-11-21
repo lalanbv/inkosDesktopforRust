@@ -1,5 +1,5 @@
 import { fetchJson, useApi, postApi } from "../hooks/use-api";
-import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 // 1008 号：BookStatus 枚举真源=core（本地手打 union 曾漂移丢 "incubating"）；
 // subpath 导入同 book-settings-draft（主入口拖 node:async_hooks 链进浏览器面）
 import type { BookStatus } from "@actalk/inkos-core/models/book";
@@ -185,6 +185,12 @@ export function BookDetail({
   // 1162 号：审计按章在途守卫——同排 rewrite/revise/sync 全有按章数组守卫+
   // disabled+spinner，唯 audit 裸奔（955 双提交族补扫的本排最后一块）。
   const [auditingChapters, setAuditingChapters] = useState<ReadonlyArray<number>>([]);
+  // R48a/1642 号：结构操作 revision 链式乐观并发——上一次结构操作响应的
+  // revision（首次 undefined=跳过校验；409=集合并发变更，提示刷新重试）。
+  const [structureRevision, setStructureRevision] = useState<string | undefined>(undefined);
+  const [restructuring, setRestructuring] = useState(false);
+  // 拖拽重排在途章号（HTML5 DnD：dragStart 记录源章，drop 落目标章）。
+  const dragChapterRef = useRef<number | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   // 1001 号：settings 表单草稿 sessionStorage 持久化（998 同族第三面，条件挂载
   // 域第二族）——BookDetail 挂在 App 层 view.page 条件渲染下，页面切换卸载后
@@ -637,6 +643,71 @@ export function BookDetail({
     }
   };
 
+  // ── R48b/1643 号：章节结构操作 UI（R48a 事务层消费面）─────────────
+  // 拖拽重排 + 上移/下移 → reorder 全排列事务；409 = 并发变更（1638 风险
+  // 对策：提示刷新重试）。revision 链式：操作响应携带新 revision 供下笔。
+
+  const runStructureAction = async (action: () => Promise<{ revision?: string }>): Promise<boolean> => {
+    setRestructuring(true);
+    try {
+      const body = await action();
+      if (body.revision) setStructureRevision(body.revision);
+      refetch();
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (message.includes("revision conflict")) {
+        // 409：并发修改（1638 风险对策）——刷新后提示重试。
+        setStructureRevision(undefined);
+        refetch();
+        alert(t("book.structureConflict"));
+      } else {
+        alert(message);
+      }
+      return false;
+    } finally {
+      setRestructuring(false);
+    }
+  };
+
+  const handleReorder = (from: number, to: number) => {
+    if (from === to || restructuring) return;
+    const order = chapters.map((ch) => ch.number).sort((a, b) => a - b);
+    const fromIndex = order.indexOf(from);
+    const toIndex = order.indexOf(to);
+    if (fromIndex < 0 || toIndex < 0) return;
+    order.splice(fromIndex, 1);
+    order.splice(toIndex, 0, from);
+    void runStructureAction(async () => {
+      const body = await postApi<{ ok: boolean; revision: string }>(
+        `/books/${bookId}/chapters/reorder`,
+        { order, expectedRevision: structureRevision },
+      );
+      return body;
+    });
+  };
+
+  const handleMergeIntoPrevious = (number: number) => {
+    if (number <= 1 || restructuring) return;
+    void runStructureAction(async () => {
+      const body = await postApi<{ ok: boolean; revision: string }>(
+        `/books/${bookId}/chapters/${number}/merge`,
+        { mergeWith: number - 1 },
+      );
+      return body;
+    });
+  };
+
+  const handleDragStart = (number: number) => {
+    dragChapterRef.current = number;
+  };
+
+  const handleDrop = (targetNumber: number) => {
+    const from = dragChapterRef.current;
+    dragChapterRef.current = null;
+    if (from != null) handleReorder(from, targetNumber);
+  };
+
   if (loading) return (
     <div className="flex flex-col items-center justify-center py-32 space-y-4">
       <div className="w-8 h-8 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
@@ -1012,8 +1083,25 @@ export function BookDetail({
               {chapters.map((ch, index) => {
                 const staggerClass = `stagger-${Math.min(index + 1, 5)}`;
                 return (
-                <tr key={ch.number} className={`group hover:bg-primary/[0.02] transition-colors fade-in ${staggerClass}`}>
-                  <td className="px-6 py-4 text-muted-foreground/60 font-mono text-xs">{ch.number.toString().padStart(2, '0')}</td>
+                <tr
+                  key={ch.number}
+                  draggable
+                  onDragStart={() => handleDragStart(ch.number)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => handleDrop(ch.number)}
+                  data-chapter-row={ch.number}
+                  className={`group hover:bg-primary/[0.02] transition-colors fade-in ${staggerClass} ${restructuring ? "opacity-50 pointer-events-none" : ""}`}
+                >
+                  <td className="px-6 py-4 text-muted-foreground/60 font-mono text-xs">
+                    <span
+                      className="cursor-grab inline-flex items-center gap-1"
+                      title={t("book.dragToReorder")}
+                      data-testid={`chapter-drag-handle-${ch.number}`}
+                    >
+                      ⠿
+                      {ch.number.toString().padStart(2, '0')}
+                    </span>
+                  </td>
                   <td className="px-6 py-4">
                     <button
                       onClick={() => nav.toChapter(bookId, ch.number)}
@@ -1031,6 +1119,41 @@ export function BookDetail({
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex gap-1.5 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                      {/* R48b/1643 号：结构操作（上移/下移=键盘可达通道；拖拽
+                          为增强通道）。合并到上一章=相邻合并事务。 */}
+                      {ch.number > 1 && (
+                        <>
+                          <button
+                            onClick={() => handleReorder(ch.number, ch.number - 1)}
+                            disabled={restructuring}
+                            className="p-2 rounded-lg bg-secondary/60 text-muted-foreground hover:text-foreground transition-all"
+                            title={t("book.moveUp")}
+                            data-testid={`chapter-move-up-${ch.number}`}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            onClick={() => handleMergeIntoPrevious(ch.number)}
+                            disabled={restructuring}
+                            className="p-2 rounded-lg bg-secondary/60 text-muted-foreground hover:text-foreground transition-all"
+                            title={t("book.mergeIntoPrevious")}
+                            data-testid={`chapter-merge-up-${ch.number}`}
+                          >
+                            ⇲
+                          </button>
+                        </>
+                      )}
+                      {ch.number < (chapters[chapters.length - 1]?.number ?? 0) && (
+                        <button
+                          onClick={() => handleReorder(ch.number, ch.number + 1)}
+                          disabled={restructuring}
+                          className="p-2 rounded-lg bg-secondary/60 text-muted-foreground hover:text-foreground transition-all"
+                          title={t("book.moveDown")}
+                          data-testid={`chapter-move-down-${ch.number}`}
+                        >
+                          ↓
+                        </button>
+                      )}
                       {ch.status === "ready-for-review" && (
                         <>
                           <button

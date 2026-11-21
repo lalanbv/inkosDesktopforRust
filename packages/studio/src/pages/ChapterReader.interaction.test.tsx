@@ -2,13 +2,13 @@
 //! 458 号：ChapterReader 动作链交互测试——通过/驳回调用与导航、对照分屏
 //! 开关（divider 出现/消失）。
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChapterReader } from "@/pages/ChapterReader";
 import type { Nav } from "@/lib/nav";
 import type { TFunction } from "@/hooks/use-i18n";
 
-const postApiMock = vi.fn(async (path: string) => ({}));
+const postApiMock = vi.fn(async (path: string, body?: unknown) => ({}));
 const toBookMock = vi.fn();
 
 const useApiMock = vi.fn<(path: string) => unknown>((path: string) => {
@@ -37,7 +37,7 @@ const useApiMock = vi.fn<(path: string) => unknown>((path: string) => {
 vi.mock("@/hooks/use-api", () => ({
   useApi: (path: string) => useApiMock(path),
   fetchJson: vi.fn(),
-  postApi: (path: string) => postApiMock(path),
+  postApi: (path: string, body?: unknown) => postApiMock(path, body),
 }));
 
 const nav = { toBook: toBookMock } as unknown as Nav;
@@ -97,5 +97,62 @@ describe("ChapterReader 动作链（458 号）", () => {
 
     await user.click(screen.getByTestId("reader-split-toggle"));
     expect(document.querySelector('[data-testid="reader-split-divider"]')).toBeNull();
+  });
+});
+
+// ── R48b/1643 号：编辑态光标拆分（R48a split 事务消费面）────────────
+// 光标 UTF-16 偏移 = textarea.selectionStart（splitUtf16 契约同语义）；
+// 光标在边界（0/文本尾）→ 提示不发请求；合法中段 → postApi 两参形态。
+describe("ChapterReader 光标拆分（R48b/1643 号）", () => {
+  function renderChapter1() {
+    return render(<ChapterReader bookId="b1" chapterNumber={1} nav={nav} theme="light" t={t} />);
+  }
+
+  async function enterEditAndPlaceCursor(user: ReturnType<typeof userEvent.setup>, offset: number) {
+    await user.click(screen.getByText("reader.edit"));
+    // 1643 号备案：页面含多只 textarea（ChapterWorkspacePanel 的 brief 编辑
+    // 器先渲染、value 空）——编辑态主编辑器按「value 非空」甄别，且光标设
+    // 置后须同步 fireEvent.click（userEvent 微任务链会重置 selection）。
+    const area = [...document.querySelectorAll("textarea")].find(
+      (candidate) => candidate.value.length > 0,
+    ) as HTMLTextAreaElement;
+    fireEvent.focus(area);
+    area.setSelectionRange(offset, offset);
+    return area;
+  }
+
+  it("编辑态拆分按钮：光标中段 → postApi 两参（path+offset）并回书目", async () => {
+    const user = userEvent.setup();
+    const alertMock = vi.spyOn(window, "alert").mockImplementation(() => {});
+    try {
+    renderChapter1();
+    const area = await enterEditAndPlaceCursor(user, 8);
+    expect(area.selectionStart).toBe(8);
+    // jsdom 光标时序坑：userEvent.click 的微任务链会重置 textarea selection
+    // （sanity 实证 selectionStart 归 0）——fireEvent 原生同步点击保 selection。
+    fireEvent.click(screen.getByTestId("reader-split-at-cursor"));
+    await vi.waitFor(() => {
+      expect(postApiMock).toHaveBeenCalledWith("/books/b1/chapters/1/split", { offset: 8 });
+    });
+    expect(toBookMock).toHaveBeenCalledWith("b1");
+    expect(alertMock).not.toHaveBeenCalled();
+    } finally {
+      alertMock.mockRestore();
+    }
+  });
+
+  it("光标在文本尾边界 → 提示不请求（offset 无切点负路径）", async () => {
+    const user = userEvent.setup();
+    const alertMock = vi.spyOn(window, "alert").mockImplementation(() => {});
+    try {
+      renderChapter1();
+      const area = await enterEditAndPlaceCursor(user, 0);
+      area.selectionStart = area.value.length;
+      await user.click(screen.getByTestId("reader-split-at-cursor"));
+      expect(postApiMock).not.toHaveBeenCalledWith("/books/b1/chapters/1/split", expect.anything());
+      expect(alertMock).toHaveBeenCalled();
+    } finally {
+      alertMock.mockRestore();
+    }
   });
 });

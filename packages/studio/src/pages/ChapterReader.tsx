@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { findQueryMatch, queryTokens } from "@actalk/inkos-core/retrieval/global-search";
 import { takeChapterFocus } from "../lib/chapter-focus";
-import { fetchJson, useApi } from "../hooks/use-api";
+import { fetchJson, postApi, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
@@ -76,7 +76,29 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const [splitting, setSplitting] = useState(false);
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
+  // R48b/1643 号：编辑态光标拆分（R48a split 事务消费面）——光标 UTF-16
+  // 偏移 = textarea.selectionStart（splitUtf16 契约同语义）。
+  const editAreaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const handleSplitAtCursor = async () => {
+    const offset = editAreaRef.current?.selectionStart ?? -1;
+    if (offset <= 0 || offset >= editContent.length) {
+      alert(t("reader.splitAtCursor"));
+      return;
+    }
+    setSplitting(true);
+    try {
+      await postApi(`/books/${bookId}/chapters/${chapterNumber}/split`, { offset });
+      setEditing(false);
+      nav.toBook(bookId);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Split failed");
+    } finally {
+      setSplitting(false);
+    }
+  };
 
   // R47/1640 号：⌘P 正文命中一次性焦点——数据到位后定位首个命中段落，
   // scrollIntoView 居中 + 闪烁高亮（takeChapterFocus 取走即清，防重放）。
@@ -206,6 +228,15 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
           {editing ? (
             <>
               <button
+                onClick={() => void handleSplitAtCursor()}
+                disabled={splitting}
+                className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary text-muted-foreground rounded-xl hover:text-foreground transition-all border border-border/50 disabled:opacity-50"
+                title={t("reader.splitAtCursor")}
+                data-testid="reader-split-at-cursor"
+              >
+                {t("reader.splitAtCursor")}
+              </button>
+              <button
                 onClick={handleSave}
                 disabled={saving}
                 className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-primary text-primary-foreground rounded-xl hover:scale-105 active:scale-95 transition-all shadow-sm disabled:opacity-50"
@@ -283,6 +314,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
 
         {editing ? (
           <textarea
+            ref={editAreaRef}
             value={editContent}
             onChange={(e) => setEditContent(e.target.value)}
             className="w-full min-h-[60vh] bg-transparent font-serif text-lg leading-[1.8] text-foreground/90 focus:outline-none resize-none border border-border/30 rounded-lg p-6 focus:border-primary/40 focus:ring-2 focus:ring-primary/10 transition-all"
