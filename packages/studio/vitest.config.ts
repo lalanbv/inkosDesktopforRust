@@ -23,6 +23,8 @@ export default defineConfig({
       "@actalk/inkos-core/models/book": resolve(__dirname, "../core/src/models/book.ts"),
       // R47/1640 号：retrieval/global-search subpath（高亮/分词纯函数，⌘P 命中档与章阅读器焦点消费）
       "@actalk/inkos-core/retrieval/global-search": resolve(__dirname, "../core/src/retrieval/global-search.ts"),
+      // R49/1644 号：state/volumes subpath（卷分组投影纯函数，卷管理卡消费）
+      "@actalk/inkos-core/state/volumes": resolve(__dirname, "../core/src/state/volumes.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },

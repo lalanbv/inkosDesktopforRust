@@ -478,6 +478,17 @@ pub fn router_books(
             "/api/v1/books/:id/chapters/reorder",
             post(books_state_routes::reorder_chapters_route).with_state(books.clone()),
         )
+        // R49/1644 号：卷/幕元数据面（组织面非上下文层）。
+        .route(
+            "/api/v1/books/:id/volumes",
+            get(books_state_routes::get_volumes)
+                .put(books_state_routes::put_volumes)
+                .with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/volume",
+            put(books_state_routes::put_chapter_volume).with_state(books.clone()),
+        )
         // 50 号：交互运行时子集（export-save 落盘变体 + LLM 灵感卡）。
         .route(
             "/api/v1/books/:id/export-save",

@@ -81,6 +81,10 @@ pub struct ChapterMeta {
     pub audit_issues: Vec<String>,
     #[serde(default)]
     pub length_warnings: Vec<String>,
+    /// R49/1644 号：卷归属（book.json.writing.volumes 的卷 id；键缺省=
+    /// 未分组归「正文」默认卷）。组织面键，不进装配注入。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -127,6 +131,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             updated_at: "2026-01-01T00:00:00Z".into(),
             audit_issues: vec![],
+            volume_id: None,
             length_warnings: vec![],
             review_note: None,
             detection_score: None,
@@ -152,6 +157,7 @@ mod tests {
             created_at: "t".into(),
             updated_at: "t".into(),
             audit_issues: vec!["a".into()],
+            volume_id: None,
             length_warnings: vec![],
             review_note: Some("note".into()),
             detection_score: Some(0.5),

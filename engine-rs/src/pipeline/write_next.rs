@@ -2872,6 +2872,7 @@ mod tests {
             created_at: "t".into(),
             updated_at: "t".into(),
             audit_issues: vec![],
+            volume_id: None,
             length_warnings: vec![],
             review_note: None,
             detection_score: None,

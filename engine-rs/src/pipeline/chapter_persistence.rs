@@ -82,6 +82,7 @@ pub async fn persist_chapter_artifacts(
             .map(|issue| format!("[{}] {}", severity_label(issue.severity), issue.description))
             .collect(),
         length_warnings: params.length_warnings.to_vec(),
+        volume_id: None,
         review_note: (params.status == ChapterStatus::StateDegraded).then(|| {
             build_state_degraded_review_note(
                 if params.audit_passed {
@@ -413,6 +414,7 @@ mod tests {
             updated_at: "2020-01-01T00:00:00.000Z".into(),
             audit_issues: vec![],
             length_warnings: vec![],
+            volume_id: None,
             review_note: None,
             detection_score: None,
             detection_provider: None,

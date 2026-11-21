@@ -321,6 +321,7 @@ impl StateManager {
                 updated_at: timestamp,
                 audit_issues: Vec::new(),
                 length_warnings: Vec::new(),
+                volume_id: None,
                 review_note: None,
                 detection_score: None,
                 detection_provider: None,

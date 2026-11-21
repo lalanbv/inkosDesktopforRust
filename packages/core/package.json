@@ -68,6 +68,10 @@
     "./retrieval/global-search": {
       "types": "./dist/retrieval/global-search.d.ts",
       "import": "./dist/retrieval/global-search.js"
+    },
+    "./state/volumes": {
+      "types": "./dist/state/volumes.d.ts",
+      "import": "./dist/state/volumes.js"
     }
   },
   "files": [

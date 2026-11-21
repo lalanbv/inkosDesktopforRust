@@ -40,6 +40,9 @@ export const ChapterMetaSchema = z.object({
   // 792 号：length_warnings 镜像（Rust serde default 空 vec 恒序列化——
   // bookDetail 响应行键对齐；存量索引无此键完全兼容）。
   lengthWarnings: z.array(z.string()).optional(),
+  // R49/1644 号：卷归属（book.json.writing.volumes 的卷 id；null 不落键=
+  // 未分组归「正文」默认卷）。组织面键，不进装配注入。
+  volumeId: z.string().optional(),
   provenance: z.enum(["generated", "imported", "edited"]).optional(),
   lengthTelemetry: LengthTelemetrySchema.optional(),
   lengthSpec: LengthSpecSchema.optional(),

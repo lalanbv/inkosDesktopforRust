@@ -905,6 +905,233 @@ pub async fn reorder_chapters_route(
     }
 }
 
+// ── R49/1644 号：卷/幕元数据面（book.json.writing.volumes）──────────
+// GET/PUT volumes（全量事务：新建/改名/重排/删卷合一，删卷时其章归默认卷）
+// + PUT chapters/:num/volume（章归属行级更新）。卷是组织面非上下文层
+// ——不进装配注入（1638 号规格红线）。
+
+fn load_writing_mut(
+    config: &mut crate::models::book::BookConfig,
+) -> &mut crate::models::book::BookWritingConfig {
+    config.writing.get_or_insert_with(Default::default)
+}
+
+pub async fn get_volumes(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    if !crate::interaction::session::is_safe_book_id(&book_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        )
+            .into_response();
+    }
+    let config = runtime
+        .state
+        .load_book_config(&book_id)
+        .await
+        .unwrap_or_else(|_| {
+            serde_json::from_str::<crate::models::book::BookConfig>(
+                &json!({
+                    "id": book_id, "title": "", "platform": "other", "genre": "",
+                    "status": "active", "createdAt": "", "updatedAt": "",
+                })
+                .to_string(),
+            )
+            .expect("最小 BookConfig 形态")
+        });
+    let volumes = config
+        .writing
+        .as_ref()
+        .and_then(|writing| writing.volumes.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    (
+        StatusCode::OK,
+        Json(json!({ "volumes": crate::state::volumes::sort_volumes(&volumes) })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PutVolumesBody {
+    #[serde(default)]
+    pub volumes: Option<Vec<crate::models::book::BookVolume>>,
+}
+
+pub async fn put_volumes(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    Json(body): Json<PutVolumesBody>,
+) -> impl IntoResponse {
+    if !crate::interaction::session::is_safe_book_id(&book_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        )
+            .into_response();
+    }
+    let Some(volumes) = body.volumes else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Volumes list is required." })),
+        )
+            .into_response();
+    };
+    if !crate::state::volumes::volume_ids_unique(&volumes) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Volume ids must be unique." })),
+        )
+            .into_response();
+    }
+
+    let mut config = runtime
+        .state
+        .load_book_config(&book_id)
+        .await
+        .unwrap_or_else(|_| {
+            serde_json::from_str::<crate::models::book::BookConfig>(
+                &json!({
+                    "id": book_id, "title": "", "platform": "other", "genre": "",
+                    "status": "active", "createdAt": "", "updatedAt": "",
+                })
+                .to_string(),
+            )
+            .expect("最小 BookConfig 形态")
+        });
+    let removed_ids: Vec<String> = {
+        let old = load_writing_mut(&mut config)
+            .volumes
+            .get_or_insert_with(Vec::new);
+        let new_ids: std::collections::BTreeSet<&str> =
+            volumes.iter().map(|volume| volume.id.as_str()).collect();
+        old.iter()
+            .filter(|volume| !new_ids.contains(volume.id.as_str()))
+            .map(|volume| volume.id.clone())
+            .collect()
+    };
+    // 删卷迁移：被删卷归属章 volume_id 清空（归「正文」默认卷）。
+    let mut index = runtime
+        .state
+        .load_chapter_index(&book_id)
+        .await
+        .unwrap_or_default();
+    for removed in &removed_ids {
+        index = crate::state::volumes::migrate_chapters_on_volume_delete(&index, removed);
+    }
+    // 顺序：先章迁移（index）后卷列表（book.json）——任一失败幂等重跑收敛。
+    if let Err(e) = runtime.state.save_chapter_index(&book_id, &index).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    load_writing_mut(&mut config).volumes = Some(volumes.clone());
+    if let Err(e) = runtime.state.save_book_config(&book_id, &config).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "volumes": crate::state::volumes::sort_volumes(&volumes) })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PutChapterVolumeBody {
+    #[serde(default)]
+    pub volume_id: Option<Option<String>>,
+}
+
+pub async fn put_chapter_volume(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    Json(body): Json<PutChapterVolumeBody>,
+) -> impl IntoResponse {
+    if !crate::interaction::session::is_safe_book_id(&book_id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Invalid book id" })),
+        )
+            .into_response();
+    }
+    let Some(chapter_number) = ts_parse_int(&chapter).and_then(|v| u32::try_from(v).ok()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Chapter {chapter} not found.") })),
+        )
+            .into_response();
+    };
+    let Some(volume_id) = body.volume_id.flatten() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Volume id is required." })),
+        )
+            .into_response();
+    };
+    let config = runtime
+        .state
+        .load_book_config(&book_id)
+        .await
+        .unwrap_or_else(|_| {
+            serde_json::from_str::<crate::models::book::BookConfig>(
+                &json!({
+                    "id": book_id, "title": "", "platform": "other", "genre": "",
+                    "status": "active", "createdAt": "", "updatedAt": "",
+                })
+                .to_string(),
+            )
+            .expect("最小 BookConfig 形态")
+        });
+    let known = config
+        .writing
+        .as_ref()
+        .and_then(|writing| writing.volumes.as_ref())
+        .map(|volumes| volumes.iter().any(|volume| volume.id == volume_id))
+        .unwrap_or(false);
+    if !known {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("Volume {volume_id} not found") })),
+        )
+            .into_response();
+    }
+    let mut index = runtime
+        .state
+        .load_chapter_index(&book_id)
+        .await
+        .unwrap_or_default();
+    let Some(meta) = index.iter_mut().find(|meta| meta.number == chapter_number) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Chapter {chapter_number} not found") })),
+        )
+            .into_response();
+    };
+    meta.volume_id = Some(volume_id.clone());
+    if let Err(e) = runtime.state.save_chapter_index(&book_id, &index).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(json!({ "ok": true, "chapterNumber": chapter_number, "volumeId": volume_id })),
+    )
+        .into_response()
+}
+
 // ── POST /api/v1/books/:id/export-save（50 号） ───────────────────
 
 /// 落盘变体导出：写 `books/{id}.{fmt}`（TS 经交互运行时 export_book intent，
@@ -2093,6 +2320,7 @@ mod tests {
                     created_at: "".into(),
                     updated_at: "".into(),
                     audit_issues: vec![],
+                    volume_id: None,
                     length_warnings: vec![],
                     review_note: None,
                     detection_score: None,
@@ -2132,6 +2360,7 @@ mod tests {
             created_at: "".into(),
             updated_at: "".into(),
             audit_issues: vec![],
+            volume_id: None,
             length_warnings: vec![],
             review_note: None,
             detection_score: None,

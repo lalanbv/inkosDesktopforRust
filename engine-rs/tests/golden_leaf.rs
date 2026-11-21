@@ -550,6 +550,7 @@ fn resolve_chapter_review_mode_matches_ts() {
                 revision_gate: None,
                 auto_timeline_beats: None,
                 scene_beats: None,
+                volumes: None,
             });
         let proj = c.input["projectReviewMode"].as_str().map(|s| {
             if s == "manual" {
@@ -585,6 +586,7 @@ fn resolve_revision_gate_matches_ts() {
             }),
             auto_timeline_beats: None,
             scene_beats: None,
+            volumes: None,
         });
         let proj = c.input["projectGate"].as_str().map(|s| match s {
             "lenient" => RevisionGateVal::Lenient,
@@ -1889,6 +1891,7 @@ fn state_degraded_note_matches_ts() {
         audit_issues,
         length_warnings: vec![],
         review_note,
+        volume_id: None,
         detection_score: None,
         detection_provider: None,
         detected_at: None,

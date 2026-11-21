@@ -15,6 +15,7 @@ import { AssetLibraryPanel } from "../components/AssetLibraryPanel";
 import { AntiAiAndExperiencePanel } from "../components/AntiAiAndExperiencePanel";
 import { CodexPanel } from "../components/CodexPanel";
 import { SearchPanel } from "../components/SearchPanel";
+import { VolumeManageCard } from "../components/VolumeManageCard";
 import { SeriesCanonPanel } from "../components/SeriesCanonPanel";
 import { ContextLensPanel } from "../components/ContextLensPanel";
 import { DeconstructPanel } from "../components/DeconstructPanel";
@@ -773,6 +774,9 @@ export function BookDetail({
 
       {/* R47/1640 号：全局搜索（正文/实体/伏笔/真相四轴，chapters 命中跳章滚到命中行）。 */}
       <SearchPanel bookId={bookId} nav={nav} />
+
+      {/* R49/1644 号：卷/幕元数据管理（组织层非上下文层，删卷自动迁移章）。 */}
+      <VolumeManageCard bookId={bookId} chapters={chapters} />
 
       {/* R21/391 号：上下文透视（回放每章装配清单，纯读）。 */}
       <ContextLensPanel bookId={bookId} />

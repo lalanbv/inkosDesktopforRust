@@ -1,0 +1,12 @@
+{
+  "$comment": "R49/1644 号：chapters/index.json 行键面 parity fixture——volumeId 为 R49 新增可选键（键缺省=未分组归「正文」默认卷）。",
+  "number": 2,
+  "title": "第二章",
+  "status": "ready-for-review",
+  "wordCount": 1200,
+  "createdAt": "2026-11-21T00:00:00.000Z",
+  "updatedAt": "2026-11-21T00:00:00.000Z",
+  "auditIssues": [],
+  "lengthWarnings": [],
+  "volumeId": "vol-1"
+}

@@ -1,0 +1,382 @@
+{
+  "groups": [
+    {
+      "name": "two-volumes-plus-ungrouped",
+      "volumes": [
+        {
+          "id": "v2",
+          "title": "第二卷",
+          "order": 2
+        },
+        {
+          "id": "v1",
+          "title": "第一卷",
+          "order": 1
+        }
+      ],
+      "chapters": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v1"
+        },
+        {
+          "number": 2,
+          "title": "第2章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v2"
+        },
+        {
+          "number": 3,
+          "title": "第3章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 4,
+          "title": "第4章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v1"
+        }
+      ],
+      "expected": [
+        {
+          "volumeId": "v1",
+          "title": "第一卷",
+          "chapters": [
+            1,
+            4
+          ]
+        },
+        {
+          "volumeId": "v2",
+          "title": "第二卷",
+          "chapters": [
+            2
+          ]
+        },
+        {
+          "volumeId": null,
+          "title": null,
+          "chapters": [
+            3
+          ]
+        }
+      ]
+    },
+    {
+      "name": "empty-volume-kept",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "第一卷",
+          "order": 1
+        }
+      ],
+      "chapters": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        }
+      ],
+      "expected": [
+        {
+          "volumeId": "v1",
+          "title": "第一卷",
+          "chapters": []
+        },
+        {
+          "volumeId": null,
+          "title": null,
+          "chapters": [
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "name": "no-volumes-all-default",
+      "volumes": [],
+      "chapters": [
+        {
+          "number": 2,
+          "title": "第2章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        }
+      ],
+      "expected": [
+        {
+          "volumeId": null,
+          "title": null,
+          "chapters": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unknown-volumeid-falls-default",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "第一卷",
+          "order": 1
+        }
+      ],
+      "chapters": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "ghost"
+        }
+      ],
+      "expected": [
+        {
+          "volumeId": "v1",
+          "title": "第一卷",
+          "chapters": []
+        }
+      ]
+    }
+  ],
+  "sort": [
+    {
+      "name": "order-desc-input",
+      "volumes": [
+        {
+          "id": "b",
+          "title": "乙",
+          "order": 2
+        },
+        {
+          "id": "a",
+          "title": "甲",
+          "order": 1
+        }
+      ],
+      "expected": [
+        {
+          "id": "a",
+          "title": "甲",
+          "order": 1
+        },
+        {
+          "id": "b",
+          "title": "乙",
+          "order": 2
+        }
+      ]
+    },
+    {
+      "name": "empty",
+      "volumes": [],
+      "expected": []
+    }
+  ],
+  "migrate": [
+    {
+      "name": "chapters-return-to-default",
+      "chapters": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v1"
+        },
+        {
+          "number": 2,
+          "title": "第2章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 3,
+          "title": "第3章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v1"
+        },
+        {
+          "number": 4,
+          "title": "第4章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v2"
+        }
+      ],
+      "removedVolumeId": "v1",
+      "expected": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 2,
+          "title": "第2章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 3,
+          "title": "第3章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 4,
+          "title": "第4章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v2"
+        }
+      ]
+    },
+    {
+      "name": "no-hit-unchanged",
+      "chapters": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v2"
+        }
+      ],
+      "removedVolumeId": "v1",
+      "expected": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "status": "ready-for-review",
+          "wordCount": 10,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": [],
+          "volumeId": "v2"
+        }
+      ]
+    }
+  ],
+  "unique": [
+    {
+      "name": "unique",
+      "volumes": [
+        {
+          "id": "a",
+          "title": "甲",
+          "order": 1
+        },
+        {
+          "id": "b",
+          "title": "乙",
+          "order": 2
+        }
+      ],
+      "expected": true
+    },
+    {
+      "name": "duplicate",
+      "volumes": [
+        {
+          "id": "a",
+          "title": "甲",
+          "order": 1
+        },
+        {
+          "id": "a",
+          "title": "乙",
+          "order": 2
+        }
+      ],
+      "expected": false
+    }
+  ]
+}

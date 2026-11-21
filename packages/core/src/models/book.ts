@@ -24,6 +24,15 @@ export type FanficMode = z.infer<typeof FanficModeSchema>;
 // （707）等写面把 writing/governance/seriesId 落进 book.json，strict 根拒收会让
 // 随后的 loadBookConfig ZodError（整本书不可加载的潜伏自毁键）。子对象保持
 // fork 非严格口径（未知子键容忍，与 serde 缺省容错同水位）。
+/** R49/1644 号：卷/幕元数据条目（组织面非上下文层——不进装配注入）。
+ * book.json.writing.volumes 可选键，存量书零迁移（键缺省=全部归「正文」默认卷）。 */
+export const BookVolumeSchema = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  order: z.number().int().min(1),
+});
+export type BookVolume = z.infer<typeof BookVolumeSchema>;
+
 export const BookWritingSchema = z.object({
   reviewMode: z.enum(["auto", "manual"]).optional(),
   revisionGate: z.enum(["strict", "lenient", "always"]).optional(),
@@ -31,6 +40,8 @@ export const BookWritingSchema = z.object({
   autoTimelineBeats: z.boolean().optional(),
   /** R11/378 号：场景节拍驱动写作（planner 产节拍、writer 按拍推进；默认关）。 */
   sceneBeats: z.boolean().optional(),
+  /** R49/1644 号：卷有序列表（新建/改名/重排/删卷走 PUT volumes 全量事务）。 */
+  volumes: z.array(BookVolumeSchema).optional(),
 });
 export type BookWriting = z.infer<typeof BookWritingSchema>;
 

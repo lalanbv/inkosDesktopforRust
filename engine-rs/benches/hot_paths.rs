@@ -189,6 +189,7 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
                 created_at: "2026-09-07T00:00:00.000Z".to_string(),
                 updated_at: "2026-09-07T00:00:00.000Z".to_string(),
                 audit_issues: Vec::new(),
+                volume_id: None,
                 length_warnings: Vec::new(),
                 review_note: None,
                 detection_score: None,

@@ -200,6 +200,10 @@ import {
   mergeChapters,
   reorderChapters,
   ChapterStructureError,
+  // R49/1644 号：卷/幕元数据面（Rust state/volumes.rs 镜像）。
+  sortVolumes as sortVolumesCore,
+  volumeIdsUnique,
+  migrateChaptersOnVolumeDelete,
   // 707 号：timeline 域 + series 域回收（第五批）——模型/工具在树，index 导出补齐。
   TimelineSchema,
   isValidSeriesId,
@@ -3383,6 +3387,94 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ ok: true, ...outcome });
     } catch (e) {
       return structureErrorResponse(c, e);
+    } finally {
+      await releaseLock();
+    }
+  });
+
+  // ── R49/1644 号：卷/幕元数据面（book.json.writing.volumes；Rust
+  // get_volumes/put_volumes/put_chapter_volume 镜像）。全量事务：新建/
+  // 改名/重排/删卷合一；删卷时其章归「正文」默认卷（volumeId 键清除）。
+
+  app.get("/api/v1/books/:id/volumes", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    try {
+      const config = await state.loadBookConfig(id);
+      return c.json({ volumes: sortVolumesCore(config.writing?.volumes ?? []) });
+    } catch {
+      return c.json({ volumes: [] });
+    }
+  });
+
+  app.put("/api/v1/books/:id/volumes", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const body = await c.req
+      .json<{ volumes?: ReadonlyArray<{ id: string; title: string; order: number }> }>()
+      .catch(() => ({}) as { volumes?: ReadonlyArray<{ id: string; title: string; order: number }> });
+    if (!Array.isArray(body.volumes)) {
+      return c.json({ error: "Volumes list is required." }, 400);
+    }
+    if (!volumeIdsUnique(body.volumes)) {
+      return c.json({ error: "Volume ids must be unique." }, 400);
+    }
+    const releaseLock = await state.acquireBookLock(id);
+    try {
+      // 删卷迁移：读旧 book.json 对比被删卷 → index 行 volumeId 清除。
+      const oldConfig = await state.loadBookConfig(id);
+      const oldIds = new Set((oldConfig.writing?.volumes ?? []).map((volume) => volume.id));
+      const newIds = new Set(body.volumes.map((volume) => volume.id));
+      const removedIds = [...oldIds].filter((oldId) => !newIds.has(oldId));
+      const index = await state.loadChapterIndex(id);
+      const migratedIndex = removedIds.reduce(
+        (current, removedId) => migrateChaptersOnVolumeDelete(current, removedId),
+        [...index],
+      );
+      // 顺序：先章迁移（index）后卷列表（book.json）——幂等重跑收敛。
+      await state.saveChapterIndex(id, migratedIndex);
+      const bookPath = join(state.bookDir(id), "book.json");
+      const rawBook = JSON.parse(await readFile(bookPath, "utf-8")) as {
+        writing?: Record<string, unknown>;
+      };
+      rawBook.writing = { ...(rawBook.writing ?? {}), volumes: body.volumes };
+      await writeTextAtomic(bookPath, JSON.stringify(rawBook, null, 2));
+      return c.json({ ok: true, volumes: sortVolumesCore(body.volumes) });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    } finally {
+      await releaseLock();
+    }
+  });
+
+  app.put("/api/v1/books/:id/chapters/:num/volume", async (c) => {
+    const id = c.req.param("id");
+    const num = parseInt(c.req.param("num"), 10);
+    if (!Number.isInteger(num) || num < 1) {
+      return c.json({ error: `Chapter ${c.req.param("num")} not found.` }, 500);
+    }
+    const body = await c.req
+      .json<{ volumeId?: string }>()
+      .catch(() => ({}) as { volumeId?: string });
+    if (typeof body.volumeId !== "string" || !body.volumeId) {
+      return c.json({ error: "Volume id is required." }, 400);
+    }
+    const releaseLock = await state.acquireBookLock(id);
+    try {
+      const config = await state.loadBookConfig(id);
+      if (!(config.writing?.volumes ?? []).some((volume) => volume.id === body.volumeId)) {
+        return c.json({ error: `Volume ${body.volumeId} not found` }, 400);
+      }
+      const index = await state.loadChapterIndex(id);
+      const row = index.find((meta) => meta.number === num);
+      if (!row) return c.json({ error: `Chapter ${num} not found` }, 404);
+      const nextIndex = index.map((meta) =>
+        meta.number === num ? { ...meta, volumeId: body.volumeId } : meta,
+      );
+      await state.saveChapterIndex(id, nextIndex);
+      return c.json({ ok: true, chapterNumber: num, volumeId: body.volumeId });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
     } finally {
       await releaseLock();
     }

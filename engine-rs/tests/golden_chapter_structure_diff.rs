@@ -107,6 +107,7 @@ fn meta_from_row(row: &IndexRow) -> ChapterMeta {
         created_at: "2026-11-21T00:00:00.000Z".to_string(),
         updated_at: row.updated_at.clone(),
         audit_issues: Vec::new(),
+        volume_id: None,
         length_warnings: Vec::new(),
         review_note: None,
         detection_score: None,

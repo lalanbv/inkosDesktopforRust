@@ -101,6 +101,7 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".into(),
             updated_at: "2026-01-01T00:00:00Z".into(),
             audit_issues: vec![],
+            volume_id: None,
             length_warnings: vec![],
             review_note: None,
             detection_score: None,

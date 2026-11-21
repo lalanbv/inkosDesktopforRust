@@ -131,6 +131,7 @@ mod tests {
             created_at: "now".into(),
             updated_at: "now".into(),
             audit_issues: vec!["[critical] 主线偏离".into()],
+            volume_id: None,
             length_warnings: vec![],
             review_note: None,
             detection_score: None,

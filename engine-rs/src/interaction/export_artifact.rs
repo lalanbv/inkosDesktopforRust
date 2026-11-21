@@ -467,6 +467,7 @@ mod tests {
             created_at: now.into(),
             updated_at: now.into(),
             audit_issues: Vec::new(),
+            volume_id: None,
             length_warnings: Vec::new(),
             review_note: None,
             detection_score: None,

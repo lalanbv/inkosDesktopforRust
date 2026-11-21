@@ -111,6 +111,19 @@ pub enum RevisionGateVal {
     Always,
 }
 
+/// R49/1644 号：卷/幕元数据条目（组织面非上下文层——不进装配注入）。
+/// book.json.writing.volumes 可选键，存量书零迁移（键缺省=全部归「正文」默认卷）。
+/// 对齐 TS `BookVolumeSchema`。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "export-bindings", derive(TS))]
+#[cfg_attr(feature = "export-bindings", ts(export))]
+#[serde(rename_all = "camelCase")]
+pub struct BookVolume {
+    pub id: String,
+    pub title: String,
+    pub order: u32,
+}
+
 /// 书籍 writing 子配置。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
@@ -127,6 +140,9 @@ pub struct BookWritingConfig {
     /// R11/378 号：场景节拍驱动写作（默认关）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene_beats: Option<bool>,
+    /// R49/1644 号：卷有序列表（新建/改名/重排/删卷走 PUT volumes 全量事务）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volumes: Option<Vec<BookVolume>>,
 }
 
 /// 系列归属。对齐 TS `BookSeriesSchema`（180 号 C3-a）。
@@ -330,7 +346,8 @@ mod tests {
                     review_mode: Some(ChapterReviewModeVal::Manual),
                     revision_gate: None,
                     auto_timeline_beats: None,
-                    scene_beats: None
+                    scene_beats: None,
+                    volumes: None,
                 }),
                 Some(ChapterReviewModeVal::Auto)
             ),
@@ -359,7 +376,8 @@ mod tests {
                     review_mode: None,
                     revision_gate: Some(RevisionGateVal::Always),
                     auto_timeline_beats: None,
-                    scene_beats: None
+                    scene_beats: None,
+                    volumes: None,
                 }),
                 Some(RevisionGateVal::Strict)
             ),

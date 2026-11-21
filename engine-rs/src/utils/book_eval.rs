@@ -453,6 +453,7 @@ mod tests {
             created_at: now.to_string(),
             updated_at: now.to_string(),
             audit_issues: issues.into_iter().map(str::to_string).collect(),
+            volume_id: None,
             length_warnings: Vec::new(),
             review_note: None,
             detection_score: None,

@@ -1994,9 +1994,9 @@ mod books49_e2e {
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::books_routes::BooksRuntime;
     use inkos_engine::server::books_state_routes::{
-        chapter_workspace, delete_chapter, get_chapter_version, merge_chapter_route, put_chapter,
-        put_workspace_brief, read_chapter, reorder_chapters_route, restore_chapter_version,
-        split_chapter_route,
+        chapter_workspace, delete_chapter, get_chapter_version, get_volumes, merge_chapter_route,
+        put_chapter, put_chapter_volume, put_volumes, put_workspace_brief, read_chapter,
+        reorder_chapters_route, restore_chapter_version, split_chapter_route,
     };
     use inkos_engine::state::manager::StateManager;
 
@@ -2121,6 +2121,14 @@ mod books49_e2e {
             .route(
                 "/api/v1/books/:id/chapters/reorder",
                 axum::routing::post(reorder_chapters_route),
+            )
+            .route(
+                "/api/v1/books/:id/volumes",
+                axum::routing::get(get_volumes).put(put_volumes),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/volume",
+                axum::routing::put(put_chapter_volume),
             )
             .with_state(runtime)
     }
@@ -2678,6 +2686,109 @@ Deleting a middle chapter would require renumbering later chapters and replaying
         );
         assert!(root.join("books/b1/chapters/0001_第2章.md").exists());
         assert!(root.join("books/b1/chapters/0002_第1章.md").exists());
+    }
+
+    /// R49/1644 号：卷/幕元数据三端点 HTTP 契约——PUT volumes 全量事务 +
+    /// GET 回读 + PUT chapters/:num/volume 行级归属 + 删卷迁移（章归默认卷）。
+    #[tokio::test]
+    async fn volumes_contract_full_set_and_migrate() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let runtime = rt49(&root);
+
+        // 负路径：缺列表 400 逐字 + 重复 id 400 逐字。
+        let (status, parsed) = call(
+            app49(runtime.clone()),
+            "PUT",
+            "/api/v1/books/b1/volumes",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Volumes list is required.");
+        let (status, parsed) = call(
+            app49(runtime.clone()),
+            "PUT",
+            "/api/v1/books/b1/volumes",
+            Some(r#"{"volumes":[{"id":"a","title":"甲","order":1},{"id":"a","title":"乙","order":2}]}"#),
+            )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "unique-guard body={parsed}"
+        );
+
+        // 快乐链：建两卷 → 章 2 归 vol-1 → PUT 只留 vol-2（vol-1 被删）→ 章 2 迁默认。
+        let (status, parsed) = call(
+            app49(runtime.clone()),
+            "PUT",
+            "/api/v1/books/b1/volumes",
+            Some(r#"{"volumes":[{"id":"vol-1","title":"第一卷","order":1},{"id":"vol-2","title":"第二卷","order":2}]}"#),
+            )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{parsed}");
+        assert_eq!(parsed["volumes"][0]["id"], "vol-1", "响应 order 升序投影");
+
+        let (status, parsed) = call(
+            app49(runtime.clone()),
+            "PUT",
+            "/api/v1/books/b1/chapters/2/volume",
+            Some(r#"{"volumeId":"vol-1"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{parsed}");
+        assert_eq!(parsed["volumeId"], "vol-1");
+        let index = runtime.state.load_chapter_index("b1").await.unwrap();
+        assert_eq!(
+            index
+                .iter()
+                .find(|m| m.number == 2)
+                .unwrap()
+                .volume_id
+                .as_deref(),
+            Some("vol-1")
+        );
+
+        // 未知卷 400 逐字。
+        let (status, parsed) = call(
+            app49(runtime.clone()),
+            "PUT",
+            "/api/v1/books/b1/chapters/1/volume",
+            Some(r#"{"volumeId":"ghost"}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(parsed["error"], "Volume ghost not found");
+
+        // 删卷迁移：PUT 只留 vol-2 → 章 2 volumeId 键清除。
+        let (status, _) = call(
+            app49(runtime.clone()),
+            "PUT",
+            "/api/v1/books/b1/volumes",
+            Some(r#"{"volumes":[{"id":"vol-2","title":"第二卷","order":2}]}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let index = runtime.state.load_chapter_index("b1").await.unwrap();
+        assert!(index
+            .iter()
+            .find(|m| m.number == 2)
+            .unwrap()
+            .volume_id
+            .is_none());
+
+        // GET 回读。
+        let (status, parsed) = call(
+            app49(runtime.clone()),
+            "GET",
+            "/api/v1/books/b1/volumes",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(parsed["volumes"][0]["id"], "vol-2");
     }
 }
 

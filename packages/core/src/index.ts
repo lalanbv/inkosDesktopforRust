@@ -502,6 +502,14 @@ export {
   type ChapterVersion,
   type ChapterVersionSource,
 } from "./state/chapter-workspace.js";
+// ── R49/1644 号：卷/幕元数据纯函数（engine-rs state/volumes.rs 镜像）──
+export {
+  migrateChaptersOnVolumeDelete,
+  projectVolumeGroups,
+  sortVolumes,
+  volumeIdsUnique,
+  type VolumeGroup,
+} from "./state/volumes.js";
 export { loadChaptersFromPath, compareChapterSourceNames } from "./agent/chapter-import-source.js";
 export { renderCurrentStateProjection, renderHooksProjection, renderChapterSummariesProjection } from "./state/state-projections.js";
 export { applyRuntimeStateDelta, type RuntimeStateSnapshot } from "./state/state-reducer.js";
