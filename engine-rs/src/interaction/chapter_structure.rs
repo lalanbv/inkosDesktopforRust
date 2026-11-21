@@ -811,10 +811,17 @@ pub async fn merge_chapter(
         keep,
         crate::utils::language::utf16_len(merged.trim()) as u32,
     );
-    let next_index: Vec<ChapterMeta> = apply_renumber(&index, &mapping, &word_overrides, now_iso)
-        .into_iter()
+    // 1647 号 bug 修复：先滤掉被删章行、再应用重编号映射。此前顺序相反——
+    // 「原 removed 行」与「重编后恰好落到 removed 号的行」并存同号，随后的
+    // number != removed 过滤把重编章一并滤杀（3 章书 merge 3→2 后 index 只剩
+    // {1,2}、文件面却正确——index/文件面发散，duel 双端同错通过=回声室，
+    // 逐功能「拆→并→集合复原」live 断言逼出）。
+    let kept: Vec<ChapterMeta> = index
+        .iter()
         .filter(|meta| meta.number != removed)
+        .cloned()
         .collect();
+    let next_index: Vec<ChapterMeta> = apply_renumber(&kept, &mapping, &word_overrides, now_iso);
     state
         .save_chapter_index_at(&root, &next_index, false)
         .await
@@ -1250,6 +1257,53 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.status, 400);
+    }
+
+    /// 1647 号回归：merge 触发重编号路径（removed 之后仍有章）时索引不得丢
+    /// 章——此前「先映射后过滤」把重编后恰好落到 removed 号的行一并滤杀
+    /// （removed=2 时 3→2 的重编行被滤，index 丢收束章而文件面在位=
+    /// 双面发散；live 逐功能「拆→并→集合复原」断言逼出）。
+    #[tokio::test]
+    async fn merge_with_renumber_keeps_shifted_chapter_in_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        // merge 2 into 1：removed=2、keep=1、3→2 重编号路径。
+        let outcome = merge_chapter(
+            &state,
+            "b1",
+            2,
+            1,
+            Some("\n\n"),
+            None,
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("merge");
+        assert_eq!(outcome.merged_into, Some(1));
+        assert_eq!(outcome.removed_chapter, Some(2));
+        assert_eq!(
+            outcome
+                .renumbered
+                .iter()
+                .map(|e| (e.from, e.to))
+                .collect::<Vec<_>>(),
+            vec![(3, 2)]
+        );
+        let index = state.load_chapter_index("b1").await.unwrap();
+        assert_eq!(
+            index.iter().map(|m| m.number).collect::<Vec<_>>(),
+            vec![1, 2],
+            "重编章必须保留在索引（修复前只剩 [1]）"
+        );
+        assert_eq!(
+            index.iter().map(|m| m.title.as_str()).collect::<Vec<_>>(),
+            vec!["风起", "收束"]
+        );
+        let chapters = dir.path().join("books/b1/chapters");
+        assert!(chapters.join("0002_收束.md").exists(), "重编号文件在位");
+        assert!(!chapters.join("0003_收束.md").exists());
+        assert!(chapters.join(".trash/0002_灵脉.md").exists());
     }
 
     #[tokio::test]

@@ -38,7 +38,9 @@ impl ExportFormat {
         }
     }
 
-    fn extension(self) -> &'static str {
+    /// R50/1647 号：pub(crate)——export-save 落盘名须用格式正典扩展名
+    /// （md-zip→zip；此前路由用原始 fmt 串拼出 `.md-zip` 文件名）。
+    pub(crate) fn extension(self) -> &'static str {
         match self {
             ExportFormat::Txt => "txt",
             ExportFormat::Md => "md",

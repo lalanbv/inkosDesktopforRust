@@ -433,8 +433,14 @@ export async function mergeChapters(
   }
 
   const wordOverrides = new Map<number, number>([[keep, merged.trim().length]]);
-  const nextIndex = buildNextIndex(index, mapping, wordOverrides)
-    .filter((meta) => meta.number !== removed);
+  // 1647 号 bug 修复：先滤掉被删章行、再应用重编号映射（与 Rust merge 同款
+  // 镜像 bug——此前先映射后过滤，重编后恰好落到 removed 号的章被一并滤杀，
+  // index 丢章而文件面正确=双面发散）。
+  const nextIndex = buildNextIndex(
+    index.filter((meta) => meta.number !== removed),
+    mapping,
+    wordOverrides,
+  );
 
   await commitAtomicFileSet({
     rootDir: deps.bookDir,

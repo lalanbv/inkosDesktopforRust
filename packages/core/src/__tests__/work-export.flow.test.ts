@@ -2,6 +2,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { it, expect, vi } from "vitest";
+import JSZip from "jszip";
 import { createWorkManifest, saveWorkManifest, loadWorkManifest } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { createExportWorkTool } from "../harness/tools/work-artifacts.js";
@@ -61,6 +62,42 @@ it('measures actual exported chapters and requires current source receipts and e
     await expect(exportCurrent()).rejects.toMatchObject({code:'CHAPTER_EXPORT_SOURCE_MISMATCH'});
     await expect(completed()).rejects.toMatchObject({code:'TURN_REQUIRED_OPERATIONS_INCOMPLETE'});
     expect((await state.loadChapterIndex('gallery')).map(chapter=>chapter.wordCount)).toEqual([99,99]);
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+// ── R50/1647 号：export_book 工具面接线（md-zip 格式 + chapters 子集 +
+// approvedOnly 回填 + 空子集报错——fb8c8e3e 遗失能力回归锁）────────────
+it('export_book tool honors md-zip format, chapters subset, approvedOnly precedence and empty-subset error',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'inkos-export-tool-'));
+  try{
+    await saveWorkManifest(root,createWorkManifest({id:'gallery',title:'Gallery',profileId:'longform-novel',language:'en'}));
+    const state=new StateManager(root),now=new Date().toISOString();
+    await state.saveBookConfig('gallery',{id:'gallery',title:'Gallery',genre:'general',platform:'other' as const,status:'active' as const,targetChapters:2,chapterWordCount:1000,language:'en' as const,createdAt:now,updatedAt:now});
+    // 第 1 章 approved、第 2 章 ready-for-review（approvedOnly 过滤依据）。
+    const chapter=(number:number,status:string)=>({number,title:'Scene '+number,status:status as 'approved',wordCount:9,provenance:'imported' as const,observations:[],createdAt:now,updatedAt:now});
+    await state.saveChapterIndex('gallery',[chapter(1,'approved'),chapter(2,'ready-for-review')]);
+    const bookDir=state.bookDir('gallery');
+    await mkdir(join(bookDir,'chapters'),{recursive:true});
+    await writeFile(join(bookDir,'chapters/0001_Scene 1.md'),'# Chapter 1: Scene 1\n\nThe visitor arrives.\n');
+    await writeFile(join(bookDir,'chapters/0002_Scene 2.md'),'# Chapter 2: Scene 2\n\nThe visitor leaves.\n');
+    const output=join(bookDir,'pick.zip');
+    const tool=createExportBookTool(state,'gallery',{outputPath:output});
+    // chapters 子集 [2]：zip 只含第 2 章 + manifest。
+    const subset=await tool.execute('export',{format:'md-zip',chapters:[2]});
+    expect(subset.details).toMatchObject({chaptersExported:1,format:'md-zip'});
+    const loaded=await JSZip.loadAsync(await readFile(output));
+    // jszip 载入时补中间目录条目（00_ungrouped/）——只断言文件条目。
+    expect(Object.values(loaded.files).filter(entry=>!entry.dir).map(entry=>entry.name).sort()).toEqual(['00_ungrouped/0002_Scene 2.md','manifest.json']);
+    const manifest=JSON.parse(await loaded.file('manifest.json')!.async('string')) as {chapters:ReadonlyArray<{number:number;volumeId:string|null}>};
+    expect(manifest.chapters).toEqual([{number:2,title:'Scene 2',volumeId:null,path:'00_ungrouped/0002_Scene 2.md',wordCount:expect.any(Number)}]);
+    // approvedOnly 优先于 chapters（互斥非交集——Rust 同优先级）。
+    const approved=await tool.execute('export',{format:'md',chapters:[2],approvedOnly:true});
+    expect(approved.details).toMatchObject({chaptersExported:1});
+    const approvedMd=await readFile((approved.details as {outputPath:string}).outputPath,'utf-8');
+    expect(approvedMd).toContain('The visitor arrives.');
+    expect(approvedMd).not.toContain('The visitor leaves.');
+    // 空子集 → "No chapters to export."（Rust 同文案；此前 TS 静默空工件=漂移）。
+    await expect(tool.execute('export',{format:'md',chapters:[99]})).rejects.toThrow('No chapters to export.');
   }finally{await rm(root,{recursive:true,force:true});}
 });
 

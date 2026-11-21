@@ -2644,6 +2644,53 @@ Deleting a middle chapter would require renumbering later chapters and replaying
         );
     }
 
+    /// 1647 号回归（live 逐功能探针逼出）：merge 触发重编号路径（removed
+    /// 之后仍有章）时索引不得丢章——此前「先映射后过滤」把重编后恰好落到
+    /// removed 号的行一并滤杀（index 丢章而文件面在位=双面发散；duel 双端
+    /// 同错通过对拍=回声室，状态码级断言绕过）。
+    #[tokio::test]
+    async fn merge_with_renumber_keeps_shifted_chapter() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let runtime = rt49(&root);
+        // 拆第 1 章：{1,2} → {1,2,3}（fixture 两章书，一拆即造出 removed
+        // 之后仍有章的重编号路径）。
+        {
+            let (status, body) = call(
+                app49(runtime.clone()),
+                "POST",
+                "/api/v1/books/b1/chapters/1/split",
+                Some(&serde_json::json!({ "offset": 12 }).to_string()),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
+        // merge 2 into 1：removed=2、3→2 重编号路径（修复前 3 号重编行被滤杀）。
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/2/merge",
+            Some(&serde_json::json!({ "mergeWith": 1 }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["renumbered"],
+            serde_json::json!([{ "from": 3, "to": 2 }])
+        );
+        let index = runtime.state.load_chapter_index("b1").await.unwrap();
+        assert_eq!(
+            index.iter().map(|m| m.number).collect::<Vec<_>>(),
+            vec![1, 2],
+            "重编章必须保留（修复前只剩 [1]）"
+        );
+        assert_eq!(
+            body["revision"],
+            inkos_engine::interaction::chapter_structure::chapter_set_revision(&index)
+        );
+    }
+
     #[tokio::test]
     async fn reorder_chapter_contract_requires_permutation() {
         let dir = tempfile::tempdir().unwrap();
@@ -2956,6 +3003,56 @@ mod books50_e2e {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(parsed["format"], "txt");
         assert_eq!(parsed["chapters"], 2);
+
+        // R50/1647 号：chapters 勾选子集 + md-zip 正典扩展名（此前 body 的
+        // chapters 被静默忽略=全量导出、fmt 原样拼出 `.md-zip` 文件名）。
+        // 子集含未知章号 7 与非整数 "x"（正整数过滤语义）。
+        let (status, parsed) = call(
+            app50(rt50(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/books/b1/export-save",
+            Some(r#"{ "format": "md-zip", "chapters": [1, 7, "x"] }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["format"], "md-zip");
+        assert_eq!(parsed["chapters"], 1);
+        assert!(
+            parsed["path"].as_str().unwrap().ends_with("b1/b1.zip"),
+            "path: {parsed}"
+        );
+        // StoredZipWriter=stored 零压缩 → 章节正文以原始字节出现在 zip 内。
+        let zip_bytes = std::fs::read(book.join("b1.zip")).unwrap();
+        let zip_text = String::from_utf8_lossy(&zip_bytes);
+        assert!(zip_text.contains("林动睁开双眼"), "第 1 章应在子集内");
+        assert!(!zip_text.contains("正文二"), "第 2 章应被子集排除");
+
+        // approvedOnly 与 chapters 同给 → approvedOnly 优先（互斥非交集，
+        // 对齐 build_export_artifact 内建优先级）：chapter 2 非 approved 被排除。
+        let (status, parsed) = call(
+            app50(rt50(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/books/b1/export-save",
+            Some(r#"{ "format": "md", "approvedOnly": true, "chapters": [2] }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["chapters"], 1);
+        let md = std::fs::read_to_string(book.join("b1.md")).unwrap();
+        assert!(md.contains("林动睁开双眼"));
+        assert!(!md.contains("正文二"));
+
+        // R50/1647 号：空子集 → "No chapters to export."（此前双端漂移：
+        // Rust 报错、TS 静默产出空工件——本轮 TS 回填同语义）。
+        let (status, parsed) = call(
+            app50(rt50(&root, "http://127.0.0.1:9")),
+            "POST",
+            "/api/v1/books/b1/export-save",
+            Some(r#"{ "format": "md", "chapters": [99] }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(parsed["error"], "No chapters to export.");
     }
 
     #[tokio::test]

@@ -24,6 +24,9 @@ export interface ExportStateLike {
     readonly lengthSpec?: LengthSpec;
     /** R49/1644 号：卷归属（md-zip 打包按卷分组目录）。 */
     readonly volumeId?: string;
+    /** R50/1647 号：approvedOnly 过滤依据（fb8c8e3e 状态机替换时遗失的
+     * 能力回填——Rust build_export_artifact 移植体一直保留）。 */
+    readonly status?: string;
   }>>;
 }
 
@@ -43,12 +46,22 @@ export interface ExportArtifact {
 }
 
 /** Read once: measurements, exported text and the receipt describe the same source. */
-export async function readBookExportSource(state: ExportStateLike, bookId: string) {
-  const index = await state.loadChapterIndex(bookId);
+export async function readBookExportSource(
+  state: ExportStateLike,
+  bookId: string,
+  // R50/1647 号：导出章选择器（读盘前于索引层生效——镜像 Rust
+  // build_export_artifact 先过滤后读盘；过滤后空集=「No chapters to export.」
+  // 双端同文案，此前 TS 空子集静默产出空工件=漂移）。
+  select?: (chapter: { readonly number: number; readonly status?: string }) => boolean,
+) {
+  const allIndex = await state.loadChapterIndex(bookId);
+  const index = select ? allIndex.filter(select) : allIndex;
   const book = await state.loadBookConfig(bookId);
-  if (!index.length) throw new Error("No chapters to export.");
+  if (!allIndex.length || !index.length) throw new Error("No chapters to export.");
   const chaptersDir = join(state.bookDir(bookId), "chapters");
-  const files = buildChapterFileLookup(await readdir(chaptersDir), index);
+  // 源一致性校验面对全量索引——部分导出不豁免未导出章的对账（409 语义
+  // 与既有行为一致；此前首版把过滤后索引喂进校验=子集外章误报 unindexed）。
+  const files = buildChapterFileLookup(await readdir(chaptersDir), allIndex);
   const chapters = await Promise.all(index.map(async chapter => {
     const file = files.get(chapter.number)!;
     const raw = await readFile(join(chaptersDir, file), "utf-8");
@@ -173,12 +186,23 @@ export async function buildExportArtifact(
     readonly outputPath?: string;
     /** R50/1645 号：章节勾选子集（Scrivener Compile 语义；缺省=全部）。 */
     readonly chapterFilter?: ReadonlyArray<number>;
+    /** R50/1647 号：仅导出 approved 章（fb8c8e3e 遗失回填）。与 Rust 同
+     * 优先级：approvedOnly 置位时 chapterFilter 被忽略（互斥非交集）。 */
+    readonly approvedOnly?: boolean;
   },
 ): Promise<ExportArtifact> {
   const format = options.format ?? "txt";
   const filter = options.chapterFilter;
-  const {book, chapters: allChapters, delivery, sourceDigest, totalWords: allWords} = await readBookExportSource(state, bookId);
-  const chapters = filter ? allChapters.filter((chapter) => filter.includes(chapter.number)) : allChapters;
+  const {book, chapters, delivery, sourceDigest} = await readBookExportSource(
+    state,
+    bookId,
+    (entry) =>
+      options.approvedOnly
+        ? entry.status === "approved"
+        : filter
+          ? filter.includes(entry.number)
+          : true,
+  );
   const totalWords = chapters.reduce((sum, chapter) => sum + chapter.count, 0);
 
   const bookDir = state.bookDir(bookId);
@@ -268,6 +292,8 @@ export async function writeExportArtifact(
     readonly format?: "txt" | "md" | "epub" | "md-zip";
     readonly outputPath?: string;
     readonly chapterFilter?: ReadonlyArray<number>;
+    /** R50/1647 号：approvedOnly 透传（互斥优先级同 buildExportArtifact）。 */
+    readonly approvedOnly?: boolean;
   },
 ): Promise<Omit<ExportArtifact, "payload" | "contentType" | "fileName">> {
   const artifact = await buildExportArtifact(state, bookId, options);

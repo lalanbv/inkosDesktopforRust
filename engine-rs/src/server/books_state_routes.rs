@@ -1154,17 +1154,33 @@ pub async fn export_save(
         .get("approvedOnly")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // R50/1647 号：chapters 勾选子集（TS body `chapters` 数组镜像——正整数
+    // 过滤；空数组=空子集，与 GET `chapters=垃圾段` 过滤后空集同语义）。
+    // 此前 body 收了 chapters 却静默全量导出（契约谎言，双端同款）。
+    let chapter_filter: Option<Vec<u32>> =
+        parsed
+            .get("chapters")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|value| u32::try_from(value.as_i64()?).ok())
+                    .collect::<Vec<u32>>()
+            });
+    let export_format = ExportFormat::parse(Some(&fmt));
+    // 落盘扩展名=格式正典扩展名（md-zip→zip；对齐 GET 面 file_name 与
+    // TS server export-save，此前 fmt 原样拼出 `.md-zip`）。
     let output_path = runtime
         .state
         .book_dir(&book_id)
-        .join(format!("{book_id}.{fmt}"));
+        .join(format!("{book_id}.{}", export_format.extension()));
     match build_export_artifact(
         &runtime.state,
         &book_id,
-        ExportFormat::parse(Some(&fmt)),
+        export_format,
         approved_only,
         Some(&output_path),
-        None,
+        chapter_filter.as_deref(),
     )
     .await
     {

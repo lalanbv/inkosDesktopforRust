@@ -8180,11 +8180,15 @@ function yamlScalar(value: unknown): string {
     const chapterFilter = chaptersCsv
       ? chaptersCsv.split(",").map((s) => Number.parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0)
       : undefined;
+    // R50/1647 号：approvedOnly 回填（fb8c8e3e 状态机替换时 TS 侧遗失，
+    // Rust 47 号移植体一直保留=同端点行为漂移；`=== "true"` 同 Rust 语义）。
+    const approvedOnly = c.req.query("approvedOnly") === "true";
 
     try {
       const artifact = await buildExportArtifact(state, id, {
         format: format as "txt" | "md" | "epub" | "md-zip",
         chapterFilter,
+        approvedOnly,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -8205,17 +8209,23 @@ function yamlScalar(value: unknown): string {
 
   app.post("/api/v1/books/:id/export-save", async (c) => {
     const id = c.req.param("id");
-    const { format, chapters } = await c.req
-      .json<{ format?: string; chapters?: ReadonlyArray<number> }>()
-      .catch(() => ({ format: "txt" }) as { format?: string; chapters?: ReadonlyArray<number> });
+    // R50/1647 号：approvedOnly 一并回填（Rust export_save 同款 body 面）。
+    const { format, chapters, approvedOnly } = await c.req
+      .json<{ format?: string; chapters?: ReadonlyArray<number>; approvedOnly?: boolean }>()
+      .catch(() => ({ format: "txt" }) as { format?: string; chapters?: ReadonlyArray<number>; approvedOnly?: boolean });
     const fmt = format ?? "txt";
+    // R50/1647 号：正整数过滤（GET /export `chapters` CSV 同语义；空数组=
+    // 空子集——与 GET 垃圾段过滤后为空集同语义，双端对齐）。
     const chapterFilter = Array.isArray(chapters)
       ? chapters.filter((n) => Number.isInteger(n) && n > 0)
       : undefined;
 
     try {
       const bookDir = state.bookDir(id);
-      const outputPath = join(bookDir, `${id}.${fmt === "epub" ? "epub" : fmt}`);
+      // R50/1647 号：落盘扩展名=格式正典扩展名（md-zip→zip，对齐 GET 面
+      // fileName 与 Rust ExportFormat::extension；此前 fmt 原样拼出 .md-zip）。
+      const extension = fmt === "md-zip" ? "zip" : fmt === "epub" ? "epub" : fmt;
+      const outputPath = join(bookDir, `${id}.${extension}`);
       const tool = createExportBookTool(state, id, { outputPath });
       const result = await executeExplicitCapabilityTool({
         projectRoot: root,
@@ -8229,6 +8239,8 @@ function yamlScalar(value: unknown): string {
         workId: id,
         parameters: {
           format: fmt,
+          ...(chapterFilter ? { chapters: chapterFilter } : {}),
+          ...(approvedOnly ? { approvedOnly: true } : {}),
         },
       });
       const details = result.data as Readonly<Record<string, unknown>> | undefined;
@@ -8240,7 +8252,9 @@ function yamlScalar(value: unknown): string {
       });
     } catch (e) {
       if (e instanceof ChapterExportSourceError) return c.json({error:e.message,code:e.code,details:e.details},409);
-      return c.json({ error: String(e) }, 500);
+      // 1647 号：message 裸形态（Rust export_save 返回裸错误串——此前
+      // String(e) 带 "Error: " 前缀=同端点双端文案漂移，live 探针逼出）。
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 

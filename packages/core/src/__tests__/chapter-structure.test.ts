@@ -135,6 +135,26 @@ describe("mergeChapters（R48a/1641 号）", () => {
     await expect(mergeChapters(deps, "b1", 1, 3, undefined, undefined)).rejects.toMatchObject({ status: 400 });
     await expect(mergeChapters(deps, "b1", 2, 2, undefined, undefined)).rejects.toMatchObject({ status: 400 });
   });
+
+  // 1647 号回归：merge 触发重编号路径（removed 之后仍有章）时索引不得丢章
+  // ——此前「先映射后过滤」把重编后恰好落到 removed 号的行一并滤杀（与
+  // Rust 同款镜像 bug；removed=2 时 3→2 重编行被滤，index 丢收束章而
+  // 文件面在位=双面发散；live 逐功能「拆→并→集合复原」断言逼出）。
+  it("重编号路径合并：重编章保留在索引（修复前 index 只剩 [1]）", async () => {
+    const { bookDir, deps } = seedBook();
+    const outcome = await mergeChapters(deps, "b1", 2, 1, "\n\n", undefined);
+    expect(outcome.mergedInto).toBe(1);
+    expect(outcome.removedChapter).toBe(2);
+    expect(outcome.renumbered).toEqual([{ from: 3, to: 2 }]);
+    const chapters = join(bookDir, "chapters");
+    const index = JSON.parse(readFileSync(join(chapters, "index.json"), "utf-8")) as ChapterMeta[];
+    expect(index.map((meta) => meta.number)).toEqual([1, 2]);
+    expect(index.map((meta) => meta.title)).toEqual(["风起", "收束"]);
+    expect(existsSync(join(chapters, "0002_收束.md"))).toBe(true);
+    expect(existsSync(join(chapters, "0003_收束.md"))).toBe(false);
+    expect(existsSync(join(chapters, ".trash", "0002_灵脉.md"))).toBe(true);
+    expect(outcome.revision).toBe(chapterSetRevision(index));
+  });
 });
 
 describe("reorderChapters（R48a/1641 号）", () => {
