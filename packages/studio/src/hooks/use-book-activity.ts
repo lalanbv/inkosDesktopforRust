@@ -19,6 +19,7 @@ const BOOK_REFRESH_EVENTS = new Set([
   // bookId；经聊天/代理外部触发时已打开的书籍视图须刷新）。
   "chapter:deleted",
   "chapter:restored",
+  "chapter:restructured",
   "consolidate:complete",
   "consolidate:error",
   "foundation:revised",

@@ -144,7 +144,7 @@ fn delete_file_re() -> &'static Regex {
 }
 
 /// 重名规避：`base-2.ext`、`base-3.ext`…（对齐 TS `pickAvailableName`）。
-async fn pick_available_name(dir: &Path, file_name: &str) -> String {
+pub(crate) async fn pick_available_name(dir: &Path, file_name: &str) -> String {
     let (base, ext) = match file_name.rfind('.') {
         Some(dot) => (&file_name[..dot], &file_name[dot..]),
         None => (file_name, ""),

@@ -8,7 +8,9 @@ export type ChapterVersionSource =
   | "agent"
   | "revision"
   | "regeneration"
-  | "restore";
+  | "restore"
+  // R48a/1641 号：章节结构操作（拆分/合并/重排）的拆前存档来源。
+  | "structure";
 
 export interface ChapterVersion {
   readonly id: string;
@@ -18,7 +20,7 @@ export interface ChapterVersion {
   readonly characterCount: number;
 }
 
-const VERSION_ID_PATTERN = /^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$/;
+const VERSION_ID_PATTERN = /^(\d{13})_(manual|agent|revision|regeneration|restore|structure)_([0-9a-f-]{36})$/;
 
 export async function readChapterUserBrief(
   bookDir: string,

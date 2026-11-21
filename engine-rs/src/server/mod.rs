@@ -465,6 +465,19 @@ pub fn router_books(
             "/api/v1/books/:id/chapters/:num/versions/:versionId/restore",
             post(books_state_routes::restore_chapter_version).with_state(books.clone()),
         )
+        // R48a/1641 号：章节结构操作三事务（staging 两相原子 + revision 乐观并发）。
+        .route(
+            "/api/v1/books/:id/chapters/:num/split",
+            post(books_state_routes::split_chapter_route).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/:num/merge",
+            post(books_state_routes::merge_chapter_route).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/reorder",
+            post(books_state_routes::reorder_chapters_route).with_state(books.clone()),
+        )
         // 50 号：交互运行时子集（export-save 落盘变体 + LLM 灵感卡）。
         .route(
             "/api/v1/books/:id/export-save",

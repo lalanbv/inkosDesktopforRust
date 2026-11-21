@@ -22,6 +22,8 @@ pub enum ChapterVersionSource {
     Revision,
     Regeneration,
     Restore,
+    /// R48a/1641 号：章节结构操作（拆分/合并/重排）的拆前存档来源。
+    Structure,
 }
 
 impl ChapterVersionSource {
@@ -33,6 +35,7 @@ impl ChapterVersionSource {
             ChapterVersionSource::Revision => "revision",
             ChapterVersionSource::Regeneration => "regeneration",
             ChapterVersionSource::Restore => "restore",
+            ChapterVersionSource::Structure => "structure",
         }
     }
 
@@ -44,6 +47,7 @@ impl ChapterVersionSource {
             "revision" => ChapterVersionSource::Revision,
             "regeneration" => ChapterVersionSource::Regeneration,
             "restore" => ChapterVersionSource::Restore,
+            "structure" => ChapterVersionSource::Structure,
             _ => return None,
         })
     }

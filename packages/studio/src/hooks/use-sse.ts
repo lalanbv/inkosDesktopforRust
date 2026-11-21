@@ -41,6 +41,9 @@ export const STUDIO_SSE_EVENTS = [
   // 代理外部触发时已打开的书籍视图与书目据此刷新（低频，通知表不含=零噪音）。
   "chapter:deleted",
   "chapter:restored",
+  // R48a/1641 号：章节结构操作完成（拆分/合并/重排，单事件广播）——双端带
+  // bookId；重编号面已打开视图与书目章数据此刷新。
+  "chapter:restructured",
   "consolidate:complete",
   "consolidate:error",
   "foundation:revised",

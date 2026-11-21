@@ -27,6 +27,7 @@
     "review:complete",
     "chapter:deleted",
     "chapter:restored",
+    "chapter:restructured",
     "consolidate:complete",
     "consolidate:error",
     "foundation:revised",

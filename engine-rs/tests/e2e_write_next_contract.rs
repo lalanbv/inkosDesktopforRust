@@ -1994,8 +1994,9 @@ mod books49_e2e {
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::books_routes::BooksRuntime;
     use inkos_engine::server::books_state_routes::{
-        chapter_workspace, delete_chapter, get_chapter_version, put_chapter, put_workspace_brief,
-        read_chapter, restore_chapter_version,
+        chapter_workspace, delete_chapter, get_chapter_version, merge_chapter_route, put_chapter,
+        put_workspace_brief, read_chapter, reorder_chapters_route, restore_chapter_version,
+        split_chapter_route,
     };
     use inkos_engine::state::manager::StateManager;
 
@@ -2107,6 +2108,19 @@ mod books49_e2e {
             .route(
                 "/api/v1/books/:id/chapters/:num/versions/:versionId/restore",
                 axum::routing::post(restore_chapter_version),
+            )
+            // R48a/1641 号：章节结构操作三事务 HTTP 契约。
+            .route(
+                "/api/v1/books/:id/chapters/:num/split",
+                axum::routing::post(split_chapter_route),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/merge",
+                axum::routing::post(merge_chapter_route),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/reorder",
+                axum::routing::post(reorder_chapters_route),
             )
             .with_state(runtime)
     }
@@ -2485,6 +2499,185 @@ mod books49_e2e {
             "Only the latest chapter (2) can be deleted, but chapter 1 was requested. \
 Deleting a middle chapter would require renumbering later chapters and replaying state."
         );
+    }
+
+    // split/merge/reorder 端点形状 + 负路径文案逐字 + revision 乐观并发 409
+    // + chapter:restructured 单事件广播。事务语义（重编号/产物迁移/归档/
+    // 中断原子性）由 chapter_structure.rs 模块内单测与 TS 镜像单测覆盖。
+
+    #[tokio::test]
+    async fn split_chapter_contract_renumbers_and_broadcasts_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let runtime = rt49(&root);
+        let revision_before = {
+            let index = runtime.state.load_chapter_index("b1").await.unwrap();
+            inkos_engine::interaction::chapter_structure::chapter_set_revision(&index)
+        };
+
+        // 负路径：offset 缺失 400 逐字。
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/2/split",
+            Some(&serde_json::json!({}).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "Split offset is required.");
+        // 乐观并发：expectedRevision 不符 409 + code。
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/2/split",
+            Some(
+                &serde_json::json!({ "offset": 5, "expectedRevision": "deadbeefdeadbeef" })
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["code"], "CHAPTER_SET_CONFLICT");
+        assert_eq!(
+            body["error"],
+            "Chapter set changed since last read (revision conflict)."
+        );
+
+        // 成功链：staging 事务 + 单事件广播。
+        let mut subscriber = runtime.hub.subscribe();
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/2/split",
+            Some(&serde_json::json!({ "offset": 5 }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["op"], "split");
+        assert_eq!(body["splitFrom"], 2);
+        assert_eq!(body["newChapter"], 3);
+        assert_eq!(
+            body["renumbered"],
+            serde_json::json!([]),
+            "2 章 fixture：拆分末章无后章移位"
+        );
+        assert_ne!(body["revision"], revision_before);
+        // 单事件广播（防风暴——恰一次）。
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv())
+            .await
+            .expect("应收到 chapter:restructured")
+            .expect("通道");
+        assert_eq!(event.event, "chapter:restructured");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&event.data).unwrap()["bookId"],
+            "b1"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&event.data).unwrap()["op"],
+            "split"
+        );
+        // 磁盘面：3 号=新章（被拆后段），2 号=前段；索引 3 行。
+        let index = runtime.state.load_chapter_index("b1").await.unwrap();
+        assert_eq!(
+            index.iter().map(|m| m.number).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        let content =
+            std::fs::read_to_string(root.join("books/b1/chapters/0003_第2章.md")).unwrap();
+        assert!(content.contains("正文二"));
+    }
+
+    #[tokio::test]
+    async fn merge_chapter_contract_trashes_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let runtime = rt49(&root);
+
+        // 负路径：mergeWith 缺失 400 逐字（不动盘）。
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/2/merge",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "Merge target chapter is required.");
+
+        // 成功链：1+2 合并（保留 1、删 2 进 trash）。
+        let mut subscriber = runtime.hub.subscribe();
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/1/merge",
+            Some(&serde_json::json!({ "mergeWith": 2, "separator": "\n" }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["op"], "merge");
+        assert_eq!(body["mergedInto"], 1);
+        assert_eq!(body["removedChapter"], 2);
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), subscriber.recv())
+            .await
+            .expect("应收到 chapter:restructured")
+            .expect("通道");
+        assert_eq!(event.event, "chapter:restructured");
+        // 保留章原名不变（0001_风起.md 原位覆写合并内容）；被删章以**盘上
+        // 原文件名**移入 .trash（pick_available_name 重名规避面）。
+        let merged = std::fs::read_to_string(root.join("books/b1/chapters/0001_风起.md")).unwrap();
+        assert!(merged.contains("林动睁开双眼。") && merged.contains("正文二。"));
+        assert!(root.join("books/b1/chapters/.trash/0002_云涌.md").exists());
+        assert_eq!(
+            runtime.state.load_chapter_index("b1").await.unwrap().len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn reorder_chapter_contract_requires_permutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture49(&root);
+        let runtime = rt49(&root);
+
+        // 缺 order 400 逐字。
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/reorder",
+            Some("{}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"], "Reorder order is required.");
+        // 非双射 400。
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/reorder",
+            Some(&serde_json::json!({ "order": [1] }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        // 成功链：倒序重排。
+        let (status, body) = call(
+            app49(runtime.clone()),
+            "POST",
+            "/api/v1/books/b1/chapters/reorder",
+            Some(&serde_json::json!({ "order": [2, 1] }).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["op"], "reorder");
+        assert_eq!(
+            body["renumbered"],
+            serde_json::json!([{ "from": 1, "to": 2 }, { "from": 2, "to": 1 }])
+        );
+        assert!(root.join("books/b1/chapters/0001_第2章.md").exists());
+        assert!(root.join("books/b1/chapters/0002_第1章.md").exists());
     }
 }
 

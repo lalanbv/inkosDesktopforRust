@@ -716,6 +716,195 @@ pub async fn delete_chapter(
     }
 }
 
+// ── POST /api/v1/books/:id/chapters/:num/split（R48a/1641 号）──────
+// ── POST /api/v1/books/:id/chapters/:num/merge ────────────────────
+// ── POST /api/v1/books/:id/chapters/reorder ───────────────────────
+//
+// 章节结构操作三事务（interaction/chapter_structure.rs）：staging 两相
+// 原子性 + 章集合 revision 乐观并发（expectedRevision 不符 409
+// CHAPTER_SET_CONFLICT，缺省跳过）+ 事务完成后单事件广播
+// chapter:restructured（防重编号窗口期事件风暴——1638 号风险对策）。
+// TS 镜像 = server.ts 三同形端点（core/state/chapter-structure.ts 事务）。
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterSplitBody {
+    /// UTF-16 code unit 偏移（对齐前端光标语义）。
+    #[serde(default)]
+    pub offset: Option<serde_json::Number>,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterMergeBody {
+    #[serde(default)]
+    pub merge_with: Option<serde_json::Number>,
+    /// 拼接分隔（缺省 "\n\n"；显式空串合法）。
+    #[serde(default)]
+    pub separator: Option<String>,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterReorderBody {
+    #[serde(default)]
+    pub order: Option<Vec<serde_json::Number>>,
+    #[serde(default)]
+    pub expected_revision: Option<String>,
+}
+
+fn structure_error_response(
+    error: crate::interaction::chapter_structure::StructureError,
+) -> axum::response::Response {
+    let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::BAD_REQUEST);
+    let mut body = json!({ "error": error.message });
+    if let Some(code) = error.code {
+        body["code"] = json!(code);
+    }
+    (status, Json(body)).into_response()
+}
+
+fn as_u32_field(value: Option<&serde_json::Number>) -> Option<u32> {
+    value.and_then(|number| number.as_u64()).map(|n| n as u32)
+}
+
+pub async fn split_chapter_route(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    Json(body): Json<ChapterSplitBody>,
+) -> impl IntoResponse {
+    let Some(chapter_number) = ts_parse_int(&chapter).and_then(|v| u32::try_from(v).ok()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Chapter {chapter} not found.") })),
+        )
+            .into_response();
+    };
+    let Some(offset) = as_u32_field(body.offset.as_ref()).map(|v| v as usize) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Split offset is required." })),
+        )
+            .into_response();
+    };
+    match crate::interaction::chapter_structure::split_chapter(
+        &runtime.state,
+        &book_id,
+        chapter_number,
+        offset,
+        body.expected_revision.as_deref(),
+        utc_now_millis(),
+        &utc_now_iso(),
+    )
+    .await
+    {
+        Ok(outcome) => {
+            runtime.hub.broadcast(
+                "chapter:restructured",
+                &json!({ "bookId": book_id, "op": outcome.op }),
+            );
+            let mut body = serde_json::to_value(&outcome).unwrap_or_else(|_| json!({}));
+            body["ok"] = json!(true);
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Err(error) => structure_error_response(error),
+    }
+}
+
+pub async fn merge_chapter_route(
+    State(runtime): State<BooksRuntime>,
+    Path((book_id, chapter)): Path<(String, String)>,
+    Json(body): Json<ChapterMergeBody>,
+) -> impl IntoResponse {
+    let Some(chapter_number) = ts_parse_int(&chapter).and_then(|v| u32::try_from(v).ok()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Chapter {chapter} not found.") })),
+        )
+            .into_response();
+    };
+    let Some(merge_with) = as_u32_field(body.merge_with.as_ref()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Merge target chapter is required." })),
+        )
+            .into_response();
+    };
+    match crate::interaction::chapter_structure::merge_chapter(
+        &runtime.state,
+        &book_id,
+        chapter_number,
+        merge_with,
+        body.separator.as_deref(),
+        body.expected_revision.as_deref(),
+        utc_now_millis(),
+        &utc_now_iso(),
+    )
+    .await
+    {
+        Ok(outcome) => {
+            runtime.hub.broadcast(
+                "chapter:restructured",
+                &json!({ "bookId": book_id, "op": outcome.op }),
+            );
+            let mut body = serde_json::to_value(&outcome).unwrap_or_else(|_| json!({}));
+            body["ok"] = json!(true);
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Err(error) => structure_error_response(error),
+    }
+}
+
+pub async fn reorder_chapters_route(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    Json(body): Json<ChapterReorderBody>,
+) -> impl IntoResponse {
+    let Some(order) = body.order.as_ref().map(|list| {
+        list.iter()
+            .filter_map(|number| number.as_u64())
+            .map(|n| n as u32)
+            .collect::<Vec<u32>>()
+    }) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Reorder order is required." })),
+        )
+            .into_response();
+    };
+    if order.contains(&0) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "Reorder order is required." })),
+        )
+            .into_response();
+    }
+    match crate::interaction::chapter_structure::reorder_chapters(
+        &runtime.state,
+        &book_id,
+        &order,
+        body.expected_revision.as_deref(),
+        &utc_now_iso(),
+    )
+    .await
+    {
+        Ok(outcome) => {
+            runtime.hub.broadcast(
+                "chapter:restructured",
+                &json!({ "bookId": book_id, "op": outcome.op }),
+            );
+            let mut body = serde_json::to_value(&outcome).unwrap_or_else(|_| json!({}));
+            body["ok"] = json!(true);
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Err(error) => structure_error_response(error),
+    }
+}
+
 // ── POST /api/v1/books/:id/export-save（50 号） ───────────────────
 
 /// 落盘变体导出：写 `books/{id}.{fmt}`（TS 经交互运行时 export_book intent，

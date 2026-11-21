@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { streamSSE } from "hono/streaming";
 import { serve } from "@hono/node-server";
@@ -195,6 +195,11 @@ import {
   listAvailableGenres,
   readGenreProfile,
   validateAntiAiRule,
+  // R48a/1641 号：章节结构操作三事务（Rust interaction/chapter_structure.rs 镜像）。
+  splitChapter,
+  mergeChapters,
+  reorderChapters,
+  ChapterStructureError,
   // 707 号：timeline 域 + series 域回收（第五批）——模型/工具在树，index 导出补齐。
   TimelineSchema,
   isValidSeriesId,
@@ -3263,6 +3268,121 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ ok: true, chapterNumber: num, result });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
+    } finally {
+      await releaseLock();
+    }
+  });
+
+  // ── R48a/1641 号：章节结构操作三事务（Rust interaction/chapter_structure.rs
+  // 镜像）：staging 两相原子（core commitAtomicFileSet 单提交）+ 章集合
+  // revision 乐观并发（expectedRevision 不符 409 CHAPTER_SET_CONFLICT，缺省
+  // 跳过）+ 事务完成后单事件广播 chapter:restructured（防重编号窗口期事件
+  // 风暴——1638 号风险对策）。负路径文案与状态码与 Rust 逐字对齐。
+
+  const structureDeps = (id: string) => ({
+    bookDir: state.bookDir(id),
+    loadChapterIndex: () => state.loadChapterIndex(id),
+  });
+
+  const structureErrorResponse = (
+    c: Context,
+    e: unknown,
+  ) => {
+    if (e instanceof ChapterStructureError) {
+      return c.json(
+        { error: e.message, ...(e.code ? { code: e.code } : {}) },
+        e.status as 400 | 404 | 409,
+      );
+    }
+    return c.json({ error: String(e) }, 500);
+  };
+
+  app.post("/api/v1/books/:id/chapters/:num/split", async (c) => {
+    const id = c.req.param("id");
+    const num = parseInt(c.req.param("num"), 10);
+    const body = await c.req
+      .json<{ offset?: number; expectedRevision?: string }>()
+      .catch(() => ({}) as { offset?: number; expectedRevision?: string });
+    // Rust ts_parse_int NaN 同款：非法章号 500 逐字文案。
+    if (!Number.isInteger(num) || num < 1) {
+      return c.json({ error: `Chapter ${c.req.param("num")} not found.` }, 500);
+    }
+    if (typeof body.offset !== "number" || !Number.isInteger(body.offset) || body.offset < 0) {
+      return c.json({ error: "Split offset is required." }, 400);
+    }
+    const releaseLock = await state.acquireBookLock(id);
+    try {
+      const outcome = await splitChapter(
+        structureDeps(id),
+        id,
+        num,
+        body.offset,
+        body.expectedRevision,
+      );
+      broadcast("chapter:restructured", { bookId: id, op: outcome.op });
+      return c.json({ ok: true, ...outcome });
+    } catch (e) {
+      return structureErrorResponse(c, e);
+    } finally {
+      await releaseLock();
+    }
+  });
+
+  app.post("/api/v1/books/:id/chapters/:num/merge", async (c) => {
+    const id = c.req.param("id");
+    const num = parseInt(c.req.param("num"), 10);
+    const body = await c.req
+      .json<{ mergeWith?: number; separator?: string; expectedRevision?: string }>()
+      .catch(() => ({}) as { mergeWith?: number; separator?: string; expectedRevision?: string });
+    if (!Number.isInteger(num) || num < 1) {
+      return c.json({ error: `Chapter ${c.req.param("num")} not found.` }, 500);
+    }
+    if (typeof body.mergeWith !== "number" || !Number.isInteger(body.mergeWith) || body.mergeWith < 1) {
+      return c.json({ error: "Merge target chapter is required." }, 400);
+    }
+    const releaseLock = await state.acquireBookLock(id);
+    try {
+      const outcome = await mergeChapters(
+        structureDeps(id),
+        id,
+        num,
+        body.mergeWith,
+        body.separator,
+        body.expectedRevision,
+      );
+      broadcast("chapter:restructured", { bookId: id, op: outcome.op });
+      return c.json({ ok: true, ...outcome });
+    } catch (e) {
+      return structureErrorResponse(c, e);
+    } finally {
+      await releaseLock();
+    }
+  });
+
+  app.post("/api/v1/books/:id/chapters/reorder", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req
+      .json<{ order?: number[]; expectedRevision?: string }>()
+      .catch(() => ({}) as { order?: number[]; expectedRevision?: string });
+    const order = Array.isArray(body.order) ? body.order : [];
+    if (
+      order.length === 0
+      || !order.every((n) => Number.isInteger(n) && n >= 1)
+    ) {
+      return c.json({ error: "Reorder order is required." }, 400);
+    }
+    const releaseLock = await state.acquireBookLock(id);
+    try {
+      const outcome = await reorderChapters(
+        structureDeps(id),
+        id,
+        order,
+        body.expectedRevision,
+      );
+      broadcast("chapter:restructured", { bookId: id, op: outcome.op });
+      return c.json({ ok: true, ...outcome });
+    } catch (e) {
+      return structureErrorResponse(c, e);
     } finally {
       await releaseLock();
     }

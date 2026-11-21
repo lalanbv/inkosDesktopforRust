@@ -1,0 +1,378 @@
+{
+  "revision": [
+    {
+      "name": "empty",
+      "index": [],
+      "expected": "4f53cda18c2baa0c"
+    },
+    {
+      "name": "three-zh",
+      "index": [
+        {
+          "number": 1,
+          "title": "",
+          "status": "ready-for-review",
+          "wordCount": 120,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 2,
+          "title": "",
+          "status": "ready-for-review",
+          "wordCount": 340,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T01:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 3,
+          "title": "",
+          "status": "ready-for-review",
+          "wordCount": 88,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T02:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        }
+      ],
+      "expected": "c875f2bc7ec07f2b"
+    },
+    {
+      "name": "single",
+      "index": [
+        {
+          "number": 1,
+          "title": "",
+          "status": "ready-for-review",
+          "wordCount": 0,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T03:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        }
+      ],
+      "expected": "8782f3e430321c97"
+    },
+    {
+      "name": "reordered-input",
+      "index": [
+        {
+          "number": 3,
+          "title": "",
+          "status": "ready-for-review",
+          "wordCount": 88,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T02:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 1,
+          "title": "",
+          "status": "ready-for-review",
+          "wordCount": 120,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T00:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        },
+        {
+          "number": 2,
+          "title": "",
+          "status": "ready-for-review",
+          "wordCount": 340,
+          "createdAt": "2026-11-21T00:00:00.000Z",
+          "updatedAt": "2026-11-21T01:00:00.000Z",
+          "auditIssues": [],
+          "lengthWarnings": []
+        }
+      ],
+      "expected": "c875f2bc7ec07f2b"
+    }
+  ],
+  "renumber": {
+    "split": [
+      {
+        "name": "mid",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "at": 1,
+        "expected": [
+          {
+            "from": 2,
+            "to": 3
+          },
+          {
+            "from": 3,
+            "to": 4
+          }
+        ]
+      },
+      {
+        "name": "last",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "at": 3,
+        "expected": []
+      },
+      {
+        "name": "first",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "at": 0,
+        "expected": [
+          {
+            "from": 1,
+            "to": 2
+          },
+          {
+            "from": 2,
+            "to": 3
+          },
+          {
+            "from": 3,
+            "to": 4
+          }
+        ]
+      }
+    ],
+    "merge": [
+      {
+        "name": "remove-mid",
+        "numbers": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "removed": 2,
+        "expected": [
+          {
+            "from": 3,
+            "to": 2
+          },
+          {
+            "from": 4,
+            "to": 3
+          }
+        ]
+      },
+      {
+        "name": "remove-last",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "removed": 3,
+        "expected": []
+      },
+      {
+        "name": "remove-first",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "removed": 1,
+        "expected": [
+          {
+            "from": 2,
+            "to": 1
+          },
+          {
+            "from": 3,
+            "to": 2
+          }
+        ]
+      }
+    ],
+    "reorder": [
+      {
+        "name": "rotate",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "order": [
+          3,
+          1,
+          2
+        ],
+        "expected": [
+          {
+            "from": 1,
+            "to": 2
+          },
+          {
+            "from": 2,
+            "to": 3
+          },
+          {
+            "from": 3,
+            "to": 1
+          }
+        ]
+      },
+      {
+        "name": "reverse",
+        "numbers": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "order": [
+          4,
+          3,
+          2,
+          1
+        ],
+        "expected": [
+          {
+            "from": 1,
+            "to": 4
+          },
+          {
+            "from": 2,
+            "to": 3
+          },
+          {
+            "from": 3,
+            "to": 2
+          },
+          {
+            "from": 4,
+            "to": 1
+          }
+        ]
+      },
+      {
+        "name": "identity",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "order": [
+          1,
+          2,
+          3
+        ],
+        "expected": []
+      },
+      {
+        "name": "invalid-missing",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "order": [
+          1,
+          2
+        ],
+        "invalid": true,
+        "expected": null
+      },
+      {
+        "name": "invalid-dup",
+        "numbers": [
+          1,
+          2,
+          3
+        ],
+        "order": [
+          1,
+          2,
+          2
+        ],
+        "invalid": true,
+        "expected": [
+          {
+            "from": 2,
+            "to": 3
+          }
+        ]
+      }
+    ]
+  },
+  "split": [
+    {
+      "name": "bmp-mid",
+      "content": "# 标题\n\n正文第一段。\n\n第二段。",
+      "offset": 8,
+      "expected": {
+        "head": "# 标题\n\n正文",
+        "tail": "第一段。\n\n第二段。"
+      }
+    },
+    {
+      "name": "astral-boundary",
+      "content": "ab龙c🐠尾",
+      "offset": 4,
+      "expected": {
+        "head": "ab龙c",
+        "tail": "🐠尾"
+      }
+    },
+    {
+      "name": "surrogate-mid-invalid",
+      "content": "ab龙c🐠尾",
+      "offset": 5,
+      "invalid": true,
+      "expected": null
+    },
+    {
+      "name": "offset-zero-invalid",
+      "content": "正文",
+      "offset": 0,
+      "invalid": true,
+      "expected": null
+    },
+    {
+      "name": "offset-len-invalid",
+      "content": "正文",
+      "offset": 2,
+      "invalid": true,
+      "expected": null
+    }
+  ],
+  "merge": [
+    {
+      "name": "default-double-newline",
+      "a": "第一章甲。",
+      "b": "第二章乙。",
+      "separator": "\n\n",
+      "expected": "第一章甲。\n\n第二章乙。"
+    },
+    {
+      "name": "empty-separator",
+      "a": "甲",
+      "b": "乙",
+      "separator": "",
+      "expected": "甲乙"
+    },
+    {
+      "name": "newline-only",
+      "a": "甲",
+      "b": "乙",
+      "separator": "\n",
+      "expected": "甲\n乙"
+    }
+  ]
+}

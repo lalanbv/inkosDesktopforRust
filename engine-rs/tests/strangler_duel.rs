@@ -1802,3 +1802,117 @@ async fn search_face_duel() {
         diffs.join("\n")
     );
 }
+
+/// R48a/1641 号：章节结构操作写面对跑（fork 契约复活面，688 豁免记账同族
+/// ——当前双端逐位对齐的活体认证走 contract-diff 变异探针尾批 + 双端单测，
+/// 本测为 fork 契约复活面）。三操作在双端各自 root 上顺序执行同参数
+/// split→merge→reorder，随后对齐 `GET /books/b1` 的章清单与 `GET
+/// /chapters/:num` 内容（normalize 剥易变键后逐位比对）。
+#[tokio::test]
+async fn chapter_structure_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
+
+    async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {
+        let response = loopback_client()
+            .post(format!("{base}{path}"))
+            .header("content-type", "application/json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("请求失败");
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        let parsed = serde_json::from_str(&text).unwrap_or(Value::String(text));
+        (status, parsed)
+    }
+
+    let mut diffs: Vec<String> = Vec::new();
+
+    // ── split：2 号章按 UTF-16 offset 8 切两章 ──
+    for (base, name) in [(&rust, "rust"), (&ts.base, "ts")] {
+        let (status, body) =
+            post_json(base, "/api/v1/books/b1/chapters/2/split", r#"{"offset":8}"#).await;
+        if status != 200 {
+            diffs.push(format!("[{name}] split status={status} body={body}"));
+        }
+    }
+    let (rust_status, mut rust_body) = get_json(&rust, "/api/v1/books/b1").await;
+    let (ts_status, mut ts_body) = get_json(&ts, "/api/v1/books/b1").await;
+    normalize(&mut rust_body);
+    normalize(&mut ts_body);
+    if rust_status != ts_status || rust_body != ts_body {
+        diffs.push(format!(
+            "DIFF after split\n  rust[{rust_status}]: {rust_body}\n  ts  [{ts_status}]: {ts_body}"
+        ));
+    }
+
+    // ── merge：3+4 相邻合并（split 后新章与原 3 号）──
+    for (base, name) in [(&rust, "rust"), (&ts.base, "ts")] {
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/chapters/3/merge",
+            r#"{"mergeWith":4}"#,
+        )
+        .await;
+        if status != 200 {
+            diffs.push(format!("[{name}] merge status={status} body={body}"));
+        }
+    }
+    let (rust_status, mut rust_body) = get_json(&rust, "/api/v1/books/b1").await;
+    let (ts_status, mut ts_body) = get_json(&ts, "/api/v1/books/b1").await;
+    normalize(&mut rust_body);
+    normalize(&mut ts_body);
+    if rust_status != ts_status || rust_body != ts_body {
+        diffs.push(format!(
+            "DIFF after merge\n  rust[{rust_status}]: {rust_body}\n  ts  [{ts_status}]: {ts_body}"
+        ));
+    }
+
+    // ── reorder：倒序全排列 ──
+    for (base, name) in [(&rust, "rust"), (&ts.base, "ts")] {
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/chapters/reorder",
+            r#"{"order":[3,2,1]}"#,
+        )
+        .await;
+        if status != 200 {
+            diffs.push(format!("[{name}] reorder status={status} body={body}"));
+        }
+    }
+    // 终态逐位对齐：书目详情（章清单）+ 首末章内容。
+    for endpoint in [
+        "/api/v1/books/b1",
+        "/api/v1/books/b1/chapters/1",
+        "/api/v1/books/b1/chapters/3",
+    ] {
+        let (rust_status, mut rust_body) = get_json(&rust, endpoint).await;
+        let (ts_status, mut ts_body) = get_json(&ts, endpoint).await;
+        normalize(&mut rust_body);
+        normalize(&mut ts_body);
+        if rust_status != ts_status || rust_body != ts_body {
+            diffs.push(format!("DIFF {endpoint}\n  rust[{rust_status}]: {rust_body}\n  ts  [{ts_status}]: {ts_body}"));
+        }
+    }
+
+    assert!(
+        diffs.is_empty(),
+        "章节结构双端契约差异 {} 处：\n{}",
+        diffs.len(),
+        diffs.join("\n")
+    );
+}

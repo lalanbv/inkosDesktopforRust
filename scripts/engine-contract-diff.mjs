@@ -931,6 +931,15 @@ try {
       // 后快照在位双端 200，但双腿回滚语义差会清空/改写章节与账本，污染其后
       // 全部 GET 对比）→ 移共享面表尾（draft 同款防污染先例）；写链状态收敛
       // 的 GET 基线（promises/quality-trend/roster/eval/detect）先于变异探针。
+      // R48a/1641 号：章节结构操作三事务（有章区、自愈回链——split(2,off4)
+      // →3 新章 → merge(3,mergeWith:2) 回并恢复原集合 → reorder([2,1]) 倒序
+      // → reorder([1,2]) 复原，其后 approve/reject 变异语义不受影响）。
+      // statusOnly：响应含 updatedAt 派生 revision（双端时间戳差逐位必伪红）；
+      // 事务语义由 golden vectors + 双端单测锁。
+      { path: "/api/v1/books/:id/chapters/2/split", method: "POST", body: { offset: 4 }, statusOnly: true },
+      { path: "/api/v1/books/:id/chapters/3/merge", method: "POST", body: { mergeWith: 2 }, statusOnly: true },
+      { path: "/api/v1/books/:id/chapters/reorder", method: "POST", body: { order: [2, 1] }, statusOnly: true },
+      { path: "/api/v1/books/:id/chapters/reorder", method: "POST", body: { order: [1, 2] }, statusOnly: true },
       { path: "/api/v1/books/:id/chapters/1/approve", method: "POST" },
       { path: "/api/v1/books/:id/chapters/1/reject", method: "POST" },
       { path: "/api/v1/books/:id/chapters/2/reject", method: "POST" },

@@ -476,6 +476,22 @@ export { ScriptCreationAgent, StoryboardCreationAgent, InteractiveFilmCreationAg
 export { BookWriteLockError, StateManager } from "./state/manager.js";
 export { syncChapterWordCounts, type ChapterWordCountChange, type ChapterWordSyncDeps, type ChapterWordSyncResult } from "./state/chapter-word-sync.js";
 export { deleteLatestChapter, type ChapterDeleteDeps, type DeleteLatestChapterOptions, type DeleteLatestChapterResult } from "./state/chapter-delete.js";
+// ── R48a/1641 号：章节结构操作事务（engine-rs chapter_structure.rs 镜像）──
+export {
+  chapterSetRevision,
+  mergeChapters,
+  mergeContent,
+  reorderChapters,
+  reorderPlan,
+  renumberAfterMerge,
+  renumberAfterSplit,
+  splitChapter,
+  splitUtf16,
+  ChapterStructureError,
+  REVISION_CONFLICT_CODE,
+  type RenumberedEntry,
+  type StructureOutcome,
+} from "./state/chapter-structure.js";
 export {
   archiveChapterVersion,
   listChapterVersions,

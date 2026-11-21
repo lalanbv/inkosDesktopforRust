@@ -14,6 +14,7 @@ pub mod author_skill_tool;
 pub mod book_edit_tools;
 pub mod book_reference_tool;
 pub mod book_session_store;
+pub mod chapter_structure;
 pub mod chat_prompts;
 pub mod edit_controller;
 pub mod events;
