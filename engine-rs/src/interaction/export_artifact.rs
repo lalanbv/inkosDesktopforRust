@@ -24,6 +24,8 @@ pub enum ExportFormat {
     Txt,
     Md,
     Epub,
+    /// R50/1645 号：整书 markdown zip 打包（按卷目录 + 元数据 manifest）。
+    MdZip,
 }
 
 impl ExportFormat {
@@ -31,6 +33,7 @@ impl ExportFormat {
         match value {
             Some("md") => ExportFormat::Md,
             Some("epub") => ExportFormat::Epub,
+            Some("md-zip") => ExportFormat::MdZip,
             _ => ExportFormat::Txt,
         }
     }
@@ -40,6 +43,7 @@ impl ExportFormat {
             ExportFormat::Txt => "txt",
             ExportFormat::Md => "md",
             ExportFormat::Epub => "epub",
+            ExportFormat::MdZip => "zip",
         }
     }
 
@@ -48,6 +52,7 @@ impl ExportFormat {
             ExportFormat::Epub => "application/epub+zip",
             ExportFormat::Md => "text/markdown; charset=utf-8",
             ExportFormat::Txt => "text/plain; charset=utf-8",
+            ExportFormat::MdZip => "application/zip",
         }
     }
 }
@@ -132,6 +137,8 @@ pub async fn build_export_artifact(
     format: ExportFormat,
     approved_only: bool,
     output_path: Option<&Path>,
+    // R50/1645 号：章节勾选子集（Scrivener Compile 语义；None=全部）。
+    chapter_filter: Option<&[u32]>,
 ) -> Result<ExportArtifact, String> {
     let index = state
         .load_chapter_index(book_id)
@@ -147,7 +154,10 @@ pub async fn build_export_artifact(
             .filter(|ch| ch.status == crate::models::chapter::ChapterStatus::Approved)
             .collect()
     } else {
-        index.iter().collect()
+        index
+            .iter()
+            .filter(|ch| chapter_filter.is_none_or(|allowed| allowed.contains(&ch.number)))
+            .collect()
     };
     if chapters.is_empty() {
         return Err("No chapters to export.".to_string());
@@ -212,6 +222,68 @@ pub async fn build_export_artifact(
                 parts.join(joiner).into_bytes(),
             )
         }
+        ExportFormat::MdZip => {
+            // R50/1645 号：整书打包——按卷目录（{order:02}_{title}，未分组
+            // 00_ungrouped）+ 元数据 manifest.json。目录名路径分隔符 sanitize。
+            let volumes = book
+                .writing
+                .as_ref()
+                .and_then(|writing| writing.volumes.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            let sanitize_name = |raw: &str| -> String {
+                raw.chars()
+                    .map(|c| {
+                        if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                            '-'
+                        } else {
+                            c
+                        }
+                    })
+                    .collect()
+            };
+            let mut writer = StoredZipWriter::new();
+            let mut manifest_chapters: Vec<serde_json::Value> = Vec::new();
+            for chapter in &chapters {
+                let Some(file) = chapter_files.get(&chapter.number) else {
+                    continue;
+                };
+                let content = tokio::fs::read_to_string(chapters_dir.join(file))
+                    .await
+                    .unwrap_or_default();
+                let dir = chapter
+                    .volume_id
+                    .as_deref()
+                    .and_then(|id| volumes.iter().find(|volume| volume.id == id))
+                    .map(|volume| format!("{:02}_{}", volume.order, sanitize_name(&volume.title)))
+                    .unwrap_or_else(|| "00_ungrouped".to_string());
+                let path = format!(
+                    "{dir}/{:04}_{}.md",
+                    chapter.number,
+                    sanitize_name(&chapter.title)
+                );
+                writer.add(&path, content.as_bytes());
+                manifest_chapters.push(serde_json::json!({
+                    "number": chapter.number,
+                    "title": chapter.title,
+                    "volumeId": chapter.volume_id,
+                    "path": path,
+                    "wordCount": chapter.word_count,
+                }));
+            }
+            let manifest = serde_json::json!({
+                "book": { "id": book_id, "title": book.title, "language": book.language },
+                "volumes": volumes,
+                "chapters": manifest_chapters,
+            });
+            writer.add(
+                "manifest.json",
+                serde_json::to_string_pretty(&manifest)
+                    .unwrap_or_else(|_| "{}".to_string())
+                    .as_bytes(),
+            );
+            (format!("{book_id}.zip"), writer.finish())
+        }
     };
 
     Ok(ExportArtifact {
@@ -223,6 +295,38 @@ pub async fn build_export_artifact(
         content_type: format.content_type().to_string(),
         payload,
     })
+}
+
+/// R50/1645 号：md-zip 条目路径构造（纯函数，双端 golden
+/// chapter-mdzip-vectors.json 锁定）。卷目录 = `{order:02}_{title}`（路径
+/// 分隔符 sanitize），未分组 = `00_ungrouped`；章文件 = `{NNNN}_{title}.md`
+/// （正典 4 位补零形态）。TS 镜像 = export-artifact.ts `mdZipEntryPath`。
+pub fn md_zip_entry_path(
+    volume_id: Option<&str>,
+    volumes: &[crate::models::book::BookVolume],
+    chapter_number: u32,
+    chapter_title: &str,
+) -> String {
+    let sanitize_name = |raw: &str| -> String {
+        raw.chars()
+            .map(|c| {
+                if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                    '-'
+                } else {
+                    c
+                }
+            })
+            .collect()
+    };
+    let dir = volume_id
+        .and_then(|id| volumes.iter().find(|volume| volume.id == id))
+        .map(|volume| format!("{:02}_{}", volume.order, sanitize_name(&volume.title)))
+        .unwrap_or_else(|| "00_ungrouped".to_string());
+    format!(
+        "{dir}/{:04}_{}.md",
+        chapter_number,
+        sanitize_name(chapter_title)
+    )
 }
 
 // ── 零依赖 stored-zip EPUB ──────────────────────────────────────
@@ -506,7 +610,7 @@ mod tests {
     async fn txt_export_joins_title_and_chapters() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None)
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, None)
             .await
             .unwrap();
         assert_eq!(artifact.file_name, "b1.txt");
@@ -524,7 +628,7 @@ mod tests {
     async fn md_export_uses_heading_and_divider() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Md, false, None)
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Md, false, None, None)
             .await
             .unwrap();
         assert_eq!(artifact.content_type, "text/markdown; charset=utf-8");
@@ -538,7 +642,7 @@ mod tests {
     async fn approved_only_filters_index() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, true, None)
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, true, None, None)
             .await
             .unwrap();
         assert_eq!(artifact.chapters_exported, 1);
@@ -552,7 +656,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state = StateManager::new(dir.path());
         // 缺失书：loadBookConfig 在空章判断之前失败（TS 同序）。
-        let error = build_export_artifact(&state, "ghost", ExportFormat::Txt, false, None)
+        let error = build_export_artifact(&state, "ghost", ExportFormat::Txt, false, None, None)
             .await
             .unwrap_err();
         assert!(!error.is_empty());
@@ -562,7 +666,7 @@ mod tests {
     async fn epub_is_valid_stored_zip_with_mimetype_first() {
         let dir = tempfile::tempdir().unwrap();
         let state = fixture(dir.path()).await;
-        let artifact = build_export_artifact(&state, "b1", ExportFormat::Epub, false, None)
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Epub, false, None, None)
             .await
             .unwrap();
         assert_eq!(artifact.content_type, "application/epub+zip");

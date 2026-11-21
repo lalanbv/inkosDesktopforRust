@@ -477,6 +477,7 @@ fn bench_export_artifact(c: &mut Criterion) {
                         )),
                         false,
                         None,
+                        None,
                     )
                     .await
                     .expect("export"),

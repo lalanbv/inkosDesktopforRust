@@ -1164,6 +1164,7 @@ pub async fn export_save(
         ExportFormat::parse(Some(&fmt)),
         approved_only,
         Some(&output_path),
+        None,
     )
     .await
     {

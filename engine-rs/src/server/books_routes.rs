@@ -2285,6 +2285,9 @@ pub struct ExportQuery {
     pub format: Option<String>,
     #[serde(rename = "approvedOnly", default)]
     pub approved_only: Option<String>,
+    /// R50/1645 号：章节勾选子集 CSV（Scrivener Compile 语义；缺省=全部）。
+    #[serde(default)]
+    pub chapters: Option<String>,
 }
 
 pub async fn export(
@@ -2297,12 +2300,20 @@ pub async fn export(
     }
     let format = crate::interaction::export_artifact::ExportFormat::parse(query.format.as_deref());
     let approved_only = query.approved_only.as_deref() == Some("true");
+    // R50/1645 号：chapters CSV → 勾选子集（非法段忽略；缺省=全部）。
+    let chapter_filter: Option<Vec<u32>> = query.chapters.as_deref().map(|raw| {
+        raw.split(',')
+            .filter_map(|segment| segment.trim().parse::<u32>().ok())
+            .filter(|&n| n > 0)
+            .collect::<Vec<u32>>()
+    });
     match crate::interaction::export_artifact::build_export_artifact(
         &runtime.state,
         &book_id,
         format,
         approved_only,
         None,
+        chapter_filter.as_deref(),
     )
     .await
     {

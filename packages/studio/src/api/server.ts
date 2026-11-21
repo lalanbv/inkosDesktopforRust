@@ -8175,10 +8175,16 @@ function yamlScalar(value: unknown): string {
   app.get("/api/v1/books/:id/export", async (c) => {
     const id = c.req.param("id");
     const format = (c.req.query("format") ?? "txt") as string;
+    // R50/1645 号：chapters CSV 勾选子集（Scrivener Compile 语义；缺省=全部）。
+    const chaptersCsv = c.req.query("chapters");
+    const chapterFilter = chaptersCsv
+      ? chaptersCsv.split(",").map((s) => Number.parseInt(s.trim(), 10)).filter((n) => Number.isInteger(n) && n > 0)
+      : undefined;
 
     try {
       const artifact = await buildExportArtifact(state, id, {
-        format: format as "txt" | "md" | "epub",
+        format: format as "txt" | "md" | "epub" | "md-zip",
+        chapterFilter,
       });
       const responseBody = typeof artifact.payload === "string"
         ? artifact.payload
@@ -8199,8 +8205,13 @@ function yamlScalar(value: unknown): string {
 
   app.post("/api/v1/books/:id/export-save", async (c) => {
     const id = c.req.param("id");
-    const { format } = await c.req.json<{ format?: string }>().catch(() => ({ format: "txt" }));
+    const { format, chapters } = await c.req
+      .json<{ format?: string; chapters?: ReadonlyArray<number> }>()
+      .catch(() => ({ format: "txt" }) as { format?: string; chapters?: ReadonlyArray<number> });
     const fmt = format ?? "txt";
+    const chapterFilter = Array.isArray(chapters)
+      ? chapters.filter((n) => Number.isInteger(n) && n > 0)
+      : undefined;
 
     try {
       const bookDir = state.bookDir(id);

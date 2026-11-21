@@ -531,6 +531,7 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
         format,
         approved_only,
         None,
+        None,
     )
     .await
     {

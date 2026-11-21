@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { EPub } from "epub-gen-memory";
+import JSZip from "jszip";
 import {renderChapterDocument} from '../utils/chapter-document.js';
 import {readChapterHeading} from '../utils/chapter-splitter.js';
 import {buildLengthSpec, chapterLengthDelivery, countChapterLength, defaultChapterLength} from '../utils/length-metrics.js';
@@ -13,12 +14,16 @@ export interface ExportStateLike {
   readonly loadBookConfig: (bookId: string) => Promise<{
     readonly title: string; readonly language?: string; readonly chapterWordCount?: number;
     readonly minChapterLength?: number; readonly maxChapterLength?: number;
+    /** R49/1644 号：卷有序列表（md-zip 打包按卷目录）。 */
+    readonly writing?: { readonly volumes?: ReadonlyArray<{ readonly id: string; readonly title: string; readonly order: number }> };
   }>;
   readonly loadChapterIndex: (bookId: string) => Promise<ReadonlyArray<{
     readonly number: number;
     readonly title?: string;
     readonly wordCount: number;
     readonly lengthSpec?: LengthSpec;
+    /** R49/1644 号：卷归属（md-zip 打包按卷分组目录）。 */
+    readonly volumeId?: string;
   }>>;
 }
 
@@ -32,9 +37,9 @@ export interface ExportArtifact {
   readonly fileName: string;
   readonly chaptersExported: number;
   readonly totalWords: number;
-  readonly format: "txt" | "md" | "epub";
+  readonly format: "txt" | "md" | "epub" | "md-zip";
   readonly contentType: string;
-  readonly payload: string | Buffer;
+  readonly payload: string | Uint8Array;
 }
 
 /** Read once: measurements, exported text and the receipt describe the same source. */
@@ -53,7 +58,15 @@ export async function readBookExportSource(state: ExportStateLike, bookId: strin
     const markdown = renderChapterDocument(chapter.number, title, raw, language);
     const spec = chapter.lengthSpec ?? buildLengthSpec(book.chapterWordCount ?? defaultChapterLength(language), language, book);
     const count = countChapterLength(markdown, spec.countingMode);
-    return {number: chapter.number, file, markdown, count, delivery: chapterLengthDelivery(count, spec)};
+    return {
+      number: chapter.number,
+      title,
+      volumeId: chapter.volumeId ?? undefined,
+      file,
+      markdown,
+      count,
+      delivery: chapterLengthDelivery(count, spec),
+    };
   }));
   const checks = chapters.flatMap(chapter => chapter.delivery ? [{chapterNumber: chapter.number, ...chapter.delivery}] : []);
   const delivery = {
@@ -132,16 +145,41 @@ export function markdownToSimpleHtml(markdown: string): { title: string; html: s
   return { title, html };
 }
 
+/** R50/1645 号：md-zip 条目路径构造（纯函数，双端 golden 锁定）。
+ * 卷目录 = `{order:02}_{title}`（路径分隔符 sanitize），未分组 =
+ * `00_ungrouped`；章文件 = `{NNNN}_{title}.md`。Rust 镜像 =
+ * export_artifact.rs `md_zip_entry_path`。 */
+export function mdZipEntryPath(
+  volumeId: string | undefined,
+  volumes: ReadonlyArray<{ readonly id: string; readonly title: string; readonly order: number }>,
+  chapterNumber: number,
+  chapterTitle: string,
+): string {
+  const sanitizeName = (raw: string): string => raw.replace(/[/\\:*?"<>|]/g, "-");
+  const dir = volumeId
+    ? (() => {
+      const volume = volumes.find((candidate) => candidate.id === volumeId);
+      return volume ? `${String(volume.order).padStart(2, "0")}_${sanitizeName(volume.title)}` : "00_ungrouped";
+    })()
+    : "00_ungrouped";
+  return `${dir}/${String(chapterNumber).padStart(4, "0")}_${sanitizeName(chapterTitle)}.md`;
+}
+
 export async function buildExportArtifact(
   state: ExportStateLike,
   bookId: string,
   options: {
-    readonly format?: "txt" | "md" | "epub";
+    readonly format?: "txt" | "md" | "epub" | "md-zip";
     readonly outputPath?: string;
+    /** R50/1645 号：章节勾选子集（Scrivener Compile 语义；缺省=全部）。 */
+    readonly chapterFilter?: ReadonlyArray<number>;
   },
 ): Promise<ExportArtifact> {
   const format = options.format ?? "txt";
-  const {book, chapters, delivery, sourceDigest, totalWords} = await readBookExportSource(state, bookId);
+  const filter = options.chapterFilter;
+  const {book, chapters: allChapters, delivery, sourceDigest, totalWords: allWords} = await readBookExportSource(state, bookId);
+  const chapters = filter ? allChapters.filter((chapter) => filter.includes(chapter.number)) : allChapters;
+  const totalWords = chapters.reduce((sum, chapter) => sum + chapter.count, 0);
 
   const bookDir = state.bookDir(bookId);
   const outputPath = options.outputPath ?? join(bookDir, "exports", `${bookId}.${format}`);
@@ -170,6 +208,41 @@ export async function buildExportArtifact(
     };
   }
 
+  if (format === "md-zip") {
+    // R50/1645 号：整书打包（Rust ExportFormat::MdZip 镜像）——按卷目录
+    // （{order:02}_{title}，未分组 00_ungrouped）+ 元数据 manifest.json。
+    const zip = new JSZip();
+    const volumes = book.writing?.volumes ?? [];
+    const manifestChapters: Array<Record<string, unknown>> = [];
+    for (const chapter of chapters) {
+      const path = mdZipEntryPath(chapter.volumeId, volumes, chapter.number, chapter.title ?? "");
+      zip.file(path, chapter.markdown);
+      manifestChapters.push({
+        number: chapter.number,
+        title: chapter.title ?? "",
+        volumeId: chapter.volumeId ?? null,
+        path,
+        wordCount: chapter.count,
+      });
+    }
+    const manifest = {
+      book: { id: bookId, title: book.title, language: book.language ?? null },
+      volumes,
+      chapters: manifestChapters,
+    };
+    zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+    return {
+      ...receipt,
+      outputPath,
+      fileName: `${bookId}.zip`,
+      chaptersExported: chapters.length,
+      totalWords,
+      format,
+      contentType: "application/zip",
+      payload: await zip.generateAsync({ type: "uint8array" }),
+    };
+  }
+
   const parts: string[] = [];
   parts.push(format === "md" ? `# ${book.title}` : book.title);
   for (const chapter of chapters) {
@@ -192,8 +265,9 @@ export async function writeExportArtifact(
   state: ExportStateLike,
   bookId: string,
   options: {
-    readonly format?: "txt" | "md" | "epub";
+    readonly format?: "txt" | "md" | "epub" | "md-zip";
     readonly outputPath?: string;
+    readonly chapterFilter?: ReadonlyArray<number>;
   },
 ): Promise<Omit<ExportArtifact, "payload" | "contentType" | "fileName">> {
   const artifact = await buildExportArtifact(state, bookId, options);

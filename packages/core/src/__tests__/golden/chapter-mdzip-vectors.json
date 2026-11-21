@@ -1,0 +1,83 @@
+{
+  "cases": [
+    {
+      "name": "volume-dir",
+      "volumeId": "v1",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "第一卷",
+          "order": 1
+        },
+        {
+          "id": "v2",
+          "title": "第二卷",
+          "order": 2
+        }
+      ],
+      "chapterNumber": 12,
+      "chapterTitle": "风起于青萍之末",
+      "expected": "01_第一卷/0012_风起于青萍之末.md"
+    },
+    {
+      "name": "second-volume-order",
+      "volumeId": "v2",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "第一卷",
+          "order": 1
+        },
+        {
+          "id": "v2",
+          "title": "第二卷",
+          "order": 2
+        }
+      ],
+      "chapterNumber": 3,
+      "chapterTitle": "云涌",
+      "expected": "02_第二卷/0003_云涌.md"
+    },
+    {
+      "name": "ungrouped",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "第一卷",
+          "order": 1
+        }
+      ],
+      "chapterNumber": 1,
+      "chapterTitle": "风起",
+      "expected": "00_ungrouped/0001_风起.md"
+    },
+    {
+      "name": "unknown-volume-falls-default",
+      "volumeId": "ghost",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "第一卷",
+          "order": 1
+        }
+      ],
+      "chapterNumber": 2,
+      "chapterTitle": "灵脉",
+      "expected": "00_ungrouped/0002_灵脉.md"
+    },
+    {
+      "name": "path-separators-sanitized",
+      "volumes": [],
+      "chapterNumber": 5,
+      "chapterTitle": "含/斜杠:与*星号",
+      "expected": "00_ungrouped/0005_含-斜杠-与-星号.md"
+    },
+    {
+      "name": "empty-title",
+      "volumes": [],
+      "chapterNumber": 7,
+      "chapterTitle": "",
+      "expected": "00_ungrouped/0007_.md"
+    }
+  ]
+}
