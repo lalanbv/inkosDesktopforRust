@@ -27,6 +27,7 @@ import type { SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
 import { deriveBookActivity, isWriteStoppedMessage, shouldRefetchBookView, writeTaskSessionId } from "../hooks/use-book-activity";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { PromptDialog } from "../components/PromptDialog";
 import { GitBranch,
   ChevronLeft,
   Zap,
@@ -190,6 +191,32 @@ export function BookDetail({
   // R48a/1642 号：结构操作 revision 链式乐观并发——上一次结构操作响应的
   // revision（首次 undefined=跳过校验；409=集合并发变更，提示刷新重试）。
   const [structureRevision, setStructureRevision] = useState<string | undefined>(undefined);
+  // 1650/1651 号：wry 壳内 window.prompt 返回 null、alert 静默（WKUIDelegate
+  // 未实现 JS 对话框）——人工反馈输入走 React PromptDialog，错误/结果提示走
+  // 页内 notice 文本条。
+  const [actionNotice, setActionNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [pendingBrief, setPendingBrief] = useState<{
+    title: string;
+    message: string;
+    onSubmit: (value: string) => void;
+    onCancel: () => void;
+  } | null>(null);
+  /** 弹层问询（返回 null=取消；空串=确认留空——原 prompt 语义保持）。 */
+  const askBrief = (title: string, message: string) =>
+    new Promise<string | null>((resolve) => {
+      setPendingBrief({
+        title,
+        message,
+        onSubmit: (value) => { setPendingBrief(null); resolve(value); },
+        onCancel: () => { setPendingBrief(null); resolve(null); },
+      });
+    });
+  const notifyError = (fallback: string) => (e: unknown) => {
+    setActionNotice({ text: e instanceof Error ? e.message : fallback, error: true });
+  };
+  const notify = (text: string) => {
+    setActionNotice({ text, error: false });
+  };
   const [restructuring, setRestructuring] = useState(false);
   // 拖拽重排在途章号（HTML5 DnD：dragStart 记录源章，drop 落目标章）。
   const dragChapterRef = useRef<number | null>(null);
@@ -312,7 +339,7 @@ export function BookDetail({
       });
     } catch (e) {
       setWriteRequestPending(false);
-      alert(e instanceof Error ? e.message : "Failed");
+      notifyError("Failed")(e);
     }
   };
 
@@ -332,7 +359,7 @@ export function BookDetail({
       await postApi(`/books/${bookId}/draft`);
     } catch (e) {
       setDraftRequestPending(false);
-      alert(e instanceof Error ? e.message : "Failed");
+      notifyError("Failed")(e);
     }
   };
 
@@ -401,18 +428,19 @@ export function BookDetail({
       }
       nav.toDashboard();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Delete failed");
+      notifyError("Delete failed")(e);
     } finally {
       setDeleting(false);
     }
   };
 
   const handleRewrite = async (chapterNum: number) => {
-    const brief = window.prompt(
+    // 1651 号：壳内 prompt 哑——React PromptDialog（留空确认=沿用 focus 语义保持）。
+    const brief = await askBrief(
+      t("book.rewriteBriefTitle"),
       data?.book.language === "en"
         ? "Optional rewrite brief for this run only. Leave blank to use existing focus."
         : "可选：输入这次重写要遵循的补充想法。留空则沿用现有 focus。",
-      "",
     );
     if (brief === null) return;
     setRewritingChapters((prev) => [...prev, chapterNum]);
@@ -424,18 +452,18 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Rewrite failed");
+      notifyError("Rewrite failed")(e);
     } finally {
       setRewritingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
   };
 
   const handleRevise = async (chapterNum: number, mode: ReviseMode) => {
-    const brief = window.prompt(
+    const brief = await askBrief(
+      t("book.reviseBriefTitle"),
       data?.book.language === "en"
         ? "Optional revise brief for this run only. Leave blank to use existing focus."
         : "可选：输入这次修订要遵循的补充想法。留空则沿用现有 focus。",
-      "",
     );
     if (brief === null) return;
     setRevisingChapters((prev) => [...prev, chapterNum]);
@@ -447,18 +475,18 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Revision failed");
+      notifyError("Revision failed")(e);
     } finally {
       setRevisingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
   };
 
   const handleSync = async (chapterNum: number) => {
-    const brief = window.prompt(
+    const brief = await askBrief(
+      t("book.syncBriefTitle"),
       data?.book.language === "en"
         ? "Optional sync brief for interpreting the edited chapter body. Leave blank to sync directly from the text."
         : "可选：输入这次同步时要遵循的补充说明。留空则直接按正文同步。",
-      "",
     );
     if (brief === null) return;
     setSyncingChapters((prev) => [...prev, chapterNum]);
@@ -470,7 +498,7 @@ export function BookDetail({
       });
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Sync failed");
+      notifyError("Sync failed")(e);
     } finally {
       setSyncingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
@@ -493,7 +521,7 @@ export function BookDetail({
       // 1001 号：保存成功清草稿（真源已更新，覆盖层语义一致）
       clearBookSettingsDraft(bookId);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Save failed");
+      notifyError("Save failed")(e);
       // 失败草稿保留（不丢未保存修改）
     } finally {
       setSavingSettings(false);
@@ -512,7 +540,7 @@ export function BookDetail({
       }
     }
     if (failed > 0) {
-      alert(`${failed}/${reviewable.length} approve(s) failed`);
+      notify(`${failed}/${reviewable.length} approve(s) failed`);
     }
     refetch();
   };
@@ -520,10 +548,10 @@ export function BookDetail({
   const runBookAction = async (key: string, action: () => Promise<string>) => {
     setBookActionPending(key);
     try {
-      alert(await action());
+      notify(await action());
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Action failed");
+      notifyError("Action failed")(e);
     } finally {
       setBookActionPending(null);
     }
@@ -562,11 +590,12 @@ export function BookDetail({
   };
 
   const handleReviseFoundation = async () => {
-    const feedback = window.prompt(
+    // 1651 号：React PromptDialog（空反馈=取消执行，原语义保持）。
+    const feedback = await askBrief(
+      t("book.foundationFeedbackTitle"),
       data?.book.language === "en"
         ? "Foundation revision feedback. This rewrites the book foundation, not chapter body."
         : "输入重修基础设定的反馈。此操作会重写基础设定，不直接改正文。",
-      "",
     );
     if (!feedback?.trim()) return;
     await runBookAction("revise-foundation", async () => {
@@ -580,11 +609,11 @@ export function BookDetail({
   };
 
   const handlePlan = async () => {
-    const context = window.prompt(
+    const context = await askBrief(
+      t("book.planContextTitle"),
       data?.book.language === "en"
         ? "Optional planning context for the next chapter."
         : "可选：下一章规划补充说明。",
-      "",
     );
     if (context === null) return;
     await runBookAction("plan", async () => {
@@ -600,11 +629,11 @@ export function BookDetail({
   };
 
   const handleCompose = async () => {
-    const context = window.prompt(
+    const context = await askBrief(
+      t("book.composeContextTitle"),
       data?.book.language === "en"
         ? "Optional compose context for the next chapter."
         : "可选：下一章组装补充说明。",
-      "",
     );
     if (context === null) return;
     await runBookAction("compose", async () => {
@@ -636,10 +665,10 @@ export function BookDetail({
     try {
       // 961 号：双形态归一（Rust {passed,issues} / TS 2.0 {summary,observations}）。
       const auditResult = await fetchJson<unknown>(`/books/${bookId}/audit/${chapterNum}`, { method: "POST" });
-      alert(formatAuditOutcome(summarizeAuditResult(auditResult)));
+      notify(formatAuditOutcome(summarizeAuditResult(auditResult)));
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Audit failed");
+      notifyError("Audit failed")(e);
     } finally {
       setAuditingChapters((prev) => prev.filter((n) => n !== chapterNum));
     }
@@ -662,9 +691,9 @@ export function BookDetail({
         // 409：并发修改（1638 风险对策）——刷新后提示重试。
         setStructureRevision(undefined);
         refetch();
-        alert(t("book.structureConflict"));
+        notify(t("book.structureConflict"));
       } else {
-        alert(message);
+        setActionNotice({ text: message, error: true });
       }
       return false;
     } finally {
@@ -742,6 +771,20 @@ export function BookDetail({
         <span className="text-border">/</span>
         <span className="text-foreground">{book.title}</span>
       </nav>
+
+      {/* 1651 号：操作通知条（壳内 alert 静默——错误/结果改页内可见）。 */}
+      {actionNotice ? (
+        <div
+          role="status"
+          className={`rounded-xl border px-4 py-2 text-xs ${
+            actionNotice.error
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-primary/20 bg-secondary/40 text-muted-foreground"
+          }`}
+        >
+          {actionNotice.text}
+        </div>
+      ) : null}
 
       {/* G3/337 号：质量债务清单（无未决债务时自动隐藏）。 */}
       <QualityDebtsCard bookId={bookId} />
@@ -997,9 +1040,9 @@ export function BookDetail({
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ format: exportFormat, approvedOnly: exportApprovedOnly }),
                   });
-                  alert(`${t("common.exportSuccess")}\n${data.path}\n(${data.chapters} ${t("dash.chapters")})`);
+                  notify(`${t("common.exportSuccess")} ${data.path ?? ""} (${data.chapters ?? 0} ${t("dash.chapters")})`);
                 } catch (e) {
-                  alert(e instanceof Error ? e.message : "Export failed");
+                  notifyError("Export failed")(e);
                 }
               }}
               className="flex items-center gap-2 px-4 py-2 text-xs font-bold bg-secondary/50 text-muted-foreground rounded-lg hover:text-foreground hover:bg-secondary transition-all border border-border/50"
@@ -1167,7 +1210,7 @@ export function BookDetail({
                           <button
                             onClick={async () => {
                               try { await postApi(`/books/${bookId}/chapters/${ch.number}/approve`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Approve failed"); }
+                              catch (e) { notifyError("Approve failed")(e); }
                             }}
                             className="p-2 rounded-lg bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500 hover:text-white transition-all shadow-sm"
                             title={t("book.approve")}
@@ -1177,7 +1220,7 @@ export function BookDetail({
                           <button
                             onClick={async () => {
                               try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
-                              catch (e) { alert(e instanceof Error ? e.message : "Reject failed"); }
+                              catch (e) { notifyError("Reject failed")(e); }
                             }}
                             className="p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-all shadow-sm"
                             title={t("book.reject")}
@@ -1276,6 +1319,19 @@ export function BookDetail({
         variant="danger"
         onConfirm={handleDeleteBook}
         onCancel={() => setConfirmDeleteOpen(false)}
+      />
+
+      {/* 1651 号：人工反馈输入弹层（壳内 prompt 哑——rewrite/revise/sync/
+          foundation/plan/compose 六面共用）。 */}
+      <PromptDialog
+        open={pendingBrief !== null}
+        title={pendingBrief?.title ?? ""}
+        message={pendingBrief?.message}
+        confirmLabel={t("common.confirm")}
+        cancelLabel={t("common.cancel")}
+        multiline
+        onCancel={() => pendingBrief?.onCancel()}
+        onConfirm={(value) => pendingBrief?.onSubmit(value)}
       />
     </div>
   );

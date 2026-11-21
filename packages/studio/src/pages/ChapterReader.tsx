@@ -77,6 +77,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [splitting, setSplitting] = useState(false);
+  // 1651 号：壳内 alert 静默——拆分/保存提示改页内可见文本。
+  const [readerNotice, setReaderNotice] = useState("");
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
   // R48b/1643 号：编辑态光标拆分（R48a split 事务消费面）——光标 UTF-16
   // 偏移 = textarea.selectionStart（splitUtf16 契约同语义）。
@@ -85,7 +87,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   const handleSplitAtCursor = async () => {
     const offset = editAreaRef.current?.selectionStart ?? -1;
     if (offset <= 0 || offset >= editContent.length) {
-      alert(t("reader.splitAtCursor"));
+      // 1651 号：壳内 alert 静默——边界提示改页内文本。
+      setReaderNotice(t("reader.splitAtCursorBoundary"));
       return;
     }
     setSplitting(true);
@@ -101,7 +104,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
       setEditing(false);
       nav.toBook(bookId);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Split failed");
+      setReaderNotice(e instanceof Error ? e.message : "Split failed");
     } finally {
       setSplitting(false);
     }
@@ -167,7 +170,7 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
       refetch();
       setWorkspaceRevision((revision) => revision + 1);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Save failed");
+      setReaderNotice(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -230,6 +233,11 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
             <List size={14} />
             {t("reader.backToList")}
           </button>
+
+          {/* 1651 号：页内提示条（壳内 alert 静默）。 */}
+          {readerNotice ? (
+            <span role="status" data-testid="reader-notice" className="text-xs text-destructive self-center">{readerNotice}</span>
+          ) : null}
 
           {/* Edit / Preview toggle */}
           {editing ? (

@@ -163,18 +163,19 @@ describe("ChapterReader 光标拆分（R48b/1643 号）", () => {
     }
   });
 
-  it("光标在文本尾边界 → 提示不请求（offset 无切点负路径）", async () => {
+  it("光标在文本尾边界 → 页内提示不请求（offset 无切点负路径）", async () => {
     const user = userEvent.setup();
-    const alertMock = vi.spyOn(window, "alert").mockImplementation(() => {});
-    try {
-      renderChapter1();
-      const area = await enterEditAndPlaceCursor(user, 0);
-      area.selectionStart = area.value.length;
-      await user.click(screen.getByTestId("reader-split-at-cursor"));
-      expect(postApiMock).not.toHaveBeenCalledWith("/books/b1/chapters/1/split", expect.anything());
-      expect(alertMock).toHaveBeenCalled();
-    } finally {
-      alertMock.mockRestore();
-    }
+    renderChapter1();
+    const area = await enterEditAndPlaceCursor(user, 0);
+    area.selectionStart = area.value.length;
+    await user.click(screen.getByTestId("reader-split-at-cursor"));
+    expect(postApiMock).not.toHaveBeenCalledWith("/books/b1/chapters/1/split", expect.anything());
+    // 1651 号：壳内 alert 静默——边界提示改页内 notice 文本条。
+    const notice = await vi.waitFor(() => {
+      const el = document.querySelector('[data-testid="reader-notice"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(notice.textContent).toBe("reader.splitAtCursorBoundary");
   });
 });
