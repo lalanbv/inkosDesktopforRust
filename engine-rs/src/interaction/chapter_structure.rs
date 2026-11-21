@@ -863,8 +863,16 @@ pub async fn reorder_chapters(
     if renumber.is_empty() {
         return Err(StructureError::bad_request("Reorder produces no change."));
     }
-    let files = collect_chapter_files(&chapters_dir, &numbers, &index).await?;
-    let artifacts = collect_artifact_files(&root, &numbers).await;
+    // 1649 号 bug 修复（IAB 走查逼出）：staging 收走面=**变号章**，与
+    // split/merge 的受影响语义对齐。此前传入全部章号——恒等成员（号不变
+    // 的章）被收进 staging 后，rename 循环 `mapping.get(old)` 未命中而
+    // continue，恒等章滞留 staging，成功路径 remove_dir_all 将其**永久
+    // 删除**（reorder [1,3,2,4,5] 后 0001/0004/0005 静默消失而 index 仍在
+    // =数据丢失级 index/文件面发散；既有测试全用全员变号排列 [3,2,1]/
+    // [3,1,2]/[2,1]，恒等成员从未被测）。
+    let affected: Vec<u32> = renumber.iter().map(|(from, _)| *from).collect();
+    let files = collect_chapter_files(&chapters_dir, &affected, &index).await?;
+    let artifacts = collect_artifact_files(&root, &affected).await;
     let staging = stage_affected(&chapters_dir, &root, &files, &artifacts).await?;
 
     let mapping: BTreeMap<u32, u32> = renumber.iter().copied().collect();
@@ -1334,6 +1342,48 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.status, 400);
+    }
+
+    /// 1649 号回归（IAB 走查逼出）：reorder 含恒等成员的排列——恒等章
+    /// 文件必须原位保留。此前 staging 收走全部章而 rename 循环只回位变号
+    /// 章，恒等章滞留 staging 被成功路径 remove_dir_all **永久删除**
+    /// （[1,3,2,4,5] 后 0001/0004/0005 静默消失、index 却全在=数据丢失）。
+    /// 既有测试全用全员变号排列，恒等成员从未被测。
+    #[tokio::test]
+    async fn reorder_with_identity_members_keeps_unchanged_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        // [1,3,2]：章 1 恒等（风起不动），2/3 交换。
+        let outcome = reorder_chapters(&state, "b1", &[1, 3, 2], None, "2026-11-22T00:00:00.000Z")
+            .await
+            .expect("reorder");
+        assert_eq!(
+            outcome
+                .renumbered
+                .iter()
+                .map(|e| (e.from, e.to))
+                .collect::<Vec<_>>(),
+            vec![(2, 3), (3, 2)]
+        );
+        let chapters = dir.path().join("books/b1/chapters");
+        // 恒等章文件原位（修复前被 staging 永删）。
+        assert!(
+            chapters.join("0001_风起.md").exists(),
+            "恒等章 1 文件必须保留"
+        );
+        // 变号章交换落位。
+        assert!(chapters.join("0002_收束.md").exists());
+        assert!(chapters.join("0003_灵脉.md").exists());
+        let index = state.load_chapter_index("b1").await.unwrap();
+        assert_eq!(
+            index.iter().map(|m| m.title.as_str()).collect::<Vec<_>>(),
+            vec!["风起", "收束", "灵脉"]
+        );
+        // 二次 reorder（再交换 1/2）可行——修复前此时报 Chapter file not found
+        // （首轮恒等章 1 文件已被 staging 永删，collect_chapter_files 404）。
+        let again =
+            reorder_chapters(&state, "b1", &[2, 1, 3], None, "2026-11-22T00:00:00.000Z").await;
+        assert!(again.is_ok(), "二次 reorder 不应因文件缺失失败: {again:?}");
     }
 
     /// 事务中断原子性（1646 号审查修复后的活体注入）：新章回写位被预放

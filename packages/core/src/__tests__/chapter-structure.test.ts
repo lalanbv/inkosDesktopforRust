@@ -181,6 +181,21 @@ describe("reorderChapters（R48a/1641 号）", () => {
     await expect(reorderChapters(deps, "b1", [1, 2, 2], undefined)).rejects.toMatchObject({ status: 400 });
     await expect(reorderChapters(deps, "b1", [1, 2, 3], undefined)).rejects.toMatchObject({ status: 400 });
   });
+
+  // 1649 号回归（Rust 侧 IAB 走查逼出同族位）：reorder 含恒等成员的排列
+  // ——恒等章文件必须原位保留（Rust staging 曾把恒等章永删；TS 无 staging
+  // 天然免疫，此测锁行为防回归）。
+  it("恒等成员排列：不变号章文件原位保留", async () => {
+    const { bookDir, deps } = seedBook();
+    const outcome = await reorderChapters(deps, "b1", [1, 3, 2], undefined);
+    expect(outcome.renumbered).toEqual([{ from: 2, to: 3 }, { from: 3, to: 2 }]);
+    const chapters = join(bookDir, "chapters");
+    expect(existsSync(join(chapters, "0001_风起.md"))).toBe(true);
+    expect(existsSync(join(chapters, "0002_收束.md"))).toBe(true);
+    expect(existsSync(join(chapters, "0003_灵脉.md"))).toBe(true);
+    const index = JSON.parse(readFileSync(join(chapters, "index.json"), "utf-8")) as ChapterMeta[];
+    expect(index.map((meta) => meta.title)).toEqual(["风起", "收束", "灵脉"]);
+  });
 });
 
 describe("ChapterStructureError 形状（端点层映射面）", () => {
