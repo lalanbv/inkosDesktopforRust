@@ -44,7 +44,7 @@ export function RosterCandidatesCard({ bookId }: { bookId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId]);
 
-  const confirm = async (card: RosterCandidateCard, action: "new-entity" | "alias" | "typo") => {
+  const confirmCandidate = async (card: RosterCandidateCard, action: "new-entity" | "alias" | "typo") => {
     setBusyCandidate(card.candidate);
     try {
       await fetchJson(`/books/${encodeURIComponent(bookId)}/roster/confirm`, {
@@ -92,7 +92,7 @@ export function RosterCandidatesCard({ bookId }: { bookId: string }) {
             </span>
             <span className="ml-auto flex items-center gap-1.5">
               <button
-                onClick={() => confirm(card, "new-entity")}
+                onClick={() => confirmCandidate(card, "new-entity")}
                 disabled={busyCandidate === card.candidate}
                 className="px-2 py-1 rounded-md bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 disabled:opacity-40"
               >
@@ -100,7 +100,7 @@ export function RosterCandidatesCard({ bookId }: { bookId: string }) {
               </button>
               {card.action !== "new-entity" && card.targetName && (
                 <button
-                  onClick={() => confirm(card, "alias")}
+                  onClick={() => confirmCandidate(card, "alias")}
                   disabled={busyCandidate === card.candidate}
                   className="px-2 py-1 rounded-md bg-sky-500/10 text-sky-600 hover:bg-sky-500/20 disabled:opacity-40"
                 >
@@ -108,7 +108,7 @@ export function RosterCandidatesCard({ bookId }: { bookId: string }) {
                 </button>
               )}
               <button
-                onClick={() => confirm(card, "typo")}
+                onClick={() => confirmCandidate(card, "typo")}
                 disabled={busyCandidate === card.candidate}
                 className="px-2 py-1 rounded-md bg-muted text-muted-foreground hover:bg-muted/60 disabled:opacity-40"
               >

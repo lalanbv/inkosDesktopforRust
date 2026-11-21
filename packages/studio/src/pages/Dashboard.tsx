@@ -142,6 +142,8 @@ function BookMenu({ bookId, bookTitle, nav, t, onDelete, onOpenChange }: {
 export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: ReadonlyArray<SSEMessage> }; theme: Theme; t: TFunction }) {
   const c = useColors(theme);
   const [menuOpenBookId, setMenuOpenBookId] = useState<string | null>(null);
+  // 1655 号：write-next 失败通知条（壳内 alert 静默——wry 全哑族批三）。
+  const [writeNotice, setWriteNotice] = useState<{ text: string; error: boolean } | null>(null);
   const { data, loading, error, refetch } = useApi<{ books: ReadonlyArray<BookSummary> }>("/books");
   const worksQuery = useApi<{ works: ReadonlyArray<{
     readonly id: string;
@@ -225,6 +227,19 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
 
   return (
     <div className="space-y-12">
+      {writeNotice ? (
+        <div
+          role="status"
+          data-testid="write-notice"
+          className={`rounded-xl border px-4 py-2 text-xs ${
+            writeNotice.error
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-primary/20 bg-secondary/40 text-muted-foreground"
+          }`}
+        >
+          {writeNotice.text}
+        </div>
+      ) : null}
       {!hasServices && (
         <div className="rounded-lg border border-border/60 bg-card px-5 py-4 mb-8 flex items-center justify-between gap-4">
           <div>
@@ -368,7 +383,7 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
                   <button
                     onClick={async () => {
                       try { await postApi(`/books/${book.id}/write-next`, { sessionId: writeTaskSessionId(book.id) }); }
-                      catch (e) { alert(e instanceof Error ? e.message : "Write failed"); }
+                      catch (e) { setWriteNotice({ text: `${book.title}: ${e instanceof Error ? e.message : "Write failed"}`, error: true }); }
                     }}
                     disabled={isWriting}
                     className={`flex items-center gap-2 px-6 py-3 rounded-xl text-sm font-bold transition-all shadow-sm ${

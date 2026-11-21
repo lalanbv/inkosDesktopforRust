@@ -14,6 +14,8 @@ export function DaemonControl({ nav, theme, t, sse }: { nav: Nav; theme: Theme; 
   const c = useColors(theme);
   const { data, refetch } = useApi<{ running: boolean }>("/daemon");
   const [loading, setLoading] = useState(false);
+  // 1655 号：页内通知条（壳内 alert 静默——wry 全哑族批三）。
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
 
   useEffect(() => {
     const recent = sse.messages.at(-1);
@@ -36,7 +38,7 @@ export function DaemonControl({ nav, theme, t, sse }: { nav: Nav; theme: Theme; 
       await postApi("/daemon/start");
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed");
+      setNotice({ text: e instanceof Error ? e.message : "Failed", error: true });
     } finally {
       setLoading(false);
     }
@@ -48,7 +50,7 @@ export function DaemonControl({ nav, theme, t, sse }: { nav: Nav; theme: Theme; 
       await postApi("/daemon/stop");
       refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed");
+      setNotice({ text: e instanceof Error ? e.message : "Failed", error: true });
     } finally {
       setLoading(false);
     }
@@ -58,6 +60,19 @@ export function DaemonControl({ nav, theme, t, sse }: { nav: Nav; theme: Theme; 
 
   return (
     <div className="space-y-8">
+      {notice ? (
+        <div
+          role="status"
+          data-testid="daemon-notice"
+          className={`rounded-xl border px-4 py-2 text-xs ${
+            notice.error
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-primary/20 bg-secondary/40 text-muted-foreground"
+          }`}
+        >
+          {notice.text}
+        </div>
+      ) : null}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <button onClick={nav.toDashboard} className={c.link}>{t("bread.home")}</button>
         <span className="text-border">/</span>

@@ -61,7 +61,10 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
     setEditMode(false);
   };
 
-  const handleSaveEdit = async () => {
+  // 1655 号：页内通知条（壳内 alert 静默——wry 全哑族批三）。
+  const [saveNotice, setSaveNotice] = useState("");
+
+const handleSaveEdit = async () => {
     if (!selected) return;
     setSavingEdit(true);
     try {
@@ -73,7 +76,7 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
       setEditMode(false);
       refetchFile();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to save");
+      setSaveNotice(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSavingEdit(false);
     }
@@ -146,6 +149,9 @@ export function TruthFiles({ bookId, nav, theme, t }: { bookId: string; nav: Nav
                       <Save size={14} />
                       {savingEdit ? t("truth.saving") : t("truth.save")}
                     </button>
+                    {saveNotice ? (
+                      <span role="status" data-testid="truth-save-notice" className="text-xs text-destructive self-center">{saveNotice}</span>
+                    ) : null}
                   </>
                 ) : (
                   presentation.canEdit && (

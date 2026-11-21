@@ -219,10 +219,16 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
 
   const { data: detail } = useApi<GenreDetail>(validSelected ? `/genres/${validSelected}` : "");
 
+  // 1655 号：页内通知条（壳内 alert 静默——wry 全哑族批三；成功/失败双态）。
+  const [formNotice, setFormNotice] = useState<{ text: string; error: boolean } | null>(null);
   const handleCopy = async (id: string) => {
-    await postApi(`/genres/${id}/copy`);
-    alert(`Copied ${id} to project genres/`);
-    refetch();
+    try {
+      await postApi(`/genres/${id}/copy`);
+      setFormNotice({ text: `Copied ${id} to project genres/`, error: false });
+      refetch();
+    } catch (e) {
+      setFormNotice({ text: e instanceof Error ? e.message : "Failed to copy genre", error: true });
+    }
   };
 
   const openCreateForm = () => {
@@ -269,7 +275,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       setSelected(form.id);
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to create genre");
+      setFormNotice({ text: e instanceof Error ? e.message : "Failed to create genre", error: true });
     }
   };
 
@@ -297,7 +303,7 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       setFormMode("hidden");
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to update genre");
+      setFormNotice({ text: e instanceof Error ? e.message : "Failed to update genre", error: true });
     }
   };
 
@@ -309,12 +315,25 @@ export function GenreManager({ nav, theme, t }: { nav: Nav; theme: Theme; t: TFu
       setSelected(null);
       await refetch();
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Failed to delete genre");
+      setFormNotice({ text: e instanceof Error ? e.message : "Failed to delete genre", error: true });
     }
   };
 
   return (
     <div className="space-y-8">
+      {formNotice ? (
+        <div
+          role="status"
+          data-testid="genre-form-notice"
+          className={`rounded-xl border px-4 py-2 text-xs ${
+            formNotice.error
+              ? "border-destructive/30 bg-destructive/5 text-destructive"
+              : "border-primary/20 bg-secondary/40 text-muted-foreground"
+          }`}
+        >
+          {formNotice.text}
+        </div>
+      ) : null}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <button onClick={nav.toDashboard} className={c.link}>{t("bread.home")}</button>
         <span className="text-border">/</span>

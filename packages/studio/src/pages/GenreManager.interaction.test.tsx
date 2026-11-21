@@ -2,7 +2,7 @@
 //! 911 号：GenreManager 写面交互（CRUD+copy）——mount 冒烟只验渲染；本文件
 //! 锁定写面契约形态：create body 的 chapterTypes/fatigueWords 逗号拆数组、
 //! edit body 的 {profile:{...},body} 包裹形、DELETE 经 ConfirmDialog 确认、
-//! copy 的 alert 回执（window.alert stub）。
+//! copy 的通知条回执（1655 号 alert→页内条；原 window.alert stub 形态随实现同灭）。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { GenreManager } from "./GenreManager";
@@ -129,10 +129,15 @@ describe("GenreManager 写面交互（911 号）", () => {
     expect(del).toBeTruthy();
   });
 
-  it("copy：POST /genres/:id/copy + alert 回执", async () => {
+  it("copy：POST /genres/:id/copy + 通知条回执（1655 号）", async () => {
     await selectG1();
     fireEvent.click(screen.getByRole("button", { name: /genre\.copyToProject/ }));
-    await waitFor(() => expect(alertSpy).toHaveBeenCalledWith("Copied g1 to project genres/"));
+    // 1655 号：alert→页内通知条（壳内 alert 静默族）。
+    await waitFor(() => {
+      const notice = document.querySelector('[data-testid="genre-form-notice"]');
+      expect(notice?.getAttribute("role")).toBe("status");
+      expect(notice?.textContent).toContain("Copied g1 to project genres/");
+    });
     expect(postApiMock.mock.calls.some(([p]) => p === "/genres/g1/copy")).toBe(true);
   });
 });
