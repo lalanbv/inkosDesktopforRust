@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { useApi, fetchJson } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 // 子路径导入（1640 号同族教训）：主入口 dist 拖 node:async_hooks 链进
 // vite 前端 bundle——卷面纯函数走无 node 依赖的子路径。
 import { projectVolumeGroups } from "@actalk/inkos-core/state/volumes";
 import type { ChapterMeta } from "@actalk/inkos-core";
-import { postApi } from "../hooks/use-api";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { PromptDialog } from "./PromptDialog";
 
 interface BookVolume {
   readonly id: string;
@@ -19,6 +21,10 @@ type ChapterRow = Pick<ChapterMeta, "number" | "volumeId">;
  * 卷有序列表 CRUD（新建/改名/删卷合一走 PUT volumes 全量事务，删卷自动
  * 迁移章归「正文」默认卷）+ 分组投影（projectVolumeGroups）+ 章归属行级
  * 更新（PUT chapters/:num/volume）。卷是组织面非上下文层——不进装配注入。
+ *
+ * 1650 号：新建/改名/删卷对话框全部 React 化（PromptDialog/ConfirmDialog）
+ * ——wry 0.57 的 WKUIDelegate 未实现 JS 文本/确认面板，桌面壳内
+ * window.prompt 返回 null、confirm 返回 false（原实现=壳内死按钮）。
  */
 export function VolumeManageCard({ bookId, chapters }: { bookId: string; chapters: ReadonlyArray<ChapterRow> }) {
   const { data, refetch } = useApi<{ volumes: ReadonlyArray<BookVolume> }>(
@@ -26,6 +32,12 @@ export function VolumeManageCard({ bookId, chapters }: { bookId: string; chapter
   );
   const volumes = data?.volumes ?? [];
   const groups = projectVolumeGroups(volumes, chapters);
+  // 1650 号弹层状态：create/rename 共用 PromptDialog（rename 记目标 id），
+  // delete 走 ConfirmDialog。
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<BookVolume | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<BookVolume | null>(null);
+  const [error, setError] = useState("");
 
   const saveVolumes = async (next: ReadonlyArray<BookVolume>) => {
     const body = await fetchJson<{ ok: boolean; volumes: ReadonlyArray<BookVolume> }>(
@@ -36,50 +48,44 @@ export function VolumeManageCard({ bookId, chapters }: { bookId: string; chapter
     return body;
   };
 
-  const createVolume = async () => {
-    const title = window.prompt(tr("新卷名称", "New volume title"));
-    if (!title?.trim()) return;
-    const id = `vol-${Date.now()}`;
-    const next = [...volumes, { id, title: title.trim(), order: volumes.length + 1 }];
+  const createVolume = () => {
+    setRenameTarget(null);
+    setPromptOpen(true);
+  };
+
+  const renameVolume = (volume: BookVolume) => {
+    setRenameTarget(volume);
+    setPromptOpen(true);
+  };
+
+  const submitPrompt = async (title: string) => {
+    const trimmed = title.trim();
+    setPromptOpen(false);
+    if (!trimmed) return;
     try {
-      await saveVolumes(next);
+      if (renameTarget) {
+        if (trimmed === renameTarget.title) return;
+        await saveVolumes(volumes.map((volume) => (volume.id === renameTarget.id ? { ...volume, title: trimmed } : volume)));
+      } else {
+        const id = `vol-${Date.now()}`;
+        await saveVolumes([...volumes, { id, title: trimmed, order: volumes.length + 1 }]);
+      }
+      setError("");
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const renameVolume = async (id: string) => {
-    const current = volumes.find((volume) => volume.id === id);
-    const title = window.prompt(tr("改名", "Rename"), current?.title ?? "");
-    if (!title?.trim() || title === current?.title) return;
-    const next = volumes.map((volume) => (volume.id === id ? { ...volume, title: title.trim() } : volume));
-    try {
-      await saveVolumes(next);
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const deleteVolume = async (id: string) => {
+  const confirmDelete = async () => {
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    if (!target) return;
     // 删卷迁移：归属章自动归「正文」默认卷（引擎事务面）。
-    if (!window.confirm(tr("删除该卷？卷内章节将归入未分组。", "Delete this volume? Its chapters move to ungrouped."))) {
-      return;
-    }
     try {
-      await saveVolumes(volumes.filter((volume) => volume.id !== id));
+      await saveVolumes(volumes.filter((volume) => volume.id !== target.id));
+      setError("");
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    }
-  };
-
-  const assignChapter = async (number: number, volumeId: string) => {
-    try {
-      await postApi(`/books/${encodeURIComponent(bookId)}/chapters/${number}/volume`, {
-        volumeId,
-      });
-      await refetch();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -96,13 +102,13 @@ export function VolumeManageCard({ bookId, chapters }: { bookId: string; chapter
           <li key={volume.id} className="flex items-center gap-2 text-sm">
             <span className="font-medium truncate">{volume.title}</span>
             <button
-              onClick={() => void renameVolume(volume.id)}
+              onClick={() => renameVolume(volume)}
               className="text-[10px] text-muted-foreground hover:text-foreground"
             >
               {tr("改名", "Rename")}
             </button>
             <button
-              onClick={() => void deleteVolume(volume.id)}
+              onClick={() => setDeleteTarget(volume)}
               className="text-[10px] text-destructive hover:text-destructive/70"
             >
               {tr("删卷", "Delete")}
@@ -114,11 +120,12 @@ export function VolumeManageCard({ bookId, chapters }: { bookId: string; chapter
         ) : null}
       </ul>
       <button
-        onClick={() => void createVolume()}
+        onClick={createVolume}
         className="w-full rounded-lg border border-dashed border-border/50 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
       >
         {tr("＋ 新建卷", "＋ New volume")}
       </button>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
       <div className="pt-2 space-y-1">
         <p className="text-[10px] uppercase tracking-widest text-muted-foreground/60">{tr("分组投影", "Grouping")}</p>
         {groups.map((group) => (
@@ -132,6 +139,27 @@ export function VolumeManageCard({ bookId, chapters }: { bookId: string; chapter
           </p>
         ))}
       </div>
+
+      <PromptDialog
+        open={promptOpen}
+        title={renameTarget ? tr("卷改名", "Rename volume") : tr("新建卷", "New volume")}
+        message={renameTarget ? undefined : tr("输入新卷名称。", "Enter the new volume title.")}
+        defaultValue={renameTarget?.title ?? ""}
+        confirmLabel={tr("保存", "Save")}
+        cancelLabel={tr("取消", "Cancel")}
+        onCancel={() => setPromptOpen(false)}
+        onConfirm={(value) => void submitPrompt(value)}
+      />
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={tr("删除卷", "Delete volume")}
+        message={tr("删除该卷？卷内章节将归入未分组。", "Delete this volume? Its chapters move to ungrouped.")}
+        confirmLabel={tr("删除", "Delete")}
+        cancelLabel={tr("取消", "Cancel")}
+        variant="danger"
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

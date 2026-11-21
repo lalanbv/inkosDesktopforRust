@@ -167,8 +167,9 @@ describe("ChapterWorkspacePanel 交互（457 号）", () => {
     });
   });
 
-  it("恢复版本——confirm 确认后 POST restore 并通知变更（462 号）", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  // 1650 号：恢复/删除确认改 React ConfirmDialog（wry 壳内原生 confirm 恒
+  // false=死按钮）——测试同步改两步链：点恢复 → 弹层 → 点确认。
+  it("恢复版本——弹层确认后 POST restore 并通知变更（462/1650 号）", async () => {
     const user = userEvent.setup();
     const onChapterChanged = vi.fn();
     renderPanel(onChapterChanged);
@@ -176,6 +177,14 @@ describe("ChapterWorkspacePanel 交互（457 号）", () => {
       (b) => b.textContent?.trim() === "reader.restoreVersion",
     ) as HTMLButtonElement;
     await user.click(restore);
+    // 确认弹层出现（title=reader.restoreVersion 的对话框）。
+    const confirmBtn = await vi.waitFor(() => {
+      const dialog = Array.from(document.querySelectorAll("button"))
+        .find((b) => b.textContent?.trim() === "reader.restoreVersion" && b.closest(".fixed.inset-0"));
+      expect(dialog).toBeDefined();
+      return dialog as HTMLButtonElement;
+    });
+    await user.click(confirmBtn);
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("reader.restoreComplete");
     });
@@ -184,18 +193,22 @@ describe("ChapterWorkspacePanel 交互（457 号）", () => {
     );
     expect(restoreCall).toBeDefined();
     expect(onChapterChanged).toHaveBeenCalled();
-    confirmSpy.mockRestore();
   });
 
-  it("恢复取消——confirm 拒绝则不调用 restore（462 号）", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+  it("恢复取消——弹层取消则不调用 restore（462/1650 号）", async () => {
     const user = userEvent.setup();
     renderPanel();
     const restore = Array.from(document.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "reader.restoreVersion",
     ) as HTMLButtonElement;
     await user.click(restore);
+    const cancelBtn = await vi.waitFor(() => {
+      const dialog = Array.from(document.querySelectorAll("button"))
+        .find((b) => b.textContent?.trim() === "common.cancel" && b.closest(".fixed.inset-0"));
+      expect(dialog).toBeDefined();
+      return dialog as HTMLButtonElement;
+    });
+    await user.click(cancelBtn);
     expect(fetchJsonMock.mock.calls.find(([path]) => path.includes("/restore"))).toBeUndefined();
-    confirmSpy.mockRestore();
   });
 });

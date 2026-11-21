@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import type { TFunction } from "../hooks/use-i18n";
 import { fetchJson, useApi } from "../hooks/use-api";
+import { ConfirmDialog } from "./ConfirmDialog";
 
 interface ChapterVersion {
   readonly id: string;
@@ -57,6 +58,9 @@ export function ChapterWorkspacePanel({
   const [actionError, setActionError] = useState("");
   const [inspiration, setInspiration] = useState("");
   const [versionPreview, setVersionPreview] = useState<{ id: string; content: string } | null>(null);
+  // 1650 号：恢复/删除确认弹层状态（React ConfirmDialog）。
+  const [pendingRestore, setPendingRestore] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState(false);
 
   useEffect(() => {
     if (data) setBrief(data.brief);
@@ -117,7 +121,13 @@ export function ChapterWorkspacePanel({
   };
 
   const restoreVersion = (versionId: string) => {
-    if (!window.confirm(t("reader.restoreConfirm"))) return;
+    // 1650 号：wry 壳内 window.confirm 恒 false（原实现=恢复按钮永取消）
+    // ——改 React ConfirmDialog 待确认后再执行。
+    setPendingRestore(versionId);
+  };
+
+  const performRestore = (versionId: string) => {
+    setPendingRestore(null);
     void runAction("restore", async () => {
       await fetchJson(
         `/books/${bookId}/chapters/${chapterNumber}/versions/${versionId}/restore`,
@@ -130,7 +140,12 @@ export function ChapterWorkspacePanel({
   };
 
   const deleteChapter = () => {
-    if (!window.confirm(t("reader.deleteChapterConfirm"))) return;
+    // 1650 号：同上——React ConfirmDialog 确认后执行（壳内 confirm 死路）。
+    setPendingDelete(true);
+  };
+
+  const performDelete = () => {
+    setPendingDelete(false);
     void runAction("delete", async () => {
       await fetchJson(`/books/${bookId}/chapters/${chapterNumber}`, { method: "DELETE" });
       onChapterDeleted();
@@ -302,6 +317,27 @@ export function ChapterWorkspacePanel({
           </pre>
         </div>
       )}
+
+      {/* 1650 号：恢复/删除确认弹层（壳内原生 confirm 恒 false）。 */}
+      <ConfirmDialog
+        open={pendingRestore !== null}
+        title={t("reader.restoreVersion")}
+        message={t("reader.restoreConfirm")}
+        confirmLabel={t("reader.restoreVersion")}
+        cancelLabel={t("common.cancel")}
+        onConfirm={() => { if (pendingRestore !== null) performRestore(pendingRestore); }}
+        onCancel={() => setPendingRestore(null)}
+      />
+      <ConfirmDialog
+        open={pendingDelete}
+        title={t("reader.deleteChapter")}
+        message={t("reader.deleteChapterConfirm")}
+        confirmLabel={t("reader.deleteChapter")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        onConfirm={performDelete}
+        onCancel={() => setPendingDelete(false)}
+      />
     </section>
   );
 }

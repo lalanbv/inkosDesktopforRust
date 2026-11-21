@@ -3,6 +3,7 @@ import { fetchJson } from "../hooks/use-api";
 import { useServiceStore } from "../store/service";
 import { Eye, EyeOff, Loader2, ArrowLeft, Plus, Trash2, X } from "lucide-react";
 import { ServiceQuickLinks } from "../components/ServiceQuickLinks";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { tr } from "../lib/app-language";
 import { isLLMApiFormat } from "@actalk/inkos-core/llm/api-format";
 import {
@@ -52,6 +53,8 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
 
   // -- Local form state --
   const [apiKey, setApiKey] = useState("");
+  // 1650 号：删除确认弹层（壳内原生 confirm 恒 false）。
+  const [pendingDelete, setPendingDelete] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [customName, setCustomName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
@@ -200,8 +203,14 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
     }
   };
 
-  const handleDelete = async () => {
-    if (!window.confirm(tr(`删除“${label}”的配置和密钥？`, `Delete the config and key for “${label}”?`))) return;
+  const handleDelete = () => {
+    // 1650 号：wry 壳内 window.confirm 恒 false（原实现=删除按钮永取消）
+    // ——React ConfirmDialog 确认后执行。
+    setPendingDelete(true);
+  };
+
+  const performDelete = async () => {
+    setPendingDelete(false);
     setStatus({ state: "saving" });
     try {
       await deleteServiceConfig(effectiveServiceId);
@@ -351,6 +360,18 @@ export function ServiceDetailPage({ serviceId, nav }: { serviceId: string; nav: 
               {tr("删除配置", "Delete config")}
             </button>
           )}
+
+          {/* 1650 号：删除确认弹层（壳内原生 confirm 恒 false）。 */}
+          <ConfirmDialog
+            open={pendingDelete}
+            title={tr("删除配置", "Delete config")}
+            message={tr(`删除“${label}”的配置和密钥？`, `Delete the config and key for “${label}”?`)}
+            confirmLabel={tr("删除", "Delete")}
+            cancelLabel={tr("取消", "Cancel")}
+            variant="danger"
+            onConfirm={() => void performDelete()}
+            onCancel={() => setPendingDelete(false)}
+          />
           {/* Status feedback */}
           {status.state === "connected" && (
             <span className="text-xs text-emerald-500">
