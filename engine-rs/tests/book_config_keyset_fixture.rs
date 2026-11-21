@@ -48,6 +48,9 @@ fn book_config_roundtrip_keeps_writing_volumes_keyset() {
         "writing.volumes[].id",
         "writing.volumes[].title",
         "writing.volumes[].order",
+        // R51/1653 号：写作目标顶层可选键。
+        "targetWords",
+        "deadline",
     ] {
         assert!(
             keys.iter().any(|key| key.contains(expected)),

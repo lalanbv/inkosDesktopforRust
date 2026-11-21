@@ -412,6 +412,8 @@ pub async fn fanfic_init(
             .and_then(Value::as_f64)
             .map(|v| v as u32)
             .unwrap_or(3000),
+        target_words: None,
+        deadline: None,
         language,
         created_at: now.clone(),
         updated_at: now,

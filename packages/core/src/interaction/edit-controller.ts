@@ -8,6 +8,7 @@ import {
 } from "../state/chapter-workspace.js";
 import { classifyTruthAuthority, normalizeTruthFileName, type TruthAuthority } from "./truth-authority.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
+import { appendWritingLog } from "../utils/writing-log-store.js";
 
 export type EditRequest =
   | {
@@ -359,13 +360,26 @@ async function executeChapterReplace(
   await writeTextAtomic(chapterPath, replacementContent);
   const removedRuntimeFiles = await clearChapterRuntimeFiles(root, request.chapterNumber);
 
+  // R51/1653 号：日产出账本——编辑保存记 wordCount 净变化（Δ≠0；结构
+  // 操作/纯保存零变化不记，施工图 §2.2；best-effort 不 fail 保存事务）。
+  const previousIndex = await deps.loadChapterIndex(request.bookId);
+  const before = previousIndex.find((chapter) => chapter.number === request.chapterNumber)?.wordCount ?? 0;
+  const after = roughChapterLength(fullText);
   const updatedIndex = recordManualEditObservation(
-    await deps.loadChapterIndex(request.bookId),
+    previousIndex,
     request.chapterNumber,
     "Chapter content was replaced by an explicit edit action.",
-    roughChapterLength(fullText),
+    after,
   );
   await deps.saveChapterIndex(request.bookId, updatedIndex);
+  if (before !== after) {
+    await appendWritingLog(root, [{
+      ts: new Date().toISOString(),
+      chapterNum: request.chapterNumber,
+      before,
+      after,
+    }]).catch(() => undefined);
+  }
 
   return {
     transactionType: request.kind,
@@ -397,13 +411,25 @@ async function executeChapterLocalEdit(
   await writeTextAtomic(chapterPath, nextContent);
 
   const removedRuntimeFiles = await clearChapterRuntimeFiles(root, request.chapterNumber);
+  // R51/1653 号：日产出账本（同 chapter-replace 写点语义）。
+  const previousIndex = await deps.loadChapterIndex(request.bookId);
+  const before = previousIndex.find((chapter) => chapter.number === request.chapterNumber)?.wordCount ?? 0;
+  const after = roughChapterLength(nextContent);
   const updatedIndex = recordManualEditObservation(
-    await deps.loadChapterIndex(request.bookId),
+    previousIndex,
     request.chapterNumber,
     "Chapter content was changed by an explicit local edit action.",
-    roughChapterLength(nextContent),
+    after,
   );
   await deps.saveChapterIndex(request.bookId, updatedIndex);
+  if (before !== after) {
+    await appendWritingLog(root, [{
+      ts: new Date().toISOString(),
+      chapterNum: request.chapterNumber,
+      before,
+      after,
+    }]).catch(() => undefined);
+  }
 
   return {
     transactionType: request.kind,

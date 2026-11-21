@@ -1011,6 +1011,11 @@ pub fn router_books(
             "/api/v1/writing-stats-rows",
             get(ops_routes::get_writing_stats_rows).with_state(books.clone()),
         )
+        // R51/1653 号：日产出账本行面（前端 writing-goal 纯函数聚合）。
+        .route(
+            "/api/v1/writing-log-rows",
+            get(ops_routes::get_writing_log_rows).with_state(books.clone()),
+        )
         .route(
             "/api/v1/books/:id/quality-debts",
             get(ops_routes::get_quality_debts).with_state(books.clone()),

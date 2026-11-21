@@ -170,6 +170,13 @@ pub struct BookConfig {
     pub target_chapters: u32,
     #[serde(default = "default_chapter_word_count", rename = "chapterWordCount")]
     pub chapter_word_count: u32,
+    /// R51/1653 号：全书目标字数（可选顶层，与 targetChapters 同族——不落
+    /// writing 段，「组织不注入」红线；存量书零迁移）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_words: Option<u32>,
+    /// R51/1653 号：截止日（YYYY-MM-DD，可选；预计完成投影面）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     pub created_at: String,

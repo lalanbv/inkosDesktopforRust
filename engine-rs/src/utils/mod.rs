@@ -80,6 +80,8 @@ pub mod token_meter;
 pub mod truth_dialect;
 pub mod utc_time;
 pub mod vector_engine;
+pub mod writing_goal;
+pub mod writing_log;
 pub mod writing_methodology;
 
 pub use book_id::{assert_safe_book_id, derive_book_id_from_title, is_safe_book_id};

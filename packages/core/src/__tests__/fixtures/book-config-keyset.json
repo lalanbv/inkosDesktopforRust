@@ -1,5 +1,5 @@
 {
-  "$comment": "R49/1644 号：book.json 键面 parity fixture（1604 号机制扩展到 book 面）——Rust 守卫 engine-rs/tests/book_config_keyset_fixture.rs 断言此样本 serde round-trip 键集；TS 守卫 book-config-keyset-parity.test.ts 断言 zod schema 键集。writing.volumes 与 chapters[].volumeId 为 R49 新增可选键（存量书零迁移）。",
+  "$comment": "R49/1644 号：book.json 键面 parity fixture（1604 号机制扩展到 book 面）——Rust 守卫 engine-rs/tests/book_config_keyset_fixture.rs 断言此样本 serde round-trip 键集；TS 守卫 book-config-keyset-parity.test.ts 断言 zod schema 键集。writing.volumes 与 chapters[].volumeId 为 R49 新增可选键；targetWords/deadline 为 R51/1653 新增可选顶层键（存量书零迁移）。",
   "id": "b1",
   "title": "键面校验书",
   "platform": "other",
@@ -7,14 +7,24 @@
   "status": "active",
   "targetChapters": 12,
   "chapterWordCount": 1600,
+  "targetWords": 200000,
+  "deadline": "2026-12-31",
   "language": "zh",
   "createdAt": "2026-11-21T00:00:00.000Z",
   "updatedAt": "2026-11-21T00:00:00.000Z",
   "writing": {
     "reviewMode": "manual",
     "volumes": [
-      { "id": "vol-1", "title": "第一卷", "order": 1 },
-      { "id": "vol-2", "title": "第二卷", "order": 2 }
+      {
+        "id": "vol-1",
+        "title": "第一卷",
+        "order": 1
+      },
+      {
+        "id": "vol-2",
+        "title": "第二卷",
+        "order": 2
+      }
     ]
   }
 }

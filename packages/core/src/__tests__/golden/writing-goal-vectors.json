@@ -1,0 +1,258 @@
+{
+  "shiftDayKey": [
+    {
+      "name": "cross-month",
+      "dayKey": "2026-11-30",
+      "days": 1,
+      "expected": "2026-12-01"
+    },
+    {
+      "name": "cross-year",
+      "dayKey": "2026-12-31",
+      "days": 1,
+      "expected": "2027-01-01"
+    },
+    {
+      "name": "leap-day",
+      "dayKey": "2028-02-28",
+      "days": 1,
+      "expected": "2028-02-29"
+    },
+    {
+      "name": "backward-non-leap",
+      "dayKey": "2026-03-01",
+      "days": -1,
+      "expected": "2026-02-28"
+    },
+    {
+      "name": "zero",
+      "dayKey": "2026-11-22",
+      "days": 0,
+      "expected": "2026-11-22"
+    }
+  ],
+  "dailyWordDelta": [
+    {
+      "name": "cross-day-rows",
+      "rows": [
+        {
+          "ts": "2026-11-20T08:00:00.000Z",
+          "chapterNum": 1,
+          "before": 100,
+          "after": 600
+        },
+        {
+          "ts": "2026-11-21T09:00:00.000Z",
+          "chapterNum": 2,
+          "before": 0,
+          "after": 800
+        }
+      ],
+      "dayKeys": [
+        "2026-11-20",
+        "2026-11-21"
+      ],
+      "expected": [
+        {
+          "dayKey": "2026-11-20",
+          "delta": 500
+        },
+        {
+          "dayKey": "2026-11-21",
+          "delta": 800
+        }
+      ]
+    },
+    {
+      "name": "negative-delta-day",
+      "rows": [
+        {
+          "ts": "2026-11-21T10:00:00.000Z",
+          "chapterNum": 3,
+          "before": 9000,
+          "after": 8500
+        },
+        {
+          "ts": "2026-11-21T22:00:00.000Z",
+          "chapterNum": 3,
+          "before": 8500,
+          "after": 8400
+        }
+      ],
+      "dayKeys": [
+        "2026-11-21",
+        "2026-11-21"
+      ],
+      "expected": [
+        {
+          "dayKey": "2026-11-21",
+          "delta": -600
+        }
+      ]
+    },
+    {
+      "name": "same-chapter-multiple-saves",
+      "rows": [
+        {
+          "ts": "2026-11-22T01:00:00.000Z",
+          "chapterNum": 1,
+          "before": 0,
+          "after": 300
+        },
+        {
+          "ts": "2026-11-22T05:00:00.000Z",
+          "chapterNum": 1,
+          "before": 300,
+          "after": 500
+        },
+        {
+          "ts": "2026-11-22T09:00:00.000Z",
+          "chapterNum": 1,
+          "before": 500,
+          "after": 420
+        }
+      ],
+      "dayKeys": [
+        "2026-11-22",
+        "2026-11-22",
+        "2026-11-22"
+      ],
+      "expected": [
+        {
+          "dayKey": "2026-11-22",
+          "delta": 420
+        }
+      ]
+    },
+    {
+      "name": "empty-stream",
+      "rows": [],
+      "dayKeys": [],
+      "expected": []
+    }
+  ],
+  "goalStreak": [
+    {
+      "name": "today-not-met-skips",
+      "deltas": [
+        {
+          "dayKey": "2026-11-20",
+          "delta": 500
+        },
+        {
+          "dayKey": "2026-11-21",
+          "delta": 600
+        },
+        {
+          "dayKey": "2026-11-22",
+          "delta": 100
+        }
+      ],
+      "goal": 500,
+      "todayKey": "2026-11-22",
+      "expected": 2
+    },
+    {
+      "name": "today-met-counts",
+      "deltas": [
+        {
+          "dayKey": "2026-11-22",
+          "delta": 700
+        }
+      ],
+      "goal": 500,
+      "todayKey": "2026-11-22",
+      "expected": 1
+    },
+    {
+      "name": "gap-resets",
+      "deltas": [
+        {
+          "dayKey": "2026-11-18",
+          "delta": 600
+        },
+        {
+          "dayKey": "2026-11-20",
+          "delta": 600
+        },
+        {
+          "dayKey": "2026-11-21",
+          "delta": 600
+        }
+      ],
+      "goal": 500,
+      "todayKey": "2026-11-22",
+      "expected": 2
+    },
+    {
+      "name": "first-day-only",
+      "deltas": [
+        {
+          "dayKey": "2026-11-19",
+          "delta": 900
+        }
+      ],
+      "goal": 500,
+      "todayKey": "2026-11-25",
+      "expected": 1
+    },
+    {
+      "name": "endpoint-before-today-unmet-chain",
+      "deltas": [
+        {
+          "dayKey": "2026-11-23",
+          "delta": 400
+        },
+        {
+          "dayKey": "2026-11-24",
+          "delta": 600
+        }
+      ],
+      "goal": 500,
+      "todayKey": "2026-11-25",
+      "expected": 1
+    }
+  ],
+  "expectedFinish": [
+    {
+      "name": "nano-pace",
+      "current": 5000,
+      "target": 50000,
+      "pace": 1667,
+      "todayKey": "2026-11-22",
+      "expected": "2026-12-19"
+    },
+    {
+      "name": "already-achieved",
+      "current": 50000,
+      "target": 50000,
+      "pace": 1000,
+      "todayKey": "2026-11-22",
+      "expected": ""
+    },
+    {
+      "name": "zero-pace-unpredictable",
+      "current": 0,
+      "target": 100,
+      "pace": 0,
+      "todayKey": "2026-11-22",
+      "expected": ""
+    },
+    {
+      "name": "ceil-remainder",
+      "current": 0,
+      "target": 110,
+      "pace": 100,
+      "todayKey": "2026-11-22",
+      "expected": "2026-11-24"
+    },
+    {
+      "name": "cross-month-finish",
+      "current": 100000,
+      "target": 150000,
+      "pace": 2000,
+      "todayKey": "2026-11-25",
+      "expected": "2026-12-20"
+    }
+  ]
+}

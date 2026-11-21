@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchJson, useApi } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 import { aggregateWritingStats, type ChapterStatRow } from "../lib/writing-stats";
+import { WritingGoalPanel } from "./WritingGoalPanel";
 
 /**
  * R13/382 号：写作数据面板（Dashboard 挂载）。
@@ -99,6 +100,8 @@ export function WritingStatsCard() {
           </div>
         </div>
       )}
+      {/* R51/1653 号：写作目标面板（账本独立于 index 数据，两种状态都显示）。 */}
+      <WritingGoalPanel />
     </div>
   );
 }

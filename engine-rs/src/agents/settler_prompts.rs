@@ -336,6 +336,8 @@ mod tests {
             status: BookStatus::Active,
             target_chapters: 300,
             chapter_word_count: 2000,
+            target_words: None,
+            deadline: None,
             language: None,
             created_at: "2026-01-01".to_string(),
             updated_at: "2026-01-01".to_string(),

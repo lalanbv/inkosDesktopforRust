@@ -1258,6 +1258,8 @@ async fn execute_continuation_import(
                     .and_then(Value::as_f64)
                     .map(|v| v as u32)
                     .unwrap_or(3000),
+                target_words: None,
+                deadline: None,
                 language: payload_language(args, lang),
                 created_at: now.clone(),
                 updated_at: now,
@@ -1575,6 +1577,8 @@ async fn execute_fanfic_init(
             .and_then(Value::as_f64)
             .map(|v| v as u32)
             .unwrap_or(3000),
+        target_words: None,
+        deadline: None,
         language,
         created_at: now.clone(),
         updated_at: now,

@@ -88,17 +88,32 @@ pub async fn execute_chapter_replace(
         .load_chapter_index(book_id)
         .await
         .map_err(|e| e.to_string())?;
+    // R51/1653 号：日产出账本——编辑保存记 wordCount 净变化（Δ≠0；结构
+    // 操作/纯保存零变化不记，施工图 §2.2）。
+    let previous_word_count = index
+        .iter()
+        .find(|meta| meta.number == chapter_number)
+        .map_or(0, |meta| i64::from(meta.word_count));
+    let new_word_count = rough_chapter_length(trimmed);
     let updated_index = mark_chapter_for_manual_review(
         index,
         chapter_number,
         MANUAL_REPLACEMENT_ISSUE,
-        rough_chapter_length(trimmed),
+        new_word_count,
         now_iso,
     );
     state
         .save_chapter_index(book_id, &updated_index)
         .await
         .map_err(|e| e.to_string())?;
+    crate::utils::writing_log::record_word_count_delta(
+        &root,
+        chapter_number,
+        previous_word_count,
+        new_word_count as i64,
+        now_iso,
+    )
+    .await;
 
     let chapter_rel = chapter_path
         .strip_prefix(&root)
@@ -256,17 +271,31 @@ pub async fn execute_chapter_local_edit(
         .load_chapter_index(book_id)
         .await
         .map_err(|e| e.to_string())?;
+    // R51/1653 号：日产出账本（同 chapter-replace 写点语义）。
+    let previous_word_count = index
+        .iter()
+        .find(|meta| meta.number == chapter_number)
+        .map_or(0, |meta| i64::from(meta.word_count));
+    let new_word_count = rough_chapter_length(&next_content);
     let updated_index = mark_chapter_for_manual_review(
         index,
         chapter_number,
         MANUAL_TEXT_EDIT_ISSUE,
-        rough_chapter_length(&next_content),
+        new_word_count,
         now_iso,
     );
     state
         .save_chapter_index(book_id, &updated_index)
         .await
         .map_err(|e| e.to_string())?;
+    crate::utils::writing_log::record_word_count_delta(
+        &root,
+        chapter_number,
+        previous_word_count,
+        new_word_count as i64,
+        now_iso,
+    )
+    .await;
 
     let chapter_rel = chapter_path
         .strip_prefix(&root)
@@ -1020,5 +1049,67 @@ mod tests {
             err,
             "Chapter-local edits require targetText and replacementText."
         );
+    }
+
+    // ── R51/1653 号：日产出账本写点（编辑保存 Δ≠0 记账）──────────────
+
+    #[tokio::test]
+    async fn edit_transactions_record_word_count_deltas_in_writing_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fixture(&root).await;
+        let state = state(&root);
+        let book = root.join("books").join("b1");
+
+        // chapter-replace：wordCount 4 → 8（Δ=+4）记一行。
+        execute_chapter_replace(
+            &state,
+            "b1",
+            3,
+            "# 第3章 新稿\n\n新正文更长一些。",
+            ChapterVersionSource::Manual,
+            1_782_864_000_000,
+            "2026-07-01T00:00:00.000Z",
+        )
+        .await
+        .unwrap();
+        let rows = crate::utils::writing_log::load_writing_log(&book).await;
+        assert_eq!(rows.len(), 1, "Δ≠0 记一行");
+        assert_eq!(rows[0].chapter_num, 3);
+        assert_eq!(rows[0].before, 4);
+        assert_eq!(rows[0].after, 8);
+        assert_eq!(rows[0].ts, "2026-07-01T00:00:00.000Z");
+
+        // 同长度 replace（8 → 8，Δ=0）不记。
+        execute_chapter_replace(
+            &state,
+            "b1",
+            3,
+            "# 第3章 新稿\n\n一二三四五六七八",
+            ChapterVersionSource::Manual,
+            1_782_864_000_001,
+            "2026-07-01T00:00:01.000Z",
+        )
+        .await
+        .unwrap();
+        let rows = crate::utils::writing_log::load_writing_log(&book).await;
+        assert_eq!(rows.len(), 1, "Δ=0 不记");
+
+        // chapter-local-edit（8 → 4）追加第二行。
+        execute_chapter_local_edit(
+            &state,
+            "b1",
+            3,
+            "一二三四五六七八",
+            "新稿",
+            1_782_864_000_002,
+            "2026-07-01T00:00:02.000Z",
+        )
+        .await
+        .unwrap();
+        let rows = crate::utils::writing_log::load_writing_log(&book).await;
+        assert_eq!(rows.len(), 2, "append 语义");
+        assert_eq!(rows[1].before, 8);
+        assert_eq!(rows[1].after, 2, "「新稿」= 2 码元");
     }
 }

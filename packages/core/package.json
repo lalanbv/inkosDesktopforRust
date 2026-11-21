@@ -61,6 +61,10 @@
       "types": "./dist/utils/hook-kind.d.ts",
       "import": "./dist/utils/hook-kind.js"
     },
+    "./utils/writing-goal": {
+      "types": "./dist/utils/writing-goal.d.ts",
+      "import": "./dist/utils/writing-goal.js"
+    },
     "./utils/promise-ledger": {
       "types": "./dist/utils/promise-ledger.d.ts",
       "import": "./dist/utils/promise-ledger.js"

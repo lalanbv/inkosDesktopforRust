@@ -439,6 +439,8 @@ mod retry_tests {
             status: crate::models::book::BookStatus::Active,
             target_chapters: 10,
             chapter_word_count: 3000,
+            target_words: None,
+            deadline: None,
             language: Some("zh".to_string()),
             created_at: String::new(),
             updated_at: String::new(),

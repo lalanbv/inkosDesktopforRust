@@ -141,6 +141,8 @@ fn build_studio_book_config(
         status: crate::models::book::BookStatus::Outlining,
         target_chapters: target_chapters.unwrap_or(200),
         chapter_word_count: chapter_word_count.unwrap_or(default_length),
+        target_words: None,
+        deadline: None,
         language,
         created_at: now.to_string(),
         updated_at: now.to_string(),

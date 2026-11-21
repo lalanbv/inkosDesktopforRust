@@ -212,7 +212,7 @@ import {
 } from "@actalk/inkos-core";
 import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
-import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, syncWorkSourceArtifacts } from "@actalk/inkos-core";
+import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, syncWorkSourceArtifacts, loadWritingLog } from "@actalk/inkos-core";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { buildTarArchive, listArchiveFiles } from "../lib/tar-write.js";
 import { listBackupSnapshots, runBackupImport, runBackupRollback } from "./backup-snapshot.js";
@@ -4615,6 +4615,23 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const aggregate = stats.aggregateWritingStats(rows, new Date().toISOString());
       const perBook = stats.passRateByBook(rows, 30, new Date().toISOString());
       return c.json({ ...aggregate, passRateByBook: perBook });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // R51/1653 号：日产出账本行面（Rust ops_routes get_writing_log_rows 同构
+  // ——双端行面对称，dayKey 由前端本地时区计算，服务端零时区依赖）。
+  app.get("/api/v1/writing-log-rows", async (c) => {
+    try {
+      const rows: Array<{ bookId: string; ts: string; chapterNum: number; before: number; after: number }> = [];
+      for (const bookId of await state.listBooks()) {
+        const log = await loadWritingLog(state.bookDir(bookId));
+        for (const entry of log) {
+          rows.push({ bookId, ts: entry.ts, chapterNum: entry.chapterNum, before: entry.before, after: entry.after });
+        }
+      }
+      return c.json({ rows });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
     }

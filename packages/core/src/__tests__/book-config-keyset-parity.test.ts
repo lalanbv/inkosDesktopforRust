@@ -60,6 +60,19 @@ describe("BookConfig 键面 parity（Rust fixture ↔ TS zod schema，R49/1644 �
     expect(parsed.writing?.volumes?.[0]?.id).toBe("vol-1");
   });
 
+  // R51/1653 号：写作目标顶层可选键（targetWords/deadline）——Rust
+  // BookConfig.target_words/deadline 镜像，Rust 守卫=
+  // book_config_keyset_fixture.rs round-trip 键集。
+  it("targetWords/deadline 键在 schema shape 且样本 parse 值直达（R51）", () => {
+    const shapeKeys = new Set(Object.keys(BookConfigSchema.shape));
+    expect(shapeKeys.has("targetWords")).toBe(true);
+    expect(shapeKeys.has("deadline")).toBe(true);
+    const { $comment: _ignored, ...bookConfig } = bookFixture;
+    const parsed = BookConfigSchema.parse(bookConfig);
+    expect(parsed.targetWords).toBe(200000);
+    expect(parsed.deadline).toBe("2026-12-31");
+  });
+
   it("全文 parse：chapter 行样本过 ChapterMetaSchema（含 volumeId）", () => {
     // ChapterMetaSchema 是 strict（709 号族——未知键拒收），fixture 注释键剥除。
     const { $comment: _ignored, ...chapterMeta } = chapterFixture;

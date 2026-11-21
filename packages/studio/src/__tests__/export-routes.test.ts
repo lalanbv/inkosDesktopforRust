@@ -104,6 +104,26 @@ describe("export routes (R50/1647)", () => {
     expect(((await response.json()) as { error: string }).error).toBe("Export failed");
   });
 
+  it("PUT 章保存记账 → GET /writing-log-rows 行面（R51/1653）", async () => {
+    const { app } = seedApp();
+    // 章 1 正文改长（wordCount 变化 → 账本一行）。
+    const edit = await app.request("/api/v1/books/b1/chapters/1", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "# 风起\n\n林动睁开双眼，看见了一片崭新的天地与远方的山脉。" }),
+    });
+    expect(edit.status).toBe(200);
+    const response = await app.request("/api/v1/writing-log-rows");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      rows: Array<{ bookId: string; ts: string; chapterNum: number; before: number; after: number }>;
+    };
+    expect(body.rows).toHaveLength(1);
+    expect(body.rows[0]).toMatchObject({ bookId: "b1", chapterNum: 1, before: 8 });
+    expect(body.rows[0]!.after).toBeGreaterThan(body.rows[0]!.before);
+    expect(typeof body.rows[0]!.ts).toBe("string");
+  });
+
   it("GET /export format=docx → OOXML 4-part（R50/1652 全量面）", async () => {
     const { app } = seedApp();
     const response = await app.request("/api/v1/books/b1/export?format=docx");

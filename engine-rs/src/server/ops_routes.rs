@@ -3518,3 +3518,26 @@ pub async fn get_writing_stats_rows(State(runtime): State<BooksRuntime>) -> impl
     }
     (StatusCode::OK, Json(json!({ "rows": rows }))).into_response()
 }
+
+/// R51/1653 号：日产出账本行面（GET /api/v1/writing-log-rows，全局遍历各书
+/// `.inkos/writing-log.jsonl`）。行 = `{bookId, ts, chapterNum, before,
+/// after}` 四键 + bookId；dayKey 由消费端（前端本地时区）计算——服务端零
+/// 时区依赖（与 TS 同构行面；writing-stats 双端异构声明在账本面对称改良
+/// 为双端同构行面）。
+pub async fn get_writing_log_rows(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    for book_id in runtime.state.list_books().await {
+        let log =
+            crate::utils::writing_log::load_writing_log(&runtime.state.book_dir(&book_id)).await;
+        for entry in log {
+            rows.push(serde_json::json!({
+                "bookId": book_id,
+                "ts": entry.ts,
+                "chapterNum": entry.chapter_num,
+                "before": entry.before,
+                "after": entry.after,
+            }));
+        }
+    }
+    (StatusCode::OK, Json(json!({ "rows": rows }))).into_response()
+}

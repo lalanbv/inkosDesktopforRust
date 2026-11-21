@@ -59,6 +59,8 @@ fn settler_book() -> BookConfig {
         status: BookStatus::Active,
         target_chapters: 200,
         chapter_word_count: 3000,
+        target_words: None,
+        deadline: None,
         language: None,
         created_at: "2026-01-01T00:00:00.000Z".into(),
         updated_at: "2026-01-01T00:00:00.000Z".into(),

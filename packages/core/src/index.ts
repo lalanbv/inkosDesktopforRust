@@ -202,6 +202,22 @@ export { assertSafeBookId, deriveBookIdFromTitle, isSafeBookId } from "./utils/b
 // 707 号：series 域回收——R20/390 号契约真源（Rust series_canon.rs 1:1 镜像）。
 export { SERIES_CANON_VERSION, isValidSeriesId, parseSeriesCanonFile, type SeriesCanonFile } from "./utils/series-canon.js";
 export { safeChildPath } from "./utils/path-safety.js";
+// R51/1653 号：写作目标纯函数 + 日产出账本存储（studio server 行面端点与
+// 前端聚合消费）。
+export {
+  dailyWordDelta,
+  expectedFinish,
+  goalStreak,
+  localDayKey,
+  shiftDayKey,
+  type DayDelta,
+  type WritingLogRow,
+} from "./utils/writing-goal.js";
+export {
+  appendWritingLog,
+  loadWritingLog,
+  writingLogPath,
+} from "./utils/writing-log-store.js";
 export { toPosixPath } from "./utils/posix-path.js";
 export {
   ActionSourceSchema,

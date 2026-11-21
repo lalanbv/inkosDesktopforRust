@@ -73,6 +73,11 @@ export const BookConfigSchema = z.object({
   status: BookStatusSchema,
   targetChapters: z.number().int().min(1),
   chapterWordCount: z.number().int().min(1),
+  /** R51/1653 号：全书目标字数（可选顶层，与 targetChapters 同族——不落
+   * writing 段；Rust BookConfig.target_words 镜像，存量书零迁移）。 */
+  targetWords: z.number().int().min(1).optional(),
+  /** R51/1653 号：截止日（YYYY-MM-DD，可选；预计完成投影面）。 */
+  deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional(),
   minChapterLength: z.number().int().min(1).optional(),
   maxChapterLength: z.number().int().min(1).optional(),
   language: z.enum(["zh", "en"]),
