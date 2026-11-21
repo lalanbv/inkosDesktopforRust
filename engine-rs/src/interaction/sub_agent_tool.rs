@@ -506,6 +506,10 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
             let lower = instruction.to_lowercase();
             if lower.contains("epub") {
                 "epub".to_string()
+            } else if lower.contains("docx") || lower.contains("word") {
+                "docx".to_string()
+            } else if lower.contains("md-zip") {
+                "md-zip".to_string()
             } else if lower.contains("markdown")
                 || instruction.contains(" md ")
                 || instruction.contains("MD")
@@ -524,6 +528,16 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
                 || instruction.contains("通过章节")
         }
     };
+    // R50/1652 号：chapters 勾选子集接线（1647 施工图 §1.4#4 遗留——
+    // books_state_routes export_save 1648 已接，此处恒 None=工具面子集
+    // 缺口；正整数过滤同 export_save 正典形态）。
+    let chapter_filter: Option<Vec<u32>> =
+        args.get("chapters").and_then(Value::as_array).map(|items| {
+            items
+                .iter()
+                .filter_map(|value| u32::try_from(value.as_i64()?).ok())
+                .collect::<Vec<u32>>()
+        });
     let format = crate::interaction::export_artifact::ExportFormat::parse(Some(&inferred_format));
     match crate::interaction::export_artifact::build_export_artifact(
         &deps.runtime.state,
@@ -531,7 +545,7 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
         format,
         approved_only,
         None,
-        None,
+        chapter_filter.as_deref(),
     )
     .await
     {

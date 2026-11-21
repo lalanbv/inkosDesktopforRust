@@ -40,7 +40,7 @@ export interface ExportArtifact {
   readonly fileName: string;
   readonly chaptersExported: number;
   readonly totalWords: number;
-  readonly format: "txt" | "md" | "epub" | "md-zip";
+  readonly format: "txt" | "md" | "epub" | "md-zip" | "docx";
   readonly contentType: string;
   readonly payload: string | Uint8Array;
 }
@@ -178,11 +178,107 @@ export function mdZipEntryPath(
   return `${dir}/${String(chapterNumber).padStart(4, "0")}_${sanitizeName(chapterTitle)}.md`;
 }
 
+// ── R50/1652 号：docx 导出纯函数族（Rust 镜像 = export_artifact.rs docx_*
+// 系列，golden chapter-docx-vectors.json 锁定）。最小 4-part OOXML
+// （ECMA-376）：[Content_Types].xml / _rels/.rels / word/document.xml /
+// word/styles.xml——属性序固定、无缩进无注释、UTF-8 无 BOM = duel 条目级
+// 逐位可比。零新依赖（jszip STORE，与 md-zip 链同款）。 ─────────────────
+
+/** XML 五实体转义（& 最先——防二次转义）。 */
+export function docxEscapeXml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+/** 章正文切段：非 `#` 行 trim 后非空各一段——与 EPUB markdownToSimpleHtml
+ * 行语义一致（同书双格式分段一致；章标题由索引 title 单独成 Heading2 段，
+ * 正文中的标题行滤除）。 */
+export function docxBodyParagraphs(markdown: string): ReadonlyArray<string> {
+  return markdown
+    .split("\n")
+    .filter((line) => !line.startsWith("#"))
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+const DOCX_EAST_ASIA_FONT = "SimSun";
+
+/** (styleId, text) → `<w:p>`：pPr 样式引用 + run 级 rPr eastAsia（中文字族
+ * 声明不依赖 styles 继承链）+ xml:space="preserve"。空文本 = 无 run 空段。 */
+export function docxParagraphXml(styleId: string, text: string): string {
+  if (!text) {
+    return `<w:p><w:pPr><w:pStyle w:val="${styleId}"/></w:pPr></w:p>`;
+  }
+  return `<w:p><w:pPr><w:pStyle w:val="${styleId}"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="${DOCX_EAST_ASIA_FONT}"/></w:rPr><w:t xml:space="preserve">${docxEscapeXml(text)}</w:t></w:r></w:p>`;
+}
+
+export interface DocxVolume {
+  readonly id: string;
+  readonly title: string;
+  readonly order: number;
+}
+
+export interface DocxChapterInput {
+  readonly number: number;
+  readonly title: string;
+  readonly volumeId?: string;
+  readonly paragraphs: ReadonlyArray<string>;
+}
+
+/** 章序 = (卷 order（未分组/未知卷 = 0 前置，与 md-zip `00_ungrouped` 桶序
+ * 一致）, 章号) 稳定排序；卷桶首章前发 Heading1（卷名）。未分组章直排不造
+ * 卷标题——docx 无目录树语义，直排更符 Word 阅读习惯（与 md-zip 的
+ * `00_ungrouped` 目录形态有意不同）。sectPr = A4 + 1 英寸页边距（Word
+ * 惯例 twips 值）。 */
+export function docxDocumentXml(
+  bookTitle: string,
+  volumes: ReadonlyArray<DocxVolume>,
+  chapters: ReadonlyArray<DocxChapterInput>,
+): string {
+  const volumeOf = (volumeId: string | undefined) =>
+    volumeId ? volumes.find((candidate) => candidate.id === volumeId) : undefined;
+  const ordered = chapters
+    .map(chapter => ({chapter, volume: volumeOf(chapter.volumeId)}))
+    .sort((a, b) => {
+      const orderA = a.volume?.order ?? 0;
+      const orderB = b.volume?.order ?? 0;
+      return orderA !== orderB ? orderA - orderB : a.chapter.number - b.chapter.number;
+    });
+  const body: string[] = [docxParagraphXml("Title", bookTitle)];
+  let prevBucketId: string | null | undefined;
+  for (const {chapter, volume} of ordered) {
+    const bucketId = volume?.id ?? null;
+    if (volume && bucketId !== prevBucketId) {
+      body.push(docxParagraphXml("Heading1", volume.title));
+    }
+    prevBucketId = bucketId;
+    body.push(docxParagraphXml("Heading2", chapter.title));
+    for (const paragraph of chapter.paragraphs) {
+      body.push(docxParagraphXml("Normal", paragraph));
+    }
+  }
+  const sectPr = `<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body.join("")}${sectPr}</w:body></w:document>`;
+}
+
+/** 三常量 part（双端字面一致，duel sha256 对拍锁定；document.xml 由
+ * docxDocumentXml 产出，条目序 = [Content_Types].xml → _rels/.rels →
+ * word/document.xml → word/styles.xml）。 */
+export const DOCX_CONTENT_TYPES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>';
+
+export const DOCX_RELS_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>';
+
+export const DOCX_STYLES_XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimSun"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:sz w:val="56"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/></w:rPr></w:style></w:styles>';
+
 export async function buildExportArtifact(
   state: ExportStateLike,
   bookId: string,
   options: {
-    readonly format?: "txt" | "md" | "epub" | "md-zip";
+    readonly format?: "txt" | "md" | "epub" | "md-zip" | "docx";
     readonly outputPath?: string;
     /** R50/1645 号：章节勾选子集（Scrivener Compile 语义；缺省=全部）。 */
     readonly chapterFilter?: ReadonlyArray<number>;
@@ -229,6 +325,37 @@ export async function buildExportArtifact(
       format,
       contentType: "application/epub+zip",
       payload: await epubInstance.genEpub(),
+    };
+  }
+
+  if (format === "docx") {
+    // R50/1652 号：最小 4-part OOXML（条目序固定，STORE 零压缩=双端同为
+    // method-0，duel 解包逐条目可比）。Rust 镜像 = export_artifact.rs
+    // ExportFormat::Docx 分支（StoredZipWriter）。
+    const zip = new JSZip();
+    zip.file("[Content_Types].xml", DOCX_CONTENT_TYPES_XML);
+    zip.file("_rels/.rels", DOCX_RELS_XML);
+    const documentXml = docxDocumentXml(
+      book.title,
+      book.writing?.volumes ?? [],
+      chapters.map(chapter => ({
+        number: chapter.number,
+        title: chapter.title ?? "",
+        volumeId: chapter.volumeId,
+        paragraphs: docxBodyParagraphs(chapter.markdown),
+      })),
+    );
+    zip.file("word/document.xml", documentXml);
+    zip.file("word/styles.xml", DOCX_STYLES_XML);
+    return {
+      ...receipt,
+      outputPath,
+      fileName: `${bookId}.docx`,
+      chaptersExported: chapters.length,
+      totalWords,
+      format,
+      contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      payload: await zip.generateAsync({ type: "uint8array", compression: "STORE" }),
     };
   }
 
@@ -289,7 +416,7 @@ export async function writeExportArtifact(
   state: ExportStateLike,
   bookId: string,
   options: {
-    readonly format?: "txt" | "md" | "epub" | "md-zip";
+    readonly format?: "txt" | "md" | "epub" | "md-zip" | "docx";
     readonly outputPath?: string;
     readonly chapterFilter?: ReadonlyArray<number>;
     /** R50/1647 号：approvedOnly 透传（互斥优先级同 buildExportArtifact）。 */

@@ -26,6 +26,8 @@ pub enum ExportFormat {
     Epub,
     /// R50/1645 号：整书 markdown zip 打包（按卷目录 + 元数据 manifest）。
     MdZip,
+    /// R50/1652 号：Word 文档（最小 4-part OOXML，零新依赖）。
+    Docx,
 }
 
 impl ExportFormat {
@@ -34,6 +36,9 @@ impl ExportFormat {
             Some("md") => ExportFormat::Md,
             Some("epub") => ExportFormat::Epub,
             Some("md-zip") => ExportFormat::MdZip,
+            // 施工图 §1.4#1 的 mime 串仅用于 content_type 响应头；parse 面
+            // 只收短名（TS GET 面无 mime 归一，加别名即双端漂移）。
+            Some("docx") => ExportFormat::Docx,
             _ => ExportFormat::Txt,
         }
     }
@@ -46,6 +51,7 @@ impl ExportFormat {
             ExportFormat::Md => "md",
             ExportFormat::Epub => "epub",
             ExportFormat::MdZip => "zip",
+            ExportFormat::Docx => "docx",
         }
     }
 
@@ -55,6 +61,9 @@ impl ExportFormat {
             ExportFormat::Md => "text/markdown; charset=utf-8",
             ExportFormat::Txt => "text/plain; charset=utf-8",
             ExportFormat::MdZip => "application/zip",
+            ExportFormat::Docx => {
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            }
         }
     }
 }
@@ -286,6 +295,39 @@ pub async fn build_export_artifact(
             );
             (format!("{book_id}.zip"), writer.finish())
         }
+        ExportFormat::Docx => {
+            // R50/1652 号：最小 4-part OOXML（条目序固定，stored 零压缩=
+            // method-0）。TS 镜像 = export-artifact.ts docx 分支（jszip
+            // STORE）。
+            let volumes = book
+                .writing
+                .as_ref()
+                .and_then(|writing| writing.volumes.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            let mut docx_chapters: Vec<DocxChapterInput> = Vec::new();
+            for chapter in &chapters {
+                let Some(file) = chapter_files.get(&chapter.number) else {
+                    continue;
+                };
+                let content = tokio::fs::read_to_string(chapters_dir.join(file))
+                    .await
+                    .unwrap_or_default();
+                docx_chapters.push(DocxChapterInput {
+                    number: chapter.number,
+                    title: chapter.title.clone(),
+                    volume_id: chapter.volume_id.clone(),
+                    paragraphs: docx_body_paragraphs(&content),
+                });
+            }
+            let document = docx_document_xml(&book.title, &volumes, &docx_chapters);
+            let mut writer = StoredZipWriter::new();
+            writer.add("[Content_Types].xml", DOCX_CONTENT_TYPES_XML.as_bytes());
+            writer.add("_rels/.rels", DOCX_RELS_XML.as_bytes());
+            writer.add("word/document.xml", document.as_bytes());
+            writer.add("word/styles.xml", DOCX_STYLES_XML.as_bytes());
+            (format!("{book_id}.docx"), writer.finish())
+        }
     };
 
     Ok(ExportArtifact {
@@ -330,6 +372,123 @@ pub fn md_zip_entry_path(
         sanitize_name(chapter_title)
     )
 }
+
+// ── R50/1652 号：docx 导出纯函数族（TS 镜像 = export-artifact.ts docx*
+// 系列，golden chapter-docx-vectors.json 锁定）。最小 4-part OOXML
+// （ECMA-376）：[Content_Types].xml / _rels/.rels / word/document.xml /
+// word/styles.xml——属性序固定、无缩进无注释、UTF-8 无 BOM = duel 条目级
+// 逐位可比。零新依赖（StoredZipWriter stored 容器，EPUB/MdZip 同款）。──
+
+/// XML 五实体转义（`&` 最先——防二次转义）。TS 镜像 = `docxEscapeXml`。
+pub fn docx_escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// 章正文切段：非 `#` 行 trim 后非空各一段——与 EPUB `markdown_to_simple_html`
+/// 行语义一致（同书双格式分段一致；章标题由索引 title 单独成 Heading2 段，
+/// 正文中的标题行滤除）。TS 镜像 = `docxBodyParagraphs`。
+pub fn docx_body_paragraphs(markdown: &str) -> Vec<String> {
+    markdown
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+const DOCX_EAST_ASIA_FONT: &str = "SimSun";
+
+/// (style_id, text) → `<w:p>`：pPr 样式引用 + run 级 rPr eastAsia（中文字族
+/// 声明不依赖 styles 继承链）+ xml:space="preserve"。空文本 = 无 run 空段。
+/// TS 镜像 = `docxParagraphXml`。
+pub fn docx_paragraph_xml(style_id: &str, text: &str) -> String {
+    if text.is_empty() {
+        return format!(r#"<w:p><w:pPr><w:pStyle w:val="{style_id}"/></w:pPr></w:p>"#);
+    }
+    format!(
+        concat!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{style_id}"/></w:pPr>"#,
+            r#"<w:r><w:rPr><w:rFonts w:eastAsia="{font}"/></w:rPr>"#,
+            r#"<w:t xml:space="preserve">{text}</w:t></w:r></w:p>"#,
+        ),
+        style_id = style_id,
+        font = DOCX_EAST_ASIA_FONT,
+        text = docx_escape_xml(text),
+    )
+}
+
+/// docx 文档章节输入（章号 + 标题 + 卷归属 + 正文段）。TS 镜像 =
+/// `DocxChapterInput`。
+#[derive(Debug, Clone)]
+pub struct DocxChapterInput {
+    pub number: u32,
+    pub title: String,
+    pub volume_id: Option<String>,
+    pub paragraphs: Vec<String>,
+}
+
+/// 章序 = (卷 order（未分组/未知卷 = 0 前置，与 md-zip `00_ungrouped` 桶序
+/// 一致）, 章号) 稳定排序；卷桶首章前发 Heading1（卷名）。未分组章直排不造
+/// 卷标题——docx 无目录树语义，直排更符 Word 阅读习惯（与 md-zip 的
+/// `00_ungrouped` 目录形态有意不同）。sectPr = A4 + 1 英寸页边距（Word
+/// 惯例 twips 值）。TS 镜像 = `docxDocumentXml`。
+pub fn docx_document_xml(
+    book_title: &str,
+    volumes: &[crate::models::book::BookVolume],
+    chapters: &[DocxChapterInput],
+) -> String {
+    let volume_of = |id: Option<&str>| -> Option<&crate::models::book::BookVolume> {
+        id.and_then(|id| volumes.iter().find(|volume| volume.id == id))
+    };
+    let mut ordered: Vec<(&DocxChapterInput, Option<&crate::models::book::BookVolume>)> = chapters
+        .iter()
+        .map(|chapter| (chapter, volume_of(chapter.volume_id.as_deref())))
+        .collect();
+    ordered.sort_by_key(|(chapter, volume)| (volume.map_or(0, |v| v.order), chapter.number));
+    let mut body = String::new();
+    body.push_str(&docx_paragraph_xml("Title", book_title));
+    let mut prev_bucket: Option<Option<&str>> = None;
+    for (chapter, volume) in ordered {
+        let bucket = volume.map(|volume| volume.id.as_str());
+        if prev_bucket != Some(bucket) {
+            if let Some(volume) = volume {
+                body.push_str(&docx_paragraph_xml("Heading1", &volume.title));
+            }
+        }
+        prev_bucket = Some(bucket);
+        body.push_str(&docx_paragraph_xml("Heading2", &chapter.title));
+        for paragraph in &chapter.paragraphs {
+            body.push_str(&docx_paragraph_xml("Normal", paragraph));
+        }
+    }
+    body.push_str(r#"<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>"#);
+    body.push_str(
+        r#"<w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>"#,
+    );
+    format!(
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#,
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
+            r#"<w:body>{body}</w:body></w:document>"#,
+        ),
+        body = body,
+    )
+}
+
+/// 三常量 part（TS 字面镜像 = export-artifact.ts `DOCX_*_XML`，golden
+/// chapter-docx-vectors.json staticParts sha256 锁定）。document.xml 由
+/// docx_document_xml 产出；条目序 = [Content_Types].xml → _rels/.rels →
+/// word/document.xml → word/styles.xml。
+pub const DOCX_CONTENT_TYPES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>"#;
+
+pub const DOCX_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+
+pub const DOCX_STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="SimSun"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:b/><w:sz w:val="56"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="1"/></w:pPr><w:rPr><w:b/><w:sz w:val="30"/></w:rPr></w:style></w:styles>"#;
 
 // ── 零依赖 stored-zip EPUB ──────────────────────────────────────
 
@@ -706,5 +865,192 @@ mod tests {
         assert_eq!(html, "<p>他走了。&lt;b&gt;加粗&lt;/b&gt;</p>");
         let (title, _) = markdown_to_simple_html("无标题正文");
         assert_eq!(title, "Untitled Chapter");
+    }
+
+    // ── R50/1652 号：docx 全链 ─────────────────────────────────────
+
+    /// 解 stored zip local headers → (条目名, 内容) 序列（StoredZipWriter
+    /// 产物无 extra 字段；duel 断言与 JSZip 解包同视角）。
+    fn unzip_stored(payload: &[u8]) -> Vec<(String, Vec<u8>)> {
+        let mut entries = Vec::new();
+        let mut offset = 0usize;
+        while payload[offset..].starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
+            let name_len =
+                u16::from_le_bytes([payload[offset + 26], payload[offset + 27]]) as usize;
+            let extra_len =
+                u16::from_le_bytes([payload[offset + 28], payload[offset + 29]]) as usize;
+            let size = u32::from_le_bytes([
+                payload[offset + 18],
+                payload[offset + 19],
+                payload[offset + 20],
+                payload[offset + 21],
+            ]) as usize;
+            let name_start = offset + 30;
+            let data_start = name_start + name_len + extra_len;
+            let name = String::from_utf8(payload[name_start..name_start + name_len].to_vec())
+                .expect("条目名 UTF-8");
+            entries.push((name, payload[data_start..data_start + size].to_vec()));
+            offset = data_start + size;
+        }
+        entries
+    }
+
+    async fn docx_fixture(root: &Path) -> StateManager {
+        let state = StateManager::new(root);
+        let config: crate::models::book::BookConfig = serde_json::from_str(
+            r#"{"id":"b1","title":"风起云涌","platform":"other","genre":"other","status":"active","targetChapters":4,"chapterWordCount":1000,"language":"zh","createdAt":"","updatedAt":"","writing":{"volumes":[{"id":"v1","title":"第一卷 风起","order":1},{"id":"v2","title":"第二卷 云涌","order":2}]}}"#,
+        )
+        .unwrap();
+        state.save_book_config("b1", &config).await.unwrap();
+        let now = "2026-01-01T00:00:00.000Z";
+        let meta = |number: u32, volume_id: Option<&str>| crate::models::chapter::ChapterMeta {
+            number,
+            title: format!("第{number}章"),
+            status: serde_json::from_value::<crate::models::chapter::ChapterStatus>(
+                serde_json::json!("approved"),
+            )
+            .unwrap(),
+            word_count: 5,
+            created_at: now.into(),
+            updated_at: now.into(),
+            audit_issues: Vec::new(),
+            volume_id: volume_id.map(str::to_string),
+            length_warnings: Vec::new(),
+            review_note: None,
+            detection_score: None,
+            detection_provider: None,
+            detected_at: None,
+            length_telemetry: None,
+            token_usage: None,
+        };
+        state
+            .save_chapter_index(
+                "b1",
+                &[
+                    meta(1, Some("v1")),
+                    meta(2, Some("v1")),
+                    meta(3, Some("v2")),
+                    meta(4, None),
+                ],
+            )
+            .await
+            .unwrap();
+        let chapters_dir = state.book_dir("b1").join("chapters");
+        tokio::fs::create_dir_all(&chapters_dir).await.unwrap();
+        // 与 TS golden-chapter-docx.test.ts docxFixture 同数据（双端活体
+        // sha256 对拍前提；正文段两端口径一致——renderChapterDocument 只
+        // 重写标题行，标题行两侧都被 docx_body_paragraphs 滤除）。
+        let bodies = [
+            (1u32, "风起青萍。"),
+            (2, "青萍之末。"),
+            (3, "云涌微澜。"),
+            (4, "未分组直排。"),
+        ];
+        for (number, body) in bodies {
+            tokio::fs::write(
+                chapters_dir.join(format!("{number:04}_第{number}章.md")),
+                format!("# 第{number}章\n\n{body}"),
+            )
+            .await
+            .unwrap();
+        }
+        state
+    }
+
+    #[tokio::test]
+    async fn docx_export_builds_four_part_ooxml_with_volume_headings() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = docx_fixture(dir.path()).await;
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Docx, false, None, None)
+            .await
+            .unwrap();
+        assert_eq!(artifact.file_name, "b1.docx");
+        assert_eq!(
+            artifact.content_type,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(artifact.chapters_exported, 4);
+        let entries = unzip_stored(&artifact.payload);
+        assert_eq!(
+            entries
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "[Content_Types].xml",
+                "_rels/.rels",
+                "word/document.xml",
+                "word/styles.xml"
+            ],
+            "条目序固定（duel 逐位可比前提）"
+        );
+        let document = String::from_utf8(entries[2].1.clone()).unwrap();
+        // 卷 Heading1 序（未分组(0) 前置 → 卷1 → 卷2；未分组无卷标题）。
+        let positions = [
+            document.find("第4章</w:t>").unwrap(),
+            document.find("第一卷 风起</w:t>").unwrap(),
+            document.find("第1章</w:t>").unwrap(),
+            document.find("风起青萍。</w:t>").unwrap(),
+            document.find("第二卷 云涌</w:t>").unwrap(),
+            document.find("云涌微澜。</w:t>").unwrap(),
+        ];
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(document.contains(r#"w:val="Title""#));
+        assert!(document.ends_with("</w:sectPr></w:body></w:document>"));
+        // 双端活体逐位对拍锚：word/document.xml sha256 = TS 同 fixture 生产
+        // 值（golden chapter-docx-vectors.json fullChainDocumentDigest）。
+        use sha2::{Digest, Sha256};
+        let digest = format!("{:x}", Sha256::digest(entries[2].1.as_slice()));
+        assert_eq!(
+            digest, "dfa752c347d4d2a426bc3d6623abe421840f70f6821c07b6f017688a0fc6a8cc",
+            "word/document.xml 与 TS 双端漂移"
+        );
+        // 常量 part 逐字节 = 生产常量。
+        assert_eq!(entries[0].1, DOCX_CONTENT_TYPES_XML.as_bytes());
+        assert_eq!(entries[1].1, DOCX_RELS_XML.as_bytes());
+        assert_eq!(entries[3].1, DOCX_STYLES_XML.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn docx_export_honors_chapter_filter_subset() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = docx_fixture(dir.path()).await;
+        let artifact =
+            build_export_artifact(&state, "b1", ExportFormat::Docx, false, None, Some(&[2]))
+                .await
+                .unwrap();
+        assert_eq!(artifact.chapters_exported, 1);
+        let entries = unzip_stored(&artifact.payload);
+        let document = String::from_utf8(entries[2].1.clone()).unwrap();
+        assert!(document.contains("第2章</w:t>"));
+        assert!(document.contains("青萍之末。</w:t>"));
+        assert!(!document.contains("第1章</w:t>"));
+        assert!(!document.contains("云涌微澜。</w:t>"));
+    }
+
+    // textutil 活体开档（macOS 本机自动可读性用例——施工图 §1.5；Word/WPS/
+    // Pages 三端人工走查备案变更记录）。
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn docx_export_opens_with_textutil() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = docx_fixture(dir.path()).await;
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Docx, false, None, None)
+            .await
+            .unwrap();
+        let path = dir.path().join("b1.docx");
+        tokio::fs::write(&path, &artifact.payload).await.unwrap();
+        let output = std::process::Command::new("textutil")
+            .arg("-convert")
+            .arg("txt")
+            .arg("-stdout")
+            .arg(&path)
+            .output()
+            .expect("textutil 可执行");
+        assert!(output.status.success(), "textutil 开档失败");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("风起云涌"));
+        assert!(text.contains("风起青萍。"));
+        assert!(text.contains("第一卷 风起"));
     }
 }

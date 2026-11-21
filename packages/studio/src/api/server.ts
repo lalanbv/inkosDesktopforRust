@@ -8186,7 +8186,7 @@ function yamlScalar(value: unknown): string {
 
     try {
       const artifact = await buildExportArtifact(state, id, {
-        format: format as "txt" | "md" | "epub" | "md-zip",
+        format: format as "txt" | "md" | "epub" | "md-zip" | "docx",
         chapterFilter,
         approvedOnly,
       });

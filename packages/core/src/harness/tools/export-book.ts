@@ -9,6 +9,8 @@ const ExportBookParameters = Type.Object({
     Type.Literal("epub"),
     // R50/1647 号：md-zip 打包格式补入工具面（此前仅 GET /export 可达）。
     Type.Literal("md-zip"),
+    // R50/1652 号：Word 文档（最小 4-part OOXML，零新依赖）。
+    Type.Literal("docx"),
   ])),
   // R50/1647 号：章节勾选子集（GET /export `chapters` CSV 同语义——正整数
   // 过滤、缺省=全部；调用方须自行过滤非正项，与 server 端一致）。
@@ -28,7 +30,7 @@ export function createExportBookTool(
   return {
     name: "export_book",
     label: "Export Work",
-    description: "Export this long-form Work as Markdown, text, EPUB, or a zipped Markdown bundle; chapters selects a chapter subset.",
+    description: "Export this long-form Work as Markdown, text, EPUB, a zipped Markdown bundle, or a Word document (docx); chapters selects a chapter subset.",
     parameters: ExportBookParameters,
     async execute(_toolCallId, input: ExportBookInput) {
       const details = await writeExportArtifact(state, bookId, {

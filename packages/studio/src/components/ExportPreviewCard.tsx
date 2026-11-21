@@ -7,10 +7,11 @@ interface ChapterRow {
   readonly status?: string;
 }
 
-type ExportFormatChoice = "txt" | "md" | "epub" | "md-zip";
+type ExportFormatChoice = "txt" | "md" | "epub" | "md-zip" | "docx";
 
 const FORMATS: ReadonlyArray<{ id: ExportFormatChoice; labelZh: string; labelEn: string }> = [
   { id: "md-zip", labelZh: "Markdown 打包（zip）", labelEn: "Markdown bundle (zip)" },
+  { id: "docx", labelZh: "Word 文档（docx）", labelEn: "Word document (docx)" },
   { id: "md", labelZh: "Markdown 单文件", labelEn: "Markdown (single)" },
   { id: "txt", labelZh: "纯文本", labelEn: "Plain text" },
   { id: "epub", labelZh: "EPUB", labelEn: "EPUB" },

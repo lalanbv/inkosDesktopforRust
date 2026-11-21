@@ -1392,6 +1392,38 @@ mod books47_e2e {
             .unwrap();
         assert_eq!(&body[..4], &[0x50, 0x4B, 0x03, 0x04]);
 
+        // R50/1652 号：docx——OOXML content-type + zip 魔数 + 4-part 条目名
+        // （stored 条目名 local header 明文，按字节断言）。
+        let app = axum::Router::new()
+            .route("/api/v1/books/:id/export", axum::routing::get(export))
+            .with_state(runtime.clone());
+        let response = get(app, "/api/v1/books/b1/export?format=docx").await;
+        assert_eq!(response.status(), 200);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        );
+        assert_eq!(
+            response.headers().get("content-disposition").unwrap(),
+            "attachment; filename=\"b1.docx\"; filename*=UTF-8''b1.docx"
+        );
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        assert_eq!(&body[..4], &[0x50, 0x4B, 0x03, 0x04]);
+        for entry in [
+            "[Content_Types].xml".as_bytes(),
+            "_rels/.rels".as_bytes(),
+            "word/document.xml".as_bytes(),
+            "word/styles.xml".as_bytes(),
+        ] {
+            assert!(
+                body.windows(entry.len()).any(|window| window == entry),
+                "docx 条目 {:?} 缺失",
+                String::from_utf8_lossy(entry)
+            );
+        }
+
         // approvedOnly=true：仅 approved 的第 1 章。
         let app = axum::Router::new()
             .route("/api/v1/books/:id/export", axum::routing::get(export))

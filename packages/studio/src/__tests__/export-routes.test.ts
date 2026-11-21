@@ -104,6 +104,35 @@ describe("export routes (R50/1647)", () => {
     expect(((await response.json()) as { error: string }).error).toBe("Export failed");
   });
 
+  it("GET /export format=docx → OOXML 4-part（R50/1652 全量面）", async () => {
+    const { app } = seedApp();
+    const response = await app.request("/api/v1/books/b1/export?format=docx");
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    expect(response.headers.get("Content-Disposition")).toContain('filename="b1.docx"');
+    const bytes = Buffer.from(await response.arrayBuffer());
+    // zip 魔数（jszip STORE）。
+    expect([...bytes.subarray(0, 4)]).toEqual([0x50, 0x4b, 0x03, 0x04]);
+    // jszip 是 core 依赖（studio 无权直引）——条目名/正文按字节断言；内容级
+    // 解包由 core golden-chapter-docx 测试（jszip 全量解析）覆盖。
+    for (const entry of ["[Content_Types].xml", "_rels/.rels", "word/document.xml", "word/styles.xml"]) {
+      expect(bytes.includes(Buffer.from(entry, "utf-8"))).toBe(true);
+    }
+    expect(bytes.includes(Buffer.from("导出测试书", "utf-8"))).toBe(true);
+    expect(bytes.includes(Buffer.from("林动睁开双眼。", "utf-8"))).toBe(true);
+  });
+
+  it("GET /export format=docx chapters 子集 → 子集正文（R50/1652 子集面）", async () => {
+    const { app } = seedApp();
+    const response = await app.request("/api/v1/books/b1/export?format=docx&chapters=2");
+    expect(response.status).toBe(200);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    expect(bytes.includes(Buffer.from("正文二乙。", "utf-8"))).toBe(true);
+    expect(bytes.includes(Buffer.from("林动睁开双眼", "utf-8"))).toBe(false);
+  });
+
   it("POST export-save md-zip chapters 子集 → 落盘 b1.zip 正典扩展名 + 子集条目", async () => {
     const { bookDir, app } = await seedRegisteredApp();
     const response = await app.request("/api/v1/books/b1/export-save", {

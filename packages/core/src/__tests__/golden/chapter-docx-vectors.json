@@ -1,0 +1,205 @@
+{
+  "staticParts": {
+    "[Content_Types].xml": "42591d0489f7e86a01b2a608cd6cde7294d7753bd5a05a38dacbcb861b2cda93",
+    "_rels/.rels": "d8b0bad955075e5c5a427fe596520be989739fbcaddd9d837b319ea620740fde",
+    "word/styles.xml": "917f5de34d9947f8aa638d746b912ce2918cbb0301a4cc3ca7d8cfdbe5d8fcb8"
+  },
+  "fullChainDocumentDigest": "dfa752c347d4d2a426bc3d6623abe421840f70f6821c07b6f017688a0fc6a8cc",
+  "escape": [
+    {
+      "name": "chinese-body",
+      "input": "风起于青萍之末，浪成于微澜之间。",
+      "expected": "风起于青萍之末，浪成于微澜之间。"
+    },
+    {
+      "name": "quotes-and-apostrophe",
+      "input": "\"双引号\"与'单引号'<他>@&",
+      "expected": "&quot;双引号&quot;与&apos;单引号&apos;&lt;他&gt;@&amp;"
+    },
+    {
+      "name": "consecutive-entities",
+      "input": "&&<<>>",
+      "expected": "&amp;&amp;&lt;&lt;&gt;&gt;"
+    },
+    {
+      "name": "empty",
+      "input": "",
+      "expected": ""
+    }
+  ],
+  "bodyParagraphs": [
+    {
+      "name": "heading-filtered",
+      "input": "# 第1章 风起\n\n正文第一段。\n\n正文第二段。",
+      "expected": [
+        "正文第一段。",
+        "正文第二段。"
+      ]
+    },
+    {
+      "name": "blank-lines-and-indent",
+      "input": "\n  缩进行  \n\n\n尾段\n",
+      "expected": [
+        "缩进行",
+        "尾段"
+      ]
+    },
+    {
+      "name": "all-heading",
+      "input": "# 标题\n## 副题",
+      "expected": []
+    },
+    {
+      "name": "mixed-cn-en",
+      "input": "# T\nChinese line one.\nEnglish line two.",
+      "expected": [
+        "Chinese line one.",
+        "English line two."
+      ]
+    }
+  ],
+  "paragraph": [
+    {
+      "name": "heading1-style",
+      "styleId": "Heading1",
+      "text": "第一卷 风起",
+      "expected": "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第一卷 风起</w:t></w:r></w:p>"
+    },
+    {
+      "name": "normal-escapes",
+      "styleId": "Normal",
+      "text": "A&B<C>\"D\"'E'",
+      "expected": "<w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">A&amp;B&lt;C&gt;&quot;D&quot;&apos;E&apos;</w:t></w:r></w:p>"
+    },
+    {
+      "name": "empty-text-no-run",
+      "styleId": "Normal",
+      "text": "",
+      "expected": "<w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr></w:p>"
+    },
+    {
+      "name": "title-cn-number",
+      "styleId": "Heading2",
+      "text": "第12章 云涌",
+      "expected": "<w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第12章 云涌</w:t></w:r></w:p>"
+    }
+  ],
+  "document": [
+    {
+      "name": "volume-chapter-nesting",
+      "bookTitle": "风起",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "第一卷 风起",
+          "order": 1
+        },
+        {
+          "id": "v2",
+          "title": "第二卷 云涌",
+          "order": 2
+        }
+      ],
+      "chapters": [
+        {
+          "number": 3,
+          "title": "第3章 灵脉",
+          "volumeId": "v2",
+          "paragraphs": [
+            "卷二正文。"
+          ]
+        },
+        {
+          "number": 1,
+          "title": "第1章 风起",
+          "volumeId": "v1",
+          "paragraphs": [
+            "卷一正文一。",
+            "卷一正文二。"
+          ]
+        },
+        {
+          "number": 2,
+          "title": "第2章 青萍",
+          "volumeId": "v1",
+          "paragraphs": []
+        }
+      ],
+      "expected": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">风起</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第一卷 风起</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第1章 风起</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">卷一正文一。</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">卷一正文二。</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第2章 青萍</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第二卷 云涌</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第3章 灵脉</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">卷二正文。</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
+    },
+    {
+      "name": "ungrouped-straight",
+      "bookTitle": "无卷书",
+      "volumes": [],
+      "chapters": [
+        {
+          "number": 2,
+          "title": "第2章",
+          "paragraphs": [
+            "乙。"
+          ]
+        },
+        {
+          "number": 1,
+          "title": "第1章",
+          "paragraphs": [
+            "甲。"
+          ]
+        }
+      ],
+      "expected": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">无卷书</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第1章</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">甲。</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第2章</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">乙。</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
+    },
+    {
+      "name": "chapter-filter-subset",
+      "bookTitle": "子集书",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "唯一卷",
+          "order": 1
+        }
+      ],
+      "chapters": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "volumeId": "v1",
+          "paragraphs": [
+            "保留章。"
+          ]
+        }
+      ],
+      "expected": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">子集书</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">唯一卷</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第1章</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">保留章。</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
+    },
+    {
+      "name": "unknown-volume-falls-ungrouped",
+      "bookTitle": "幽灵卷",
+      "volumes": [
+        {
+          "id": "v1",
+          "title": "真实卷",
+          "order": 1
+        }
+      ],
+      "chapters": [
+        {
+          "number": 1,
+          "title": "第1章",
+          "volumeId": "ghost",
+          "paragraphs": [
+            "未知卷章。"
+          ]
+        },
+        {
+          "number": 2,
+          "title": "第2章",
+          "volumeId": "v1",
+          "paragraphs": [
+            "真实卷章。"
+          ]
+        }
+      ],
+      "expected": "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body><w:p><w:pPr><w:pStyle w:val=\"Title\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">幽灵卷</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第1章</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">未知卷章。</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">真实卷</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Heading2\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">第2章</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val=\"Normal\"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia=\"SimSun\"/></w:rPr><w:t xml:space=\"preserve\">真实卷章。</w:t></w:r></w:p><w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\" w:header=\"720\" w:footer=\"720\" w:gutter=\"0\"/></w:sectPr></w:body></w:document>"
+    }
+  ]
+}
