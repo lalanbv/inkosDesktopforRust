@@ -10,7 +10,11 @@ import type { Api, Context, Model } from "@earendil-works/pi-ai";
 // 1015/1017 号：测试凭据治理——env 表值走 env 注入+非凭据回退（855 惯用形）。
 const TEST_KEY = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
 
-const { completionsStreamSimple, responsesStreamSimple, anthropicStreamSimple } = vi.hoisted(() => ({
+const {
+  completionsStreamSimple,
+  responsesStreamSimple,
+  anthropicStreamSimple,
+} = vi.hoisted(() => ({
   completionsStreamSimple: vi.fn(() => "completions-stream"),
   responsesStreamSimple: vi.fn(() => "responses-stream"),
   anthropicStreamSimple: vi.fn(() => "anthropic-stream"),
@@ -49,12 +53,24 @@ afterEach(() => {
 
 describe("getEnvApiKey（上游 env-api-keys 自持镜像）", () => {
   it("resolves single-key providers from the upstream table", () => {
-    expect(getEnvApiKey("openai", { OPENAI_API_KEY: `${TEST_KEY}-1` })).toBe(`${TEST_KEY}-1`);
-    expect(getEnvApiKey("deepseek", { DEEPSEEK_API_KEY: `${TEST_KEY}-2` })).toBe(`${TEST_KEY}-2`);
-    expect(getEnvApiKey("zai", { ZAI_API_KEY: `${TEST_KEY}-3` })).toBe(`${TEST_KEY}-3`);
-    expect(getEnvApiKey("openrouter", { OPENROUTER_API_KEY: `${TEST_KEY}-4` })).toBe(`${TEST_KEY}-4`);
-    expect(getEnvApiKey("moonshotai", { MOONSHOT_API_KEY: `${TEST_KEY}-5` })).toBe(`${TEST_KEY}-5`);
-    expect(getEnvApiKey("google", { GEMINI_API_KEY: `${TEST_KEY}-6` })).toBe(`${TEST_KEY}-6`);
+    expect(getEnvApiKey("openai", { OPENAI_API_KEY: `${TEST_KEY}-1` })).toBe(
+      `${TEST_KEY}-1`,
+    );
+    expect(
+      getEnvApiKey("deepseek", { DEEPSEEK_API_KEY: `${TEST_KEY}-2` }),
+    ).toBe(`${TEST_KEY}-2`);
+    expect(getEnvApiKey("zai", { ZAI_API_KEY: `${TEST_KEY}-3` })).toBe(
+      `${TEST_KEY}-3`,
+    );
+    expect(
+      getEnvApiKey("openrouter", { OPENROUTER_API_KEY: `${TEST_KEY}-4` }),
+    ).toBe(`${TEST_KEY}-4`);
+    expect(
+      getEnvApiKey("moonshotai", { MOONSHOT_API_KEY: `${TEST_KEY}-5` }),
+    ).toBe(`${TEST_KEY}-5`);
+    expect(getEnvApiKey("google", { GEMINI_API_KEY: `${TEST_KEY}-6` })).toBe(
+      `${TEST_KEY}-6`,
+    );
   });
 
   it("falls back to process.env when the scoped env omits the key", () => {
@@ -70,36 +86,96 @@ describe("getEnvApiKey（上游 env-api-keys 自持镜像）", () => {
 
   it("mirrors the anthropic candidate order and skips AUTH_TOKEN", () => {
     // AUTH_TOKEN 在场但不作为 key 返回（上游须以 Authorization: Bearer 传递）。
-    expect(getEnvApiKey("anthropic", { ANTHROPIC_AUTH_TOKEN: "bearer" })).toBeUndefined();
+    expect(
+      getEnvApiKey("anthropic", { ANTHROPIC_AUTH_TOKEN: "bearer" }),
+    ).toBeUndefined();
     // AUTH_TOKEN 在场时跳过，取 API_KEY。
     expect(
-      getEnvApiKey("anthropic", { ANTHROPIC_AUTH_TOKEN: "bearer", ANTHROPIC_API_KEY: TEST_KEY }),
+      getEnvApiKey("anthropic", {
+        ANTHROPIC_AUTH_TOKEN: "bearer",
+        ANTHROPIC_API_KEY: TEST_KEY,
+      }),
     ).toBe(TEST_KEY);
     // 仅 AUTH_TOKEN 在场时跳过后无候选。
-    expect(getEnvApiKey("anthropic", { ANTHROPIC_OAUTH_TOKEN: "oauth" })).toBe("oauth");
+    expect(getEnvApiKey("anthropic", { ANTHROPIC_OAUTH_TOKEN: "oauth" })).toBe(
+      "oauth",
+    );
   });
 
   it("returns undefined for unknown providers and ollama (ambient, keyless)", () => {
     expect(getEnvApiKey("ollama")).toBeUndefined();
     expect(getEnvApiKey("not-a-provider", { WHATEVER: "x" })).toBeUndefined();
   });
+
+  it("mirrors the 1.6.0 qwen token-plan fallback chains (per-plan first, legacy region second)", () => {
+    // 1.6.0 数组化：per-plan 变量优先，两 plan 曾共用的旧区域变量兜底。
+    expect(
+      getEnvApiKey("qwen-token-plan", {
+        QWEN_TOKEN_PLAN_API_KEY: `${TEST_KEY}-legacy`,
+      }),
+    ).toBe(`${TEST_KEY}-legacy`);
+    expect(
+      getEnvApiKey("qwen-token-plan", {
+        QWEN_TOKEN_PLAN_TEAM_API_KEY: `${TEST_KEY}-team`,
+        QWEN_TOKEN_PLAN_API_KEY: `${TEST_KEY}-legacy`,
+      }),
+    ).toBe(`${TEST_KEY}-team`);
+    expect(
+      getEnvApiKey("qwen-token-plan-individual-cn", {
+        QWEN_TOKEN_PLAN_INDIVIDUAL_CN_API_KEY: TEST_KEY,
+      }),
+    ).toBe(TEST_KEY);
+    // 键名互不串扰：TEAM_CN 不充当 individual-cn 的候选。
+    expect(
+      getEnvApiKey("qwen-token-plan-individual-cn", {
+        QWEN_TOKEN_PLAN_TEAM_CN_API_KEY: "other",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("mirrors the 1.6.0 table additions and renames", () => {
+    // azure 键随上游改名（0.87 为 azure-openai-responses）。
+    expect(getEnvApiKey("azure", { AZURE_OPENAI_API_KEY: TEST_KEY })).toBe(
+      TEST_KEY,
+    );
+    expect(
+      getEnvApiKey("azure-openai-responses", {
+        AZURE_OPENAI_API_KEY: TEST_KEY,
+      }),
+    ).toBeUndefined();
+    // typesafe 为 0.87 后上游新增；github-copilot 分支按全表镜像补齐。
+    expect(getEnvApiKey("typesafe", { TYPESAFE_API_KEY: TEST_KEY })).toBe(
+      TEST_KEY,
+    );
+    expect(
+      getEnvApiKey("github-copilot", { COPILOT_GITHUB_TOKEN: TEST_KEY }),
+    ).toBe(TEST_KEY);
+  });
 });
 
 describe("piStreamSimple dispatch（上游 streamSimple 分发自持）", () => {
   it("routes by model.api to the matching per-API streamSimple", () => {
-    const context = { messages: [{ role: "user", content: "hi" }] } as unknown as Context;
-    expect(piStreamSimple(makeModel("openai-completions"), context)).toBe("completions-stream");
+    const context = {
+      messages: [{ role: "user", content: "hi" }],
+    } as unknown as Context;
+    expect(piStreamSimple(makeModel("openai-completions"), context)).toBe(
+      "completions-stream",
+    );
     expect(completionsStreamSimple).toHaveBeenCalledTimes(1);
-    expect(piStreamSimple(makeModel("openai-responses"), context)).toBe("responses-stream");
+    expect(piStreamSimple(makeModel("openai-responses"), context)).toBe(
+      "responses-stream",
+    );
     expect(responsesStreamSimple).toHaveBeenCalledTimes(1);
-    expect(piStreamSimple(makeModel("anthropic-messages"), context)).toBe("anthropic-stream");
+    expect(piStreamSimple(makeModel("anthropic-messages"), context)).toBe(
+      "anthropic-stream",
+    );
     expect(anthropicStreamSimple).toHaveBeenCalledTimes(1);
   });
 
   it("throws a clear error for an unregistered api value", () => {
     const context = { messages: [] } as unknown as Context;
-    expect(() => piStreamSimple(makeModel("mistral-conversations" as Api), context)).toThrow(
-      /No pi-ai API module registered for api: mistral-conversations/,
-    );
+    expect(() =>
+      piStreamSimple(makeModel("mistral-conversations" as Api), context),
+    ).toThrow(/No pi-ai API module registered for api: mistral-conversations/);
   });
 });
