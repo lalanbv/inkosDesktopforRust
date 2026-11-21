@@ -589,6 +589,13 @@ pub fn router_books(
                 .put(project_config_routes::put_chapter_review_mode)
                 .with_state(books.clone()),
         )
+        // R51/1654 号：应用级日目标字数（写作目标面板服务端正典键）。
+        .route(
+            "/api/v1/project/writing-goal",
+            get(project_config_routes::get_writing_goal)
+                .put(project_config_routes::put_writing_goal)
+                .with_state(books.clone()),
+        )
         .route(
             "/api/v1/project/notify",
             get(project_config_routes::get_notify)

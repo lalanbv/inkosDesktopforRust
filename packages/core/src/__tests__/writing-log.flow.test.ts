@@ -9,6 +9,9 @@ import { it, expect } from "vitest";
 import { StateManager } from "../state/manager.js";
 import { executeEditTransaction, type EditExecutionDeps } from "../interaction/edit-controller.js";
 import { loadWritingLog, writingLogPath } from "../utils/writing-log-store.js";
+import { persistChapterArtifacts } from "../pipeline/chapter-persistence.js";
+import type { WritingLogRow } from "../utils/writing-goal.js";
+import type { ChapterMeta } from "../models/chapter.js";
 
 async function seed(root: string): Promise<StateManager> {
   const state = new StateManager(root);
@@ -94,4 +97,44 @@ it("chapter-local-edit 同款写点语义", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// ── R51/1654 号：管线写章写点（persistChapterArtifacts）─────────────────
+
+const auditResult = { observations: [], summary: "" } as Parameters<typeof persistChapterArtifacts>[0]["auditResult"];
+
+it("persistChapterArtifacts 记 wordCount Δ（Δ≠0 一行；Δ=0 不记；新章 before 0）", async () => {
+  const recorded: WritingLogRow[] = [];
+  let index: ReadonlyArray<ChapterMeta> = [
+    { number: 3, title: "旧章", status: "approved", wordCount: 1000,
+      createdAt: "2020-01-01T00:00:00.000Z", updatedAt: "2020-01-01T00:00:00.000Z",
+      observations: [], provenance: "generated" } as ChapterMeta,
+  ];
+  const persist = (finalWordCount: number) => persistChapterArtifacts({
+    chapterNumber: 3, chapterTitle: "夜探", auditResult, finalWordCount,
+    loadChapterIndex: async () => index,
+    saveChapter: async (next) => { index = next; },
+    markBookActiveIfNeeded: async () => {},
+    now: () => "2026-08-15T00:00:00.000Z",
+    appendWritingLog: async (row) => { recorded.push(row); },
+  });
+
+  // ① 1000 → 2400：记一行（ts=注入时刻）。
+  await persist(2400);
+  expect(recorded).toEqual([
+    { ts: "2026-08-15T00:00:00.000Z", chapterNum: 3, before: 1000, after: 2400 },
+  ]);
+
+  // ② 2400 → 2400（Δ=0）不记。
+  await persist(2400);
+  expect(recorded).toHaveLength(1);
+
+  // ③ 无 appendWritingLog（缺省可选）零破坏——直调不传钩子。
+  const untouched = await persistChapterArtifacts({
+    chapterNumber: 4, chapterTitle: "新章", auditResult, finalWordCount: 800,
+    loadChapterIndex: async () => [],
+    saveChapter: async () => {},
+    markBookActiveIfNeeded: async () => {},
+  });
+  expect(untouched.entry.wordCount).toBe(800);
 });

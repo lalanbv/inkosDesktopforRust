@@ -29,6 +29,14 @@ pub trait PersistenceHooks: Send + Sync {
     async fn persist_audit_drift_guidance(&self, issues: &[AuditIssue]) -> Result<(), String>;
     async fn snapshot_state(&self) -> Result<(), String>;
     async fn sync_current_state_fact_history(&self) -> Result<(), String>;
+    /// R51/1654 号：日产出账本追加（wordCount Δ≠0 时；默认 no-op——既有
+    /// 测试 hooks 零破坏，runner 真源覆写接 writing_log）。
+    async fn append_writing_log(
+        &self,
+        _row: &crate::utils::writing_goal::WritingLogRow,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// 落盘入参。
@@ -110,6 +118,11 @@ pub async fn persist_chapter_artifacts(
     let existing_idx = existing_index
         .iter()
         .position(|meta| meta.number == params.chapter_number);
+    // R51/1654 号：旧 wordCount 先取（existing_index 后续被 move）；新章无
+    // 同号行 = before 0（与编辑事务写点同语义）。
+    let previous_word_count = existing_idx
+        .and_then(|pos| existing_index.get(pos))
+        .map_or(0, |meta| i64::from(meta.word_count));
     let updated_index: Vec<ChapterMeta> = match existing_idx {
         Some(index) => existing_index
             .iter()
@@ -135,6 +148,20 @@ pub async fn persist_chapter_artifacts(
         .save_chapter_index(&updated_index)
         .await
         .map_err(hook_err)?;
+    // R51/1654 号：日产出账本——管线写章 wordCount Δ≠0 记账（best-effort：
+    // 失败 warn 吞=漂移指引同款纪律；ts 复用注入时刻=同一保存事件）。
+    let new_word_count = i64::from(params.final_word_count);
+    if previous_word_count != new_word_count {
+        let row = crate::utils::writing_goal::WritingLogRow {
+            ts: entry.created_at.clone(),
+            chapter_num: params.chapter_number,
+            before: previous_word_count,
+            after: new_word_count,
+        };
+        if let Err(error) = hooks.append_writing_log(&row).await {
+            tracing::warn!("[writing-log] append failed (ignored): {error}");
+        }
+    }
     hooks.mark_book_active_if_needed().await.map_err(hook_err)?;
 
     let drift_issues: Vec<AuditIssue> = params
@@ -216,6 +243,8 @@ mod tests {
         index: Mutex<Vec<ChapterMeta>>,
         calls: Mutex<Vec<&'static str>>,
         drift_fail: bool,
+        /// R51/1654 号：append_writing_log 钩子记录面。
+        log: Mutex<Vec<crate::utils::writing_goal::WritingLogRow>>,
     }
 
     impl RecordingHooks {
@@ -224,6 +253,7 @@ mod tests {
                 index: Mutex::new(index),
                 calls: Mutex::new(Vec::new()),
                 drift_fail: false,
+                log: Mutex::new(Vec::new()),
             }
         }
 
@@ -280,6 +310,17 @@ mod tests {
         }
         async fn sync_current_state_fact_history(&self) -> Result<(), String> {
             self.record("fact_history");
+            Ok(())
+        }
+        async fn append_writing_log(
+            &self,
+            row: &crate::utils::writing_goal::WritingLogRow,
+        ) -> Result<(), String> {
+            self.record("writing_log");
+            self.log
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(row.clone());
             Ok(())
         }
     }
@@ -347,6 +388,7 @@ mod tests {
                 "save_truth",
                 "load_index",
                 "save_index",
+                "writing_log",
                 "mark_active",
                 "drift",
                 "snapshot",
@@ -397,10 +439,72 @@ mod tests {
                 "save_chapter",
                 "load_index",
                 "save_index",
+                "writing_log",
                 "mark_active",
                 "drift"
             ]
         );
+    }
+
+    // ── R51/1654 号：日产出账本管线写点 ─────────────────────────────
+
+    fn meta_with_words(number: u32, words: u32) -> ChapterMeta {
+        ChapterMeta {
+            number,
+            title: "旧章".into(),
+            status: ChapterStatus::Approved,
+            word_count: words,
+            created_at: "2020-01-01T00:00:00.000Z".into(),
+            updated_at: "2020-01-01T00:00:00.000Z".into(),
+            audit_issues: vec![],
+            length_warnings: vec![],
+            volume_id: None,
+            review_note: None,
+            detection_score: None,
+            detection_provider: None,
+            detected_at: None,
+            length_telemetry: None,
+            token_usage: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn records_word_count_delta_and_skips_no_change() {
+        // 既有章 3：1000 → 2400（Δ=+1400）记一行，ts=注入时刻。
+        let hooks = RecordingHooks::new(vec![meta_with_words(3, 1000)]);
+        let issues: Vec<AuditIssue> = vec![];
+        let degraded: Vec<AuditIssue> = vec![];
+        let warnings: Vec<String> = WARNINGS.iter().map(|w| w.to_string()).collect();
+        persist_chapter_artifacts(
+            &hooks,
+            &params(ChapterStatus::ReadyForReview, &issues, &degraded, &warnings),
+        )
+        .await
+        .unwrap();
+        let log = hooks
+            .log
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(log.len(), 1, "Δ≠0 记一行");
+        assert_eq!(log[0].chapter_num, 3);
+        assert_eq!(log[0].before, 1000);
+        assert_eq!(log[0].after, 2400);
+        assert_eq!(log[0].ts, "2026-08-15T00:00:00.000Z");
+
+        // 再跑一次（index 已 2400 → Δ=0）不新增。
+        persist_chapter_artifacts(
+            &hooks,
+            &params(ChapterStatus::ReadyForReview, &issues, &degraded, &warnings),
+        )
+        .await
+        .unwrap();
+        let log = hooks
+            .log
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(log.len(), 1, "Δ=0 不记");
     }
 
     #[tokio::test]
@@ -461,6 +565,7 @@ mod tests {
             index: Mutex::new(Vec::new()),
             calls: Mutex::new(Vec::new()),
             drift_fail: true,
+            log: Mutex::new(Vec::new()),
         };
         let issues = vec![issue(AuditSeverity::Critical)];
         let degraded: Vec<AuditIssue> = vec![];

@@ -1686,6 +1686,14 @@ impl PersistenceHooks for RunnerPersistenceHooks<'_> {
         // 回退面下为空操作，SQLite 面随记忆索引端点移植（备案）。
         Ok(())
     }
+    /// R51/1654 号：日产出账本真源接线（编辑事务写点同款 append 语义）。
+    async fn append_writing_log(
+        &self,
+        row: &crate::utils::writing_goal::WritingLogRow,
+    ) -> Result<(), String> {
+        crate::utils::writing_log::append_writing_log(self.book_dir, std::slice::from_ref(row))
+            .await
+    }
 }
 
 /// 审计漂移指引（audit_drift.md + current_state 剥旧块）。

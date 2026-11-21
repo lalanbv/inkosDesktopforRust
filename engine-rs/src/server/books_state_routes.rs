@@ -214,6 +214,37 @@ pub struct UpdateBookBody {
     pub status: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
+    /// R51/1654 号：全书目标字数——double Option：未传=不动、null=清除、
+    /// 数值=设置（TS PUT /books/:id `targetWords: number|null` 同语义）。
+    /// serde 嵌套 Option 的 null 透明性（null 直落外层 None）需显式
+    /// double_option 反序列化器区分「未传」与「传 null」。
+    #[serde(
+        rename = "targetWords",
+        default,
+        deserialize_with = "deserialize_double_option_value"
+    )]
+    pub target_words: Option<Option<Value>>,
+    /// R51/1654 号：截止日（YYYY-MM-DD）——同 double Option 语义。
+    #[serde(default, deserialize_with = "deserialize_double_option_string")]
+    pub deadline: Option<Option<String>>,
+}
+
+fn deserialize_double_option_value<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<Value>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<Value>::deserialize(deserializer)?))
+}
+
+fn deserialize_double_option_string<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
 /// 对齐 TS `Number(value)` 的宽容数值化：数字/数字字符串可转，其余 None
@@ -261,6 +292,13 @@ pub async fn update_book(
     }
     if let Some(language) = body.language.as_deref() {
         book.language = Some(language.to_string());
+    }
+    // R51/1654 号：写作目标键（number|null=设置/清除；缺省不动）。
+    if let Some(value) = body.target_words.as_ref() {
+        book.target_words = value.as_ref().and_then(coerce_number);
+    }
+    if let Some(value) = body.deadline.as_ref() {
+        book.deadline = value.clone().filter(|deadline| !deadline.is_empty());
     }
     book.updated_at = utc_now_iso();
     match runtime.state.save_book_config(&book_id, &book).await {

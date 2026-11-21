@@ -5533,6 +5533,28 @@ function yamlScalar(value: unknown): string {
     return c.json({ ok: true, mode: next });
   });
 
+  // R51/1654 号：应用级日目标字数（project config writing.dailyGoalWords，
+  // 正整数；缺省 500——Rust project_config_routes get/put_writing_goal 镜像）。
+  app.get("/api/v1/project/writing-goal", async (c) => {
+    const raw = await loadRawConfig(root);
+    const writing = raw.writing as Record<string, unknown> | undefined;
+    const parsed = typeof writing?.dailyGoalWords === "number" ? writing.dailyGoalWords : Number.NaN;
+    const goal = Number.isInteger(parsed) && parsed > 0 ? parsed : 500;
+    return c.json({ dailyGoalWords: goal });
+  });
+
+  app.put("/api/v1/project/writing-goal", async (c) => {
+    const { dailyGoalWords } = await c.req.json<{ dailyGoalWords?: number }>();
+    const goal = Number(dailyGoalWords);
+    if (!Number.isInteger(goal) || goal <= 0) {
+      return c.json({ error: "dailyGoalWords must be a positive integer" }, 500);
+    }
+    const raw = await loadRawConfig(root);
+    raw.writing = { ...((raw.writing as Record<string, unknown> | undefined) ?? {}), dailyGoalWords: goal };
+    await saveRawConfig(root, raw);
+    return c.json({ ok: true, dailyGoalWords: goal });
+  });
+
   app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
     const bookId = c.req.param("id");
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
@@ -8420,6 +8442,9 @@ function yamlScalar(value: unknown): string {
       targetChapters?: number;
       status?: string;
       language?: string;
+      /** R51/1654 号：number=设置、null=清除、undefined=不动（Rust 同语义）。 */
+      targetWords?: number | null;
+      deadline?: string | null;
     }>();
     try {
       const book = await state.loadBookConfig(id);
@@ -8429,6 +8454,12 @@ function yamlScalar(value: unknown): string {
         ...(updates.targetChapters !== undefined ? { targetChapters: Number(updates.targetChapters) } : {}),
         ...(updates.status !== undefined ? { status: updates.status as typeof book.status } : {}),
         ...(updates.language !== undefined ? { language: updates.language as "zh" | "en" } : {}),
+        ...(updates.targetWords !== undefined
+          ? { targetWords: updates.targetWords === null ? undefined : Number(updates.targetWords) }
+          : {}),
+        ...(updates.deadline !== undefined
+          ? { deadline: updates.deadline === null || updates.deadline === "" ? undefined : updates.deadline }
+          : {}),
         updatedAt: new Date().toISOString(),
       };
       await state.saveBookConfig(id, updated);

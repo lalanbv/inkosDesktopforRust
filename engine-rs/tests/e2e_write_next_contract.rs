@@ -1424,6 +1424,49 @@ mod books47_e2e {
             );
         }
 
+        // R51/1654 号：写作目标键——设（number）/不动（缺省）/清（null）三态。
+        let put_goal = |runtime: BooksRuntime, body: &'static str| async move {
+            use tower::ServiceExt;
+            let app = axum::Router::new()
+                .route(
+                    "/api/v1/books/:id",
+                    axum::routing::put(inkos_engine::server::books_state_routes::update_book),
+                )
+                .with_state(runtime);
+            app.oneshot(
+                axum::http::Request::builder()
+                    .method(axum::http::Method::PUT)
+                    .uri("/api/v1/books/b1")
+                    .header("content-type", "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+        };
+        let response = put_goal(
+            runtime.clone(),
+            r#"{"targetWords": 200000, "deadline": "2026-12-31"}"#,
+        )
+        .await;
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["book"]["targetWords"], 200000);
+        assert_eq!(parsed["book"]["deadline"], "2026-12-31");
+        // null=清除（double Option 内层 None）。
+        let response = put_goal(runtime.clone(), r#"{"targetWords": null}"#).await;
+        assert_eq!(response.status(), 200);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed["book"].get("targetWords").is_none(), "null=清除键");
+        // deadline 未传=不动。
+        assert_eq!(parsed["book"]["deadline"], "2026-12-31");
+
         // approvedOnly=true：仅 approved 的第 1 章。
         let app = axum::Router::new()
             .route("/api/v1/books/:id/export", axum::routing::get(export))

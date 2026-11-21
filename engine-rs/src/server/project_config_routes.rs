@@ -668,6 +668,58 @@ pub async fn put_chapter_review_mode(
     ok_json(json!({ "ok": true, "mode": next }))
 }
 
+// ── GET/PUT /api/v1/project/writing-goal ──────────────────────────
+
+/// R51/1654 号：应用级日目标字数（project config `writing.dailyGoalWords`，
+/// 正整数；缺省 500——WritingGoalPanel localStorage 回退的服务端正典键）。
+pub async fn get_writing_goal(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let Some(raw) = load_raw_config(runtime.state.project_root()).await else {
+        return internal_error();
+    };
+    let goal = raw
+        .get("writing")
+        .and_then(|writing| writing.get("dailyGoalWords"))
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .unwrap_or(500);
+    ok_json(json!({ "dailyGoalWords": goal }))
+}
+
+pub async fn put_writing_goal(
+    State(runtime): State<BooksRuntime>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+        return internal_error();
+    };
+    // 正整数才收（TS Number.isInteger(n>0) 同语义）；无效 500。
+    let Some(goal) = parsed
+        .get("dailyGoalWords")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+    else {
+        return internal_error();
+    };
+    let root = runtime.state.project_root();
+    let Some(mut raw) = load_raw_config(root).await else {
+        return internal_error();
+    };
+    let mut writing = raw
+        .get("writing")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    writing.insert("dailyGoalWords".to_string(), json!(goal));
+    let Some(obj) = raw.as_object_mut() else {
+        return internal_error();
+    };
+    obj.insert("writing".to_string(), Value::Object(writing));
+    if !save_raw_config(root, &raw).await {
+        return internal_error();
+    }
+    ok_json(json!({ "ok": true, "dailyGoalWords": goal }))
+}
+
 // ── GET/PUT /api/v1/project/notify ───────────────────────────────
 
 pub async fn get_notify(State(runtime): State<BooksRuntime>) -> impl IntoResponse {

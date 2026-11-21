@@ -104,6 +104,36 @@ describe("export routes (R50/1647)", () => {
     expect(((await response.json()) as { error: string }).error).toBe("Export failed");
   });
 
+  it("GET/PUT /project/writing-goal 日目标键（缺省 500 → 设 800 → 回读，R51/1654）", async () => {
+    const { root, app } = seedApp();
+    // project config 文件（loadRawConfig 读 inkos.json——空对象起）。
+    writeFileSync(join(root, "inkos.json"), "{}");
+    // 缺省 500（project config 无 writing 段）。
+    const initial = await app.request("/api/v1/project/writing-goal");
+    expect(initial.status).toBe(200);
+    expect(((await initial.json()) as { dailyGoalWords: number }).dailyGoalWords).toBe(500);
+    // PUT 正整数 → 落盘 writing.dailyGoalWords。
+    const saved = await app.request("/api/v1/project/writing-goal", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: '{"dailyGoalWords": 800}',
+    });
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as { dailyGoalWords: number }).dailyGoalWords).toBe(800);
+    // 回读 + 盘面（root 的 project config 文件含键）。
+    const reread = await app.request("/api/v1/project/writing-goal");
+    expect(((await reread.json()) as { dailyGoalWords: number }).dailyGoalWords).toBe(800);
+    const configText = JSON.stringify(JSON.parse(readFileSync(join(root, "inkos.json"), "utf-8") as unknown as string));
+    expect(configText).toContain("dailyGoalWords");
+    // 非正整数 → 500 拒。
+    const invalid = await app.request("/api/v1/project/writing-goal", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: '{"dailyGoalWords": -3}',
+    });
+    expect(invalid.status).toBe(500);
+  });
+
   it("PUT 章保存记账 → GET /writing-log-rows 行面（R51/1653）", async () => {
     const { app } = seedApp();
     // 章 1 正文改长（wordCount 变化 → 账本一行）。

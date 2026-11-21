@@ -16,6 +16,7 @@ import { AntiAiAndExperiencePanel } from "../components/AntiAiAndExperiencePanel
 import { CodexPanel } from "../components/CodexPanel";
 import { SearchPanel } from "../components/SearchPanel";
 import { VolumeManageCard } from "../components/VolumeManageCard";
+import { BookGoalCard } from "../components/BookGoalCard";
 import { ExportPreviewCard } from "../components/ExportPreviewCard";
 import { SeriesCanonPanel } from "../components/SeriesCanonPanel";
 import { ContextLensPanel } from "../components/ContextLensPanel";
@@ -821,6 +822,9 @@ export function BookDetail({
 
       {/* R49/1644 号：卷/幕元数据管理（组织层非上下文层，删卷自动迁移章）。 */}
       <VolumeManageCard bookId={bookId} chapters={chapters} />
+
+      {/* R51/1654 号：书级写作目标（targetWords/deadline 编辑+进度条+预计完成日）。 */}
+      <BookGoalCard bookId={bookId} chapters={chapters} />
 
       {/* R50/1645 号：导出预览面（格式选择+章节勾选子集，Scrivener Compile 语义）。 */}
       <ExportPreviewCard bookId={bookId} chapters={chapters} />

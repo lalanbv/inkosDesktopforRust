@@ -34,7 +34,17 @@ export function WritingGoalPanel() {
   const [goal, setGoal] = useState(DEFAULT_DAILY_GOAL);
 
   useEffect(() => {
+    // R51/1654 号：服务端正典键优先（project config writing.dailyGoalWords），
+    // 不可达回退 localStorage（Rust/TS 引擎双端均有端点）。
     setGoal(loadDailyGoal());
+    void fetchJson<{ dailyGoalWords: number }>("/project/writing-goal")
+      .then((payload) => {
+        if (Number.isInteger(payload.dailyGoalWords) && payload.dailyGoalWords > 0) {
+          setGoal(payload.dailyGoalWords);
+          globalThis.localStorage?.setItem(GOAL_STORAGE_KEY, String(payload.dailyGoalWords));
+        }
+      })
+      .catch(() => undefined);
     void fetchJson<{ rows: ReadonlyArray<LogRow> }>("/writing-log-rows")
       .then((payload) => setRows(payload.rows ?? []))
       .catch(() => setRows([]));
@@ -73,6 +83,12 @@ export function WritingGoalPanel() {
     if (Number.isInteger(parsed) && parsed > 0) {
       setGoal(parsed);
       globalThis.localStorage?.setItem(GOAL_STORAGE_KEY, String(parsed));
+      // R51/1654 号：服务端键同步写（best-effort——失败保留 localStorage 值）。
+      void fetchJson("/project/writing-goal", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyGoalWords: parsed }),
+      }).catch(() => undefined);
     }
   };
 

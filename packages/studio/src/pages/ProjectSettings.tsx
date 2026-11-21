@@ -7,6 +7,7 @@ import { usePreferencesStore } from "../store/preferences";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
+import { tr } from "../lib/app-language";
 import { TaskRoutingPanel } from "../components/TaskRoutingPanel";
 import {
   buildDetectionConfig,
@@ -115,6 +116,17 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
   const [det, setDet] = useState<DetectionDraft>({ ...DEFAULT_DETECTION });
   const [notice, setNotice] = useState<{ tone: NoticeTone; message: string } | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  // R51/1654 号：应用级日目标字数（project config writing.dailyGoalWords）。
+  const [dailyGoal, setDailyGoal] = useState("500");
+  useEffect(() => {
+    void fetchJson<{ dailyGoalWords: number }>("/project/writing-goal")
+      .then((payload) => {
+        if (Number.isInteger(payload.dailyGoalWords) && payload.dailyGoalWords > 0) {
+          setDailyGoal(String(payload.dailyGoalWords));
+        }
+      })
+      .catch(() => undefined);
+  }, []);
   const skillFolderInputRef = useRef<HTMLInputElement>(null);
   const toolDetailsDefaultOpen = usePreferencesStore((s) => s.toolDetailsDefaultOpen);
   const setToolDetailsDefaultOpen = usePreferencesStore((s) => s.setToolDetailsDefaultOpen);
@@ -400,6 +412,38 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
               ))}
             </div>
           )}
+        </div>
+      </SettingsCard>
+
+      {/* R51/1654 号：写作目标——应用级日目标字数。 */}
+      <SettingsCard title={tr("写作目标", "Writing goal")} description={tr("日产出账本 streak 与月历达成档的判定阈值（字/日）。", "Daily-net ledger streak & calendar tier threshold (words/day).")} icon={<Settings2 size={18} />}>
+        <div className="rounded-xl border border-border/60 bg-secondary/20 p-3 space-y-2">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] items-end">
+            <label className="space-y-1">
+              <span className="text-sm font-semibold">{tr("日目标字数", "Daily goal words")}</span>
+              <input
+                type="number"
+                min={1}
+                value={dailyGoal}
+                onChange={(e) => setDailyGoal(e.target.value)}
+                className={fieldClass}
+                data-settings-goal="daily-goal-input"
+              />
+            </label>
+            <button
+              onClick={() => runSave("writing-goal", async () => {
+                const parsed = Number.parseInt(dailyGoal, 10);
+                if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(tr("日目标须为正整数", "Daily goal must be a positive integer"));
+                await putApi("/project/writing-goal", { dailyGoalWords: parsed });
+                await fetchJson<{ dailyGoalWords: number }>("/project/writing-goal").then((payload) => setDailyGoal(String(payload.dailyGoalWords)));
+              }, t("settings.saved"))}
+              disabled={saving === "writing-goal"}
+              className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}
+              data-settings-goal="save"
+            >
+              {saving === "writing-goal" ? t("config.saving") : t("config.save")}
+            </button>
+          </div>
         </div>
       </SettingsCard>
 

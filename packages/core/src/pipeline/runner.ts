@@ -53,6 +53,7 @@ import { readFile, readdir, writeFile, mkdir, rm, stat } from "node:fs/promises"
 import { join } from "node:path";
 import { reconcileChapterStateAfterReview, unresolvedStateObservation } from "./chapter-state-recovery.js";
 import { persistChapterArtifacts } from "./chapter-persistence.js";
+import { appendWritingLog } from "../utils/writing-log-store.js";
 import { createWorkManifest, loadWorkManifest, saveWorkManifest } from "../harness/work-store.js";
 import { WorkManifestSchema, type WorkManifest } from "../harness/contracts.js";
 import { syncWorkSourceArtifacts, captureWorkSourceState, changedWorkSourcePaths } from "../harness/source-sync.js";
@@ -1776,6 +1777,8 @@ export class PipelineRunner {
       loadChapterIndex: () => this.state.loadChapterIndex(bookId),
       saveChapter: (index) => writer.saveChapter(bookDir, persistenceOutput, pipelineLang, index),
       markBookActiveIfNeeded: () => this.markBookActiveIfNeeded(bookId),
+      // R51/1654 号：管线写章日产出账本（Rust RunnerPersistenceHooks 同款）。
+      appendWritingLog: (row) => appendWritingLog(bookDir, [row]),
     });
     await draftCandidate.complete();
 
