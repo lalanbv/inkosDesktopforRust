@@ -1,0 +1,155 @@
+{
+  "vectors": [
+    {
+      "name": "term-frequency-ranks-first",
+      "documents": [
+        {
+          "id": "chapter:1",
+          "title": "风起",
+          "body": "林动睁开双眼，灵气顺着经脉游走。"
+        },
+        {
+          "id": "chapter:2",
+          "title": "灵脉",
+          "body": "灵气紊乱，林动被迫闭关，灵气再度翻涌。"
+        },
+        {
+          "id": "chapter:3",
+          "title": "林动传",
+          "body": "与主角无关的旁支剧情。"
+        },
+        {
+          "id": "chapter:4",
+          "title": "尾声",
+          "body": "故事收束。"
+        }
+      ],
+      "query": "灵气",
+      "limit": 10,
+      "expectedIds": [
+        "chapter:2",
+        "chapter:1"
+      ]
+    },
+    {
+      "name": "title-weight-ranks-first",
+      "documents": [
+        {
+          "id": "chapter:1",
+          "title": "风起",
+          "body": "林动睁开双眼，灵气顺着经脉游走。"
+        },
+        {
+          "id": "chapter:2",
+          "title": "灵脉",
+          "body": "灵气紊乱，林动被迫闭关，灵气再度翻涌。"
+        },
+        {
+          "id": "chapter:3",
+          "title": "林动传",
+          "body": "与主角无关的旁支剧情。"
+        },
+        {
+          "id": "chapter:4",
+          "title": "尾声",
+          "body": "故事收束。"
+        }
+      ],
+      "query": "林动",
+      "limit": 10,
+      "expectedIds": [
+        "chapter:3",
+        "chapter:2",
+        "chapter:1"
+      ]
+    },
+    {
+      "name": "no-hit-empty-set",
+      "documents": [
+        {
+          "id": "chapter:1",
+          "title": "风起",
+          "body": "林动睁开双眼，灵气顺着经脉游走。"
+        },
+        {
+          "id": "chapter:2",
+          "title": "灵脉",
+          "body": "灵气紊乱，林动被迫闭关，灵气再度翻涌。"
+        },
+        {
+          "id": "chapter:3",
+          "title": "林动传",
+          "body": "与主角无关的旁支剧情。"
+        },
+        {
+          "id": "chapter:4",
+          "title": "尾声",
+          "body": "故事收束。"
+        }
+      ],
+      "query": "完全不相关",
+      "limit": 10,
+      "expectedIds": []
+    },
+    {
+      "name": "cjk-bigram-mixed",
+      "documents": [
+        {
+          "id": "chapter:1",
+          "title": "风起",
+          "body": "林动睁开双眼，灵气顺着经脉游走。"
+        },
+        {
+          "id": "chapter:2",
+          "title": "灵脉",
+          "body": "灵气紊乱，林动被迫闭关，灵气再度翻涌。"
+        },
+        {
+          "id": "chapter:3",
+          "title": "林动传",
+          "body": "与主角无关的旁支剧情。"
+        },
+        {
+          "id": "chapter:4",
+          "title": "尾声",
+          "body": "故事收束。"
+        }
+      ],
+      "query": "闭关",
+      "limit": 10,
+      "expectedIds": [
+        "chapter:2"
+      ]
+    },
+    {
+      "name": "limit-truncates",
+      "documents": [
+        {
+          "id": "chapter:1",
+          "title": "风起",
+          "body": "林动睁开双眼，灵气顺着经脉游走。"
+        },
+        {
+          "id": "chapter:2",
+          "title": "灵脉",
+          "body": "灵气紊乱，林动被迫闭关，灵气再度翻涌。"
+        },
+        {
+          "id": "chapter:3",
+          "title": "林动传",
+          "body": "与主角无关的旁支剧情。"
+        },
+        {
+          "id": "chapter:4",
+          "title": "尾声",
+          "body": "故事收束。"
+        }
+      ],
+      "query": "灵气 林动",
+      "limit": 1,
+      "expectedIds": [
+        "chapter:3"
+      ]
+    }
+  ]
+}

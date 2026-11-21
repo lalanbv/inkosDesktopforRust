@@ -890,12 +890,14 @@ export function App() {
         isMac={isMacPlatform}
       />
 
-      {/* P2-5 快速打开（⌘P）：书/章节/影游/会话 内容层直达 */}
+      {/* P2-5 快速打开（⌘P）：书/章节/影游/会话 内容层直达；R47/1640 号
+          正文命中档（activeBookId 有当前书时才搜，防全书并行扫描）。 */}
       <QuickOpenPalette
         open={quickOpenOpen}
         onOpenChange={setQuickOpenOpen}
         books={booksData?.books ?? []}
         sessions={quickOpenSessions}
+        activeBookId={deriveActiveBookId(route)}
         onNavigate={setRouteTracked}
       />
     </div>

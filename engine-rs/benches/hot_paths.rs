@@ -721,6 +721,108 @@ fn bench_read_chain(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_book_search(c: &mut Criterion) {
+    // R47/1640 号：全局搜索 chapters 轴双路径（≥300 章大书锚点，验收
+    // P95<200ms 以热路径 mean 为锚入 bench-gate 门禁；冷路径=首次检索
+    // 全量分词，一次性质、不入阈值面）。
+    // - `cold_300ch`：:memory: 全量 replace_scope + search（300 章全分词）
+    // - `warm_300ch`：磁盘投影 db 已建，iter = 打开 + replace_scope
+    //   （content_hash 全跳）+ search——生产形态（.inkos/chapter-search.db）
+    let rt = tokio::runtime::Runtime::new().expect("tokio rt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().to_path_buf();
+    let book_dir = root.join("books").join("b1");
+    std::fs::create_dir_all(book_dir.join("chapters")).expect("mkdir chapters");
+    std::fs::create_dir_all(root.join(".inkos")).expect("mkdir .inkos");
+
+    let paragraph = "林动握紧手中的祖符玉佩，坊市的喧嚣在身后渐渐远去，山道上的风带着初秋的凉意。他回望这座生活了十六年的小城，目光里没有留恋，只有对前路的笃定。";
+    let body: String = (0..9).map(|_| paragraph).collect::<Vec<_>>().join("\n\n");
+    let mut documents = Vec::with_capacity(300);
+    let mut index_rows = Vec::with_capacity(300);
+    for i in 1..=300u32 {
+        let title = format!("第{i}章 风起于青萍之末");
+        let content = format!("# {title}\n\n{body}\n");
+        std::fs::write(
+            book_dir.join("chapters").join(format!("{i:04}_风起.md")),
+            &content,
+        )
+        .expect("chapter file");
+        index_rows.push(json!({
+            "number": i, "title": title, "wordCount": body.replace('\n', "").chars().count(),
+            "createdAt": "2026-10-31T00:00:00.000Z", "updatedAt": "2026-10-31T00:00:00.000Z",
+            "observations": [], "provenance": "generated",
+        }));
+        documents.push(inkos_engine::utils::local_search::SearchDocument {
+            id: format!("chapter:{i}"),
+            scope: "chapters:b1".to_string(),
+            kind: "chapter".to_string(),
+            source: format!("{i:04}_风起.md"),
+            title: title.clone(),
+            body: content,
+            metadata: None,
+        });
+    }
+    std::fs::write(
+        book_dir.join("chapters").join("index.json"),
+        serde_json::to_string(&index_rows).expect("index"),
+    )
+    .expect("index.json");
+
+    let mut group = c.benchmark_group("book_search");
+    group.sample_size(20);
+    let scope = "chapters:b1".to_string();
+    let docs = documents;
+    group.bench_function("cold_300ch", |b| {
+        b.iter(|| {
+            let index = inkos_engine::utils::local_search::LocalSearchIndex::new(":memory:")
+                .expect("memory index");
+            index.replace_scope(&scope, &docs).expect("replace");
+            let hits = index.search(
+                "祖符玉佩",
+                &inkos_engine::utils::local_search::SearchOptions {
+                    scope: &scope,
+                    kinds: &[],
+                    limit: 20,
+                },
+            );
+            index.close();
+            hits
+        })
+    });
+
+    // 热路径：预建磁盘投影（一次全量分词在 setup 内，不入采样）。
+    let db_path = root.join(".inkos").join("chapter-search.db");
+    {
+        let index =
+            inkos_engine::utils::local_search::LocalSearchIndex::new(&db_path.to_string_lossy())
+                .expect("disk index");
+        index.replace_scope(&scope, &docs).expect("warm replace");
+        index.close();
+    }
+    let db_path_for_iter = db_path.clone();
+    group.bench_function("warm_300ch", |b| {
+        b.iter(|| {
+            let index = inkos_engine::utils::local_search::LocalSearchIndex::new(
+                &db_path_for_iter.to_string_lossy(),
+            )
+            .expect("disk index");
+            index.replace_scope(&scope, &docs).expect("noop replace");
+            let hits = index.search(
+                "祖符玉佩",
+                &inkos_engine::utils::local_search::SearchOptions {
+                    scope: &scope,
+                    kinds: &[],
+                    limit: 20,
+                },
+            );
+            index.close();
+            hits
+        })
+    });
+    let _ = rt;
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_sensitive_words,
@@ -731,6 +833,7 @@ criterion_group!(
     bench_story_markdown_render,
     bench_export_artifact,
     bench_backup_export,
-    bench_read_chain
+    bench_read_chain,
+    bench_book_search
 );
 criterion_main!(benches);

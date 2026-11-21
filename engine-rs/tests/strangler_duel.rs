@@ -1686,3 +1686,119 @@ async fn strangler_series_backfill_duel() {
         diffs.join("\n")
     );
 }
+
+/// R47/1640 号：全局搜索面 fork 契约对跑（688 守卫豁免记账同族——fork 契约
+/// 复活后自动生效；当前双端同构的活体认证走 engine-contract-diff search
+/// 通道，本测为复活面）。fixture：write_fixture 基线之外追加 search-book
+/// 双布局播种（scripts/search-fixture.mjs 同内容内联——TS 腿读 works/<id>/
+/// source 正典，Rust 腿读 books/<id>）；hits[].score 剥离后比对（686 备案
+/// 双端 SQLite bm25 常数差 + ICU 版本漂移容忍面——token 序列由
+/// search-tokenizer-vectors golden 锁定，命中集/序/片段=契约面）。
+fn write_search_fixture(root: &Path) {
+    let chapters: [(&str, &str); 4] = [
+        (
+            "0001_风起.md",
+            "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。\n",
+        ),
+        (
+            "0002_灵脉.md",
+            "# 第2章 灵脉\n\n灵气紊乱，林动被迫闭关，灵气再度翻涌。\n",
+        ),
+        (
+            "0003_林动传.md",
+            "# 第3章 林动传\n\n与主角无关的旁支剧情。\n",
+        ),
+        ("0004_收束.md", "# 第4章 收束\n\n故事在此收束。\n"),
+    ];
+    let index = r#"[{"number":1,"title":"风起","status":"ready-for-review","wordCount":18,"createdAt":"2026-11-21T00:00:00.000Z","updatedAt":"2026-11-21T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]},{"number":2,"title":"灵脉","status":"ready-for-review","wordCount":20,"createdAt":"2026-11-21T00:00:00.000Z","updatedAt":"2026-11-21T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]},{"number":3,"title":"林动传","status":"ready-for-review","wordCount":12,"createdAt":"2026-11-21T00:00:00.000Z","updatedAt":"2026-11-21T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]},{"number":4,"title":"收束","status":"ready-for-review","wordCount":8,"createdAt":"2026-11-21T00:00:00.000Z","updatedAt":"2026-11-21T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]}]"#;
+    let codex = r#"{"version":1,"cards":[{"name":"林动","aliases":["武祖"],"kind":"character","summary":"主角，修炼天才。","facts":["曾在青阳镇外门试炼","佩祖符玉佩"],"relationships":[{"target":"青阳镇","note":"出身地"}]}]}"#;
+    let roster = "# 实体名册（Entity Roster）\n\n## entity-qingyang\n- name: 青阳镇\n- aliases: \n- kind: location\n- registeredAt: 0\n";
+    let bible = "# 故事圣经\n\n主角林动，出身青阳镇，随身玉佩藏祖符来历。\n";
+    let state_md = "| 字段 | 值 |\n|---|---|\n| 当前位置 | 碎镜崖之谜待解 |\n";
+    for base in [
+        root.join("books").join("search-book"),
+        root.join("works").join("search-book").join("source"),
+    ] {
+        std::fs::create_dir_all(base.join("chapters")).unwrap();
+        std::fs::create_dir_all(base.join("story")).unwrap();
+        for (name, content) in chapters {
+            std::fs::write(base.join("chapters").join(name), content).unwrap();
+        }
+        std::fs::write(base.join("chapters").join("index.json"), index).unwrap();
+        std::fs::write(base.join("story").join("entity_codex.json"), codex).unwrap();
+        std::fs::write(base.join("story").join("entity_roster.md"), roster).unwrap();
+        std::fs::write(base.join("story").join("story_bible.md"), bible).unwrap();
+        std::fs::write(base.join("story").join("current_state.md"), state_md).unwrap();
+    }
+    std::fs::write(
+        root.join("books").join("search-book").join("book.json"),
+        r#"{"id":"search-book","title":"搜索校准书","platform":"qidian","genre":"xuanhuan","status":"active","targetChapters":8,"chapterWordCount":1600,"language":"zh","createdAt":"2026-11-21T00:00:00.000Z","updatedAt":"2026-11-21T00:00:00.000Z"}"#,
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn search_face_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+    write_search_fixture(&root);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+    duel_require_fork_contract!(&ts);
+
+    // score 剥离（词法实现面）：递归删除对象键 score。
+    fn strip_scores(value: &mut Value) {
+        match value {
+            Value::Array(items) => items.iter_mut().for_each(strip_scores),
+            Value::Object(map) => {
+                map.remove("score");
+                map.values_mut().for_each(strip_scores);
+            }
+            _ => {}
+        }
+    }
+
+    let endpoints = [
+        "/api/v1/books/search-book/search?q=%E7%81%B5%E6%B0%94&scope=chapters",
+        "/api/v1/books/search-book/search?q=%E6%9E%97%E5%8A%A8&scope=chapters",
+        "/api/v1/books/search-book/search?q=%E7%81%B5%E6%B0%94&scope=chapters&limit=1",
+        "/api/v1/books/search-book/search?q=%E6%9E%97%E5%8A%A8&scope=entity",
+        "/api/v1/books/search-book/search?q=%E9%9D%92%E9%98%B3%E9%95%87&scope=entity",
+        "/api/v1/books/search-book/search?q=%E4%B9%8B%E8%B0%9C&scope=truth",
+        "/api/v1/books/search-book/search?q=%E5%AE%8C%E5%85%A8%E4%B8%8D%E7%9B%B8%E5%85%B3&scope=chapters",
+        "/api/v1/books/search-book/search?q=",
+        "/api/v1/books/search-book/search?q=x&scope=bogus",
+    ];
+
+    let mut diffs: Vec<String> = Vec::new();
+    for endpoint in endpoints {
+        let (rust_status, mut rust_body) = get_json(&rust, endpoint).await;
+        let (ts_status, mut ts_body) = get_json(&ts, endpoint).await;
+        strip_scores(&mut rust_body);
+        strip_scores(&mut ts_body);
+        normalize(&mut rust_body);
+        normalize(&mut ts_body);
+        if rust_status != ts_status || rust_body != ts_body {
+            diffs.push(format!(
+                "DIFF {endpoint}\n  rust[{rust_status}]: {rust_body}\n  ts  [{ts_status}]: {ts_body}"
+            ));
+        }
+    }
+
+    assert!(
+        diffs.is_empty(),
+        "搜索面双端契约差异 {} 处：\n{}",
+        diffs.len(),
+        diffs.join("\n")
+    );
+}

@@ -32,6 +32,7 @@ pub mod deconstruction;
 pub mod detection_insights;
 pub mod entity_codex;
 pub mod entity_roster;
+pub mod global_search;
 pub mod goal_repeat_gate;
 pub mod governed_context;
 pub mod governed_working_set;

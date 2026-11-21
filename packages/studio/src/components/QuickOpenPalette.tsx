@@ -11,21 +11,27 @@ import {
 import { tr } from "@/lib/app-language";
 import { fetchJson } from "@/hooks/use-api";
 import {
+  buildMatchQuickOpenItems,
   buildQuickOpenItems,
   cacheChapters,
   filterQuickOpenItems,
   isChapterCacheFresh,
+  QUICK_OPEN_MATCH_DEBOUNCE_MS,
+  QUICK_OPEN_MATCH_LIMIT,
+  QUICK_OPEN_MATCH_MIN_QUERY,
   readCachedChapters,
 } from "@/lib/quick-open";
 import type { QuickOpenChapterMeta, QuickOpenFilm, QuickOpenItem, QuickOpenSession } from "@/lib/quick-open";
 import type { HashRoute } from "@/hooks/use-hash-route";
-import { BookOpen, FileText, Film, MessageSquare } from "lucide-react";
+import { setChapterFocus } from "@/lib/chapter-focus";
+import { BookOpen, FileText, Film, MessageSquare, Search } from "lucide-react";
 
 const KIND_ICONS = {
   book: BookOpen,
   chapter: FileText,
   film: Film,
   session: MessageSquare,
+  match: Search,
 } as const;
 
 const KIND_LABELS = {
@@ -33,6 +39,7 @@ const KIND_LABELS = {
   chapter: () => tr("章节", "Chapters"),
   film: () => tr("互动影游", "Interactive Films"),
   session: () => tr("会话", "Sessions"),
+  match: () => tr("正文命中", "Text matches"),
 } as const;
 
 /**
@@ -40,11 +47,13 @@ const KIND_LABELS = {
  * （参照 VSCode Cmd+P / Cmd+Shift+P 分离）。索引 = 书 + 各书章节 + 影游 + 会话；
  * 章节按书惰性拉取（/books/:id 一次含全部章节索引，30s 模块缓存）。
  */
-export function QuickOpenPalette({ open, onOpenChange, books, sessions, onNavigate }: {
+export function QuickOpenPalette({ open, onOpenChange, books, sessions, activeBookId, onNavigate }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   books: ReadonlyArray<{ id: string; title: string }>;
   sessions: ReadonlyArray<QuickOpenSession>;
+  /** R47/1640 号：当前活跃书（正文命中档只搜当前书，防全书并行扫描）。 */
+  activeBookId?: string | null;
   onNavigate: (route: HashRoute) => void;
 }) {
   // 734 号：弹层焦点归还（732 号模式复用，WCAG 2.4.3）——打开快照触发前
@@ -62,10 +71,13 @@ export function QuickOpenPalette({ open, onOpenChange, books, sessions, onNaviga
   const [query, setQuery] = useState("");
   const [films, setFilms] = useState<ReadonlyArray<QuickOpenFilm>>([]);
   const [chaptersByBook, setChaptersByBook] = useState<Record<string, ReadonlyArray<QuickOpenChapterMeta>>>({});
+  // R47/1640 号：正文命中档——activeBookId 存在且查询 ≥2 字符时防抖检索。
+  const [matchItems, setMatchItems] = useState<ReadonlyArray<QuickOpenItem>>([]);
 
   useEffect(() => {
     if (!open) {
       setQuery("");
+      setMatchItems([]);
       return;
     }
     let cancelled = false;
@@ -95,6 +107,34 @@ export function QuickOpenPalette({ open, onOpenChange, books, sessions, onNaviga
     };
   }, [open, books]);
 
+  // R47/1640 号：正文命中档（防抖 + latest-wins 竞态守卫；失败静默降级为空档）。
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!open || !activeBookId || trimmed.length < QUICK_OPEN_MATCH_MIN_QUERY) {
+      setMatchItems([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void fetchJson<{ hits: ReadonlyArray<{ chapterNumber?: number; title?: string; snippet?: string }> }>(
+        `/books/${encodeURIComponent(activeBookId)}/search?q=${encodeURIComponent(trimmed)}&scope=chapters&limit=${QUICK_OPEN_MATCH_LIMIT}`,
+      )
+        .then((data) => {
+          setMatchItems(buildMatchQuickOpenItems(
+            activeBookId,
+            (data.hits ?? []).flatMap((hit) => (
+              hit.chapterNumber != null
+                ? [{ chapterNumber: hit.chapterNumber, title: hit.title ?? `#${hit.chapterNumber}`, snippet: hit.snippet ?? "" }]
+                : []
+            )),
+          ));
+        })
+        .catch(() => {
+          setMatchItems([]);
+        });
+    }, QUICK_OPEN_MATCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, activeBookId, query]);
+
   const items = useMemo(
     () => buildQuickOpenItems({
       books,
@@ -108,17 +148,22 @@ export function QuickOpenPalette({ open, onOpenChange, books, sessions, onNaviga
   );
 
   const filtered = useMemo(() => filterQuickOpenItems(items, query), [items, query]);
+  // R47/1640 号：正文命中档置顶（搜索直出，跳 filterQuickOpenItems 的标题域）。
   const grouped = useMemo(() => {
     const groups = new Map<QuickOpenItem["kind"], QuickOpenItem[]>();
-    for (const item of filtered) {
+    for (const item of [...matchItems, ...filtered]) {
       const bucket = groups.get(item.kind);
       if (bucket) bucket.push(item);
       else groups.set(item.kind, [item]);
     }
     return [...groups.entries()];
-  }, [filtered]);
+  }, [matchItems, filtered]);
 
   const run = (item: QuickOpenItem) => {
+    // R47/1640 号：正文命中跳章并滚动到命中行（一次性焦点传递）。
+    if (item.kind === "match" && item.route.page === "chapter") {
+      setChapterFocus(item.route.bookId, item.route.chapterNumber, query.trim());
+    }
     onOpenChange(false);
     onNavigate(item.route);
   };

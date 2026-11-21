@@ -64,6 +64,10 @@
     "./utils/promise-ledger": {
       "types": "./dist/utils/promise-ledger.d.ts",
       "import": "./dist/utils/promise-ledger.js"
+    },
+    "./retrieval/global-search": {
+      "types": "./dist/retrieval/global-search.d.ts",
+      "import": "./dist/retrieval/global-search.js"
     }
   },
   "files": [

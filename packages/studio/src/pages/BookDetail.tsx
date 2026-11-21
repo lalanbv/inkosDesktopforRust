@@ -14,6 +14,7 @@ import { QualityTrendCard } from "../components/QualityTrendCard";
 import { AssetLibraryPanel } from "../components/AssetLibraryPanel";
 import { AntiAiAndExperiencePanel } from "../components/AntiAiAndExperiencePanel";
 import { CodexPanel } from "../components/CodexPanel";
+import { SearchPanel } from "../components/SearchPanel";
 import { SeriesCanonPanel } from "../components/SeriesCanonPanel";
 import { ContextLensPanel } from "../components/ContextLensPanel";
 import { DeconstructPanel } from "../components/DeconstructPanel";
@@ -698,6 +699,9 @@ export function BookDetail({
 
       {/* R10/377 号：实体卡编辑（名册自动派生+正典事实注入写作）。 */}
       <CodexPanel bookId={bookId} />
+
+      {/* R47/1640 号：全局搜索（正文/实体/伏笔/真相四轴，chapters 命中跳章滚到命中行）。 */}
+      <SearchPanel bookId={bookId} nav={nav} />
 
       {/* R21/391 号：上下文透视（回放每章装配清单，纯读）。 */}
       <ContextLensPanel bookId={bookId} />

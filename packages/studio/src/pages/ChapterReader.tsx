@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { findQueryMatch, queryTokens } from "@actalk/inkos-core/retrieval/global-search";
+import { takeChapterFocus } from "../lib/chapter-focus";
 import { fetchJson, useApi } from "../hooks/use-api";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
@@ -75,6 +77,43 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
+
+  // R47/1640 号：⌘P 正文命中一次性焦点——数据到位后定位首个命中段落，
+  // scrollIntoView 居中 + 闪烁高亮（takeChapterFocus 取走即清，防重放）。
+  const [focusQuery, setFocusQuery] = useState<string | null>(null);
+  const [focusParagraph, setFocusParagraph] = useState<number | null>(null);
+  const focusTimersRef = useRef<number[]>([]);
+  useEffect(() => {
+    const pending = takeChapterFocus(bookId, chapterNumber);
+    if (pending) setFocusQuery(pending);
+  }, [bookId, chapterNumber]);
+  useEffect(() => {
+    if (!data || !focusQuery || editing) return;
+    const lines = data.content.split("\n");
+    const titleLine = lines.find((l) => l.startsWith("# "));
+    const body = lines.filter((l) => l !== titleLine).join("\n").trim();
+    const paragraphsForFocus = body.split(/\n\n+/).filter(Boolean);
+    const tokens = queryTokens(focusQuery);
+    const hitIndex = paragraphsForFocus.findIndex(
+      (para) => findQueryMatch(para, tokens) !== null,
+    );
+    if (hitIndex < 0) return;
+    setFocusParagraph(hitIndex);
+    const frame = window.requestAnimationFrame(() => {
+      document
+        .querySelector('[data-search-hit="true"]')
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const clearTimer = window.setTimeout(() => setFocusParagraph(null), 2600);
+    focusTimersRef.current.push(frame, clearTimer);
+    return () => {
+      for (const timer of focusTimersRef.current) {
+        window.cancelAnimationFrame(timer);
+        window.clearTimeout(timer);
+      }
+      focusTimersRef.current = [];
+    };
+  }, [data, focusQuery, editing]);
 
   const handleStartEdit = () => {
     if (!data) return;
@@ -255,7 +294,8 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
               <p
                 key={i}
                 onClick={focusMode ? () => setActiveParagraph(i) : undefined}
-                className={`font-serif text-lg md:text-xl leading-[1.8] text-foreground/90 mb-8 first-letter:text-2xl first-letter:font-bold first-letter:text-primary/40 ${focusMode && activeParagraph !== null && i !== activeParagraph ? "typewriter-dim" : ""}`}
+                data-search-hit={i === focusParagraph ? "true" : undefined}
+                className={`font-serif text-lg md:text-xl leading-[1.8] text-foreground/90 mb-8 first-letter:text-2xl first-letter:font-bold first-letter:text-primary/40 ${focusMode && activeParagraph !== null && i !== activeParagraph ? "typewriter-dim" : ""} ${i === focusParagraph ? "bg-primary/10 ring-1 ring-primary/30 rounded-lg px-4 py-3 transition-colors" : ""}`}
               >
                 {para}
               </p>

@@ -1240,15 +1240,11 @@ async fn list_md_json_yaml(dir: &std::path::Path) -> Vec<String> {
     names
 }
 
-pub async fn truth_list(
-    State(runtime): State<BooksRuntime>,
-    Path(book_id): Path<String>,
-) -> impl IntoResponse {
-    let book_dir = runtime.state.book_dir(&book_id);
-    let story_dir = book_dir.join("story");
-    let new_layout = is_new_layout_book(&book_dir).await;
-
-    let flat_files: Vec<String> = list_md_json_yaml(&story_dir)
+/// 真相域文件枚举——truth_list 与 search truth 轴（R47，1640 号）共用的
+/// 单一来源（845 号单一事实源纪律）：顺序 = flat + outline + roles×4 +
+/// runtime 过滤，与 truth_list 既有契约排序一致。
+pub(crate) async fn truth_search_files(story_dir: &std::path::Path) -> Vec<String> {
+    let flat_files: Vec<String> = list_md_json_yaml(story_dir)
         .await
         .into_iter()
         .filter(|f| !f.starts_with("outline") && !f.starts_with("roles"))
@@ -1280,6 +1276,17 @@ pub async fn truth_list(
         .filter(|f| runtime_diagnostic_re().is_match(f))
         .collect();
     all.extend(runtime_files);
+    all
+}
+
+pub async fn truth_list(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    let book_dir = runtime.state.book_dir(&book_id);
+    let story_dir = book_dir.join("story");
+    let new_layout = is_new_layout_book(&book_dir).await;
+    let all = truth_search_files(&story_dir).await;
 
     let mut files: Vec<Value> = Vec::new();
     for rel in all {

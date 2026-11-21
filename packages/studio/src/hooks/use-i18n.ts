@@ -9,6 +9,17 @@ type Lang = "zh" | "en" | "ja";
 const strings = {
   // Header
   "nav.books": { zh: "书籍", en: "Books" },
+  // R47/1640 号：全局搜索面板（书籍详情挂载）。
+  "search.title": { zh: "搜索", en: "Search" },
+  "search.placeholder": { zh: "搜索正文、实体、伏笔与真相…", en: "Search chapters, entities, hooks and truth…" },
+  "search.scope.chapters": { zh: "正文", en: "Chapters" },
+  "search.scope.entity": { zh: "实体", en: "Entities" },
+  "search.scope.hook": { zh: "伏笔", en: "Hooks" },
+  "search.scope.truth": { zh: "真相", en: "Truth" },
+  "search.scopeAria": { zh: "搜索范围", en: "Search scope" },
+  "search.searching": { zh: "搜索中…", en: "Searching…" },
+  "search.noHits": { zh: "无命中", en: "No hits" },
+  "search.failed": { zh: "搜索失败", en: "Search failed" },
   "nav.newBook": { zh: "新建书籍", en: "New Book" },
   "nav.createSection": { zh: "开始创作", en: "Start Creating" },
   "nav.myBooks": { zh: "我的创作", en: "My Works" },

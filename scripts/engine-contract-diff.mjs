@@ -672,6 +672,73 @@ try {
     }
   };
 
+  // ── R47/1640 号 search 通道（双模式接线）：受控搜索书活体差分 ──
+  // fixture = scripts/search-fixture.mjs（search-book，纯文件播种幂等，
+  // legacy-fixture.mjs 同惯用形）。chapters/entity/truth 三轴严格差分；
+  // hits[].score 剥离（686 备案双端 SQLite bm25 常数差 + ICU 版本漂移容忍面
+  // ——token 序列已由 search-tokenizer-vectors golden 锁定，命中集/序/片段=
+  // 契约面）；hook 轴不入严格通道（798 备案双端源结构差：TS=state 正典派生
+  // vs Rust=memory.db 投影——轴逻辑由双端单测 + highlight/ranking golden 覆盖）。
+  const runSearchChannel = async () => {
+    for (const engine of engines) {
+      console.log(`[diff] search 夹具播种：${engine.name} root=${engine.root}`);
+      execFileSync("node", [join(scriptDir, "search-fixture.mjs"), engine.root], {
+        cwd: repoRoot,
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+    }
+    const SEARCH_BOOK = "search-book";
+    const stripScores = (node) => {
+      if (Array.isArray(node)) {
+        for (const item of node) stripScores(item);
+      } else if (node && typeof node === "object") {
+        delete node.score;
+        for (const value of Object.values(node)) stripScores(value);
+      }
+      return node;
+    };
+    const SEARCH_ENDPOINTS = [
+      // chapters 轴：BM25 词频序（0002 tf2 > 0001 tf1）+ 标题权重（0003）。
+      `/api/v1/books/${SEARCH_BOOK}/search?q=${encodeURIComponent("灵气")}&scope=chapters`,
+      `/api/v1/books/${SEARCH_BOOK}/search?q=${encodeURIComponent("林动")}&scope=chapters`,
+      // limit 收敛面（灵气 首位=0002）。
+      `/api/v1/books/${SEARCH_BOOK}/search?q=${encodeURIComponent("灵气")}&scope=chapters&limit=1`,
+      // entity 轴：文件卡 name 权重 3 + 名册派生卡（青阳镇）。
+      `/api/v1/books/${SEARCH_BOOK}/search?q=${encodeURIComponent("林动")}&scope=entity`,
+      `/api/v1/books/${SEARCH_BOOK}/search?q=${encodeURIComponent("青阳镇")}&scope=entity`,
+      // truth 轴：查询词取双端 truth 枚举交集文件独占词（entity_* 文件仅在
+      // Rust flat 侧——「之谜」只在 story_bible.md，轴序=枚举序）。
+      `/api/v1/books/${SEARCH_BOOK}/search?q=${encodeURIComponent("之谜")}&scope=truth`,
+      // 零命中（200 空集，双端空集形状一致）。
+      `/api/v1/books/${SEARCH_BOOK}/search?q=${encodeURIComponent("完全不相关")}&scope=chapters`,
+      // 负路径：空 query 400 / 非法 scope 400（错误文案逐字）。
+      `/api/v1/books/${SEARCH_BOOK}/search?q=`,
+      `/api/v1/books/${SEARCH_BOOK}/search?q=x&scope=bogus`,
+    ];
+    console.log(`\n[diff] search 通道：${SEARCH_ENDPOINTS.length} 端点（R47/1640 号，四轴搜索面双端同构）`);
+    for (const endpoint of SEARCH_ENDPOINTS) {
+      const nodeRes = await nodeApi(endpoint);
+      const rustRes = await rustApi(endpoint);
+      compared += 1;
+      if (nodeRes.status !== rustRes.status) {
+        divergences += 1;
+        console.log(`✗ search ${endpoint}：状态码分歧 node=${nodeRes.status} rust=${rustRes.status}`);
+        continue;
+      }
+      const aNode = JSON.stringify(stripScores(prune(nodeRes.body)));
+      const aRust = JSON.stringify(stripScores(prune(rustRes.body)));
+      if (aNode === aRust) {
+        console.log(`✓ search ${endpoint}（${nodeRes.status}）`);
+      } else {
+        divergences += 1;
+        console.log(`✗ search ${endpoint}：归一化后不一致`);
+        console.log(`    首个分叉：${firstDiffPath(nodeRes.body, rustRes.body) ?? "?"}`);
+        console.log(`    node=${aNode.slice(0, BODY_PREVIEW)}`);
+        console.log(`    rust=${aRust.slice(0, BODY_PREVIEW)}`);
+      }
+    }
+  };
+
   // ── 3.0 三域活体分歧报告（695 号）：TS 腿=上游 2.0 时的迁移进度度量 ──
   // 域定义（由 687 fork server 与 2.0 server 路由面机械比对生成，691 后现状）：
   // ①共享面=双端在位的路由（缩减集，活体逐端点对比）；②fork-only=仅 Rust 在位
@@ -1162,6 +1229,8 @@ try {
     console.log("[diff] [695 豁免记账] 共享面分歧=真实迁移工项；两域漂移行=进度信号（复活/跟进）或回归（双缺）。");
     // 792 号：legacy 通道在报告模式下照常跑（腿对称、纯读——与模式无关）。
     await runLegacyChannel();
+    // R47/1640 号：search 通道同径（纯文件播种+纯读，双模式接线）。
+    await runSearchChannel();
     throw new ProbeEarlyExit("695 三域活体分歧报告收尾（豁免记账 exit 0）");
   }
 
@@ -2172,6 +2241,8 @@ try {
 
   // ── 792 号 legacy 通道（双模式接线，函数定义见计数器声明处）──
   await runLegacyChannel();
+  // ── R47/1640 号 search 通道（四轴搜索面双端同构，函数定义同处）──
+  await runSearchChannel();
 
   console.log(`\n[diff] 对照 ${compared} 个端点，分歧 ${divergences} 个`);
   if (divergences > 0) process.exitCode = 1;

@@ -802,6 +802,18 @@ export { findChapterFileByNumber } from "./utils/chapter-files.js";
 //    在树 + RRF 融合/向量相似度/嵌入客户端；MemoryDB 语义缓存 2.0 未接线
 //    （hybrid-search 路由语义面降级 fts5-fallback，接线后自动升级）。──
 export { LocalSearchIndex, tokenizeSearchText, type SearchDocument, type SearchHit } from "./retrieval/local-search.js";
+// ── R47/1640 号：全局搜索纯函数核（engine-rs global_search.rs 镜像）──
+export {
+  buildHighlightSnippet,
+  findQueryMatch,
+  findWeightedFieldMatch,
+  queryTokens,
+  SEARCH_CONTEXT_AFTER,
+  SEARCH_CONTEXT_BEFORE,
+  SNIPPET_ELLIPSIS,
+  type HighlightSnippet,
+  type WeightedFieldMatch,
+} from "./retrieval/global-search.js";
 export { createEmbeddingClient, type EmbeddingConfig } from "./retrieval/embedding-client.js";
 export type { EmbeddingClient } from "./retrieval/semantic-retrieval.js";
 export { topKBySimilarity, reciprocalRankFusion } from "./retrieval/semantic-retrieval.js";

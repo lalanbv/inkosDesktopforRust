@@ -178,14 +178,17 @@ import {
   applyRosterConfirmation,
   buildPromiseTimeline,
   buildQualityTrend,
+  buildHighlightSnippet,
   detectPacingDebts,
   detectWeakHookRuns,
   extractCharacterCandidates,
+  findWeightedFieldMatch,
   globalRunLog,
   MemoryDBReadonly,
   parseChapterSummariesMarkdown,
   parseEntityRoster,
   projectRunLog,
+  queryTokens,
   renderEntityRoster,
   resolvePromiseUrgency,
   resolveRosterCandidates,
@@ -6135,11 +6138,9 @@ function yamlScalar(value: unknown): string {
 
   // --- Truth files browser ---
 
-  app.get("/api/v1/books/:id/truth", async (c) => {
-    const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
-    const storyDir = join(bookDir, "story");
-
+  // R47/1640 号：真相域文件枚举单一来源（truth_list 与 search truth 轴共用，
+  // 对齐 Rust truth_search_files；子清单序 = flat → outline → roles×4 → runtime）。
+  async function listTruthSearchFiles(storyDir: string): Promise<string[]> {
     async function listDir(subdir: string): Promise<string[]> {
       try {
         const entries = await readdir(join(storyDir, subdir));
@@ -6148,6 +6149,37 @@ function yamlScalar(value: unknown): string {
         return [];
       }
     }
+    // 792 号：各子清单排序（裸 readdir 序跨机不稳定——契约确定性）。
+    const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file)).sort();
+    const outlineFiles = (await listDir("outline"))
+      .map((file) => `outline/${file}`)
+      .filter((file) => TRUTH_OUTLINE_FILES.includes(file))
+      .sort();
+    // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
+    // English-locale equivalents so en-language books are visible.
+    const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`).sort();
+    const minorRolesZh = (await listDir("roles/次要角色")).map((f) => `roles/次要角色/${f}`).sort();
+    const majorRolesEn = (await listDir("roles/major")).map((f) => `roles/major/${f}`).sort();
+    const minorRolesEn = (await listDir("roles/minor")).map((f) => `roles/minor/${f}`).sort();
+    const runtimeFiles = (await listDir("runtime"))
+      .map((f) => `runtime/${f}`)
+      .filter((f) => RUNTIME_DIAGNOSTIC_FILE_RE.test(f))
+      .sort();
+    return [
+      ...flatFiles,
+      ...outlineFiles,
+      ...majorRolesZh,
+      ...minorRolesZh,
+      ...majorRolesEn,
+      ...minorRolesEn,
+      ...runtimeFiles,
+    ];
+  }
+
+  app.get("/api/v1/books/:id/truth", async (c) => {
+    const id = c.req.param("id");
+    const bookDir = state.bookDir(id);
+    const storyDir = join(bookDir, "story");
 
     async function describe(relPath: string): Promise<{ readonly name: string; readonly size: number; readonly preview: string; readonly readonly?: true; readonly readonlyReason?: string } | null> {
       try {
@@ -6162,40 +6194,310 @@ function yamlScalar(value: unknown): string {
       }
     }
 
+    // 792 号：各子清单排序（裸 readdir 序跨机不稳定——契约确定性，
+    // Rust truth_list list_md_json_yaml 同款排序）。R47/1640 号：枚举面
+    // 提为 listTruthSearchFiles 共用单一来源（search truth 轴同源消费）。
     try {
-      // 792 号：各子清单排序（裸 readdir 序跨机不稳定——契约确定性，
-      // Rust truth_list list_md_json_yaml 同款排序）。
-      const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file)).sort();
-      const outlineFiles = (await listDir("outline"))
-        .map((file) => `outline/${file}`)
-        .filter((file) => TRUTH_OUTLINE_FILES.includes(file))
-        .sort();
-      // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
-      // English-locale equivalents so en-language books are visible.
-      const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`).sort();
-      const minorRolesZh = (await listDir("roles/次要角色")).map((f) => `roles/次要角色/${f}`).sort();
-      const majorRolesEn = (await listDir("roles/major")).map((f) => `roles/major/${f}`).sort();
-      const minorRolesEn = (await listDir("roles/minor")).map((f) => `roles/minor/${f}`).sort();
-      const runtimeFiles = (await listDir("runtime"))
-        .map((f) => `runtime/${f}`)
-        .filter((f) => RUNTIME_DIAGNOSTIC_FILE_RE.test(f))
-        .sort();
-
-      const all = [
-        ...flatFiles,
-        ...outlineFiles,
-        ...majorRolesZh,
-        ...minorRolesZh,
-        ...majorRolesEn,
-        ...minorRolesEn,
-        ...runtimeFiles,
-      ];
+      const all = await listTruthSearchFiles(storyDir);
       const described = await Promise.all(all.map(describe));
       const result = described.filter((x): x is NonNullable<typeof x> => x !== null);
       return c.json({ files: result });
     } catch {
       return c.json({ files: [] });
     }
+  });
+
+  // ── R47/1640 号：全局搜索面（Rust server/search_routes.rs 镜像）──────
+  // GET /api/v1/books/:id/search?q=&scope=&limit= —— chapters 轴走
+  // .inkos/chapter-search.db FTS5 投影（materials retrieval.db 同惯用形，
+  // content_hash 去重增量）；entity/hook/truth 轴直读名册/账本/真相文件。
+  // 双端同构：strangler_duel 只读清单（score 剥离=词法实现面）+
+  // engine-contract-diff 登记；golden highlight/ranking vectors 锁纯函数。
+
+  type GlobalSearchHit = {
+    kind: "chapter" | "entity" | "hook" | "truth";
+    id: string;
+    title: string;
+    source: string;
+    score: number;
+    snippet: string;
+    matchStart: number;
+    matchLength: number;
+    chapterNumber?: number;
+  };
+
+  async function searchChaptersFor(
+    bookId: string,
+    query: string,
+    limit: number,
+  ): Promise<GlobalSearchHit[]> {
+    const chaptersDir = join(state.bookDir(bookId), "chapters");
+    let metas: Awaited<ReturnType<typeof state.loadChapterIndex>>;
+    try {
+      metas = await state.loadChapterIndex(bookId);
+    } catch {
+      return [];
+    }
+    if (metas.length === 0) return [];
+    let files: string[] = [];
+    try {
+      files = await readdir(chaptersDir);
+    } catch {
+      files = [];
+    }
+    const documents: import("@actalk/inkos-core").SearchDocument[] = [];
+    for (const meta of metas) {
+      const match = findChapterFileByNumber(files, meta.number);
+      if (!match) continue;
+      let content: string;
+      try {
+        content = await readFile(join(chaptersDir, match), "utf-8");
+      } catch {
+        continue;
+      }
+      documents.push({
+        id: `chapter:${meta.number}`,
+        scope: `chapters:${bookId}`,
+        kind: "chapter",
+        source: match,
+        title: meta.title?.trim() ? meta.title : match,
+        body: content,
+        metadata: { chapterNumber: meta.number },
+      });
+    }
+    if (documents.length === 0) return [];
+    const core = await import("@actalk/inkos-core");
+    const scopeKey = `chapters:${bookId}`;
+    // 检索尽力而为面：打开/写/查失败降级空集（Rust spawn_blocking 同语义；
+    // node:sqlite 同步 API 随事件循环，与 hybrid-search TS 腿同形态）。
+    try {
+      const index = new core.LocalSearchIndex(join(root, ".inkos", "chapter-search.db"));
+      try {
+        index.replaceScope(scopeKey, documents);
+        const searched = index.search(query, { scope: scopeKey, limit });
+        return searched.flatMap((hit) => {
+          const snippet = buildHighlightSnippet(hit.body, query);
+          if (!snippet) return [];
+          const chapterNumber = (hit.metadata as { chapterNumber?: number } | undefined)
+            ?.chapterNumber;
+          return [{
+            kind: "chapter" as const,
+            id: hit.id,
+            title: hit.title,
+            source: hit.source,
+            score: hit.score,
+            snippet: snippet.text,
+            matchStart: snippet.matchStart,
+            matchLength: snippet.matchLength,
+            ...(Number.isInteger(chapterNumber) ? { chapterNumber } : {}),
+          }];
+        });
+      } finally {
+        index.close();
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  async function searchEntityFor(
+    storyDir: string,
+    query: string,
+    limit: number,
+  ): Promise<GlobalSearchHit[]> {
+    // 名册源双面（get_codex 同源形态）：entity_codex.json 文件卡优先 +
+    // entity_roster.md 派生卡——同 name 派生卡被文件卡遮蔽。
+    const [fileRaw, rosterMarkdown] = await Promise.all([
+      readFile(join(storyDir, "entity_codex.json"), "utf-8").catch(() => ""),
+      readFile(join(storyDir, "entity_roster.md"), "utf-8").catch(() => ""),
+    ]);
+    let fileCards: ReadonlyArray<Record<string, unknown>> = [];
+    try {
+      const parsed = JSON.parse(fileRaw) as { cards?: unknown };
+      if (Array.isArray(parsed.cards)) fileCards = parsed.cards as ReadonlyArray<Record<string, unknown>>;
+    } catch {
+      fileCards = [];
+    }
+    const core = await import("@actalk/inkos-core");
+    const rosterCards = core.deriveCodexCards(core.parseEntityRoster(rosterMarkdown));
+    const known = new Set(
+      fileCards.map((card) => (typeof card.name === "string" ? card.name : "")),
+    );
+    const scans: Array<{ name: string; fields: Array<readonly [string, number]> }> = [];
+    for (const card of fileCards) {
+      const name = typeof card.name === "string" ? card.name : "";
+      if (!name) continue;
+      const fields: Array<readonly [string, number]> = [[name, 3]];
+      for (const alias of Array.isArray(card.aliases) ? card.aliases : []) {
+        if (typeof alias === "string" && alias) fields.push([alias, 2]);
+      }
+      if (typeof card.summary === "string" && card.summary) fields.push([card.summary, 1]);
+      for (const fact of Array.isArray(card.facts) ? card.facts : []) {
+        if (typeof fact === "string" && fact) fields.push([fact, 1]);
+      }
+      scans.push({ name, fields });
+    }
+    for (const card of rosterCards) {
+      if (known.has(card.name)) continue;
+      scans.push({ name: card.name, fields: [[card.name, 3]] });
+    }
+    const hits: GlobalSearchHit[] = [];
+    for (const scan of scans) {
+      const matched = findWeightedFieldMatch(scan.fields, query);
+      if (!matched) continue;
+      const matchedText = scan.fields[matched.fieldIndex]![0];
+      const snippet = buildHighlightSnippet(matchedText, query);
+      if (!snippet) continue;
+      hits.push({
+        kind: "entity",
+        id: `entity:${scan.name}`,
+        title: scan.name,
+        source: "story/entity_codex.json",
+        score: matched.weight,
+        snippet: snippet.text,
+        matchStart: snippet.matchStart,
+        matchLength: snippet.matchLength,
+      });
+    }
+    hits.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    return hits.slice(0, limit);
+  }
+
+  async function searchHooksFor(
+    bookId: string,
+    storyDir: string,
+    query: string,
+    limit: number,
+  ): Promise<GlobalSearchHit[]> {
+    // hooks state 正典派生（798 号——与 TS promises 端点同源；Rust 腿镜像
+    // 其自身 promises 投影源 memory.db，数据源差异备案于 duel hook 轴）。
+    try {
+      const hooksParsed = JSON.parse(
+        await readFile(join(storyDir, "state", "hooks.json"), "utf-8"),
+      ) as { hooks?: ReadonlyArray<Record<string, unknown>> };
+      const hooksMarkdown = await readFile(
+        join(root, "books", bookId, "story", "pending_hooks.md"),
+        "utf-8",
+      ).catch(() => readFile(join(storyDir, "pending_hooks.md"), "utf-8").catch(() => ""));
+      const kindById = new Map(
+        parsePendingHooks(hooksMarkdown)
+          .filter((hook) => hook.kind)
+          .map((hook) => [hook.id, hook.kind]),
+      );
+      const enrichedHooks = (hooksParsed.hooks ?? []).map((hook) => ({
+        hookId: String(hook.hookId ?? ""),
+        startChapter: Number(hook.startChapter ?? 0),
+        type: String(hook.type ?? ""),
+        status: String(hook.status ?? "open"),
+        lastAdvancedChapter: Number(hook.lastAdvancedChapter ?? 0),
+        expectedPayoff: String(hook.expectedPayoff ?? ""),
+        notes: String(hook.notes ?? ""),
+        ...(kindById.get(String(hook.hookId ?? "")) ? { kind: kindById.get(String(hook.hookId ?? "")) } : {}),
+      }));
+      const summariesParsed = JSON.parse(
+        await readFile(join(storyDir, "state", "chapter_summaries.json"), "utf-8"),
+      ) as { rows?: ReadonlyArray<{ chapter: number; hookActivity?: string }> };
+      const summaryRows = (summariesParsed.rows ?? [])
+        .filter((row) => Number.isInteger(row.chapter))
+        .map((row) => ({ chapter: row.chapter, hookActivity: row.hookActivity ?? "" }));
+      const currentChapter = summaryRows.length > 0
+        ? summaryRows[summaryRows.length - 1]!.chapter + 1
+        : 1;
+      const timeline = buildPromiseTimeline(enrichedHooks, currentChapter);
+      const hits: GlobalSearchHit[] = [];
+      for (const entry of timeline) {
+        const fields: Array<readonly [string, number]> = [
+          [entry.summary, 2],
+          [entry.expectedPayoff, 1],
+          [entry.hookId, 1],
+        ];
+        const matched = findWeightedFieldMatch(fields, query);
+        if (!matched) continue;
+        const matchedText = fields[matched.fieldIndex]![0];
+        const snippet = buildHighlightSnippet(matchedText, query);
+        if (!snippet) continue;
+        hits.push({
+          kind: "hook",
+          id: `hook:${entry.hookId}`,
+          title: entry.summary.trim() ? entry.summary : entry.hookId,
+          source: "story/pending_hooks.md",
+          score: matched.weight,
+          snippet: snippet.text,
+          matchStart: snippet.matchStart,
+          matchLength: snippet.matchLength,
+        });
+      }
+      hits.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return hits.slice(0, limit);
+    } catch {
+      return [];
+    }
+  }
+
+  async function searchTruthFor(
+    storyDir: string,
+    query: string,
+    limit: number,
+  ): Promise<GlobalSearchHit[]> {
+    if (queryTokens(query).length === 0) return [];
+    const files = await listTruthSearchFiles(storyDir);
+    const hits: GlobalSearchHit[] = [];
+    for (const rel of files) {
+      let content: string;
+      try {
+        content = await readFile(join(storyDir, rel), "utf-8");
+      } catch {
+        continue;
+      }
+      // 行级扫描：首个命中行产一条命中（片段取行内窗，行已窄）。
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const snippet = buildHighlightSnippet(trimmed, query);
+        if (snippet) {
+          hits.push({
+            kind: "truth",
+            id: `truth:${rel}`,
+            title: rel,
+            source: rel,
+            score: 1,
+            snippet: snippet.text,
+            matchStart: snippet.matchStart,
+            matchLength: snippet.matchLength,
+          });
+          break;
+        }
+      }
+      if (hits.length >= limit) break;
+    }
+    return hits;
+  }
+
+  app.get("/api/v1/books/:id/search", async (c) => {
+    const id = c.req.param("id");
+    if (!isSafeBookId(id)) return c.json({ error: "Invalid book id" }, 400);
+    const rawQuery = (c.req.query("q") ?? "").trim();
+    if (!rawQuery) return c.json({ error: "query is required" }, 400);
+    // 超长 query 负路径：按码点裁剪（Rust chars().take(200) 同规则）。
+    const query = Array.from(rawQuery).slice(0, 200).join("");
+    const scope = c.req.query("scope") ?? "chapters";
+    // limit 契约：正整数字面（Rust i64 parse 同形态——"3.7"/" 3"/"-1" → 默认 20）。
+    const rawLimit = c.req.query("limit") ?? "";
+    const limit = /^[+-]?[0-9]+$/.test(rawLimit) && Number.parseInt(rawLimit, 10) > 0
+      ? Math.min(50, Math.max(1, Number.parseInt(rawLimit, 10)))
+      : 20;
+    if (scope !== "chapters" && scope !== "entity" && scope !== "hook" && scope !== "truth") {
+      return c.json({ error: "invalid scope" }, 400);
+    }
+    const storyDir = join(state.bookDir(id), "story");
+    const hits = scope === "chapters"
+      ? await searchChaptersFor(id, query, limit)
+      : scope === "entity"
+        ? await searchEntityFor(storyDir, query, limit)
+        : scope === "hook"
+          ? await searchHooksFor(id, storyDir, query, limit)
+          : await searchTruthFor(storyDir, query, limit);
+    return c.json({ query, scope, hits });
   });
 
   // --- Daemon control ---

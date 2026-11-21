@@ -31,6 +31,9 @@
     "title_dedup/resolve_no_duplicate_200": 29943.839485347606,
     "tool_registry/lookup_last_hit": 28.96277847169831,
     "tool_registry/lookup_miss": 31.858604925221723,
-    "tool_registry/schemas_book_session_layer": 2790.223340920661
-  }
+    "tool_registry/schemas_book_session_layer": 2790.223340920661,
+    "book_search/cold_300ch": 32252573,
+    "book_search/warm_300ch": 20758052
+  },
+  "benchesCount": 32
 }

@@ -25,6 +25,7 @@ pub mod parent_watchdog;
 pub mod play_routes;
 pub mod project_config_routes;
 pub mod project_files_routes;
+pub mod search_routes;
 pub mod segment_guard;
 pub mod series_backfill_routes;
 pub mod service_routes;
@@ -495,6 +496,11 @@ pub fn router_books(
             get(books_state_routes::truth_file)
                 .put(books_state_routes::write_truth_file)
                 .with_state(books.clone()),
+        )
+        // R47/1640 号：全局搜索面（chapters/entity/hook/truth 四轴）。
+        .route(
+            "/api/v1/books/:id/search",
+            get(search_routes::get_search).with_state(books.clone()),
         )
         // 53 号：创建状态（磁盘判定分支）。
         .route(

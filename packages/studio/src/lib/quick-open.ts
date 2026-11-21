@@ -6,10 +6,10 @@ import { tr } from "./app-language.js";
  * 数据聚合在组件层（App 已有 /books；面板打开时补拉影游与各书章节索引并缓存）。
  */
 
-export type QuickOpenKind = "book" | "chapter" | "film" | "session";
+export type QuickOpenKind = "book" | "chapter" | "film" | "session" | "match";
 
 export interface QuickOpenItem {
-  /** 稳定 id：`book:{bookId}` / `chapter:{bookId}:{n}` / `film:{projectId}` / `session:{sessionId}`。 */
+  /** 稳定 id：`book:{bookId}` / `chapter:{bookId}:{n}` / `film:{projectId}` / `session:{sessionId}` / `match:{bookId}:{n}`。 */
   id: string;
   kind: QuickOpenKind;
   label: string;
@@ -90,6 +90,36 @@ export function buildQuickOpenItems(input: QuickOpenInput): QuickOpenItem[] {
 
   return [...books, ...chapters, ...films, ...sessions];
 }
+
+/**
+ * R47/1640 号：⌘P 正文命中档条目（纯函数）。
+ * 输入 = /books/:id/search?scope=chapters 的命中投影；detail 承载高亮片段
+ * （filterQuickOpenItems 参与 AND 过滤——命中片段含查询词，天然通过）。
+ */
+export interface QuickOpenSearchHit {
+  readonly chapterNumber: number;
+  readonly title: string;
+  readonly snippet: string;
+}
+
+export function buildMatchQuickOpenItems(
+  bookId: string,
+  hits: ReadonlyArray<QuickOpenSearchHit>,
+): QuickOpenItem[] {
+  return hits.map((hit) => ({
+    id: `match:${bookId}:${hit.chapterNumber}`,
+    kind: "match" as const,
+    label: hit.title,
+    detail: hit.snippet,
+    searchable: String(hit.chapterNumber),
+    route: { page: "chapter", bookId, chapterNumber: hit.chapterNumber },
+  }));
+}
+
+/** 正文命中档请求参数（组件层防抖消费；≥2 字符才触发全文检索）。 */
+export const QUICK_OPEN_MATCH_MIN_QUERY = 2;
+export const QUICK_OPEN_MATCH_LIMIT = 8;
+export const QUICK_OPEN_MATCH_DEBOUNCE_MS = 250;
 
 /**
  * 过滤（纯函数）：空查询返回前 RENDER_LIMIT 条；非空按空格分词 AND 匹配

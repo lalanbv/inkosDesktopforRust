@@ -243,7 +243,7 @@ pub struct PlanChapterResult {
 /// id 路径安全校验（`session::is_safe_book_id` 路径安全子集；ops_routes 同形）。
 /// 1444 号：books 面 8 入口对称补缺——TS 腿 `normalizeApiBookId`/`isSafeBookId`
 /// 早已 400 INVALID_BOOK_ID（server.ts:408），genre 面 632 先例同族。
-fn book_id_is_unsafe(id: &str) -> bool {
+pub(crate) fn book_id_is_unsafe(id: &str) -> bool {
     !crate::interaction::session::is_safe_book_id(id)
 }
 
