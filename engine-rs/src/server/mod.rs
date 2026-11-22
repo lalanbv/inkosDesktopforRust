@@ -796,6 +796,10 @@ pub fn router_books(
             get(service_routes::list_services).with_state(books.clone()),
         )
         .route(
+            "/api/v1/usage/budget-status",
+            get(service_routes::get_usage_budget_status).with_state(books.clone()),
+        )
+        .route(
             "/api/v1/services/config",
             get(service_routes::get_services_config)
                 .put(service_routes::put_services_config)

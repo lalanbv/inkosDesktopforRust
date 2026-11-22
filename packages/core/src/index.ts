@@ -230,6 +230,21 @@ export {
   diffSummary,
   type TextDiffLine,
 } from "./utils/text-diff.js";
+// R55/1661 号：用量账本存储（server 行面端点消费）。
+export {
+  appendUsageRows,
+  loadUsageLedger,
+  usageLedgerPath,
+} from "./utils/usage-ledger-store.js";
+export {
+  budgetStatus,
+  usageProjection,
+  type BudgetLevel,
+  type BudgetStatus,
+  type ServiceBudget,
+  type ServiceUsage,
+  type UsageLogRow,
+} from "./utils/usage-budget.js";
 export { toPosixPath } from "./utils/posix-path.js";
 export {
   ActionSourceSchema,

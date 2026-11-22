@@ -1134,6 +1134,8 @@ pub async fn post_agent(
         thinking: Option<ThinkingBridge>,
         /// G8a/333 号：思考流聚合文本（响应面 thinking 字段）。
         thinking_text: std::sync::Arc<std::sync::Mutex<String>>,
+        /// R55/1661 号：chat 流水用量账本写点（usage 精确值；project root）。
+        usage_root: std::path::PathBuf,
     }
 
     /// thinking 事件桥：hub + 会话标记。
@@ -1217,6 +1219,26 @@ pub async fn post_agent(
                 total_tokens: completion.total_tokens.unwrap_or(0),
                 model: Some(endpoint.model.clone()),
             };
+            // R55/1661 号：chat 流水用量账本（best-effort——usage 精确值；
+            // serviceKey=baseUrl host，预算面以 host 匹配条目）。
+            if usage.total_tokens > 0 {
+                let service_key = url::Url::parse(&endpoint.base_url)
+                    .ok()
+                    .and_then(|parsed| parsed.host_str().map(str::to_string))
+                    .unwrap_or_else(|| endpoint.base_url.clone());
+                crate::utils::usage_ledger::append_usage_rows(
+                    &self.usage_root.to_string_lossy(),
+                    &[crate::utils::usage_ledger::UsageLogRow {
+                        ts: crate::utils::utc_time::utc_now_iso(),
+                        service_key,
+                        model: endpoint.model.clone(),
+                        prompt_tokens: usage.input as u64,
+                        completion_tokens: usage.output as u64,
+                        total_tokens: usage.total_tokens as u64,
+                    }],
+                )
+                .await;
+            }
             Ok((completion.content, tool_calls, usage))
         }
     }
@@ -1365,6 +1387,7 @@ pub async fn post_agent(
             session_id: session_id.to_string(),
         }),
         thinking_text: thinking_text.clone(),
+        usage_root: runtime.state.project_root().to_path_buf(),
     };
     // R41/563 号：计量器（每请求新建 = 当前请求面折叠表；窗口 = 路由缺省窗）。
     let meter = crate::utils::token_meter::TokenMeter::new(runtime.router.default_context_window());

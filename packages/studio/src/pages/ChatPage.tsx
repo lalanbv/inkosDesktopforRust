@@ -50,6 +50,7 @@ import {
   Plus,
 } from "lucide-react";
 import { Shimmer } from "../components/ai-elements/shimmer";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import {
   Message,
   MessageContent,
@@ -302,6 +303,7 @@ function SkillPickerPanel({
 
       </div>
     </div>
+
   );
 }
 
@@ -672,12 +674,47 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
       : null);
   };
 
+  // R55/1661 号：用量预算警戒——warn 通知条 + 100% 发送前确认门（可关闭=
+  // 仅告警；无配置不发确认——服务端 budget-status 判定）。
+  const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
+  const [pendingBudgetSend, setPendingBudgetSend] = useState<string | null>(null);
+  const budgetGateBypassRef = useRef(false);
+  useEffect(() => {
+    void fetchJson<{ statuses: Array<{ serviceKey: string; ratio: number; level: string; confirmRequired: boolean }> }>("/usage/budget-status")
+      .then((payload) => {
+        const warned = (payload.statuses ?? []).filter((entry) => entry.level !== "ok");
+        if (warned.length === 0) {
+          setBudgetNotice(null);
+          return;
+        }
+        const overLabel = isZh ? "（已超预算）" : " (over budget)";
+        const parts = warned.map((entry) => `${entry.serviceKey} ${Math.round(entry.ratio * 100)}%${entry.level === "over" ? overLabel : ""}`);
+        setBudgetNotice(parts.join(" · "));
+      })
+      .catch(() => setBudgetNotice(null));
+  }, [activeSessionId]);
+
   const onSend = async (text: string) => {
     if (!activeSessionId || !sessionMatchesRoute || creatingWorkSession) return;
     const hasPendingMessage = Boolean(text.trim()) || attachedFiles.length > 0;
     if (!hasPendingMessage) {
       if (chatStreaming || loading) await abortSession(activeSessionId);
       return;
+    }
+    // 预算确认门：over 且 confirmRequired → 弹层确认后再发（best-effort——
+    // 状态查询失败不拦发送）。
+    if (budgetGateBypassRef.current) {
+      budgetGateBypassRef.current = false;
+    } else {
+      try {
+        const status = await fetchJson<{ statuses: Array<{ confirmRequired: boolean }> }>("/usage/budget-status");
+        if ((status.statuses ?? []).some((entry) => entry.confirmRequired)) {
+          setPendingBudgetSend(text);
+          return;
+        }
+      } catch {
+        // 预算面不可达不阻塞发送。
+      }
     }
     const requestedSkills = selectedSkillIdsForSend(selectedSkillIds);
     autoScrollPinnedRef.current = true;
@@ -1216,6 +1253,35 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
                 {/* 1169 号：IME 组合期回车（中文选词上屏）key 同为 "Enter"——
                     无 isComposing 守卫会把未上屏的组合文本整句发出（聊天主输入
                     面中文高频路径）。prompt-input 规范形同款 native 守卫。 */}
+                {budgetNotice ? (
+                  <div
+                    role="status"
+                    data-budget-notice="warn"
+                    className="w-full rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-1.5 text-[11px] text-destructive"
+                  >
+                    {isZh ? "用量预算：" : "Usage budget: "}{budgetNotice}
+                  </div>
+                ) : null}
+      {/* R55/1661 号：预算确认门（over 且 confirmAtBudget）。 */}
+      <ConfirmDialog
+        open={pendingBudgetSend !== null}
+        title={isZh ? "用量已达预算" : "Usage budget reached"}
+        message={isZh
+          ? "所选服务本日/本月 token 用量已达 100% 软顶。仍要发送吗？（可在服务配置关闭确认门=仅告警）"
+          : "The selected service has reached its 100% token budget for today/this month. Send anyway? (The confirm gate can be disabled per service = warn only.)"}
+        confirmLabel={isZh ? "仍要发送" : "Send anyway"}
+        cancelLabel={isZh ? "取消" : "Cancel"}
+        onConfirm={() => {
+          const text = pendingBudgetSend;
+          setPendingBudgetSend(null);
+          if (text !== null) {
+            budgetGateBypassRef.current = true;
+            void onSend(text);
+          }
+        }}
+        onCancel={() => setPendingBudgetSend(null)}
+      />
+
                 <textarea
                   ref={textareaRef}
                   value={input}
@@ -1434,5 +1500,6 @@ function ModelPickerContent({
         </DropdownMenuItem>
       </div>
     </DropdownMenuContent>
+
   );
 }

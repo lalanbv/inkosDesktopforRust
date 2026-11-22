@@ -1609,6 +1609,11 @@ interface ServiceConfigEntry {
   temperature?: number;
   apiFormat?: LLMApiFormat;
   stream?: boolean;
+  /** R55/1661 号：用量预算软顶（token/日、token/月；无=不限）。 */
+  dailyTokenBudget?: number;
+  monthlyTokenBudget?: number;
+  /** 100% 发送前确认门（可关闭=仅告警；缺省开）。 */
+  confirmAtBudget?: boolean;
 }
 
 type LLMConfigSource = "env" | "studio";
@@ -1757,6 +1762,9 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
+      ...(typeof value.dailyTokenBudget === "number" && Number.isInteger(value.dailyTokenBudget) && value.dailyTokenBudget > 0 ? { dailyTokenBudget: value.dailyTokenBudget } : {}),
+      ...(typeof value.monthlyTokenBudget === "number" && Number.isInteger(value.monthlyTokenBudget) && value.monthlyTokenBudget > 0 ? { monthlyTokenBudget: value.monthlyTokenBudget } : {}),
+      ...(typeof value.confirmAtBudget === "boolean" ? { confirmAtBudget: value.confirmAtBudget } : {}),
     };
   }
 
@@ -1769,6 +1777,9 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
+      ...(typeof value.dailyTokenBudget === "number" && Number.isInteger(value.dailyTokenBudget) && value.dailyTokenBudget > 0 ? { dailyTokenBudget: value.dailyTokenBudget } : {}),
+      ...(typeof value.monthlyTokenBudget === "number" && Number.isInteger(value.monthlyTokenBudget) && value.monthlyTokenBudget > 0 ? { monthlyTokenBudget: value.monthlyTokenBudget } : {}),
+      ...(typeof value.confirmAtBudget === "boolean" ? { confirmAtBudget: value.confirmAtBudget } : {}),
     };
   }
 
@@ -1778,6 +1789,9 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
     ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
+    ...(typeof value.dailyTokenBudget === "number" && Number.isInteger(value.dailyTokenBudget) && value.dailyTokenBudget > 0 ? { dailyTokenBudget: value.dailyTokenBudget } : {}),
+    ...(typeof value.monthlyTokenBudget === "number" && Number.isInteger(value.monthlyTokenBudget) && value.monthlyTokenBudget > 0 ? { monthlyTokenBudget: value.monthlyTokenBudget } : {}),
+    ...(typeof value.confirmAtBudget === "boolean" ? { confirmAtBudget: value.confirmAtBudget } : {}),
   };
 }
 
@@ -4588,6 +4602,48 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     await mkdir(dir, { recursive: true });
     await writeTextAtomic(join(dir, `${name}.json`), JSON.stringify(saved, null, 2));
     return c.json({ ok: true, name, profile: saved });
+  });
+
+  // R55/1661 号：用量预算状态——services 预算键 + usage 账本 → per-service
+  // 投影与级别（Rust service_routes get_usage_budget_status 镜像）。
+  app.get("/api/v1/usage/budget-status", async (c) => {
+    try {
+      const core = await import("@actalk/inkos-core");
+      const loadUsageLedger = core.loadUsageLedger;
+      const usageProjection = core.usageProjection;
+      const budgetStatus = core.budgetStatus;
+
+      const raw = await loadRawConfig(root);
+      const llm = (raw.llm ?? {}) as Record<string, unknown>;
+      const servicesRaw = llm.services && typeof llm.services === "object" ? llm.services as Record<string, Record<string, unknown>> : {};
+      const rows = await loadUsageLedger(root);
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const projection = usageProjection(rows, (row) => row.ts.slice(0, 10), todayKey);
+      const statuses = Object.entries(servicesRaw)
+        .map(([serviceId, value]) => {
+          const daily = typeof value.dailyTokenBudget === "number" ? value.dailyTokenBudget : undefined;
+          const monthly = typeof value.monthlyTokenBudget === "number" ? value.monthlyTokenBudget : undefined;
+          if (daily === undefined && monthly === undefined) return null;
+          const confirmAtBudget = typeof value.confirmAtBudget === "boolean" ? value.confirmAtBudget : undefined;
+          // 匹配键：条目 key 精确 → baseUrl host（chat 写点 serviceKey=host，Rust 同款）。
+          const host = typeof value.baseUrl === "string" && value.baseUrl.length > 0
+            ? (() => { try { return new URL(value.baseUrl).host; } catch { return undefined; } })()
+            : undefined;
+          const usage = projection.get(serviceId)
+            ?? (host !== undefined ? projection.get(host) : undefined)
+            ?? { daily: 0, monthly: 0, total: 0 };
+          const status = budgetStatus(serviceId, usage, {
+            ...(daily !== undefined ? { dailyTokenBudget: daily } : {}),
+            ...(monthly !== undefined ? { monthlyTokenBudget: monthly } : {}),
+            ...(confirmAtBudget !== undefined ? { confirmAtBudget } : {}),
+          });
+          return { serviceKey: status.serviceKey, daily: status.daily, monthly: status.monthly, ratio: status.ratio, level: status.level, confirmRequired: status.confirmRequired };
+        })
+        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      return c.json({ statuses, todayKey });
+    } catch (e) {
+      return c.json({ error: String(e) }, 500);
+    }
   });
 
   app.get("/api/v1/writing-stats", async (c) => {

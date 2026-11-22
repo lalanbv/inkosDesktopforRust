@@ -134,6 +134,25 @@ describe("export routes (R50/1647)", () => {
     expect(invalid.status).toBe(500);
   });
 
+  it("GET /usage/budget-status——services 预算+账本投影（R55/1661）", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(
+      join(root, "inkos.json"),
+      JSON.stringify({ llm: { services: { deepseek: { baseUrl: "https://api.deepseek.com", dailyTokenBudget: 1000 } } } }),
+    );
+    const today = new Date().toISOString().slice(0, 10);
+    const row = (service: string, total: number) =>
+      JSON.stringify({ ts: `${today}T01:00:00.000Z`, serviceKey: service, model: "m", promptTokens: Math.floor(total / 2), completionTokens: total - Math.floor(total / 2), totalTokens: total });
+    mkdirSync(join(root, ".inkos"), { recursive: true });
+    writeFileSync(join(root, ".inkos", "usage-log.jsonl"), [row("api.deepseek.com", 850), row("other.example", 999)].join("\n") + "\n");
+    const response = await app.request("/api/v1/usage/budget-status");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { statuses: Array<{ serviceKey: string; daily: number; ratio: number; level: string; confirmRequired: boolean }>; todayKey: string };
+    expect(body.statuses).toHaveLength(1);
+    expect(body.statuses[0]).toMatchObject({ serviceKey: "deepseek", daily: 850, ratio: 0.85, level: "warn", confirmRequired: false });
+    expect(body.todayKey).toBe(today);
+  });
+
   it("PUT 章保存记账 → GET /writing-log-rows 行面（R51/1653）", async () => {
     const { app } = seedApp();
     // 章 1 正文改长（wordCount 变化 → 账本一行）。

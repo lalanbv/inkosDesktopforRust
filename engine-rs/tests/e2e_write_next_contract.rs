@@ -7136,6 +7136,10 @@ mod services63_e2e {
                 axum::routing::get(service_routes::list_services),
             )
             .route(
+                "/api/v1/usage/budget-status",
+                axum::routing::get(service_routes::get_usage_budget_status),
+            )
+            .route(
                 "/api/v1/services/config",
                 axum::routing::get(service_routes::get_services_config)
                     .put(service_routes::put_services_config),
@@ -7354,6 +7358,55 @@ mod services63_e2e {
             .as_str()
             .unwrap()
             .contains("INKOS_LLM_API_KEY"));
+    }
+
+    // ── R55/1661 号：用量预算状态端点 ────────────────────────────────
+
+    #[tokio::test]
+    async fn usage_budget_status_projects_ledger_and_levels() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // services 配预算（deepseek 日顶 1000）。
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{ "llm": { "services": { "deepseek": { "baseUrl": "https://api.deepseek.com", "dailyTokenBudget": 1000 } } } }"#,
+        )
+        .unwrap();
+        // 账本：今日 deepseek host 850 tokens（85% warn）+ 无预算服务行（不入列）。
+        tokio::fs::create_dir_all(root.join(".inkos"))
+            .await
+            .unwrap();
+        let today_prefix = inkos_engine::utils::utc_time::utc_now_iso()
+            .get(..10)
+            .unwrap_or("")
+            .to_string();
+        let row = |service: &str, total: u64| {
+            format!(
+                r#"{{"ts":"{today_prefix}T01:00:00.000Z","serviceKey":"{service}","model":"m","promptTokens":{p},"completionTokens":{c},"totalTokens":{total}}}"#,
+                p = total / 2,
+                c = total - total / 2
+            )
+        };
+        let ledger = format!(
+            "{}\n{}\n",
+            row("api.deepseek.com", 850),
+            row("no-budget.example", 999)
+        );
+        tokio::fs::write(
+            root.join(".inkos").join("usage-log.jsonl"),
+            ledger.replace("\\n", "\n"),
+        )
+        .await
+        .unwrap();
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/usage/budget-status", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let statuses = parsed["statuses"].as_array().unwrap();
+        assert_eq!(statuses.len(), 1, "只列有预算的服务");
+        assert_eq!(statuses[0]["serviceKey"], "deepseek");
+        assert_eq!(statuses[0]["daily"], 850);
+        assert_eq!(statuses[0]["level"], "warn");
+        assert_eq!(statuses[0]["ratio"], 0.85);
+        assert_eq!(statuses[0]["confirmRequired"], false);
     }
 
     #[tokio::test]

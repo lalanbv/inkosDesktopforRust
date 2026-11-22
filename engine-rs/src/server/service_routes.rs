@@ -46,6 +46,11 @@ pub struct ServiceConfigEntry {
     pub max_tokens: Option<f64>,
     pub api_format: Option<String>,
     pub stream: Option<bool>,
+    /// R55/1661 号：用量预算软顶（token/日、token/月；无=不限）。
+    pub daily_token_budget: Option<u64>,
+    pub monthly_token_budget: Option<u64>,
+    /// 100% 发送前确认门（可关闭=仅告警；缺省开）。
+    pub confirm_at_budget: Option<bool>,
 }
 
 impl ServiceConfigEntry {
@@ -72,6 +77,16 @@ impl ServiceConfigEntry {
         if let Some(stream) = self.stream {
             map.insert("stream".into(), json!(stream));
         }
+        // R55/1661 号：预算软顶键（缺省不落盘——存量零迁移）。
+        if let Some(daily) = self.daily_token_budget {
+            map.insert("dailyTokenBudget".into(), json!(daily));
+        }
+        if let Some(monthly) = self.monthly_token_budget {
+            map.insert("monthlyTokenBudget".into(), json!(monthly));
+        }
+        if let Some(confirm) = self.confirm_at_budget {
+            map.insert("confirmAtBudget".into(), json!(confirm));
+        }
         Value::Object(map)
     }
 
@@ -92,6 +107,9 @@ impl ServiceConfigEntry {
             max_tokens: entry.get("maxTokens").and_then(Value::as_f64),
             api_format: str_field("apiFormat").filter(|v| v == "chat" || v == "responses"),
             stream: entry.get("stream").and_then(Value::as_bool),
+            daily_token_budget: entry.get("dailyTokenBudget").and_then(Value::as_u64),
+            monthly_token_budget: entry.get("monthlyTokenBudget").and_then(Value::as_u64),
+            confirm_at_budget: entry.get("confirmAtBudget").and_then(Value::as_bool),
         }
     }
 }
@@ -124,6 +142,10 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
     let max_tokens = value.get("maxTokens").and_then(Value::as_f64);
     let api_format = str_field("apiFormat").filter(|v| v == "chat" || v == "responses");
     let stream = value.get("stream").and_then(Value::as_bool);
+    // R55/1661 号：预算软顶键透传（归一不丢键）。
+    let daily_token_budget = value.get("dailyTokenBudget").and_then(Value::as_u64);
+    let monthly_token_budget = value.get("monthlyTokenBudget").and_then(Value::as_u64);
+    let confirm_at_budget = value.get("confirmAtBudget").and_then(Value::as_bool);
 
     if let Some(encoded) = service_id.strip_prefix("custom:") {
         let name = percent_decode(encoded).unwrap_or_else(|| encoded.to_string());
@@ -135,6 +157,9 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
             max_tokens,
             api_format,
             stream,
+            daily_token_budget,
+            monthly_token_budget,
+            confirm_at_budget,
         };
     }
     if service_id == "custom" {
@@ -146,6 +171,9 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
             max_tokens,
             api_format,
             stream,
+            daily_token_budget,
+            monthly_token_budget,
+            confirm_at_budget,
         };
     }
     ServiceConfigEntry {
@@ -156,6 +184,9 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
         max_tokens,
         api_format,
         stream,
+        daily_token_budget,
+        monthly_token_budget,
+        confirm_at_budget,
     }
 }
 
@@ -507,6 +538,73 @@ pub async fn get_services_config(State(runtime): State<BooksRuntime>) -> impl In
             "storedConfigSource": normalize_config_source(llm.get("configSource")),
             "envConfig": env_config,
         })),
+    )
+}
+
+// ── R55/1661 号：用量预算状态 ────────────────────────────────────
+
+/// GET /api/v1/usage/budget-status——services 预算键 + usage 账本 →
+/// per-service {daily, monthly, ratio, level, confirmRequired}（只列配置了
+/// 预算的服务；dayKey=ts 前 10 位 UTC——R51 消费端口径）。
+pub async fn get_usage_budget_status(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let config = load_raw_config(root).await.unwrap_or(json!({}));
+    let llm = llm_of(&config);
+    let entries = normalize_service_config(llm.get("services"));
+    let rows = crate::utils::usage_ledger::load_usage_ledger(&root.to_string_lossy()).await;
+    let today_key_full = crate::utils::utc_time::utc_now_iso();
+    let today_key = today_key_full.get(..10).unwrap_or("").to_string();
+    let projection = crate::utils::usage_ledger::usage_projection(
+        &rows,
+        |row| row.ts.get(..10).unwrap_or("").to_string(),
+        &today_key,
+    );
+    let statuses: Vec<Value> = entries
+        .iter()
+        .filter_map(|entry| {
+            if entry.daily_token_budget.is_none() && entry.monthly_token_budget.is_none() {
+                return None;
+            }
+            let key = service_config_key(entry);
+            // 匹配键：条目 key 精确 → baseUrl host（chat 写点 serviceKey=host）。
+            let host = entry
+                .base_url
+                .as_deref()
+                .and_then(|raw| url::Url::parse(raw).ok())
+                .map(|parsed| parsed.host_str().unwrap_or_default().to_string());
+            let empty = crate::utils::usage_ledger::ServiceUsage {
+                daily: 0,
+                monthly: 0,
+                total: 0,
+            };
+            let usage = projection
+                .get(&key)
+                .cloned()
+                .or_else(|| host.as_ref().and_then(|h| projection.get(h).cloned()))
+                .unwrap_or(empty);
+            let budget = crate::utils::usage_ledger::ServiceBudget {
+                daily_token_budget: entry.daily_token_budget,
+                monthly_token_budget: entry.monthly_token_budget,
+                confirm_at_budget: entry.confirm_at_budget.unwrap_or(true),
+            };
+            let status = crate::utils::usage_ledger::budget_status(&key, &usage, Some(&budget));
+            Some(json!({
+                "serviceKey": status.service_key,
+                "daily": status.daily,
+                "monthly": status.monthly,
+                "ratio": status.ratio,
+                "level": match status.level {
+                    crate::utils::usage_ledger::BudgetLevel::Ok => "ok",
+                    crate::utils::usage_ledger::BudgetLevel::Warn => "warn",
+                    crate::utils::usage_ledger::BudgetLevel::Over => "over",
+                },
+                "confirmRequired": status.confirm_required,
+            }))
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({ "statuses": statuses, "todayKey": today_key })),
     )
 }
 
