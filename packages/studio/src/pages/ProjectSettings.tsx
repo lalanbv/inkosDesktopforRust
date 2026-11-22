@@ -8,6 +8,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { tr } from "../lib/app-language";
+import { PromptPacksPanel } from "../components/PromptPacksPanel";
 import { TaskRoutingPanel } from "../components/TaskRoutingPanel";
 import {
   buildDetectionConfig,
@@ -445,6 +446,11 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
             </button>
           </div>
         </div>
+      </SettingsCard>
+
+      {/* R54/1659 号：prompt pack 管理（列表/编辑/版本历史/diff/回滚）。 */}
+      <SettingsCard title={tr("Prompt Packs", "Prompt Packs")} description={tr("内建 prompt 的 project 覆盖、版本历史与回滚。", "Project overrides, version history, and rollback for builtin prompts.")} icon={<Settings2 size={18} />}>
+        <PromptPacksPanel />
       </SettingsCard>
 
       {/* Model routing — per-agent model overrides */}
