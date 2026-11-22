@@ -512,7 +512,8 @@ try {
     await waitUntil(async () => (await fetchT(`${base}/api/v1/books`)).ok, 30_000, `${engine.name} 启动`);
   }
 
-  // 695 号契约源守卫（688 号守卫的升级版）：/api/v1/prompt-packs 是 fork 契约面
+  // 695 号契约源守卫（688 号守卫的升级版；1662 判据换 /api/v1/health——
+  // prompt-packs 已双端同构）：/api/v1/health 是 fork 独有面
   //（上游 2.0 已删）。node 腿 404 ⇒ TS 契约源=上游 2.0 → 进入「三域活体分歧
   // 报告」模式：fork 契约字节级对跑（全量 ENDPOINTS 表）整体失效不再逐端点跑，
   // 改为跑三域报告（共享面缩减集活体对比 + fork-only/上游新增两域声明清单活体
@@ -520,10 +521,10 @@ try {
   // TS 恢复 fork 契约（2.0 迁移落地）后自动回到严格全量表对跑，无需改码。
   let twoDomainReportMode = false;
   {
-    const probe = await fetchT(`http://127.0.0.1:${nodePort}/api/v1/prompt-packs`).catch(() => null);
+    const probe = await fetchT(`http://127.0.0.1:${nodePort}/api/v1/health`).catch(() => null);
     if (!probe || !probe.ok) {
       twoDomainReportMode = true;
-      console.log("[diff] [695 契约源守卫] node 腿=上游 2.0（/api/v1/prompt-packs 404 实证）→ 三域活体分歧报告模式。");
+      console.log("[diff] [695 契约源守卫] node 腿=上游 2.0（/api/v1/health 404 实证）→ 三域活体分歧报告模式。");
     }
   }
 
@@ -1072,10 +1073,10 @@ try {
     //     提示包产品化再接管）。
     // 豁免≠删除：Rust 面保留原样（产品引擎功能不受影响）；TS 侧不接管；
     // fork-only 域表保留此 4 条作为声明域常驻哨（漂移行活体监测 Rust 回归）。
+    // 1662 号：prompt-packs 族双端同构（TS 回退腿接管）——移出 fork-only 表。
     const FORK_ONLY_ROUTES = [
       "/api/v1/debug/tools",
       "/api/v1/health", "/api/v1/interaction/session",
-      "/api/v1/prompt-packs",
     ];
     let forkOnlyConfirmed = 0;
     const forkOnlyDrift = [];

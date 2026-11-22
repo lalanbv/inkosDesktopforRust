@@ -73,6 +73,10 @@
       "types": "./dist/utils/text-diff.d.ts",
       "import": "./dist/utils/text-diff.js"
     },
+    "./prompts/builtin-prompts-data": {
+      "types": "./dist/prompts/builtin-prompts-data.d.ts",
+      "import": "./dist/prompts/builtin-prompts-data.js"
+    },
     "./utils/promise-ledger": {
       "types": "./dist/utils/promise-ledger.d.ts",
       "import": "./dist/utils/promise-ledger.js"

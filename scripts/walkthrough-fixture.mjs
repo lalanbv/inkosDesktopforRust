@@ -24,6 +24,12 @@ import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// 1662 号：回环直连豁免——系统代理（127.0.0.1:1082 形态）窗口性拦截本地
+// 引擎探测（洪泛 503 族，窗口性非恒定=偶发红）；undici 读 env 代理，
+// 对 127.0.0.1/localhost 显式 NO_PROXY（Node fetch 无 per-request noProxy）。
+process.env.NO_PROXY = [process.env.NO_PROXY, "127.0.0.1", "localhost"].filter(Boolean).join(",");
+process.env.no_proxy = process.env.NO_PROXY;
+
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..");
 const root = process.argv[2] ?? "/tmp/inkos-walk";
@@ -68,11 +74,13 @@ if (!mockModels) {
 // 序列（如 "45,55,91"）驱动 chapter-review-cycle 的多轮修复与未净提升分支活体。
 const reviewRetries = Math.max(0, Math.floor(Number(process.env.WALKTHROUGH_REVIEW_RETRIES ?? "1")) || 1);
 mkdirSync(join(root, ".inkos"), { recursive: true });
-// 696 号：契约源自适应——/api/v1/prompt-packs 是 fork 契约面（2.0 已删）。
+// 696 号（1662 修订）：契约源自适应——判据原 /api/v1/prompt-packs（1662
+// 起 TS 回退腿同构该族，判据失效误判）换 /api/v1/health（fork 独有，
+// TS 2.0 无此路由）。
 // fork 引擎：inkos.json 带顶层 writing.reviewRetries（写作评审循环重试参数，
 // engine-rs 契约）；上游 2.0：ProjectConfigSchema strict 无此键，写入即
 // INVALID_PROJECT_CONFIG（/books 0 书与 /doctor bookCount 分歧的根因）。
-const forkContract = await fetch(`${base}/api/v1/prompt-packs`)
+const forkContract = await fetch(`${base}/api/v1/health`)
   .then((r) => r.ok)
   .catch(() => false);
 const inkosConfig = {
@@ -86,7 +94,7 @@ const inkosConfig = {
     services: [{ service: "custom", name: "Mock", baseUrl: `http://127.0.0.1:${mockPort}/v1` }],
   },
 };
-if (!forkContract) console.log("[walkthrough-fixture] TS 腿=上游 2.0（prompt-packs 404）——inkos.json 省略 writing 段（2.0 无评审重试旋钮）。");
+if (!forkContract) console.log("[walkthrough-fixture] TS 腿=上游 2.0（health 404）——inkos.json 省略 writing 段（2.0 无评审重试旋钮）。");
 writeFileSync(join(root, "inkos.json"), JSON.stringify(inkosConfig, null, 2));
 // 855 号：mock 键占位符经环境可注入（真实凭据只走 env/密钥服务，脚本不落字面量）；
 // 下方走查文案的 Key(...) 提示与本值恒等（人工按提示输入）。

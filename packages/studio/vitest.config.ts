@@ -31,6 +31,8 @@ export default defineConfig({
       "@actalk/inkos-core/utils/entity-highlight": resolve(__dirname, "../core/src/utils/entity-highlight.ts"),
       // R53/1657 号：utils/text-diff subpath（章版本比较 diff，历史面消费）
       "@actalk/inkos-core/utils/text-diff": resolve(__dirname, "../core/src/utils/text-diff.ts"),
+      // R54/1662 号：prompts/builtin-prompts-data subpath（prompt-packs 端点 builtin 数据）
+      "@actalk/inkos-core/prompts/builtin-prompts-data": resolve(__dirname, "../core/src/prompts/builtin-prompts-data.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },

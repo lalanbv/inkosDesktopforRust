@@ -172,9 +172,9 @@ async function runLeg(engine) {
     stdio: ["ignore", "ignore", "inherit"],
   });
 
-  // 700 号：契约源自适应——/prompt-packs 404 ⇒ 该腿为上游 2.0（fork 契约断言
+  // 700 号（1662 修订判据 /api/v1/health）：契约源自适应——health 404 ⇒ 该腿为上游 2.0（fork 契约断言
   // 豁免记账，功能性检查照常；Rust 腿恢复 fork 契约后自动全量）。
-  const forkContract = await fetchT(`${base}/api/v1/prompt-packs`).then((r) => r.ok).catch(() => false);
+  const forkContract = await fetchT(`${base}/api/v1/health`).then((r) => r.ok).catch(() => false);
   const res = await fetchT(`${base}/api/v1/books/${BOOK}/export-save`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

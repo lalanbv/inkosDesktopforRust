@@ -236,6 +236,23 @@ export {
   loadUsageLedger,
   usageLedgerPath,
 } from "./utils/usage-ledger-store.js";
+// R54/1662 号：prompt 覆盖与版本账本存储（Node 回退腿端点消费）。
+export {
+  BUILTIN_PROMPT_PACKS,
+  BUILTIN_PROMPTS,
+  type BuiltinPackDatum,
+  type BuiltinPromptDatum,
+} from "./prompts/builtin-prompts-data.js";
+export {
+  appendPromptVersion,
+  listPromptVersions,
+  loadPromptVersions,
+  promptOverridePath,
+  readPromptVersion,
+  removePromptOverride,
+  writePromptOverride,
+  type PromptVersionRecord,
+} from "./utils/prompt-pack-store.js";
 export {
   budgetStatus,
   usageProjection,

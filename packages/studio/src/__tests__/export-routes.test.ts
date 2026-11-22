@@ -134,6 +134,9 @@ describe("export routes (R50/1647)", () => {
     expect(invalid.status).toBe(500);
   });
 
+  // R54/1662 号：prompt-packs TS 腿端点族暂缓——tsx sidecar 对该路由注册
+  // 敏感（duel 8 红黑盒，1663 专项）；面板降级空态继续兜底。测试随端点回座。
+
   it("GET /usage/budget-status——services 预算+账本投影（R55/1661）", async () => {
     const { root, app } = seedApp();
     writeFileSync(

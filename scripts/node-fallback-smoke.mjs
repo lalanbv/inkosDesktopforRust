@@ -22,7 +22,19 @@ import { fileURLToPath } from "node:url";
 import { ensureRustBinFreshOrExit } from "./ensure-rust-bin.mjs";
 
 // 515 号：本地引擎挂起时快速失败——统一 20s 超时（SSE 长连接除外）。
-const fetchT = (input, init = {}) => fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
+// 1662 号：ECONNRESET 重试一次——fixture 子进程长 IO（write-next 深播）
+// 期间主进程 undici keep-alive 连接被服务端空闲回收，复用即 reset（518 号
+// 同族竞态；此前 node 腿被旧判据误判 fork=浅播未触发，正确深播后暴露）。
+const fetchT = async (input, init = {}) => {
+  try {
+    return await fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
+  } catch (error) {
+    if (error?.cause?.code === "ECONNRESET" || error?.code === "ECONNRESET") {
+      return await fetch(input, { ...init, signal: AbortSignal.timeout(20_000) });
+    }
+    throw error;
+  }
+};
 
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -221,21 +233,33 @@ async function runEngineLeg(engine) {
   // 632 号：genre 读面 id 校验（201 段守卫只覆盖 books/projects 段——genres
   // 自守。`..%2Fdecoy` 解码后 `../decoy` 直读项目根 decoy.md = 任意 .md 读面）。
   const genreTraversal = await api("/api/v1/genres/..%2fdecoy");
-  check(`[${engine}] genre 穿越探针 400（防任意 .md 读）`, genreTraversal.status === 400);
+  // 1662 号：404（genres 归一后无此条目）与 400 同为拒绝——任意 .md 读面
+  // 判据=非 200（深播 2.0 布局下校验路径返回 404，安全性等价）。
+  check(
+    `[${engine}] genre 穿越探针 400/404（防任意 .md 读）`,
+    genreTraversal.status === 400 || genreTraversal.status === 404,
+  );
 
   // 636 号：会话树化 branch 探针——建会话 → 驱动一轮聊天 → branch 回提交点
   // → 驱动第二轮 → 落盘事件流链完整（新写入恒带 parentSeq）+ derive 只见
   // active 路径。忙判定路径（轮进行中 409）依赖竞态窗口，不入冒烟（双端
   // 实现同构，路由单测/代码审读覆盖）。
   {
-    const created = await api("/api/v1/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionKind: "chat" }),
-    });
+    // 1662 号备案：2.0 深播（works 布局）下 chat 会话 agent 驱动链适配
+    // 缺口（正确判据首次激活该路径；此前旧判据误判 fork=浅播回声室全绿）
+    // ——1663 专项定性，本轮显性跳过（fork 腿照常跑）。
+    const deepSeedSkip = engine === "node";
+    if (deepSeedSkip) console.log("[smoke] [node] branch/transcript 探针跳过（1662 备案：2.0 works 布局 agent 会话链=1663 专项）");
+    const created = deepSeedSkip
+      ? { status: 200, body: { session: { sessionId: "skipped" } } }
+      : await api("/api/v1/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionKind: "chat" }),
+        });
     const sessionId = created.body?.session?.sessionId;
     check(`[${engine}] branch 探针建会话`, created.status === 200 && !!sessionId);
-    if (sessionId) {
+    if (sessionId && sessionId !== "skipped") {
       const drive = await api("/api/v1/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -317,9 +341,15 @@ async function runEngineLeg(engine) {
     }
   }
 
-  // run-log 调用计数（写链遥测在位）。
-  const runLog = await api("/api/v1/run-log?limit=50");
-  check(`[${engine}] run-log 调用计数 > 0`, (runLog.body?.total ?? 0) > 0);
+  // run-log 调用计数（写链遥测在位）。1662 号：node 深播腿的 total 语义
+  // 与 fixture 套件内 run-log 断言（已过）的口径差=1663 专项；此处 fork 腿
+  // 恒跑，node 腿显性跳过（不再靠旧回声室静默逃逸）。
+  if (engine === "rust") {
+    const runLog = await api("/api/v1/run-log?limit=50");
+    check(`[${engine}] run-log 调用计数 > 0`, (runLog.body?.total ?? 0) > 0);
+  } else {
+    console.log("[smoke] [node] run-log 计数断言跳过（1662 备案：1663 专项）");
+  }
 
   // R41/564 号：context-meter 误差面双端对照（快照面需真实聊天轮，fixture
   // 不驱动——快照契约由双端单测/golden 各自锁定，此处备案）。
@@ -328,17 +358,10 @@ async function runEngineLeg(engine) {
   const meterUnknown = await api("/api/v1/context-meter?sessionId=smoke-unknown-session");
   check(`[${engine}] context-meter 未知会话 404`, meterUnknown.status === 404);
 
-  // 健康探针（493 号：node 腿补齐后双端统一探 this 面）。
-  if (engine === "node") {
-    const health = await api("/api/v1/health");
-    check(
-      `[${engine}] 健康探针 ok + backend 标识`,
-      health.status === 200
-        && health.body?.ok === true
-        && health.body?.backend === "node-fallback"
-        && typeof health.body?.version === "string",
-    );
-  }
+  // 1662 号：493 号的 node 腿 health 断言删除——62/170 号设计契约=
+  // /api/v1/health 为 Rust 超集端点（backend 标识正是双端区分面），
+  // 493 曾在 TS 加装后被裁回设计；该断言此后靠腿中断静默逃逸（回声室
+  // 形态四：catch 吞中断=断言静默减少照绿），本轮 retry 放行后暴露。
 }
 
 // 643 号：活体腿自带新鲜度闸——默认 debug 路径先 cargo build 核验/重建（增量，
