@@ -80,6 +80,7 @@ pub mod tension_curve;
 pub mod text_diff;
 pub mod token_meter;
 pub mod truth_dialect;
+pub mod usage_ledger;
 pub mod utc_time;
 pub mod vector_engine;
 pub mod writing_goal;

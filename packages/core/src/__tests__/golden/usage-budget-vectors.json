@@ -1,0 +1,163 @@
+{
+  "rows": [
+    {
+      "ts": "2026-11-23T01:00:00.000Z",
+      "serviceKey": "a",
+      "model": "m",
+      "promptTokens": 50,
+      "completionTokens": 50,
+      "totalTokens": 100
+    },
+    {
+      "ts": "2026-11-23T05:00:00.000Z",
+      "serviceKey": "a",
+      "model": "m",
+      "promptTokens": 25,
+      "completionTokens": 25,
+      "totalTokens": 50
+    },
+    {
+      "ts": "2026-11-22T01:00:00.000Z",
+      "serviceKey": "a",
+      "model": "m",
+      "promptTokens": 15,
+      "completionTokens": 15,
+      "totalTokens": 30
+    },
+    {
+      "ts": "2026-10-30T01:00:00.000Z",
+      "serviceKey": "a",
+      "model": "m",
+      "promptTokens": 5,
+      "completionTokens": 5,
+      "totalTokens": 10
+    },
+    {
+      "ts": "2026-11-23T02:00:00.000Z",
+      "serviceKey": "b",
+      "model": "m",
+      "promptTokens": 3,
+      "completionTokens": 4,
+      "totalTokens": 7
+    }
+  ],
+  "dayKeys": [
+    "2026-11-23",
+    "2026-11-23",
+    "2026-11-22",
+    "2026-10-30",
+    "2026-11-23"
+  ],
+  "todayKey": "2026-11-23",
+  "projection": [
+    {
+      "serviceKey": "a",
+      "daily": 150,
+      "monthly": 180,
+      "total": 190
+    },
+    {
+      "serviceKey": "b",
+      "daily": 7,
+      "monthly": 7,
+      "total": 7
+    }
+  ],
+  "statuses": [
+    {
+      "name": "warn-85pct",
+      "usage": {
+        "daily": 850,
+        "monthly": 0,
+        "total": 850
+      },
+      "budget": {
+        "dailyTokenBudget": 1000
+      },
+      "status": {
+        "serviceKey": "warn-85pct",
+        "daily": 850,
+        "monthly": 0,
+        "ratio": 0.85,
+        "level": "warn",
+        "confirmRequired": false
+      }
+    },
+    {
+      "name": "over-confirm",
+      "usage": {
+        "daily": 1100,
+        "monthly": 0,
+        "total": 1100
+      },
+      "budget": {
+        "dailyTokenBudget": 1000
+      },
+      "status": {
+        "serviceKey": "over-confirm",
+        "daily": 1100,
+        "monthly": 0,
+        "ratio": 1.1,
+        "level": "over",
+        "confirmRequired": true
+      }
+    },
+    {
+      "name": "over-soft-no-confirm",
+      "usage": {
+        "daily": 1100,
+        "monthly": 0,
+        "total": 1100
+      },
+      "budget": {
+        "dailyTokenBudget": 1000,
+        "confirmAtBudget": false
+      },
+      "status": {
+        "serviceKey": "over-soft-no-confirm",
+        "daily": 1100,
+        "monthly": 0,
+        "ratio": 1.1,
+        "level": "over",
+        "confirmRequired": false
+      }
+    },
+    {
+      "name": "no-budget-negative-path",
+      "usage": {
+        "daily": 99999,
+        "monthly": 0,
+        "total": 99999
+      },
+      "budget": null,
+      "status": {
+        "serviceKey": "no-budget-negative-path",
+        "daily": 99999,
+        "monthly": 0,
+        "ratio": 0,
+        "level": "ok",
+        "confirmRequired": false
+      }
+    },
+    {
+      "name": "month-window-tighter",
+      "usage": {
+        "daily": 10,
+        "monthly": 21000,
+        "total": 21000
+      },
+      "budget": {
+        "dailyTokenBudget": 1000,
+        "monthlyTokenBudget": 20000
+      },
+      "status": {
+        "serviceKey": "month-window-tighter",
+        "daily": 10,
+        "monthly": 21000,
+        "ratio": 1.05,
+        "level": "over",
+        "confirmRequired": true
+      }
+    }
+  ]
+}
