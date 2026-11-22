@@ -138,6 +138,101 @@ fn normalize_prompt_id(prompt_id: &str) -> String {
     prompt_id.trim().to_lowercase()
 }
 
+// ── R54/1658 号：prompt 覆盖版本账本 ─────────────────────────────
+//
+// `{root}/prompt/.versions.jsonl` append-only（沿 writing-log 惯例：读旧+
+// 拼接+原子写；读取宽容坏行跳过）。行 = {ts, promptId, action, content}
+// （action = put | delete | restore；delete 行 content 空）。回滚 = 取版本行
+// 内容复写覆盖文件（复用 PUT 语义）+ 追加 restore 行——回滚本身也是一次
+// 可再回滚的变更（append-only 语义闭环）。
+
+/// 版本行（serde camelCase）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptVersionRecord {
+    pub ts: String,
+    pub prompt_id: String,
+    pub action: String,
+    pub content: String,
+}
+
+fn prompt_versions_path(root: &str) -> std::path::PathBuf {
+    std::path::Path::new(root)
+        .join("prompt")
+        .join(".versions.jsonl")
+}
+
+/// 读全部版本行（跨 prompt；坏行跳过）。
+pub async fn load_prompt_versions(root: &str) -> Vec<PromptVersionRecord> {
+    match tokio::fs::read_to_string(prompt_versions_path(root)).await {
+        Ok(text) => text
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    serde_json::from_str(trimmed).ok()
+                }
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 追加版本行（best-effort：失败仅日志，不 fail 覆盖写主链）。
+pub async fn append_prompt_version(
+    root: &str,
+    prompt_id: &str,
+    action: &str,
+    content: &str,
+    ts: &str,
+) {
+    let row = PromptVersionRecord {
+        ts: ts.to_string(),
+        prompt_id: prompt_id.to_string(),
+        action: action.to_string(),
+        content: content.to_string(),
+    };
+    let mut lines: Vec<String> = load_prompt_versions(root)
+        .await
+        .iter()
+        .map(|record| serde_json::to_string(record).unwrap_or_default())
+        .collect();
+    lines.push(serde_json::to_string(&row).unwrap_or_default());
+    let path = prompt_versions_path(root);
+    if let Some(parent) = path.parent() {
+        let _ = tokio::fs::create_dir_all(parent).await;
+    }
+    let text = lines.join("\n") + "\n";
+    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &text).await {
+        eprintln!("[prompt-versions] append failed (ignored): {error}");
+    }
+}
+
+/// 某 prompt 的版本列表（ts 降序=最新在前）。
+pub async fn list_prompt_versions(root: &str, prompt_id: &str) -> Vec<PromptVersionRecord> {
+    let mut versions: Vec<PromptVersionRecord> = load_prompt_versions(root)
+        .await
+        .into_iter()
+        .filter(|record| record.prompt_id == prompt_id)
+        .collect();
+    versions.sort_by(|a, b| b.ts.cmp(&a.ts));
+    versions
+}
+
+/// 读指定版本（promptId+ts 定位；找不到 None）。
+pub async fn read_prompt_version(
+    root: &str,
+    prompt_id: &str,
+    ts: &str,
+) -> Option<PromptVersionRecord> {
+    load_prompt_versions(root)
+        .await
+        .into_iter()
+        .find(|record| record.prompt_id == prompt_id && record.ts == ts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

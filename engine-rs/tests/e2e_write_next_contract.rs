@@ -6078,6 +6078,14 @@ mod skills60_e2e {
                 axum::routing::put(skill_routes::put_prompt_pack)
                     .delete(skill_routes::delete_prompt_pack),
             )
+            .route(
+                "/api/v1/prompt-packs/:promptId/versions",
+                axum::routing::get(skill_routes::get_prompt_pack_versions),
+            )
+            .route(
+                "/api/v1/prompt-packs/:promptId/versions/restore",
+                axum::routing::post(skill_routes::restore_prompt_pack_version),
+            )
             .with_state(rt60(root))
     }
 
@@ -6244,6 +6252,95 @@ mod skills60_e2e {
             .join("longform")
             .join("writer.md")
             .exists());
+    }
+
+    // ── R54/1658 号：prompt 覆盖版本化+回滚全链 ──────────────────────
+
+    #[tokio::test]
+    async fn prompt_pack_versions_append_list_and_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // ① PUT v1 → 版本行 1（regressionHint 附带）。
+        let (status, parsed) = call(
+            app60(&root),
+            "PUT",
+            "/api/v1/prompt-packs/longform.writer",
+            Some(r##"{ "content": "# 版本一" }"##),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["regressionHint"], "prompt-changed");
+        let (_, versions) = call(
+            app60(&root),
+            "GET",
+            "/api/v1/prompt-packs/longform.writer/versions",
+            None,
+        )
+        .await;
+        assert_eq!(versions["versions"].as_array().unwrap().len(), 1);
+        assert_eq!(versions["versions"][0]["action"], "put");
+        assert_eq!(versions["versions"][0]["content"], "# 版本一");
+        let v1_ts = versions["versions"][0]["ts"].as_str().unwrap().to_string();
+
+        // ② PUT v2 → 2 行降序（最新在前）。
+        call(
+            app60(&root),
+            "PUT",
+            "/api/v1/prompt-packs/longform.writer",
+            Some(r##"{ "content": "# 版本二" }"##),
+        )
+        .await;
+        let (_, versions) = call(
+            app60(&root),
+            "GET",
+            "/api/v1/prompt-packs/longform.writer/versions",
+            None,
+        )
+        .await;
+        let rows = versions["versions"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["content"], "# 版本二");
+        assert_eq!(rows[1]["content"], "# 版本一");
+
+        // ③ 回滚到 v1 → 覆盖文件=v1 内容 + restore 行（共 3 行）。
+        let body = format!(r#"{{ "ts": "{v1_ts}" }}"#);
+        let (status, parsed) = call(
+            app60(&root),
+            "POST",
+            "/api/v1/prompt-packs/longform.writer/versions/restore",
+            Some(&body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["prompt"]["content"], "# 版本一");
+        assert_eq!(parsed["regressionHint"], "prompt-changed");
+        let on_disk =
+            std::fs::read_to_string(root.join("prompt").join("longform").join("writer.md"))
+                .unwrap();
+        assert_eq!(on_disk, "# 版本一");
+        let (_, versions) = call(
+            app60(&root),
+            "GET",
+            "/api/v1/prompt-packs/longform.writer/versions",
+            None,
+        )
+        .await;
+        let rows = versions["versions"].as_array().unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["action"], "restore");
+        assert_eq!(rows[0]["content"], "# 版本一");
+
+        // ④ 负路径：未知 ts → 400。
+        let (status, parsed) = call(
+            app60(&root),
+            "POST",
+            "/api/v1/prompt-packs/longform.writer/versions/restore",
+            Some(r#"{ "ts": "1970-01-01T00:00:00.000Z" }"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "PROMPT_VERSION_NOT_FOUND");
     }
 
     #[tokio::test]

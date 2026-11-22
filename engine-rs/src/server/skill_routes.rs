@@ -409,13 +409,27 @@ pub async fn put_prompt_pack(
     if let Err(e) = crate::utils::atomic_file_set::write_file_atomic(&file, content).await {
         return internal_error(&e);
     }
+    // R54/1658 号：版本账本（best-effort）+ 评测回归门轻形态 hint（消费端
+    // 提示跑 R8 行为评测——评测本体挂观察，builtin 变更由
+    // golden_agent_prompts_diff 家族守卫）。
+    crate::prompts::prompt_pack::append_prompt_version(
+        &root.to_string_lossy(),
+        &prompt_id,
+        "put",
+        content,
+        &crate::utils::utc_time::utc_now_iso(),
+    )
+    .await;
     let prompt = builtin_prompts()
         .iter()
         .find(|item| item.id == prompt_id)
         .expect("normalize_studio_prompt_id 已确认存在");
     (
         StatusCode::OK,
-        Json(json!({ "prompt": to_studio_prompt_pack_prompt(root, prompt).await })),
+        Json(json!({
+            "prompt": to_studio_prompt_pack_prompt(root, prompt).await,
+            "regressionHint": "prompt-changed",
+        })),
     )
 }
 
@@ -437,13 +451,125 @@ pub async fn delete_prompt_pack(
             return internal_error(&e);
         }
     }
+    // R54/1658 号：delete 也记版本行（content 空——回滚到 delete 前版本可恢复）。
+    crate::prompts::prompt_pack::append_prompt_version(
+        &root.to_string_lossy(),
+        &prompt_id,
+        "delete",
+        "",
+        &crate::utils::utc_time::utc_now_iso(),
+    )
+    .await;
     let prompt = builtin_prompts()
         .iter()
         .find(|item| item.id == prompt_id)
         .expect("normalize_studio_prompt_id 已确认存在");
     (
         StatusCode::OK,
-        Json(json!({ "prompt": to_studio_prompt_pack_prompt(root, prompt).await })),
+        Json(json!({
+            "prompt": to_studio_prompt_pack_prompt(root, prompt).await,
+            "regressionHint": "prompt-changed",
+        })),
+    )
+}
+
+// ── R54/1658 号：版本历史与回滚 ─────────────────────────────────
+
+/// GET /api/v1/prompt-packs/:promptId/versions —— 版本列表（ts 降序；
+/// preview=内容前 80 字）。
+pub async fn get_prompt_pack_versions(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(prompt_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let prompt_id = match normalize_studio_prompt_id(&prompt_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let versions =
+        crate::prompts::prompt_pack::list_prompt_versions(&root.to_string_lossy(), &prompt_id)
+            .await;
+    let rows: Vec<Value> = versions
+        .iter()
+        .map(|record| {
+            let preview: String = record.content.chars().take(80).collect();
+            json!({
+                "ts": record.ts,
+                "action": record.action,
+                "preview": preview,
+                "content": record.content,
+            })
+        })
+        .collect();
+    (StatusCode::OK, Json(json!({ "versions": rows })))
+}
+
+/// POST /api/v1/prompt-packs/:promptId/versions/restore —— body {ts}；
+/// 读版本行内容复写覆盖文件 + 追加 restore 行（回滚本身可再回滚）。
+pub async fn restore_prompt_pack_version(
+    State(runtime): State<BooksRuntime>,
+    AxumPath(prompt_id): AxumPath<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let root = runtime.state.project_root();
+    let prompt_id = match normalize_studio_prompt_id(&prompt_id) {
+        Ok(id) => id,
+        Err(response) => return response,
+    };
+    let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
+        return bad_request(
+            "INVALID_PROMPT_VERSION_PAYLOAD",
+            "Restore payload must be JSON",
+        );
+    };
+    let Some(ts) = payload.get("ts").and_then(Value::as_str) else {
+        return bad_request("INVALID_PROMPT_VERSION_PAYLOAD", "ts must be a string");
+    };
+    let Some(record) =
+        crate::prompts::prompt_pack::read_prompt_version(&root.to_string_lossy(), &prompt_id, ts)
+            .await
+    else {
+        return bad_request("PROMPT_VERSION_NOT_FOUND", "Prompt version not found");
+    };
+    if record.action == "delete" {
+        // 回滚到 delete 行 = 移除覆盖（回 builtin）。
+        let file = PathBuf::from(prompt_override_path(&root.to_string_lossy(), &prompt_id));
+        if let Err(e) = tokio::fs::remove_file(&file).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return internal_error(&e);
+            }
+        }
+    } else {
+        let file = PathBuf::from(prompt_override_path(&root.to_string_lossy(), &prompt_id));
+        if let Some(parent) = file.parent() {
+            if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                return internal_error(&e);
+            }
+        }
+        if let Err(e) =
+            crate::utils::atomic_file_set::write_file_atomic(&file, &record.content).await
+        {
+            return internal_error(&e);
+        }
+    }
+    crate::prompts::prompt_pack::append_prompt_version(
+        &root.to_string_lossy(),
+        &prompt_id,
+        "restore",
+        &record.content,
+        &crate::utils::utc_time::utc_now_iso(),
+    )
+    .await;
+    let prompt = builtin_prompts()
+        .iter()
+        .find(|item| item.id == prompt_id)
+        .expect("normalize_studio_prompt_id 已确认存在");
+    (
+        StatusCode::OK,
+        Json(json!({
+            "prompt": to_studio_prompt_pack_prompt(root, prompt).await,
+            "regressionHint": "prompt-changed",
+        })),
     )
 }
 

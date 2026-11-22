@@ -780,6 +780,16 @@ pub fn router_books(
                 .delete(skill_routes::delete_prompt_pack)
                 .with_state(books.clone()),
         )
+        // R54/1658 号：prompt 覆盖版本历史与回滚。
+        .route(
+            "/api/v1/prompt-packs/:promptId/versions",
+            get(skill_routes::get_prompt_pack_versions).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/prompt-packs/:promptId/versions/restore",
+            axum::routing::post(skill_routes::restore_prompt_pack_version)
+                .with_state(books.clone()),
+        )
         // 63 号：services / cover 域。
         .route(
             "/api/v1/services",
