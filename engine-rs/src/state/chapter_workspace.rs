@@ -472,6 +472,14 @@ mod tests {
         assert_eq!(versions[1].source, ChapterVersionSource::Manual);
     }
 
+    // R53/1657 号：无快照章负路径——空列表（历史面空态契约）。
+    #[tokio::test]
+    async fn list_versions_empty_for_chapter_without_snapshots() {
+        let store = InMemoryStateStore::new();
+        let versions = list_chapter_versions(&store, "book", 9).await.unwrap();
+        assert!(versions.is_empty());
+    }
+
     #[tokio::test]
     async fn read_version_rejects_invalid_id() {
         let store = InMemoryStateStore::new();

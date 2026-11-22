@@ -69,6 +69,10 @@
       "types": "./dist/utils/entity-highlight.d.ts",
       "import": "./dist/utils/entity-highlight.js"
     },
+    "./utils/text-diff": {
+      "types": "./dist/utils/text-diff.d.ts",
+      "import": "./dist/utils/text-diff.js"
+    },
     "./utils/promise-ledger": {
       "types": "./dist/utils/promise-ledger.d.ts",
       "import": "./dist/utils/promise-ledger.js"

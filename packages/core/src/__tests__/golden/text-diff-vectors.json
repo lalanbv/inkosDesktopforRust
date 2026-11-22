@@ -1,0 +1,193 @@
+{
+  "vectors": [
+    {
+      "name": "identical",
+      "oldText": "# 第1章\n\n正文。\n",
+      "newText": "# 第1章\n\n正文。\n",
+      "expected": [
+        {
+          "kind": "kept",
+          "text": "# 第1章"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        },
+        {
+          "kind": "kept",
+          "text": "正文。"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "name": "modify-middle-line",
+      "oldText": "甲\n乙\n丙\n",
+      "newText": "甲\n二改\n丙\n",
+      "expected": [
+        {
+          "kind": "kept",
+          "text": "甲"
+        },
+        {
+          "kind": "removed",
+          "text": "乙"
+        },
+        {
+          "kind": "added",
+          "text": "二改"
+        },
+        {
+          "kind": "kept",
+          "text": "丙"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "name": "tail-add",
+      "oldText": "甲\n",
+      "newText": "甲\n乙\n丙\n",
+      "expected": [
+        {
+          "kind": "kept",
+          "text": "甲"
+        },
+        {
+          "kind": "added",
+          "text": "乙"
+        },
+        {
+          "kind": "added",
+          "text": "丙"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "name": "head-remove",
+      "oldText": "甲\n乙\n丙\n",
+      "newText": "丙\n",
+      "expected": [
+        {
+          "kind": "removed",
+          "text": "甲"
+        },
+        {
+          "kind": "removed",
+          "text": "乙"
+        },
+        {
+          "kind": "kept",
+          "text": "丙"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "name": "old-empty",
+      "oldText": "",
+      "newText": "新\n文\n",
+      "expected": [
+        {
+          "kind": "added",
+          "text": "新"
+        },
+        {
+          "kind": "added",
+          "text": "文"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "name": "both-empty",
+      "oldText": "",
+      "newText": "",
+      "expected": [
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "name": "block-rewrite",
+      "oldText": "头\n旧一\n旧二\n旧三\n尾\n",
+      "newText": "头\n新一\n新二\n尾\n",
+      "expected": [
+        {
+          "kind": "kept",
+          "text": "头"
+        },
+        {
+          "kind": "removed",
+          "text": "旧一"
+        },
+        {
+          "kind": "removed",
+          "text": "旧二"
+        },
+        {
+          "kind": "removed",
+          "text": "旧三"
+        },
+        {
+          "kind": "added",
+          "text": "新一"
+        },
+        {
+          "kind": "added",
+          "text": "新二"
+        },
+        {
+          "kind": "kept",
+          "text": "尾"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    },
+    {
+      "name": "crlf-is-line-content",
+      "oldText": "行一\r\n",
+      "newText": "行一\n",
+      "expected": [
+        {
+          "kind": "removed",
+          "text": "行一\r"
+        },
+        {
+          "kind": "added",
+          "text": "行一"
+        },
+        {
+          "kind": "kept",
+          "text": ""
+        }
+      ]
+    }
+  ],
+  "summarySample": {
+    "kept": 2,
+    "removed": 1,
+    "added": 1
+  }
+}

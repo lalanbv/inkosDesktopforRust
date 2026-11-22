@@ -144,6 +144,10 @@ const strings = {
   "reader.versionHistory": { zh: "历史版本", en: "Version History" },
   "reader.noVersions": { zh: "重写或编辑后，旧版本会出现在这里。", en: "Previous versions appear here after edits or rewrites." },
   "reader.viewVersion": { zh: "查看", en: "View" },
+  // R53/1657 号：章版本比较面。
+  "reader.compareVersion": { zh: "与当前比较", en: "Compare with current" },
+  "reader.diffGuide": { zh: "红行=该版本独有（旧），绿行=当前正文独有（新）；恢复请用版本行的「恢复版本」按钮。", en: "Red = only in this version (old); green = only in current text (new). Use the restore button on the version row to restore." },
+  "reader.diffSummary": { zh: "比较摘要", en: "Diff summary" },
   "reader.restoreVersion": { zh: "恢复", en: "Restore" },
   "reader.restoreConfirm": { zh: "恢复这个版本？当前正文会先自动归档。", en: "Restore this version? The current manuscript will be archived first." },
   "reader.deleteChapter": { zh: "删除本章", en: "Delete Chapter" },

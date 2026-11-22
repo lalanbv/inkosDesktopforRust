@@ -29,6 +29,8 @@ export default defineConfig({
       "@actalk/inkos-core/utils/writing-goal": resolve(__dirname, "../core/src/utils/writing-goal.ts"),
       // R52/1656 号：utils/entity-highlight subpath（实体命中集扫描，编辑器 overlay 消费）
       "@actalk/inkos-core/utils/entity-highlight": resolve(__dirname, "../core/src/utils/entity-highlight.ts"),
+      // R53/1657 号：utils/text-diff subpath（章版本比较 diff，历史面消费）
+      "@actalk/inkos-core/utils/text-diff": resolve(__dirname, "../core/src/utils/text-diff.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },

@@ -77,6 +77,7 @@ pub mod spot_fix_patches;
 pub mod story_markdown;
 pub mod style_feature_engine;
 pub mod tension_curve;
+pub mod text_diff;
 pub mod token_meter;
 pub mod truth_dialect;
 pub mod utc_time;

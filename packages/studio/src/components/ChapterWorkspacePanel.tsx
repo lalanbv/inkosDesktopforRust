@@ -11,6 +11,8 @@ import {
 import type { TFunction } from "../hooks/use-i18n";
 import { fetchJson, useApi } from "../hooks/use-api";
 import { ConfirmDialog } from "./ConfirmDialog";
+// R53/1657 号：章版本比较 LCS 行级 diff（core 子路径，golden 双端锁定）。
+import { diffChapterText, diffSummary, type TextDiffLine } from "@actalk/inkos-core/utils/text-diff";
 
 interface ChapterVersion {
   readonly id: string;
@@ -57,7 +59,7 @@ export function ChapterWorkspacePanel({
   const [notice, setNotice] = useState("");
   const [actionError, setActionError] = useState("");
   const [inspiration, setInspiration] = useState("");
-  const [versionPreview, setVersionPreview] = useState<{ id: string; content: string } | null>(null);
+  const [versionPreview, setVersionPreview] = useState<{ id: string; content: string; diff?: ReadonlyArray<TextDiffLine> } | null>(null);
   // 1650 号：恢复/删除确认弹层状态（React ConfirmDialog）。
   const [pendingRestore, setPendingRestore] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState(false);
@@ -115,6 +117,28 @@ export function ChapterWorkspacePanel({
         `/books/${bookId}/chapters/${chapterNumber}/versions/${versionId}`,
       );
       setVersionPreview({ id: versionId, content: result.content });
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  // R53/1657 号：与当前正文比较——版本=旧（removed 红）、当前=新（added 绿）。
+  const compareVersion = async (versionId: string) => {
+    setActionError("");
+    try {
+      const [versionResult, currentResult] = await Promise.all([
+        fetchJson<VersionContent>(
+          `/books/${bookId}/chapters/${chapterNumber}/versions/${versionId}`,
+        ),
+        fetchJson<{ content?: string }>(
+          `/books/${bookId}/chapters/${chapterNumber}`,
+        ),
+      ]);
+      setVersionPreview({
+        id: versionId,
+        content: versionResult.content,
+        diff: [...diffChapterText(versionResult.content ?? "", currentResult.content ?? "")],
+      });
     } catch (cause) {
       setActionError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -294,6 +318,14 @@ export function ChapterWorkspacePanel({
                   </button>
                   <button
                     type="button"
+                    onClick={() => void compareVersion(version.id)}
+                    data-testid="compare-version"
+                    className="rounded-lg px-3 py-1.5 text-xs font-bold text-muted-foreground transition hover:bg-secondary hover:text-foreground"
+                  >
+                    {t("reader.compareVersion")}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => restoreVersion(version.id)}
                     disabled={busy !== null}
                     className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-primary transition hover:bg-primary/10 disabled:opacity-50"
@@ -311,10 +343,39 @@ export function ChapterWorkspacePanel({
       </div>
 
       {versionPreview && (
-        <div className="rounded-xl border border-primary/15 bg-background p-4">
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-serif text-sm leading-7 text-foreground/90">
-            {versionPreview.content}
-          </pre>
+        <div className="rounded-xl border border-primary/15 bg-background p-4 space-y-2" data-version-preview={versionPreview.diff ? "diff" : "plain"}>
+          {versionPreview.diff ? (
+            <>
+              <p className="text-[11px] text-muted-foreground" data-testid="diff-guide">{t("reader.diffGuide")}</p>
+              <p className="text-[11px] text-muted-foreground" data-testid="diff-summary">
+                {t("reader.diffSummary")}: {(() => {
+                  const s = diffSummary(versionPreview.diff);
+                  return `${s.kept} kept · ${s.removed} − · ${s.added} +`;
+                })()}
+              </p>
+              <div className="max-h-96 overflow-auto font-mono text-xs leading-6" data-testid="diff-lines">
+                {versionPreview.diff.map((line, index) => (
+                  <div
+                    key={index}
+                    data-diff-kind={line.kind}
+                    className={
+                      line.kind === "removed"
+                        ? "bg-destructive/10 text-destructive px-2 rounded"
+                        : line.kind === "added"
+                          ? "bg-primary/10 text-primary px-2 rounded"
+                          : "text-muted-foreground px-2"
+                    }
+                  >
+                    {line.kind === "removed" ? "− " : line.kind === "added" ? "+ " : "  "}{line.text}
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap font-serif text-sm leading-7 text-foreground/90">
+              {versionPreview.content}
+            </pre>
+          )}
         </div>
       )}
 

@@ -25,7 +25,11 @@ const fetchJsonMock = vi.fn(async (path: string, init?: { method?: string; body?
     return { card: "灵感卡：让镜灵在雨夜首次开口。" };
   }
   if (path.includes("/versions/v1") && !path.includes("/restore")) {
-    return { content: "旧版本全文内容。" };
+    return { content: "# 第3章\n\n旧版本正文一行。\n\n旧版本正文二行。" };
+  }
+  // R53/1657 号：当前章正文（比较面「当前」侧）。
+  if (/\/chapters\/\d+$/.test(path)) {
+    return { content: "# 第3章\n\n旧版本正文一行。\n\n当前新正文。" };
   }
   if (path.includes("/restore")) {
     return {};
@@ -163,7 +167,7 @@ describe("ChapterWorkspacePanel 交互（457 号）", () => {
     ) as HTMLButtonElement;
     await user.click(view);
     await vi.waitFor(() => {
-      expect(document.body.textContent).toContain("旧版本全文内容。");
+      expect(document.body.textContent).toContain("旧版本正文一行。");
     });
   });
 
@@ -211,4 +215,28 @@ describe("ChapterWorkspacePanel 交互（457 号）", () => {
     await user.click(cancelBtn);
     expect(fetchJsonMock.mock.calls.find(([path]) => path.includes("/restore"))).toBeUndefined();
   });
+  // R53/1657 号：与当前比较——红绿行级 diff 投影（版本=旧红、当前=新绿）。
+  it("与当前比较——拉版本+当前正文，diff 红绿渲染与摘要", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+    const compare = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "reader.compareVersion",
+    ) as HTMLButtonElement;
+    await user.click(compare);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-version-preview="diff"]')).toBeDefined();
+    });
+    const currentCall = fetchJsonMock.mock.calls.find(([path]) => /\/chapters\/\d+$/.test(path));
+    expect(currentCall).toBeDefined();
+    // LCS：头两行 kept、旧二行 removed、当前新正文 added。
+    const lines = Array.from(document.querySelectorAll("[data-diff-kind]"));
+    const kinds = lines.map((line) => line.getAttribute("data-diff-kind"));
+    expect(kinds).toEqual(["kept", "kept", "kept", "kept", "removed", "added"]);
+    expect(lines[4]?.textContent).toContain("旧版本正文二行。");
+    expect(lines[5]?.textContent).toContain("当前新正文。");
+    // 摘要与引导。
+    expect(document.querySelector('[data-testid="diff-summary"]')?.textContent).toContain("4 kept · 1 − · 1 +");
+    expect(document.querySelector('[data-testid="diff-guide"]')).toBeDefined();
+  });
+
 });

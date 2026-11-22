@@ -224,6 +224,12 @@ export {
   type EntityCardLike,
   type EntityHighlightHit,
 } from "./utils/entity-highlight.js";
+// R53/1657 号：章版本比较 LCS 行级 diff（历史比较面；golden 双端锁定）。
+export {
+  diffChapterText,
+  diffSummary,
+  type TextDiffLine,
+} from "./utils/text-diff.js";
 export { toPosixPath } from "./utils/posix-path.js";
 export {
   ActionSourceSchema,
