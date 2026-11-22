@@ -36,7 +36,8 @@ const useApiMock = vi.fn<(path: string) => unknown>((path: string) => {
 
 vi.mock("@/hooks/use-api", () => ({
   useApi: (path: string) => useApiMock(path),
-  fetchJson: vi.fn(),
+  // R52/1656 号：编辑态 Codex 卡拉取——恒空卡（overlay 零命中分支）。
+  fetchJson: vi.fn(async () => ({ cards: [] })),
   postApi: (path: string, body?: unknown) => postApiMock(path, body),
 }));
 

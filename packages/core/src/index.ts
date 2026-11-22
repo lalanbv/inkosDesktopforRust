@@ -218,6 +218,12 @@ export {
   loadWritingLog,
   writingLogPath,
 } from "./utils/writing-log-store.js";
+// R52/1656 号：实体命中集扫描（编辑器 overlay；golden 双端锁定）。
+export {
+  scanEntityHighlights,
+  type EntityCardLike,
+  type EntityHighlightHit,
+} from "./utils/entity-highlight.js";
 export { toPosixPath } from "./utils/posix-path.js";
 export {
   ActionSourceSchema,

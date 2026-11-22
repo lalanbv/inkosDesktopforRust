@@ -31,6 +31,7 @@ pub mod context_source_tier;
 pub mod deconstruction;
 pub mod detection_insights;
 pub mod entity_codex;
+pub mod entity_highlight;
 pub mod entity_roster;
 pub mod global_search;
 pub mod goal_repeat_gate;

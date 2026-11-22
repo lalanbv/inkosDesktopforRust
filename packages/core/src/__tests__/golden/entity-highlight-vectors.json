@@ -1,0 +1,162 @@
+{
+  "vectors": [
+    {
+      "name": "zh-multi-hit",
+      "text": "林动望着绫清竹。林动大哥与清竹仙子并肩而行。",
+      "minLength": 2,
+      "exclude": [],
+      "expected": [
+        {
+          "entity": "林动",
+          "cardIndex": 0,
+          "start": 0,
+          "end": 2
+        },
+        {
+          "entity": "绫清竹",
+          "cardIndex": 2,
+          "start": 4,
+          "end": 7
+        },
+        {
+          "entity": "林动大哥",
+          "cardIndex": 0,
+          "start": 8,
+          "end": 12
+        },
+        {
+          "entity": "清竹仙子",
+          "cardIndex": 2,
+          "start": 13,
+          "end": 17
+        }
+      ]
+    },
+    {
+      "name": "en-case-sensitive",
+      "text": "lin dong is not Lin Dong, but LIN DONG neither.",
+      "minLength": 2,
+      "exclude": [],
+      "expected": [
+        {
+          "entity": "Lin Dong",
+          "cardIndex": 1,
+          "start": 16,
+          "end": 24
+        }
+      ]
+    },
+    {
+      "name": "longest-alias-wins",
+      "text": "林动大哥与林动。",
+      "minLength": 2,
+      "exclude": [],
+      "expected": [
+        {
+          "entity": "林动大哥",
+          "cardIndex": 0,
+          "start": 0,
+          "end": 4
+        },
+        {
+          "entity": "林动",
+          "cardIndex": 0,
+          "start": 5,
+          "end": 7
+        }
+      ]
+    },
+    {
+      "name": "overlap-greedy-cross-card",
+      "text": "清竹仙子绫清竹",
+      "minLength": 2,
+      "exclude": [],
+      "expected": [
+        {
+          "entity": "清竹仙子",
+          "cardIndex": 2,
+          "start": 0,
+          "end": 4
+        },
+        {
+          "entity": "绫清竹",
+          "cardIndex": 2,
+          "start": 4,
+          "end": 7
+        }
+      ]
+    },
+    {
+      "name": "exclude-phrases",
+      "text": "林动与绫清竹同行。",
+      "minLength": 2,
+      "exclude": [
+        "林动"
+      ],
+      "expected": [
+        {
+          "entity": "绫清竹",
+          "cardIndex": 2,
+          "start": 3,
+          "end": 6
+        }
+      ]
+    },
+    {
+      "name": "min-length-filters-single-char",
+      "text": "云散云聚，云在天上。",
+      "minLength": 2,
+      "exclude": [],
+      "expected": []
+    },
+    {
+      "name": "astral-codepoint-offsets",
+      "text": "林动😊走了。Lin Dong 😊 回来。",
+      "minLength": 2,
+      "exclude": [],
+      "expected": [
+        {
+          "entity": "林动",
+          "cardIndex": 0,
+          "start": 0,
+          "end": 2
+        },
+        {
+          "entity": "Lin Dong",
+          "cardIndex": 1,
+          "start": 6,
+          "end": 14
+        }
+      ]
+    },
+    {
+      "name": "empty-text-and-cards",
+      "text": "",
+      "minLength": 2,
+      "exclude": [],
+      "expected": []
+    }
+  ],
+  "cards": [
+    {
+      "name": "林动",
+      "aliases": [
+        "林动大哥"
+      ]
+    },
+    {
+      "name": "Lin Dong",
+      "aliases": []
+    },
+    {
+      "name": "绫清竹",
+      "aliases": [
+        "清竹仙子"
+      ]
+    },
+    {
+      "name": "云",
+      "aliases": []
+    }
+  ]
+}

@@ -27,6 +27,8 @@ export default defineConfig({
       "@actalk/inkos-core/state/volumes": resolve(__dirname, "../core/src/state/volumes.ts"),
       // R51/1653 号：utils/writing-goal subpath（写作目标纯函数，目标面板消费）
       "@actalk/inkos-core/utils/writing-goal": resolve(__dirname, "../core/src/utils/writing-goal.ts"),
+      // R52/1656 号：utils/entity-highlight subpath（实体命中集扫描，编辑器 overlay 消费）
+      "@actalk/inkos-core/utils/entity-highlight": resolve(__dirname, "../core/src/utils/entity-highlight.ts"),
       "@actalk/inkos-core": resolve(__dirname, "../core/src/index.ts"),
     },
   },

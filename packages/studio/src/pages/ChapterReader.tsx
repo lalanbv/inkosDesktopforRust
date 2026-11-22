@@ -6,6 +6,7 @@ import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useColors } from "../hooks/use-colors";
 import { Skeleton } from "../components/ui/skeleton";
+import { EntityHighlightOverlay, EDITOR_TYPOGRAPHY_CLASS } from "../components/EntityHighlightOverlay";
 import { SkeletonParagraphs } from "../components/skeletons";
 import { usePreferencesStore } from "../store/preferences";
 import { usePanelWidth } from "../hooks/use-panel-width";
@@ -74,6 +75,14 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   // 198 号：面包屑显示书名（此前暴露 bookId，与顶栏不一致）；加载前回退 id。
   const { data: bookData } = useApi<BookData>(`/books/${bookId}`);
   const [editing, setEditing] = useState(false);
+  // R52/1656 号：实体高亮 overlay——Codex 卡拉取（编辑态一次）+ 全局开关
+  // （localStorage 默认开；书级覆盖挂观察）。
+  const [entityCards, setEntityCards] = useState<ReadonlyArray<{
+    name: string; aliases?: ReadonlyArray<string>; kind?: string; summary?: string; facts?: ReadonlyArray<string>;
+  }> | null>(null);
+  const [entityHighlightOn] = useState(
+    () => (globalThis.localStorage?.getItem("inkos.entityHighlight") ?? "on") === "on",
+  );
   const [editContent, setEditContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [splitting, setSplitting] = useState(false);
@@ -83,6 +92,14 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
   // R48b/1643 号：编辑态光标拆分（R48a split 事务消费面）——光标 UTF-16
   // 偏移 = textarea.selectionStart（splitUtf16 契约同语义）。
   const editAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    if (!editing || entityCards !== null || !bookId) return;
+    void fetchJson<{ cards: ReadonlyArray<{ name: string; aliases?: string[]; kind?: string; summary?: string; facts?: string[] }> }>(
+      `/books/${encodeURIComponent(bookId)}/codex`,
+    )
+      .then((payload) => setEntityCards(payload.cards ?? []))
+      .catch(() => setEntityCards([]));
+  }, [editing, entityCards, bookId]);
 
   const handleSplitAtCursor = async () => {
     const offset = editAreaRef.current?.selectionStart ?? -1;
@@ -328,13 +345,18 @@ export function ChapterReader({ bookId, chapterNumber, nav, theme, t }: {
         </header>
 
         {editing ? (
-          <textarea
-            ref={editAreaRef}
-            value={editContent}
-            onChange={(e) => setEditContent(e.target.value)}
-            className="w-full min-h-[60vh] bg-transparent font-serif text-lg leading-[1.8] text-foreground/90 focus:outline-none resize-none border border-border/30 rounded-lg p-6 focus:border-primary/40 focus:ring-2 focus:ring-primary/10 transition-all"
-            autoFocus
-          />
+          <div className="relative" data-editor-overlay-host="true">
+            {entityHighlightOn && entityCards !== null ? (
+              <EntityHighlightOverlay text={editContent} cards={entityCards} textareaRef={editAreaRef} />
+            ) : null}
+            <textarea
+              ref={editAreaRef}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              className={`relative z-10 w-full min-h-[60vh] bg-transparent ${EDITOR_TYPOGRAPHY_CLASS} text-foreground/90 focus:outline-none resize-none border border-border/30 rounded-lg focus:border-primary/40 focus:ring-2 focus:ring-primary/10 transition-all`}
+              autoFocus
+            />
+          </div>
         ) : (
           <article className="prose prose-zinc dark:prose-invert max-w-none">
             {paragraphs.map((para, i) => (

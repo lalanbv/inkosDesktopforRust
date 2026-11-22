@@ -65,6 +65,10 @@
       "types": "./dist/utils/writing-goal.d.ts",
       "import": "./dist/utils/writing-goal.js"
     },
+    "./utils/entity-highlight": {
+      "types": "./dist/utils/entity-highlight.d.ts",
+      "import": "./dist/utils/entity-highlight.js"
+    },
     "./utils/promise-ledger": {
       "types": "./dist/utils/promise-ledger.d.ts",
       "import": "./dist/utils/promise-ledger.js"
