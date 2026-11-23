@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -175,6 +175,65 @@ describe("export routes (R50/1647)", () => {
     expect(unknown.status).toBe(404);
   });
 
+  it("prompt-packs 负路径矩阵——与 Rust put_prompt_pack_invalid_branches / prompt_pack_versions_unknown_prompt_is_not_found 同负载（1666）", async () => {
+    const { root, app } = seedApp();
+    const send = (method: string, path: string, body?: string) =>
+      app.request(path, {
+        method,
+        ...(body !== undefined ? { headers: { "Content-Type": "application/json" }, body } : {}),
+      });
+    const errorOf = async (res: Response) => ({
+      status: res.status,
+      error: (await res.json() as { error: unknown }).error,
+    });
+
+    // ① :promptId 白名单——四个端点同规则（versions 端点此前漏校验=未知 id
+    // 200 空列表，Rust 为 404）；消息回显**原值**（Rust 同款）。
+    for (const [method, path, body] of [
+      ["GET", "/api/v1/prompt-packs/unknown.prompt/versions", undefined],
+      ["POST", "/api/v1/prompt-packs/unknown.prompt/versions/restore", "{}"],
+      ["DELETE", "/api/v1/prompt-packs/unknown.prompt", undefined],
+      ["PUT", "/api/v1/prompt-packs/unknown.prompt", "{\"content\":\"x\"}"],
+      ["GET", "/api/v1/prompt-packs/%20/versions", undefined],
+    ] as const) {
+      const { status, error } = await errorOf(await send(method, path, body));
+      expect(status, `${method} ${path}`).toBe(404);
+      expect(error, `${method} ${path}`).toEqual({
+        code: "PROMPT_PACK_PROMPT_NOT_FOUND",
+        message: path.includes("%20") ? "Prompt pack prompt not found:  " : "Prompt pack prompt not found: unknown.prompt",
+      });
+    }
+
+    // ② PUT 载荷：非 JSON / 空体单独报「must be JSON」；解析成功但 content
+    // 非串（含 null / 数组 / 缺键）统一「content must be a string」。
+    const put = (body: string) => send("PUT", "/api/v1/prompt-packs/longform.writer", body);
+    const mustBeJson = { code: "INVALID_PROMPT_PACK_PAYLOAD", message: "Prompt pack payload must be JSON" };
+    const contentNotString = { code: "INVALID_PROMPT_PACK_PAYLOAD", message: "content must be a string" };
+    expect(await errorOf(await put("not-json"))).toEqual({ status: 400, error: mustBeJson });
+    expect(await errorOf(await put(""))).toEqual({ status: 400, error: mustBeJson });
+    for (const body of ["null", "[1,2]", "{}", "{\"content\":123}"]) {
+      expect(await errorOf(await put(body)), body).toEqual({ status: 400, error: contentNotString });
+    }
+
+    // ③ restore 载荷：同一分层；未知 ts → PROMPT_VERSION_NOT_FOUND。
+    const restore = (body: string) => send("POST", "/api/v1/prompt-packs/longform.writer/versions/restore", body);
+    const tsNotString = { code: "INVALID_PROMPT_VERSION_PAYLOAD", message: "ts must be a string" };
+    expect(await errorOf(await restore("not-json"))).toEqual({
+      status: 400, error: { code: "INVALID_PROMPT_VERSION_PAYLOAD", message: "Restore payload must be JSON" },
+    });
+    for (const body of ["null", "[]", "{}", "{\"ts\":1}"]) {
+      expect(await errorOf(await restore(body)), body).toEqual({ status: 400, error: tsNotString });
+    }
+    expect(await errorOf(await restore("{\"ts\":\"1970-01-01T00:00:00.000Z\"}"))).toEqual({
+      status: 400, error: { code: "PROMPT_VERSION_NOT_FOUND", message: "Prompt version not found" },
+    });
+
+    // ④ 被拒请求零副作用：无版本行、无覆盖文件。
+    const versions = await (await send("GET", "/api/v1/prompt-packs/LONGFORM.Writer/versions")).json() as { versions: unknown[] };
+    expect(versions.versions).toEqual([]);
+    expect(existsSync(join(root, "prompt"))).toBe(false);
+  });
+
   it("GET /usage/budget-status——services 预算+账本投影（R55/1661）", async () => {
     const { root, app } = seedApp();
     writeFileSync(
@@ -192,6 +251,109 @@ describe("export routes (R50/1647)", () => {
     expect(body.statuses).toHaveLength(1);
     expect(body.statuses[0]).toMatchObject({ serviceKey: "deepseek", daily: 850, ratio: 0.85, level: "warn", confirmRequired: false });
     expect(body.todayKey).toBe(today);
+  });
+
+  // ── 1666 号：budget-status 读侧勘误 + 数组形态归一不丢预算键 ──────────
+  // 1661 的用例是「默认端口 + 对象形态」夹具，照不见下面任何一条。
+
+  type BudgetStatusRow = { serviceKey: string; daily: number; monthly: number; ratio: number; level: string; confirmRequired: boolean };
+  const seedUsage = (root: string, rows: ReadonlyArray<readonly [service: string, total: number]>) => {
+    mkdirSync(join(root, ".inkos"), { recursive: true });
+    writeFileSync(
+      join(root, ".inkos", "usage-log.jsonl"),
+      rows.map(([service, total]) => JSON.stringify({
+        ts: `${new Date().toISOString().slice(0, 10)}T01:00:00.000Z`, serviceKey: service, model: "m",
+        promptTokens: Math.floor(total / 2), completionTokens: total - Math.floor(total / 2), totalTokens: total,
+      })).join("\n") + "\n",
+    );
+  };
+  const fetchBudget = async (app: ReturnType<typeof createStudioServer>) => {
+    const response = await app.request("/api/v1/usage/budget-status");
+    expect(response.status).toBe(200);
+    return (await response.json()) as { statuses: BudgetStatusRow[]; todayKey: string };
+  };
+
+  it("带端口的 baseUrl 按不含端口的 host 匹配账本行（写点同口径）", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({
+      llm: { services: { "custom:Local": { name: "Local", baseUrl: "http://127.0.0.1:1234/v1", dailyTokenBudget: 1000 } } },
+    }));
+    // 账本行由 chat 写点落：serviceKey = host（不含端口）。读侧若用 URL.host
+    // （127.0.0.1:1234）永远匹配不上 → 恒报 0。
+    seedUsage(root, [["127.0.0.1", 850]]);
+    const body = await fetchBudget(app);
+    expect(body.statuses).toEqual([
+      { serviceKey: "custom:Local", daily: 850, monthly: 850, ratio: 0.85, level: "warn", confirmRequired: false },
+    ]);
+  });
+
+  it("数组形态 services（Node 腿 PUT 后的盘上形态）：键=serviceConfigKey、只列有预算的条目、保持配置序", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({
+      llm: { services: [
+        { service: "custom", name: "Local", baseUrl: "http://127.0.0.1:1234/v1", dailyTokenBudget: 1000 },
+        { service: "deepseek", baseUrl: "https://api.deepseek.com" },
+        { service: "openai", baseUrl: "https://api.openai.com/v1", monthlyTokenBudget: 5000, confirmAtBudget: false },
+      ] },
+    }));
+    seedUsage(root, [["127.0.0.1", 1100], ["api.openai.com", 6000], ["api.deepseek.com", 999999]]);
+    const body = await fetchBudget(app);
+    // 此前按 Object.entries 取原始键 → serviceKey 是 "0"/"2"，且预算键读不到。
+    expect(body.statuses).toEqual([
+      { serviceKey: "custom:Local", daily: 1100, monthly: 1100, ratio: 1.1, level: "over", confirmRequired: true },
+      { serviceKey: "openai", daily: 6000, monthly: 6000, ratio: 1.2, level: "over", confirmRequired: false },
+    ]);
+  });
+
+  it("对象形态：键序同 Rust（serde_json Map=BTreeMap），裸 custom → custom:{name}", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({
+      llm: { services: {
+        zeta: { dailyTokenBudget: 10 },
+        "custom:a": { dailyTokenBudget: 10 },
+        custom: { name: "Plain", dailyTokenBudget: 10 },
+        "custom:B": { dailyTokenBudget: 10 },
+        alpha: { monthlyTokenBudget: 10 },
+      } },
+    }));
+    const body = await fetchBudget(app);
+    expect(body.statuses.map((row) => row.serviceKey)).toEqual(["alpha", "custom:Plain", "custom:B", "custom:a", "zeta"]);
+    expect(body.statuses.every((row) => row.level === "ok" && row.ratio === 0 && !row.confirmRequired)).toBe(true);
+  });
+
+  it("零 / 负 / 小数预算 = 未设（Rust budget_field 同款），不入列", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({
+      llm: { services: { zero: { dailyTokenBudget: 0 }, negative: { monthlyTokenBudget: -5 }, fraction: { dailyTokenBudget: 1.5 }, valid: { dailyTokenBudget: 10 } } },
+    }));
+    const body = await fetchBudget(app);
+    expect(body.statuses.map((row) => row.serviceKey)).toEqual(["valid"]);
+  });
+
+  it("PUT /services/config 数组载荷不丢预算键，二次保存既有条目预算保留（数据丢失点回归锁）", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({ llm: {} }));
+    const put = (services: unknown) => app.request("/api/v1/services/config", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ services }),
+    });
+    const savedEntry = (name: string) => {
+      const saved = JSON.parse(readFileSync(join(root, "inkos.json"), "utf-8")) as { llm: { services: Array<Record<string, unknown>> } };
+      return saved.llm.services.find((entry) => entry.name === name || entry.service === name);
+    };
+    // 首次保存：载荷里的预算键须落盘（此前数组分支在归一时就把它们丢了——
+    // Node 腿无法经 API 存下任何预算）。
+    const first = await put([{ service: "custom", name: "Local", baseUrl: "http://127.0.0.1:1234/v1", dailyTokenBudget: 1000, monthlyTokenBudget: 50000, confirmAtBudget: false }]);
+    const firstText = await first.text();
+    expect(first.status, firstText).toBe(200);
+    expect(savedEntry("Local")).toMatchObject({ dailyTokenBudget: 1000, monthlyTokenBudget: 50000, confirmAtBudget: false });
+    // 二次保存（动的是另一条目）：盘上已是数组形态，既有条目的预算键须保留。
+    const second = await put([{ service: "deepseek", baseUrl: "https://api.deepseek.com" }]);
+    expect(second.status).toBe(200);
+    expect(savedEntry("Local")).toMatchObject({ dailyTokenBudget: 1000, monthlyTokenBudget: 50000, confirmAtBudget: false });
+    // 非法预算值不入盘。
+    await put([{ service: "openai", baseUrl: "https://api.openai.com/v1", dailyTokenBudget: 0, monthlyTokenBudget: -5 }]);
+    expect(savedEntry("openai")).not.toHaveProperty("dailyTokenBudget");
+    expect(savedEntry("openai")).not.toHaveProperty("monthlyTokenBudget");
   });
 
   it("PUT 章保存记账 → GET /writing-log-rows 行面（R51/1653）", async () => {

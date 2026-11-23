@@ -2,10 +2,15 @@
 //!
 //! 688 号上游合并退役 model-chain.ts 时带走唯一写入点，GET /run-log 端点
 //! （701 号回收）此后恒空——端点在位掩盖了写入面失踪近一个合并周期。
-//! 本文件直锁 2.0 两条 LLM 传输边界的写入：非 agent 路径 chatCompletion
-//! （每个重试轮一条）、agent 路径 guardedPiStream/guardedPiNonStreaming
-//! （observe 层每次传输尝试一条）。上游=真实回环 http 服务脚本化应答；
-//! 断言只看 globalRunLog 的增量，不依赖缓冲既有内容。
+//! 本文件直锁 2.0 两条 LLM 传输边界的写入：非 agent 路径 chatCompletion、
+//! agent 路径 guardedPiStream/guardedPiNonStreaming。上游=真实回环 http 服务
+//! 脚本化应答；断言只看 globalRunLog 的增量，不依赖缓冲既有内容。
+//!
+//! 1666 号（勘误 1663 口径备案）：**一次逻辑调用一条，同模型重试折叠**。
+//! 1663 按「Rust 逐次 chat_once 记」的备案逐轮记账；Rust 实为链层记账、
+//! `chat_transient` 内环不单列（活体锁 engine-rs/tests/run_log_call_site.rs）。
+//! 本文件与该 Rust 测共用同一负载表，断言条目口径元组逐项相等——同一负载
+//! 两条腿记出同一组条目。
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
@@ -27,7 +32,7 @@ const RUN_LOG_ENTRY_KEYS = [
   "agent", "attemptIndex", "durationMs", "errorKind", "model", "ok", "round", "tookOver", "ts",
 ];
 
-type Scripted = { status: number; contentType: string; body: string };
+type Scripted = { status: number; contentType: string; body: string; hold?: boolean };
 
 const jsonOk = (content = "pong"): Scripted => ({
   status: 200,
@@ -50,6 +55,16 @@ const httpError = (status: number): Scripted => ({
   status,
   contentType: "application/json",
   body: JSON.stringify({ error: { message: `upstream status ${status}` } }),
+});
+/** 首块后挂住不收尾的 SSE（中途中止用例：收到首个增量再 abort）。 */
+const sseHang = (): Scripted => ({
+  status: 200,
+  contentType: "text/event-stream",
+  body: `data: ${JSON.stringify({
+    id: "run-log-writer",
+    choices: [{ index: 0, delta: { role: "assistant", content: "po" }, finish_reason: null }],
+  })}\n\n`,
+  hold: true,
 });
 
 let server: Server;
@@ -92,6 +107,13 @@ function expectMetadataOnly(entries: RunLogEntry[]): void {
   }
 }
 
+/**
+ * 口径元组 (ok, attemptIndex, round, tookOver, errorKind)——与 Rust
+ * `tests/run_log_call_site.rs` 的 `gauge` 同形，同一负载表两边逐项相等。
+ */
+const gauge = (entries: RunLogEntry[]) =>
+  entries.map((entry) => [entry.ok, entry.attemptIndex, entry.round, entry.tookOver, entry.errorKind]);
+
 beforeAll(async () => {
   server = createServer((req, res) => {
     req.resume();
@@ -99,6 +121,11 @@ beforeAll(async () => {
       requests += 1;
       const next = queue.shift() ?? jsonOk();
       res.writeHead(next.status, { "Content-Type": next.contentType });
+      if (next.hold) {
+        // 挂住连接直到客户端断开（socket 销毁即释放，不阻塞 afterAll 的 close）。
+        res.write(next.body);
+        return;
+      }
       res.end(next.body);
     });
   });
@@ -173,17 +200,29 @@ describe("chatCompletion 写入点（非 agent 路径）", () => {
     expect(entries[0]).toMatchObject({ agent: "workflow", ok: true });
   });
 
-  it("瞬态失败后重试成功：逐轮各记一条，命中轮 round=2 记接管", async () => {
-    queue = [httpError(503), jsonOk()];
+  it("瞬态重试折叠：503→503→200 三次上线记一条 ok、round=1、不接管（Rust 同负载同条目）", async () => {
+    queue = [httpError(503), httpError(503), jsonOk()];
+    const before = requests;
     const { result, entries } = await captured(() => chatCompletion(
       client(), model.id, [{ role: "user", content: "ping" }], { maxTokens: 8 },
     ));
     expect(result.content).toBe("pong");
+    expect(requests - before).toBe(3);
     expectMetadataOnly(entries);
-    expect(entries.map((entry) => [entry.ok, entry.errorKind, entry.round, entry.tookOver])).toEqual([
-      [false, "transient", 1, false],
-      [true, null, 2, true],
-    ]);
+    expect(gauge(entries)).toEqual([[true, 0, 1, false, null]]);
+    // 耗时覆盖全部尝试（含 800ms + 1600ms 退避）——折叠出的是一条完整调用。
+    expect(entries[0]!.durationMs).toBeGreaterThanOrEqual(2_400);
+  });
+
+  it("瞬态耗尽：三次 503 记一条 transient，不是三次失败（Rust 同负载同条目）", async () => {
+    queue = [httpError(503), httpError(503), httpError(503)];
+    const before = requests;
+    const { entries } = await captured(() => expect(chatCompletion(
+      client(), model.id, [{ role: "user", content: "ping" }], { maxTokens: 8 },
+    )).rejects.toThrow());
+    expect(requests - before).toBe(3);
+    expectMetadataOnly(entries);
+    expect(gauge(entries)).toEqual([[false, 0, 1, false, "transient"]]);
   });
 
   it("致命失败只记一条 fatal 且不重试", async () => {
@@ -249,27 +288,52 @@ describe("guardedPi* 写入点（agent 路径）", () => {
     expect(entries[0]).toMatchObject({ agent: "main", ok: true });
   });
 
-  it("空响应耗尽 observe 层重试：两次尝试各一条瞬态，无重复记账", async () => {
+  it("空响应耗尽 observe 层重试：折叠成一条 transient，不是两次失败（Rust 同负载同条目）", async () => {
     queue = [jsonEmpty(), jsonEmpty()];
     const before = requests;
     const { result, entries } = await captured(() => guardedPiNonStreaming(model, context(), { apiKey: "fixture" }).result());
     expect(requests - before).toBe(2);
     expect(result.stopReason).toBe("error");
     expectMetadataOnly(entries);
-    expect(entries.map((entry) => [entry.ok, entry.errorKind, entry.round, entry.tookOver])).toEqual([
-      [false, "transient", 1, false],
-      [false, "transient", 2, false],
-    ]);
+    expect(gauge(entries)).toEqual([[false, 0, 1, false, "transient"]]);
   });
 
-  it("空响应重试命中：首条瞬态、次条 round=2 记接管", async () => {
+  it("空响应重试命中：折叠成一条 ok，同模型重试不是接管（Rust 同负载同条目）", async () => {
     queue = [jsonEmpty(), jsonOk("recovered")];
+    const before = requests;
     const { result, entries } = await captured(() => guardedPiNonStreaming(model, context(), { apiKey: "fixture" }).result());
+    expect(requests - before).toBe(2);
     expect(result.stopReason).toBe("stop");
-    expect(entries.map((entry) => [entry.ok, entry.errorKind, entry.round, entry.tookOver])).toEqual([
-      [false, "transient", 1, false],
-      [true, null, 2, true],
-    ]);
+    expect(gauge(entries)).toEqual([[true, 0, 1, false, null]]);
+  });
+
+  it("预先中止的调用未上线：零请求、不记（与 chatCompletion 同规则）", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const before = requests;
+    const { entries } = await captured(() => guardedPiNonStreaming(
+      model, context(), { apiKey: "fixture", signal: controller.signal },
+    ).result());
+    expect(requests - before).toBe(0);
+    expect(entries).toHaveLength(0);
+  });
+
+  it("用户中途中止记一条 fatal（已上线的调用，中止非瞬态）", async () => {
+    queue = [sseHang()];
+    const controller = new AbortController();
+    const { result, entries } = await captured(async () => {
+      const stream = guardedPiStream(model, context(), { apiKey: "fixture", signal: controller.signal });
+      for await (const event of stream) {
+        if (event.type === "text_start" || event.type === "text_delta") {
+          controller.abort();
+          break;
+        }
+      }
+      return stream.result();
+    });
+    expect(result.stopReason).toBe("aborted");
+    expectMetadataOnly(entries);
+    expect(gauge(entries)).toEqual([[false, 0, 1, false, "fatal"]]);
   });
 
   it("上游致命错误记 fatal，不重试", async () => {

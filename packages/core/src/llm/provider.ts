@@ -1572,35 +1572,41 @@ export async function chatCompletion(
     }
   };
 
+  // 1666 号（勘误 1663 口径备案）：R26 运行遥测——**一次逻辑调用一条**，记在
+  // withTransientLLMRetry **之外**。1663 备案「Rust 逐次 chat_once 记」并据此
+  // 逐轮记账；实读 agent_router.rs 并活体锁定（tests/run_log_call_site.rs）：
+  // Rust 在 (chain_idx, round) 层记，chat_transient 内环的同模型 429/5xx
+  // 退避重试**不单列**（折叠进一条，耗时覆盖全部尝试，took_over=false）。
+  // 逐轮记会把同模型重试记成「接管」、把已恢复的调用记成「失败」——同一
+  // 工作负载两条腿的 total/tookOverCount/failureCount 各说各话。403 号
+  // runAndRecord 原语义同为「包在瞬态重试之外」。2.0 无模型链 → round 恒 1。
+  // 失败类按**最终失败的性质**划分（瞬态耗尽 = transient）。预先中止的
+  // 调用未发起任何尝试不计。
+  const startedAt = Date.now();
+  let attempted = false;
   try {
-    return await withTransientLLMRetry(
-      // 1663 号：R26 运行遥测——每个重试轮各记一条（只记元数据；失败类按
-      // 失败性质而非是否还有重试预算划分，与 Rust ChainFailure 同口径）。
-      // 预先中止的轮次未上线不计。
+    const response = await withTransientLLMRetry(
       async (attempt) => {
         signal?.throwIfAborted();
-        const startedAt = Date.now();
-        try {
-          const response = await transport(attempt);
-          recordRunLogCall({ agent: runLogAgent, model, startedAt, ok: true, round: attempt });
-          return response;
-        } catch (error) {
-          recordRunLogCall({
-            agent: runLogAgent,
-            model,
-            startedAt,
-            ok: false,
-            round: attempt,
-            errorKind: isRetryableLLMError(error) ? "transient" : "fatal",
-          });
-          throw error;
-        }
+        attempted = true;
+        return transport(attempt);
       },
       // Retrying after UI text deltas have been emitted can duplicate visible
       // text; callers can also opt out (e.g. fast-fail diagnostics).
       { enabled: (options?.retry ?? true) && !onTextDelta, signal },
     );
+    recordRunLogCall({ agent: runLogAgent, model, startedAt, ok: true });
+    return response;
   } catch (error) {
+    if (attempted) {
+      recordRunLogCall({
+        agent: runLogAgent,
+        model,
+        startedAt,
+        ok: false,
+        errorKind: isRetryableLLMError(error) ? "transient" : "fatal",
+      });
+    }
     // 注意：中断的流（PartialResponseError）不再"打捞"半截内容当成功返回——
     // 那会产出写到一半就结束的章节/设定文件。重试由 withTransientLLMRetry
     // 负责（完整重新生成）；重试耗尽后如实抛错。

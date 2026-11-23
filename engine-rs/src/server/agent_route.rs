@@ -1220,12 +1220,10 @@ pub async fn post_agent(
                 model: Some(endpoint.model.clone()),
             };
             // R55/1661 号：chat 流水用量账本（best-effort——usage 精确值；
-            // serviceKey=baseUrl host，预算面以 host 匹配条目）。
+            // serviceKey=baseUrl host，预算面以同一函数匹配条目——1666 号
+            // service_host_of 读写单源，TS 腿 serviceHostOf 镜像）。
             if usage.total_tokens > 0 {
-                let service_key = url::Url::parse(&endpoint.base_url)
-                    .ok()
-                    .and_then(|parsed| parsed.host_str().map(str::to_string))
-                    .unwrap_or_else(|| endpoint.base_url.clone());
+                let service_key = crate::utils::usage_ledger::service_host_of(&endpoint.base_url);
                 crate::utils::usage_ledger::append_usage_rows(
                     &self.usage_root.to_string_lossy(),
                     &[crate::utils::usage_ledger::UsageLogRow {

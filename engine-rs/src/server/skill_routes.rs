@@ -486,9 +486,16 @@ pub async fn get_prompt_pack_versions(
         Ok(id) => id,
         Err(response) => return response,
     };
-    let versions =
-        crate::prompts::prompt_pack::list_prompt_versions(&root.to_string_lossy(), &prompt_id)
-            .await;
+    // 1666 号：版本账本读不出来如实报错（此前读不到 = 报「没有版本」）。
+    let versions = match crate::prompts::prompt_pack::list_prompt_versions(
+        &root.to_string_lossy(),
+        &prompt_id,
+    )
+    .await
+    {
+        Ok(versions) => versions,
+        Err(error) => return internal_error(&error),
+    };
     let rows: Vec<Value> = versions
         .iter()
         .map(|record| {
@@ -525,10 +532,17 @@ pub async fn restore_prompt_pack_version(
     let Some(ts) = payload.get("ts").and_then(Value::as_str) else {
         return bad_request("INVALID_PROMPT_VERSION_PAYLOAD", "ts must be a string");
     };
-    let Some(record) =
-        crate::prompts::prompt_pack::read_prompt_version(&root.to_string_lossy(), &prompt_id, ts)
-            .await
-    else {
+    let record = match crate::prompts::prompt_pack::read_prompt_version(
+        &root.to_string_lossy(),
+        &prompt_id,
+        ts,
+    )
+    .await
+    {
+        Ok(record) => record,
+        Err(error) => return internal_error(&error),
+    };
+    let Some(record) = record else {
         return bad_request("PROMPT_VERSION_NOT_FOUND", "Prompt version not found");
     };
     if record.action == "delete" {

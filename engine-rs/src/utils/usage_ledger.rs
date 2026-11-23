@@ -42,50 +42,75 @@ fn default_confirm() -> bool {
     true
 }
 
+/// baseUrl → 账本 serviceKey：host（**不含端口**），不可解析/无 host 时回退
+/// 原值（TS `serviceHostOf` 镜像，golden `serviceHosts` 向量锁定）。
+///
+/// 1666 号：写点（chat 流水）与读点（budget-status 条目匹配）共用本函数=
+/// serviceKey 口径单源。此前读点对不可解析的 baseUrl 取空串（`unwrap_or_default`），
+/// 写点取原值——读写不同口径。
+pub fn service_host_of(base_url: &str) -> String {
+    url::Url::parse(base_url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+        .unwrap_or_else(|| base_url.to_string())
+}
+
 fn usage_ledger_path(root: &str) -> PathBuf {
     std::path::Path::new(root)
         .join(".inkos")
         .join("usage-log.jsonl")
 }
 
-/// 读账本（无文件=空；坏行跳过——jsonl 宽容读）。
-pub async fn load_usage_ledger(root: &str) -> Vec<UsageLogRow> {
-    match tokio::fs::read_to_string(usage_ledger_path(root)).await {
-        Ok(text) => text
-            .lines()
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    serde_json::from_str(trimmed).ok()
-                }
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+/// 账本文本 → 行（坏行跳过：serde 要求六字段齐全且类型正确——TS
+/// `isUsageLogRow` 同款形状守卫。缺字段的「像行的对象」若被收下，投影求和会
+/// 出 NaN）。
+fn parse_rows(text: &str) -> Vec<UsageLogRow> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
 }
 
-/// 追加账本行（读旧+拼+原子写；best-effort 失败日志吞）。
+/// 读账本（TS `loadUsageLedger` 镜像）：无文件 = 空；坏行跳过（jsonl 宽容读）；
+/// **读不出来（权限/IO）= Err**。1666 号：此前任何读错误都返回空——预算面据此
+/// 报「0 用量」，确认门静默失效；追加面则用「只有新行」的内容覆盖整本历史。
+pub async fn load_usage_ledger(root: &str) -> std::io::Result<Vec<UsageLogRow>> {
+    let path = usage_ledger_path(root);
+    let text = match tokio::fs::read_to_string(&path).await {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    Ok(parse_rows(&text))
+}
+
+/// 追加账本行（读旧+拼+原子写；best-effort 失败只记日志）。
+///
+/// 1666 号：经 [`crate::utils::jsonl_ledger::append_jsonl`]——同一路径的追加
+/// 进程内串行（并发追加此前丢行：32 路实测只剩 2 行）；读不出来即中止
+/// （既有账本保留）。
 pub async fn append_usage_rows(root: &str, rows: &[UsageLogRow]) {
     if rows.is_empty() {
         return;
     }
-    let mut lines: Vec<String> = load_usage_ledger(root)
-        .await
+    let new_lines: Vec<String> = rows
         .iter()
         .map(|row| serde_json::to_string(row).unwrap_or_default())
         .collect();
-    for row in rows {
-        lines.push(serde_json::to_string(row).unwrap_or_default());
-    }
-    let path = usage_ledger_path(root);
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    let text = lines.join("\n") + "\n";
-    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &text).await {
-        eprintln!("[usage-ledger] append failed (ignored): {error}");
+    let appended = crate::utils::jsonl_ledger::append_jsonl(
+        &usage_ledger_path(root),
+        |text| {
+            parse_rows(text)
+                .iter()
+                .map(|row| serde_json::to_string(row).unwrap_or_default())
+                .collect()
+        },
+        new_lines,
+    )
+    .await;
+    if let Err(error) = appended {
+        eprintln!("[usage-ledger] append aborted, existing ledger kept (ignored): {error}");
     }
 }
 
@@ -148,6 +173,10 @@ pub struct BudgetStatus {
 
 /// 预算判定（TS `budgetStatus` 镜像）：无预算键=ok/不确认（v8「确认门
 /// 负路径（无配置不发确认）」）。
+///
+/// 1666 号：cap=0 按「无预算」处理（TS 同款 `> 0` 守卫）。此前 `x / 0.0`：
+/// 用量 > 0 时得 inf → 恒 over（每次发送都弹确认门），ratio 序列化成 null
+/// （serde 把非有限 f64 写 null，破坏 `ratio: number` 契约）。
 pub fn budget_status(
     service_key: &str,
     usage: &ServiceUsage,
@@ -158,9 +187,11 @@ pub fn budget_status(
         Some(budget) => {
             let day_ratio = budget
                 .daily_token_budget
+                .filter(|cap| *cap > 0)
                 .map(|cap| usage.daily as f64 / cap as f64);
             let month_ratio = budget
                 .monthly_token_budget
+                .filter(|cap| *cap > 0)
                 .map(|cap| usage.monthly as f64 / cap as f64);
             let worst = day_ratio
                 .iter()
@@ -272,10 +303,43 @@ mod tests {
     async fn ledger_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        assert!(load_usage_ledger(&root).await.is_empty());
+        assert!(load_usage_ledger(&root).await.unwrap().is_empty());
         append_usage_rows(&root, &[row("2026-11-23T00:00:00.000Z", "a", 42)]).await;
-        let rows = load_usage_ledger(&root).await;
+        let rows = load_usage_ledger(&root).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].total_tokens, 42);
+    }
+
+    /// 1666 号：并发追加不得丢行（append-only）。「读旧+拼+原子写」的读改写
+    /// 若交错，各任务都读到 N 行、各写 N+1 行。chat 多会话并行即触发。
+    #[tokio::test]
+    async fn concurrent_appends_keep_every_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        append_usage_rows(&root, &[row("2026-11-23T00:00:00.000Z", "old", 1)]).await;
+        let mut handles = Vec::new();
+        for index in 0..32u64 {
+            let root = root.clone();
+            handles.push(tokio::spawn(async move {
+                append_usage_rows(
+                    &root,
+                    &[UsageLogRow {
+                        ts: "2026-11-24T00:00:00.000Z".to_string(),
+                        service_key: format!("svc-{index}"),
+                        model: "m".to_string(),
+                        prompt_tokens: 1,
+                        completion_tokens: 1,
+                        total_tokens: 2,
+                    }],
+                )
+                .await;
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        let rows = load_usage_ledger(&root).await.unwrap();
+        assert_eq!(rows.len(), 33, "并发追加丢行：只剩 {} 行", rows.len());
+        assert_eq!(rows[0].service_key, "old");
     }
 }

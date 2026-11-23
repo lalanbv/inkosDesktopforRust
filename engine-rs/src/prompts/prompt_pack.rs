@@ -162,25 +162,35 @@ fn prompt_versions_path(root: &str) -> std::path::PathBuf {
         .join(".versions.jsonl")
 }
 
-/// 读全部版本行（跨 prompt；坏行跳过）。
-pub async fn load_prompt_versions(root: &str) -> Vec<PromptVersionRecord> {
-    match tokio::fs::read_to_string(prompt_versions_path(root)).await {
-        Ok(text) => text
-            .lines()
-            .filter_map(|line| {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    None
-                } else {
-                    serde_json::from_str(trimmed).ok()
-                }
-            })
-            .collect(),
-        Err(_) => Vec::new(),
-    }
+/// 版本文本 → 行（坏行跳过：serde 要求四字段齐全且为串——TS
+/// `isPromptVersionRecord` 同款形状守卫）。
+fn parse_version_lines(text: &str) -> Vec<PromptVersionRecord> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+/// 读全部版本行（跨 prompt；坏行跳过）。**读不出来（权限/IO）= Err**。
+///
+/// 1666 号：此前任何读错误都返回空——追加面据此用「只有新行」的内容覆盖整本
+/// 版本历史（对应版本从此无法回滚）；读面把「读不到」报成「没有版本」。
+pub async fn load_prompt_versions(root: &str) -> std::io::Result<Vec<PromptVersionRecord>> {
+    let path = prompt_versions_path(root);
+    let text = match tokio::fs::read_to_string(&path).await {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    Ok(parse_version_lines(&text))
 }
 
 /// 追加版本行（best-effort：失败仅日志，不 fail 覆盖写主链）。
+///
+/// 1666 号：经 [`crate::utils::jsonl_ledger::append_jsonl`]——同一路径的追加
+/// 进程内串行（并发追加此前丢行：TS 腿 20 路并发实测只剩 1 行）；读不出来
+/// 即中止（既有历史保留）。
 pub async fn append_prompt_version(
     root: &str,
     prompt_id: &str,
@@ -194,43 +204,46 @@ pub async fn append_prompt_version(
         action: action.to_string(),
         content: content.to_string(),
     };
-    let mut lines: Vec<String> = load_prompt_versions(root)
-        .await
-        .iter()
-        .map(|record| serde_json::to_string(record).unwrap_or_default())
-        .collect();
-    lines.push(serde_json::to_string(&row).unwrap_or_default());
-    let path = prompt_versions_path(root);
-    if let Some(parent) = path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-    let text = lines.join("\n") + "\n";
-    if let Err(error) = crate::utils::atomic_file_set::write_file_atomic(&path, &text).await {
-        eprintln!("[prompt-versions] append failed (ignored): {error}");
+    let appended = crate::utils::jsonl_ledger::append_jsonl(
+        &prompt_versions_path(root),
+        |text| {
+            parse_version_lines(text)
+                .iter()
+                .map(|record| serde_json::to_string(record).unwrap_or_default())
+                .collect()
+        },
+        vec![serde_json::to_string(&row).unwrap_or_default()],
+    )
+    .await;
+    if let Err(error) = appended {
+        eprintln!("[prompt-versions] append aborted, existing history kept (ignored): {error}");
     }
 }
 
-/// 某 prompt 的版本列表（ts 降序=最新在前）。
-pub async fn list_prompt_versions(root: &str, prompt_id: &str) -> Vec<PromptVersionRecord> {
+/// 某 prompt 的版本列表（ts 降序=最新在前）。读不出来 = Err。
+pub async fn list_prompt_versions(
+    root: &str,
+    prompt_id: &str,
+) -> std::io::Result<Vec<PromptVersionRecord>> {
     let mut versions: Vec<PromptVersionRecord> = load_prompt_versions(root)
-        .await
+        .await?
         .into_iter()
         .filter(|record| record.prompt_id == prompt_id)
         .collect();
     versions.sort_by(|a, b| b.ts.cmp(&a.ts));
-    versions
+    Ok(versions)
 }
 
-/// 读指定版本（promptId+ts 定位；找不到 None）。
+/// 读指定版本（promptId+ts 定位；找不到 None）。读不出来 = Err。
 pub async fn read_prompt_version(
     root: &str,
     prompt_id: &str,
     ts: &str,
-) -> Option<PromptVersionRecord> {
-    load_prompt_versions(root)
-        .await
+) -> std::io::Result<Option<PromptVersionRecord>> {
+    Ok(load_prompt_versions(root)
+        .await?
         .into_iter()
-        .find(|record| record.prompt_id == prompt_id && record.ts == ts)
+        .find(|record| record.prompt_id == prompt_id && record.ts == ts))
 }
 
 #[cfg(test)]

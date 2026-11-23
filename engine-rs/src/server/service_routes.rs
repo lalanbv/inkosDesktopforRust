@@ -107,11 +107,22 @@ impl ServiceConfigEntry {
             max_tokens: entry.get("maxTokens").and_then(Value::as_f64),
             api_format: str_field("apiFormat").filter(|v| v == "chat" || v == "responses"),
             stream: entry.get("stream").and_then(Value::as_bool),
-            daily_token_budget: entry.get("dailyTokenBudget").and_then(Value::as_u64),
-            monthly_token_budget: entry.get("monthlyTokenBudget").and_then(Value::as_u64),
+            daily_token_budget: budget_field(entry, "dailyTokenBudget"),
+            monthly_token_budget: budget_field(entry, "monthlyTokenBudget"),
             confirm_at_budget: entry.get("confirmAtBudget").and_then(Value::as_bool),
         }
     }
+}
+
+/// 预算软顶键解析：**正整数**才算已配置（TS 归一 `Number.isInteger(v) && v > 0`
+/// 同款）。1666 号：此前 `as_u64` 放行 0——零预算在 Rust 腿落盘后，budget-status
+/// 对它做除零（inf → 恒 over、每次发送都弹确认门、ratio 序列化成 null），而 TS
+/// 归一层把 0 当「未设」。0 = 未设预算（None = 不限）。
+fn budget_field(value: &Value, key: &str) -> Option<u64> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .filter(|cap| *cap > 0)
 }
 
 /// `custom:Name` / `custom`。对齐 TS `isCustomServiceId`。
@@ -142,9 +153,9 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
     let max_tokens = value.get("maxTokens").and_then(Value::as_f64);
     let api_format = str_field("apiFormat").filter(|v| v == "chat" || v == "responses");
     let stream = value.get("stream").and_then(Value::as_bool);
-    // R55/1661 号：预算软顶键透传（归一不丢键）。
-    let daily_token_budget = value.get("dailyTokenBudget").and_then(Value::as_u64);
-    let monthly_token_budget = value.get("monthlyTokenBudget").and_then(Value::as_u64);
+    // R55/1661 号：预算软顶键透传（归一不丢键；正整数才算配置——见 budget_field）。
+    let daily_token_budget = budget_field(value, "dailyTokenBudget");
+    let monthly_token_budget = budget_field(value, "monthlyTokenBudget");
     let confirm_at_budget = value.get("confirmAtBudget").and_then(Value::as_bool);
 
     if let Some(encoded) = service_id.strip_prefix("custom:") {
@@ -551,7 +562,17 @@ pub async fn get_usage_budget_status(State(runtime): State<BooksRuntime>) -> imp
     let config = load_raw_config(root).await.unwrap_or(json!({}));
     let llm = llm_of(&config);
     let entries = normalize_service_config(llm.get("services"));
-    let rows = crate::utils::usage_ledger::load_usage_ledger(&root.to_string_lossy()).await;
+    // 1666 号：账本读不出来（权限/IO）如实报错——当作「空账本 = 0 用量」会让
+    // 预算告警与确认门静默失效（TS 腿同款：loadUsageLedger 上抛 → 500）。
+    let rows = match crate::utils::usage_ledger::load_usage_ledger(&root.to_string_lossy()).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to read usage ledger: {error}") })),
+            );
+        }
+    };
     let today_key_full = crate::utils::utc_time::utc_now_iso();
     let today_key = today_key_full.get(..10).unwrap_or("").to_string();
     let projection = crate::utils::usage_ledger::usage_projection(
@@ -566,12 +587,12 @@ pub async fn get_usage_budget_status(State(runtime): State<BooksRuntime>) -> imp
                 return None;
             }
             let key = service_config_key(entry);
-            // 匹配键：条目 key 精确 → baseUrl host（chat 写点 serviceKey=host）。
+            // 匹配键：条目 key 精确 → baseUrl host（chat 写点 serviceKey 同函数——
+            // 1666 号：读写共用 service_host_of，不含端口）。
             let host = entry
                 .base_url
                 .as_deref()
-                .and_then(|raw| url::Url::parse(raw).ok())
-                .map(|parsed| parsed.host_str().unwrap_or_default().to_string());
+                .map(crate::utils::usage_ledger::service_host_of);
             let empty = crate::utils::usage_ledger::ServiceUsage {
                 daily: 0,
                 monthly: 0,

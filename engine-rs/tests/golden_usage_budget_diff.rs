@@ -1,9 +1,13 @@
 //! R55/1660 号：用量账本与预算投影 golden 差分（TS 生产向量 → Rust 镜像
 //! 对拍）——投影（日/月窗口+多服务隔离）/预算级别/确认门（软关+无配置
 //! 负路径）/月窗口更紧。
+//!
+//! 1666 号扩面：零预算向量（cap=0 → ok/0/不确认——Rust 此前 x/0.0=inf → 恒
+//! over 且 ratio 序列化成 null）+ `serviceHostOf`（baseUrl → 账本 serviceKey，
+//! host 不含端口）双端逐向量相等。
 
 use inkos_engine::utils::usage_ledger::{
-    budget_status, usage_projection, ServiceBudget, UsageLogRow,
+    budget_status, service_host_of, usage_projection, ServiceBudget, UsageLogRow,
 };
 use std::collections::HashMap;
 
@@ -19,6 +23,15 @@ struct VectorFile {
     today_key: String,
     projection: Vec<ProjectionEntry>,
     statuses: Vec<StatusVector>,
+    #[serde(rename = "serviceHosts")]
+    service_hosts: Vec<HostVector>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostVector {
+    #[serde(rename = "baseUrl")]
+    base_url: String,
+    host: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -74,7 +87,7 @@ struct ExpectedStatus {
 #[test]
 fn usage_budget_matches_ts_golden_vectors() {
     let file: VectorFile = serde_json::from_str(VECTORS).expect("向量文件可解析");
-    assert!(file.statuses.len() >= 5, "golden 非空防空转");
+    assert!(file.statuses.len() >= 7, "golden 非空防空转");
 
     // 投影。
     let day_by_ts: HashMap<&str, &str> = file
@@ -146,6 +159,49 @@ fn usage_budget_matches_ts_golden_vectors() {
         assert_eq!(
             status.confirm_required, vector.status.confirm_required,
             "{} 确认门漂移",
+            vector.name
+        );
+    }
+}
+
+/// 1666 号：baseUrl → serviceKey 口径（chat 写点与 budget-status 读点共用）
+/// 双端逐向量相等；`ratio` 恒为有限数（cap=0 不得产出 inf/NaN——serde 会把
+/// 非有限 f64 序列化成 null，破坏 `ratio: number` 契约）。
+#[test]
+fn service_host_of_and_finite_ratio_match_ts_golden_vectors() {
+    let file: VectorFile = serde_json::from_str(VECTORS).expect("向量文件可解析");
+    assert!(file.service_hosts.len() >= 8, "golden 非空防空转");
+    for vector in &file.service_hosts {
+        assert_eq!(
+            service_host_of(&vector.base_url),
+            vector.host,
+            "serviceKey 口径漂移：{:?}",
+            vector.base_url
+        );
+    }
+    for vector in &file.statuses {
+        let budget = vector.budget.as_ref().map(|input| ServiceBudget {
+            daily_token_budget: input.daily_token_budget,
+            monthly_token_budget: input.monthly_token_budget,
+            confirm_at_budget: input.confirm_at_budget,
+        });
+        let usage = inkos_engine::utils::usage_ledger::ServiceUsage {
+            daily: vector.usage.daily,
+            monthly: vector.usage.monthly,
+            total: vector.usage.total,
+        };
+        let status = budget_status(&vector.name, &usage, budget.as_ref());
+        assert!(
+            status.ratio.is_finite(),
+            "{} ratio 非有限：{}",
+            vector.name,
+            status.ratio
+        );
+        // 落到 HTTP 面的形态：非有限 f64 会被 serde 写成 null。
+        let json = serde_json::to_value(&status).expect("BudgetStatus 可序列化");
+        assert!(
+            json["ratio"].is_number(),
+            "{} ratio 序列化后不是 number：{json}",
             vector.name
         );
     }

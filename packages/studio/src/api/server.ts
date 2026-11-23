@@ -1753,6 +1753,21 @@ function mergeServiceModelIds(...groups: ReadonlyArray<readonly string[] | undef
   return normalizeServiceModelIds(groups.flatMap((group) => group ?? []));
 }
 
+/**
+ * R55 预算软顶键归一——**四个归一分支共用的单源**（对象形态三分支 + 数组
+ * 形态分支）。1666 号：数组形态分支此前漏透传预算键，数组形态配置在 Node 腿
+ * 经任何「归一 → 落盘」路径（如 PUT /services/config）都会被静默抹掉
+ * dailyTokenBudget 等设置。正整数才算已配置（0 / 负 / 小数 = 未设；Rust
+ * `budget_field` 同款——Rust 此前 `as_u64` 放行 0，零预算会除零得 inf）。
+ */
+function budgetFieldsOf(value: Record<string, unknown>): Pick<ServiceConfigEntry, "dailyTokenBudget" | "monthlyTokenBudget" | "confirmAtBudget"> {
+  return {
+    ...(typeof value.dailyTokenBudget === "number" && Number.isInteger(value.dailyTokenBudget) && value.dailyTokenBudget > 0 ? { dailyTokenBudget: value.dailyTokenBudget } : {}),
+    ...(typeof value.monthlyTokenBudget === "number" && Number.isInteger(value.monthlyTokenBudget) && value.monthlyTokenBudget > 0 ? { monthlyTokenBudget: value.monthlyTokenBudget } : {}),
+    ...(typeof value.confirmAtBudget === "boolean" ? { confirmAtBudget: value.confirmAtBudget } : {}),
+  };
+}
+
 function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>): ServiceConfigEntry {
   if (serviceId.startsWith("custom:")) {
     return {
@@ -1763,9 +1778,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-      ...(typeof value.dailyTokenBudget === "number" && Number.isInteger(value.dailyTokenBudget) && value.dailyTokenBudget > 0 ? { dailyTokenBudget: value.dailyTokenBudget } : {}),
-      ...(typeof value.monthlyTokenBudget === "number" && Number.isInteger(value.monthlyTokenBudget) && value.monthlyTokenBudget > 0 ? { monthlyTokenBudget: value.monthlyTokenBudget } : {}),
-      ...(typeof value.confirmAtBudget === "boolean" ? { confirmAtBudget: value.confirmAtBudget } : {}),
+      ...budgetFieldsOf(value),
     };
   }
 
@@ -1778,9 +1791,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-      ...(typeof value.dailyTokenBudget === "number" && Number.isInteger(value.dailyTokenBudget) && value.dailyTokenBudget > 0 ? { dailyTokenBudget: value.dailyTokenBudget } : {}),
-      ...(typeof value.monthlyTokenBudget === "number" && Number.isInteger(value.monthlyTokenBudget) && value.monthlyTokenBudget > 0 ? { monthlyTokenBudget: value.monthlyTokenBudget } : {}),
-      ...(typeof value.confirmAtBudget === "boolean" ? { confirmAtBudget: value.confirmAtBudget } : {}),
+      ...budgetFieldsOf(value),
     };
   }
 
@@ -1790,9 +1801,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
     ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-    ...(typeof value.dailyTokenBudget === "number" && Number.isInteger(value.dailyTokenBudget) && value.dailyTokenBudget > 0 ? { dailyTokenBudget: value.dailyTokenBudget } : {}),
-    ...(typeof value.monthlyTokenBudget === "number" && Number.isInteger(value.monthlyTokenBudget) && value.monthlyTokenBudget > 0 ? { monthlyTokenBudget: value.monthlyTokenBudget } : {}),
-    ...(typeof value.confirmAtBudget === "boolean" ? { confirmAtBudget: value.confirmAtBudget } : {}),
+    ...budgetFieldsOf(value),
   };
 }
 
@@ -1812,6 +1821,10 @@ function normalizeServiceConfig(raw: unknown): ServiceConfigEntry[] {
         ...(typeof entry.temperature === "number" ? { temperature: entry.temperature } : {}),
         ...(isLLMApiFormat(entry.apiFormat) ? { apiFormat: entry.apiFormat } : {}),
         ...(typeof entry.stream === "boolean" ? { stream: entry.stream } : {}),
+        // 1666 号：数组形态分支此前漏透传预算键（对象形态三分支与 Rust
+        // from_json 都有）——数组形态配置在 Node 腿经任何「归一→落盘」路径
+        // （如 PUT /services/config）会被静默抹掉 dailyTokenBudget 等设置。
+        ...budgetFieldsOf(entry),
       }));
   }
 
@@ -4626,40 +4639,56 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   // R55/1661 号：用量预算状态——services 预算键 + usage 账本 → per-service
   // 投影与级别（Rust service_routes get_usage_budget_status 镜像）。
+  //
+  // 1666 号勘误三处（1661 的 studio 测试用默认端口 + 对象形态夹具，照不见）：
+  // ① 条目枚举只按对象形态取**原始键**——Node 腿 PUT services 后盘上是数组
+  //    形态（`llm.services = mergeServiceConfig(...)` 直落条目数组），此时
+  //    serviceKey 成了 "0"/"1"；`custom:Name` 键与裸 `custom` 也与 Rust
+  //    `service_config_key` 不一致。改走同一套归一 + serviceConfigKey。
+  // ② host 匹配用 `URL.host`（**含端口**），账本行按写点口径是不含端口的
+  //    host——本地模型/自定义网关这类带端口的 baseUrl 永远匹配不上。
+  //    改用 serviceHostOf（写点同函数）。
+  // ③ 顺序对齐 Rust：数组=配置序，对象=键序（serde_json Map 为 BTreeMap）。
   app.get("/api/v1/usage/budget-status", async (c) => {
     try {
       const core = await import("@actalk/inkos-core");
       const loadUsageLedger = core.loadUsageLedger;
       const usageProjection = core.usageProjection;
       const budgetStatus = core.budgetStatus;
+      const serviceHostOf = core.serviceHostOf;
 
       const raw = await loadRawConfig(root);
       const llm = (raw.llm ?? {}) as Record<string, unknown>;
-      const servicesRaw = llm.services && typeof llm.services === "object" ? llm.services as Record<string, Record<string, unknown>> : {};
       const rows = await loadUsageLedger(root);
       const todayKey = new Date().toISOString().slice(0, 10);
       const projection = usageProjection(rows, (row) => row.ts.slice(0, 10), todayKey);
-      const statuses = Object.entries(servicesRaw)
-        .map(([serviceId, value]) => {
-          const daily = typeof value.dailyTokenBudget === "number" ? value.dailyTokenBudget : undefined;
-          const monthly = typeof value.monthlyTokenBudget === "number" ? value.monthlyTokenBudget : undefined;
-          if (daily === undefined && monthly === undefined) return null;
-          const confirmAtBudget = typeof value.confirmAtBudget === "boolean" ? value.confirmAtBudget : undefined;
-          // 匹配键：条目 key 精确 → baseUrl host（chat 写点 serviceKey=host，Rust 同款）。
-          const host = typeof value.baseUrl === "string" && value.baseUrl.length > 0
-            ? (() => { try { return new URL(value.baseUrl).host; } catch { return undefined; } })()
-            : undefined;
-          const usage = projection.get(serviceId)
-            ?? (host !== undefined ? projection.get(host) : undefined)
-            ?? { daily: 0, monthly: 0, total: 0 };
-          const status = budgetStatus(serviceId, usage, {
-            ...(daily !== undefined ? { dailyTokenBudget: daily } : {}),
-            ...(monthly !== undefined ? { monthlyTokenBudget: monthly } : {}),
-            ...(confirmAtBudget !== undefined ? { confirmAtBudget } : {}),
-          });
-          return { serviceKey: status.serviceKey, daily: status.daily, monthly: status.monthly, ratio: status.ratio, level: status.level, confirmRequired: status.confirmRequired };
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+      const serviceItems: Array<[string | undefined, Record<string, unknown>]> = Array.isArray(llm.services)
+        ? llm.services
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .map((item) => [undefined, item] as [undefined, Record<string, unknown>])
+        : llm.services && typeof llm.services === "object"
+          ? Object.entries(llm.services as Record<string, unknown>)
+            .filter((pair): pair is [string, Record<string, unknown>] => Boolean(pair[1]) && typeof pair[1] === "object")
+            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          : [];
+      const statuses = serviceItems.flatMap(([serviceId, value]) => {
+        const entry = serviceId === undefined ? normalizeServiceConfig([value])[0] : normalizeServiceEntry(serviceId, value);
+        if (!entry || (entry.dailyTokenBudget === undefined && entry.monthlyTokenBudget === undefined)) return [];
+        const key = serviceConfigKey(entry);
+        // 匹配键：条目 key 精确 → **原始条目** baseUrl 的 host（chat 写点
+        // serviceKey 同函数）。取原始值而非归一化条目：TS 归一的内置服务分支
+        // 不带 baseUrl（上游既有行为），按归一化条目取会漏掉内置服务的匹配。
+        const baseUrl = typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? value.baseUrl : undefined;
+        const usage = projection.get(key)
+          ?? (baseUrl ? projection.get(serviceHostOf(baseUrl)) : undefined)
+          ?? { daily: 0, monthly: 0, total: 0 };
+        const status = budgetStatus(key, usage, {
+          ...(entry.dailyTokenBudget !== undefined ? { dailyTokenBudget: entry.dailyTokenBudget } : {}),
+          ...(entry.monthlyTokenBudget !== undefined ? { monthlyTokenBudget: entry.monthlyTokenBudget } : {}),
+          ...(entry.confirmAtBudget !== undefined ? { confirmAtBudget: entry.confirmAtBudget } : {}),
+        });
+        return [{ serviceKey: status.serviceKey, daily: status.daily, monthly: status.monthly, ratio: status.ratio, level: status.level, confirmRequired: status.confirmRequired }];
+      });
       return c.json({ statuses, todayKey });
     } catch (e) {
       return c.json({ error: String(e) }, 500);
@@ -4699,32 +4728,52 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     return c.json({ packs: BUILTIN_PROMPT_PACKS, prompts: prompts.filter((entry) => entry !== null) });
   });
 
+  // 1666 号：promptId 归一 + builtin 白名单（Rust normalize_studio_prompt_id
+  // 镜像）。四个 :promptId 端点共用——此前 versions 端点漏了白名单（未知 id
+  // 返回 200 空列表，Rust 为 404）；404 消息回显**原值**（Rust 同款）。
+  const resolvePromptPackId = (raw: string): string | null => {
+    const promptId = raw.trim().toLowerCase();
+    return promptId && BUILTIN_PROMPTS.some((entry) => entry.id === promptId) ? promptId : null;
+  };
+  const promptPackNotFound = (c: Context, raw: string) =>
+    c.json({ error: { code: "PROMPT_PACK_PROMPT_NOT_FOUND", message: `Prompt pack prompt not found: ${raw}` } }, 404);
+  // JSON 解析失败须与「解析成功但形状不对」区分：Rust 对非 JSON 体单独报
+  // 「... must be JSON」。解析结果 null 是合法 JSON，不能用 null 兼作失败标记。
+  const parseJsonBody = async (c: Context) =>
+    c.req.json<unknown>().then((value) => ({ value }), () => undefined);
+
   app.put("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = c.req.param("promptId").trim().toLowerCase();
-    if (!BUILTIN_PROMPTS.some((entry) => entry.id === promptId)) {
-      return c.json({ error: { code: "PROMPT_PACK_PROMPT_NOT_FOUND", message: `Prompt pack prompt not found: ${promptId}` } }, 404);
+    const rawId = c.req.param("promptId");
+    const promptId = resolvePromptPackId(rawId);
+    if (!promptId) return promptPackNotFound(c, rawId);
+    const parsed = await parseJsonBody(c);
+    if (!parsed) {
+      return c.json({ error: { code: "INVALID_PROMPT_PACK_PAYLOAD", message: "Prompt pack payload must be JSON" } }, 400);
     }
-    const body = await c.req.json<{ content?: unknown }>().catch(() => null);
-    if (!body || typeof body !== "object" || typeof body.content !== "string") {
+    const content = parsed.value && typeof parsed.value === "object"
+      ? (parsed.value as Record<string, unknown>).content
+      : undefined;
+    if (typeof content !== "string") {
       return c.json({ error: { code: "INVALID_PROMPT_PACK_PAYLOAD", message: "content must be a string" } }, 400);
     }
-    await writePromptOverride(root, promptId, body.content);
-    await appendPromptVersion(root, promptId, "put", body.content, new Date().toISOString());
+    await writePromptOverride(root, promptId, content);
+    await appendPromptVersion(root, promptId, "put", content, new Date().toISOString());
     return c.json({ prompt: await promptOverrideProjection(promptId), regressionHint: "prompt-changed" });
   });
 
   app.delete("/api/v1/prompt-packs/:promptId", async (c) => {
-    const promptId = c.req.param("promptId").trim().toLowerCase();
-    if (!BUILTIN_PROMPTS.some((entry) => entry.id === promptId)) {
-      return c.json({ error: { code: "PROMPT_PACK_PROMPT_NOT_FOUND", message: `Prompt pack prompt not found: ${promptId}` } }, 404);
-    }
+    const rawId = c.req.param("promptId");
+    const promptId = resolvePromptPackId(rawId);
+    if (!promptId) return promptPackNotFound(c, rawId);
     await removePromptOverride(root, promptId);
     await appendPromptVersion(root, promptId, "delete", "", new Date().toISOString());
     return c.json({ prompt: await promptOverrideProjection(promptId), regressionHint: "prompt-changed" });
   });
 
   app.get("/api/v1/prompt-packs/:promptId/versions", async (c) => {
-    const promptId = c.req.param("promptId").trim().toLowerCase();
+    const rawId = c.req.param("promptId");
+    const promptId = resolvePromptPackId(rawId);
+    if (!promptId) return promptPackNotFound(c, rawId);
     const versions = await listPromptVersions(root, promptId);
     return c.json({
       versions: versions.map((record) => ({
@@ -4737,15 +4786,20 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.post("/api/v1/prompt-packs/:promptId/versions/restore", async (c) => {
-    const promptId = c.req.param("promptId").trim().toLowerCase();
-    if (!BUILTIN_PROMPTS.some((entry) => entry.id === promptId)) {
-      return c.json({ error: { code: "PROMPT_PACK_PROMPT_NOT_FOUND", message: `Prompt pack prompt not found: ${promptId}` } }, 404);
+    const rawId = c.req.param("promptId");
+    const promptId = resolvePromptPackId(rawId);
+    if (!promptId) return promptPackNotFound(c, rawId);
+    const parsed = await parseJsonBody(c);
+    if (!parsed) {
+      return c.json({ error: { code: "INVALID_PROMPT_VERSION_PAYLOAD", message: "Restore payload must be JSON" } }, 400);
     }
-    const body = await c.req.json<{ ts?: unknown }>().catch(() => null);
-    if (!body || typeof body !== "object" || typeof body.ts !== "string") {
+    const ts = parsed.value && typeof parsed.value === "object"
+      ? (parsed.value as Record<string, unknown>).ts
+      : undefined;
+    if (typeof ts !== "string") {
       return c.json({ error: { code: "INVALID_PROMPT_VERSION_PAYLOAD", message: "ts must be a string" } }, 400);
     }
-    const record = await readPromptVersion(root, promptId, body.ts);
+    const record = await readPromptVersion(root, promptId, ts);
     if (!record) {
       return c.json({ error: { code: "PROMPT_VERSION_NOT_FOUND", message: "Prompt version not found" } }, 400);
     }

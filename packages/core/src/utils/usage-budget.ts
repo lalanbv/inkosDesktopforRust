@@ -18,6 +18,20 @@ export interface UsageLogRow {
   readonly totalTokens: number;
 }
 
+/**
+ * 1666 号：baseUrl → 账本 serviceKey（Rust `Url::host_str()` 镜像：**不含端口**，
+ * 不可解析回退原值）。写点（chat 流水）与读点（budget-status 的条目匹配）共用
+ * 本函数=serviceKey 口径单源——读侧此前用 `URL.host`（含端口），非默认端口端点
+ * 的用量匹配不上账本里的行（本地模型/自定义网关都是带端口的 baseUrl）。
+ */
+export function serviceHostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname || baseUrl;
+  } catch {
+    return baseUrl;
+  }
+}
+
 export interface ServiceBudget {
   readonly dailyTokenBudget?: number;
   readonly monthlyTokenBudget?: number;

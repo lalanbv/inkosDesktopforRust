@@ -74,6 +74,36 @@ import { guardedPiNonStreaming, guardedPiStream } from "./pi-stream.js";
 import { splitTextByEstimatedTokens } from "../llm/semantic-input.js";
 import { estimateTextTokens } from "../llm/provider.js";
 import { recoverInterruptedActionResults } from "./interrupted-request.js";
+import { appendUsageRows } from "../utils/usage-ledger-store.js";
+import { serviceHostOf } from "../utils/usage-budget.js";
+
+/**
+ * 1666 号：R55 chat 流水用量账本写点——Rust `RouterLoopChat`（agent_route.rs）
+ * 的 TS 镜像。1660/1661 只在 Rust 腿落了写入点；TS 侧 `appendUsageRows` 仅导出、
+ * 零生产调用 = Node 回退腿账本恒空，GET /usage/budget-status 恒报 0，80% 告警
+ * 与 100% 确认门永不触发（1663 run-log「端点在位≠写入面在位」同族——1664 的
+ * 死单例扫法只覆盖模块级单例，账本是文件态所以漏网）。
+ *
+ * 口径与 Rust 逐项对齐：每个模型轮一条；只记 usage 精确值（隐私红线，非
+ * TokenMeter 估算）；totalTokens 为 0 不记（失败轮 / 合成消息，如
+ * `stopForWorkTransition`）；serviceKey = baseUrl 的 host（`serviceHostOf`，
+ * 不含端口——budget-status 读侧同函数匹配）。best-effort：不 await、不阻塞
+ * 会话事件流，失败吞（Rust 同为 best-effort）。管线/worker agent 不记
+ * （1661 架构定性：管线面用量走既有 index/R13 聚合，不双记）。
+ */
+function recordChatUsage(projectRoot: string, model: Model<Api>, message: AssistantMessage): void {
+  const usage = message.usage;
+  // 非有限/负值一律视为无 usage（账本只收精确值）。
+  if (!usage || !Number.isFinite(usage.totalTokens) || usage.totalTokens <= 0) return;
+  void appendUsageRows(projectRoot, [{
+    ts: new Date().toISOString(),
+    serviceKey: serviceHostOf(model.baseUrl),
+    model: model.id,
+    promptTokens: usage.input,
+    completionTokens: usage.output,
+    totalTokens: usage.totalTokens,
+  }]).catch(() => undefined);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1488,6 +1518,12 @@ async function runAgentSessionUnlocked(
   // ----- Subscribe to events (transcript persistence + SSE forwarding) -----
   const unsubscribe = agent.subscribe(async (event: AgentEvent) => {
     await persistAgentEvent(event);
+    // 1666 号：R55 chat 流水用量——assistant 消息的 message_end = 一个模型轮的
+    // 最终态（传输重试的中间态被 observe 层替换，不会多出 message_end）。
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      // 双 pi scope 缝合边界（1519 同款）：只读 role/content/usage 等核心字段。
+      recordChatUsage(projectRoot, model, event.message as AssistantMessage);
+    }
     if ((event.type === "tool_execution_start" || event.type === "tool_execution_end" || event.type === "tool_execution_update")
       && [TURN_COMPLETION_TOOL,REQUEST_DELIVERY_TOOL].includes(event.toolName)) return;
     onEvent?.(event);

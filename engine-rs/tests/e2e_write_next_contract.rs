@@ -6343,6 +6343,51 @@ mod skills60_e2e {
         assert_eq!(parsed["error"]["code"], "PROMPT_VERSION_NOT_FOUND");
     }
 
+    /// 1666 号：versions / restore 的 :promptId 白名单。TS 回退腿的 versions
+    /// 端点此前漏了这步校验（未知 id → 200 空列表）——本测把 Rust 的参照行为
+    /// 钉成运行时事实；双端对跑见 strangler_duel `strangler_prompt_packs_duel`。
+    #[tokio::test]
+    async fn prompt_pack_versions_unknown_prompt_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        for (method, uri) in [
+            ("GET", "/api/v1/prompt-packs/unknown.prompt/versions"),
+            (
+                "POST",
+                "/api/v1/prompt-packs/unknown.prompt/versions/restore",
+            ),
+            ("DELETE", "/api/v1/prompt-packs/unknown.prompt"),
+        ] {
+            let (status, parsed) = call(app60(&root), method, uri, None).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}: {parsed}");
+            assert_eq!(
+                parsed["error"]["code"], "PROMPT_PACK_PROMPT_NOT_FOUND",
+                "{method} {uri}"
+            );
+        }
+        // 空白 id（%20）归一后为空 → 404。
+        let (status, parsed) = call(
+            app60(&root),
+            "GET",
+            "/api/v1/prompt-packs/%20/versions",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "body: {parsed}");
+
+        // 大小写/空白归一命中（与 PUT 同规则）→ 200 空列表。
+        let (status, parsed) = call(
+            app60(&root),
+            "GET",
+            "/api/v1/prompt-packs/LONGFORM.Writer/versions",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["versions"].as_array().map(Vec::len), Some(0));
+    }
+
     #[tokio::test]
     async fn put_prompt_pack_invalid_branches() {
         let dir = tempfile::tempdir().unwrap();
@@ -7407,6 +7452,92 @@ mod services63_e2e {
         assert_eq!(statuses[0]["level"], "warn");
         assert_eq!(statuses[0]["ratio"], 0.85);
         assert_eq!(statuses[0]["confirmRequired"], false);
+    }
+
+    /// 1666 号：零预算 = 未设（TS 归一同款，`budget_field`）；带端口的
+    /// baseUrl 按不含端口的 host 匹配账本行（chat 写点 service_host_of 同
+    /// 函数）；ratio 落到 JSON 面恒为 number（除零得 inf 时 serde 写 null）。
+    #[tokio::test]
+    async fn usage_budget_status_zero_cap_is_unset_and_port_host_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(
+            root.join("inkos.json"),
+            r##"{ "llm": { "services": {
+                "local": { "baseUrl": "http://127.0.0.1:1234/v1", "dailyTokenBudget": 1000 },
+                "zero": { "baseUrl": "https://zero.example", "dailyTokenBudget": 0 },
+                "other": { "baseUrl": "https://other.example" }
+            } } }"##,
+        )
+        .unwrap();
+        tokio::fs::create_dir_all(root.join(".inkos"))
+            .await
+            .unwrap();
+        let today_prefix = inkos_engine::utils::utc_time::utc_now_iso()
+            .get(..10)
+            .unwrap_or("")
+            .to_string();
+        let row = |service: &str, total: u64| {
+            format!(
+                r#"{{"ts":"{today_prefix}T01:00:00.000Z","serviceKey":"{service}","model":"m","promptTokens":{p},"completionTokens":{c},"totalTokens":{total}}}"#,
+                p = total / 2,
+                c = total - total / 2
+            )
+        };
+        // 写点口径：serviceKey = host（不含端口）。
+        let ledger = format!(
+            "{}\n{}\n",
+            row("127.0.0.1", 1100),
+            row("zero.example", 5000)
+        );
+        tokio::fs::write(
+            root.join(".inkos").join("usage-log.jsonl"),
+            ledger.replace("\\n", "\n"),
+        )
+        .await
+        .unwrap();
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/usage/budget-status", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let statuses = parsed["statuses"].as_array().unwrap();
+        assert_eq!(statuses.len(), 1, "零预算=未设，不入列：{parsed}");
+        assert_eq!(statuses[0]["serviceKey"], "local");
+        assert_eq!(statuses[0]["daily"], 1100);
+        assert_eq!(statuses[0]["level"], "over");
+        assert_eq!(statuses[0]["ratio"], 1.1);
+        assert!(statuses[0]["ratio"].is_number(), "{parsed}");
+        assert_eq!(statuses[0]["confirmRequired"], true);
+    }
+
+    /// 1666 号：PUT services 载荷里的零预算不落盘（正整数才算已配置），
+    /// 合法预算键照常保留。
+    #[tokio::test]
+    async fn put_services_config_drops_zero_budget_keeps_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(root.join("inkos.json"), r#"{ "llm": {} }"#).unwrap();
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/config",
+            Some(r#"{"services":[{"service":"custom","name":"Local","baseUrl":"http://127.0.0.1:1234/v1","dailyTokenBudget":0,"monthlyTokenBudget":50000,"confirmAtBudget":false}]}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let saved = std::fs::read_to_string(root.join("inkos.json")).unwrap();
+        assert!(
+            !saved.contains("dailyTokenBudget"),
+            "零预算不得落盘：{saved}"
+        );
+        assert!(saved.contains("50000"), "合法预算键须保留：{saved}");
+        assert!(
+            saved.contains("confirmAtBudget"),
+            "确认门开关须保留：{saved}"
+        );
+        // 读回面（归一后的条目）同样不见零预算。
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/config", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let text = parsed.to_string();
+        assert!(!text.contains("dailyTokenBudget"), "{text}");
     }
 
     #[tokio::test]

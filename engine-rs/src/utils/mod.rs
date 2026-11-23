@@ -48,6 +48,7 @@ pub mod hook_promotion;
 pub mod hook_stale_detection;
 pub mod hybrid_memory_selector;
 pub mod info_gap_ledger;
+pub mod jsonl_ledger;
 pub mod language;
 pub mod length_metrics;
 pub mod llm_endpoint_auth;

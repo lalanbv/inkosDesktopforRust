@@ -188,6 +188,18 @@ function cancelScrollFrame(id: ScrollFrameId): void {
   globalThis.clearTimeout(id);
 }
 
+/**
+ * 1666 号：预算行里属于指定服务的那一行（serviceKey = 条目键）。裸 `custom`
+ * 没有名字，匹配任一具名 custom 条目——宁可在确认门上多问一次。
+ */
+function budgetRowForService<T extends { serviceKey: string }>(
+  rows: ReadonlyArray<T>,
+  serviceId: string,
+): T | undefined {
+  return rows.find((entry) => entry.serviceKey === serviceId)
+    ?? (serviceId === "custom" ? rows.find((entry) => entry.serviceKey.startsWith("custom:")) : undefined);
+}
+
 function SkillPickerPanel({
   isZh,
   skills,
@@ -677,9 +689,16 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   // R55/1661 号：用量预算警戒——warn 通知条 + 100% 发送前确认门（可关闭=
   // 仅告警；无配置不发确认——服务端 budget-status 判定）。
   const [budgetNotice, setBudgetNotice] = useState<string | null>(null);
-  const [pendingBudgetSend, setPendingBudgetSend] = useState<string | null>(null);
+  const [pendingBudgetSend, setPendingBudgetSend] = useState<{ text: string; serviceId: string } | null>(null);
   const budgetGateBypassRef = useRef(false);
+  // 1666 号：当前会话实际使用的服务（会话覆盖优先，其次当前所选）。确认门
+  // 只看这一个服务的预算行——此前判据是「任意服务需确认」：配了预算的服务 A
+  // 超支会拦住在服务 B 上的对话，而弹层文案说的是「所选服务已达 100%」。
+  const effectiveServiceId = activeSession?.serviceOverride ?? selectedService;
   useEffect(() => {
+    // 1666 号：换会话 = 待确认的发送作废（否则「仍要发送」会把上一个会话的
+    // 文本发进新会话）。
+    setPendingBudgetSend(null);
     void fetchJson<{ statuses: Array<{ serviceKey: string; ratio: number; level: string; confirmRequired: boolean }> }>("/usage/budget-status")
       .then((payload) => {
         const warned = (payload.statuses ?? []).filter((entry) => entry.level !== "ok");
@@ -695,21 +714,30 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   }, [activeSessionId]);
 
   const onSend = async (text: string) => {
+    // 1666 号：确认旁路**一次性**——在任何早退之前消费。此前在早退检查之后
+    // 才消费：确认后的这次 onSend 若早退（会话已切换等），旁路标记一直亮着，
+    // 下一条消息（可能在别的会话）会静默跳过确认门。
+    const bypassBudgetGate = budgetGateBypassRef.current;
+    budgetGateBypassRef.current = false;
     if (!activeSessionId || !sessionMatchesRoute || creatingWorkSession) return;
     const hasPendingMessage = Boolean(text.trim()) || attachedFiles.length > 0;
     if (!hasPendingMessage) {
       if (chatStreaming || loading) await abortSession(activeSessionId);
       return;
     }
-    // 预算确认门：over 且 confirmRequired → 弹层确认后再发（best-effort——
-    // 状态查询失败不拦发送）。
-    if (budgetGateBypassRef.current) {
-      budgetGateBypassRef.current = false;
-    } else {
+    // 预算确认门：当前所用服务 over 且 confirmRequired → 弹层确认后再发
+    // （best-effort——状态查询失败不拦发送）。
+    if (!bypassBudgetGate) {
       try {
-        const status = await fetchJson<{ statuses: Array<{ confirmRequired: boolean }> }>("/usage/budget-status");
-        if ((status.statuses ?? []).some((entry) => entry.confirmRequired)) {
-          setPendingBudgetSend(text);
+        const status = await fetchJson<{ statuses: Array<{ serviceKey: string; confirmRequired: boolean }> }>("/usage/budget-status");
+        const rows = status.statuses ?? [];
+        // 只看当前所用服务的预算行；服务未知（选择未就绪）时退回「任意服务
+        // 需确认」——宁可多问一次，也不放过。
+        const gateRequired = effectiveServiceId
+          ? budgetRowForService(rows, effectiveServiceId)?.confirmRequired === true
+          : rows.some((entry) => entry.confirmRequired);
+        if (gateRequired) {
+          setPendingBudgetSend({ text, serviceId: effectiveServiceId ?? "" });
           return;
         }
       } catch {
@@ -1267,16 +1295,16 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
         open={pendingBudgetSend !== null}
         title={isZh ? "用量已达预算" : "Usage budget reached"}
         message={isZh
-          ? "所选服务本日/本月 token 用量已达 100% 软顶。仍要发送吗？（可在服务配置关闭确认门=仅告警）"
-          : "The selected service has reached its 100% token budget for today/this month. Send anyway? (The confirm gate can be disabled per service = warn only.)"}
+          ? `服务 ${pendingBudgetSend?.serviceId ?? ""} 本日/本月 token 用量已达 100% 软顶。仍要发送吗？（可在服务配置关闭确认门=仅告警）`
+          : `The service in use (${pendingBudgetSend?.serviceId ?? ""}) has reached its 100% token budget for today/this month. Send anyway? (The confirm gate can be disabled per service = warn only.)`}
         confirmLabel={isZh ? "仍要发送" : "Send anyway"}
         cancelLabel={isZh ? "取消" : "Cancel"}
         onConfirm={() => {
-          const text = pendingBudgetSend;
+          const pending = pendingBudgetSend;
           setPendingBudgetSend(null);
-          if (text !== null) {
+          if (pending !== null) {
             budgetGateBypassRef.current = true;
-            void onSend(text);
+            void onSend(pending.text);
           }
         }}
         onCancel={() => setPendingBudgetSend(null)}

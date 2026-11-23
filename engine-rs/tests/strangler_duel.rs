@@ -13,7 +13,33 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+/// 1666 号：duel 台账。`cargo test` 默认捕获测试的 stdout **与 stderr**
+/// （libtest）——688 守卫「响亮记账」的 eprintln 在门禁日志里从未出现过：守卫
+/// 早退不只是被计成 ok，连记账本身都是静默的。门禁经 `INKOS_DUEL_LEDGER`
+/// 指定台账文件：`duel_enabled()`（每个对跑的入口）写一行 `start <test>`，
+/// 守卫早退再写一行 `exempt <test>`（O_APPEND 单行小写，并行安全）。门禁据此
+/// 正向确认：start 数 = 该二进制测试总数（通道存活的握手）、真跑 = start −
+/// exempt，并对真跑数设地板、豁免数设上限。未设 env（手工跑）不落台账，只剩
+/// eprintln（配 `-- --nocapture` 可见）。
+fn record_duel_ledger(kind: &str) {
+    let Some(path) = std::env::var_os("INKOS_DUEL_LEDGER") else {
+        return;
+    };
+    let thread = std::thread::current();
+    let test = thread.name().unwrap_or("?");
+    let line = format!("{kind} {test}\n");
+    let appended = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+    if let Err(error) = appended {
+        eprintln!("[duel:ledger] 台账写入失败（{path:?}）：{error}——{kind} {test}");
+    }
+}
+
 fn duel_enabled() -> bool {
+    record_duel_ledger("start");
     std::env::var("INKOS_DUEL").is_ok()
 }
 
@@ -344,6 +370,45 @@ async fn get_json(base: &str, path: &str) -> (u16, Value) {
     (status, parsed)
 }
 
+/// 1666 号：写面/负路径面同请求——`get_json` 的带 method + JSON 体形态。
+async fn send_json(
+    client: &reqwest::Client,
+    base: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&str>,
+) -> (u16, Value) {
+    let mut request = client.request(method, format!("{base}{path}"));
+    if let Some(body) = body {
+        request = request
+            .header("content-type", "application/json")
+            .body(body.to_string());
+    }
+    let response = request.send().await.expect("请求失败");
+    let status = response.status().as_u16();
+    let text = response.text().await.unwrap_or_default();
+    let parsed = serde_json::from_str(&text).unwrap_or(Value::String(text));
+    (status, parsed)
+}
+
+/// 1666 号：双端同请求对跑——同一 method/path/body 分别打两腿，返回
+/// (rust_status, rust_body, ts_status, ts_body)（body 已 normalize）。调用方
+/// 既要断言**两腿各自**符合预期（防「对齐数据=回声室」），也要断言两腿全等。
+async fn duel_pair(
+    client: &reqwest::Client,
+    rust: &str,
+    ts: &str,
+    method: reqwest::Method,
+    path: &str,
+    body: Option<&str>,
+) -> (u16, Value, u16, Value) {
+    let (rust_status, mut rust_body) = send_json(client, rust, method.clone(), path, body).await;
+    let (ts_status, mut ts_body) = send_json(client, ts, method, path, body).await;
+    normalize(&mut rust_body);
+    normalize(&mut ts_body);
+    (rust_status, rust_body, ts_status, ts_body)
+}
+
 /// 波动键归一（递归剥除）：时间戳/版本/路径前缀类。
 fn normalize(value: &mut Value) {
     const VOLATILE: [&str; 6] = [
@@ -402,11 +467,27 @@ async fn ts_leg_contract_source(ts: &str) -> &'static str {
 /// 688 号契约源守卫：TS 腿非 fork 契约时，fork 契约对跑整体失效——
 /// 响亮记账后跳过本测（boot/readiness 已在前序 wait_ready 验证，不静默）。
 /// TS 恢复 fork 契约（2.0 迁移落地，见 688 号 §五）后守卫自动复活，无需改码。
+///
+/// 1666 号实测补注：判据 `/api/v1/health` 是 Rust 超集独有面——TS 腿**没有
+/// 这条路由**，守卫对 TS 腿恒判「上游 2.0」= 受守卫的对跑恒跳过，而 libtest
+/// 把早退计成 ok（「N passed」里混着从未执行的对跑）。强制打开守卫实测 13 个
+/// 对跑：6 真绿 / 7 真红——4 个是 `write_fixture` 仍写 1.x `books/` 布局而
+/// TS 2.0 按 works 清单发现作品；1 个是 mock LLM 不回 finish_turn；3 个是真实
+/// 契约分歧（/project 的 temperature、series-backfill extract、会话读面形状）。
+/// 复活哪些、以何判据复活属 688 号迁移欠账的处置决策；本轮只让跳过不再
+/// 隐形：落 `exempt <test>` 台账行（见 `record_duel_ledger`；eprintln 被捕获，
+/// 门禁日志里看不见），cargo-test-gate 据此算「真跑 = start − exempt」，对真跑
+/// 数设地板、豁免数设上限。
 macro_rules! duel_require_fork_contract {
     ($ts:expr) => {
         if ts_leg_contract_source($ts).await != "fork" {
+            record_duel_ledger("exempt");
             eprintln!(
-                "[688 豁免记账] 契约源检测：TS 腿=上游 2.0（/prompt-packs 404 实证）——fork 契约对跑失效，本测响亮跳过。\n                 [688 豁免记账] 差异面=2.0 迁移欠账（变更记录 688 号 §五），非 Rust 回归；迁移落地后本守卫自动复活。"
+                "[duel:exempt] {}",
+                std::thread::current().name().unwrap_or("?")
+            );
+            eprintln!(
+                "[688 豁免记账] 契约源检测：TS 腿=上游 2.0（/api/v1/health 非 200）——fork 契约对跑失效，本测响亮跳过。\n                 [688 豁免记账] 差异面=2.0 迁移欠账（变更记录 688 号 §五），非 Rust 回归；迁移落地后本守卫自动复活。"
             );
             return;
         }
@@ -572,6 +653,342 @@ async fn strangler_cross_write_read_duel() {
     eprintln!(
         "跨端写读对跑通过：Rust 写 approve / TS 写 review-mode 双向可见，写后 {} 端点复跑全一致",
         endpoints.len()
+    );
+}
+
+/// 1666 号：prompt-packs 端点族双端对跑（1663 回座 TS 腿后的族级契约锁）。
+/// 此前该族只有各腿单测——versions 端点的 :promptId 白名单漂移（Rust 404 /
+/// TS 200 空列表）正是「各测各的、无人对跑」漏过去的。
+/// A) 负路径矩阵：两腿逐条同请求，**各自**符合预期状态码/错误码且整个信封
+///    全等（防「对齐数据=回声室」），全程零副作用；
+/// B) 跨端写读：每步写操作两腿各发一次（共用同一 project root），应答全等，
+///    随后双端读面（versions 列表 / prompt 列表）全等——put → 回滚 → 删除 →
+///    回滚到 put 行 → 回滚到 delete 行。
+#[tokio::test]
+async fn strangler_prompt_packs_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts_port = next_sidecar_port().await;
+    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    wait_ready(&rust).await;
+    wait_ready(&ts).await;
+    // 契约源探测用**族根端点自身**，不走 duel_require_fork_contract!：该宏
+    // 判据 `/api/v1/health` 是 Rust 超集独有面（TS 腿无此路由）→ 对 TS 腿恒判
+    // 「上游 2.0」→ 受守卫的对跑恒跳过却计 ok。本族 TS 回退腿 1663 号起同构，
+    // 以 `GET /prompt-packs` 200 为「族在位」判据。
+    match get_json(&ts, "/api/v1/prompt-packs").await {
+        (200, _) => {}
+        (status, body) => {
+            eprintln!("[1666 记账] TS 腿无 prompt-packs 族（{status}）——本测响亮跳过。{body}");
+            return;
+        }
+    }
+    let client = loopback_client();
+    use reqwest::Method;
+
+    let versions_path = "/api/v1/prompt-packs/longform.writer/versions";
+    let restore_path = "/api/v1/prompt-packs/longform.writer/versions/restore";
+    let writer_path = "/api/v1/prompt-packs/longform.writer";
+    let override_file = root.join("prompt").join("longform").join("writer.md");
+
+    // ── A) 负路径矩阵：(method, path, body, 预期状态码, 预期错误码) ──────
+    let negative: [(Method, &str, Option<&str>, u16, &str); 11] = [
+        (
+            Method::GET,
+            "/api/v1/prompt-packs/unknown.prompt/versions",
+            None,
+            404,
+            "PROMPT_PACK_PROMPT_NOT_FOUND",
+        ),
+        (
+            Method::POST,
+            "/api/v1/prompt-packs/Unknown.Prompt/versions/restore",
+            Some("{}"),
+            404,
+            "PROMPT_PACK_PROMPT_NOT_FOUND",
+        ),
+        (
+            Method::DELETE,
+            "/api/v1/prompt-packs/unknown.prompt",
+            None,
+            404,
+            "PROMPT_PACK_PROMPT_NOT_FOUND",
+        ),
+        (
+            Method::PUT,
+            "/api/v1/prompt-packs/unknown.prompt",
+            Some(r#"{"content":"x"}"#),
+            404,
+            "PROMPT_PACK_PROMPT_NOT_FOUND",
+        ),
+        (
+            Method::GET,
+            "/api/v1/prompt-packs/%20/versions",
+            None,
+            404,
+            "PROMPT_PACK_PROMPT_NOT_FOUND",
+        ),
+        (
+            Method::PUT,
+            writer_path,
+            Some("not-json"),
+            400,
+            "INVALID_PROMPT_PACK_PAYLOAD",
+        ),
+        (
+            Method::PUT,
+            writer_path,
+            Some(r#"{"content":123}"#),
+            400,
+            "INVALID_PROMPT_PACK_PAYLOAD",
+        ),
+        (
+            Method::PUT,
+            writer_path,
+            Some("[1,2]"),
+            400,
+            "INVALID_PROMPT_PACK_PAYLOAD",
+        ),
+        (
+            Method::POST,
+            restore_path,
+            Some(r#"{"ts":1}"#),
+            400,
+            "INVALID_PROMPT_VERSION_PAYLOAD",
+        ),
+        (
+            Method::POST,
+            restore_path,
+            Some("null"),
+            400,
+            "INVALID_PROMPT_VERSION_PAYLOAD",
+        ),
+        (
+            Method::POST,
+            restore_path,
+            Some(r#"{"ts":"1970-01-01T00:00:00.000Z"}"#),
+            400,
+            "PROMPT_VERSION_NOT_FOUND",
+        ),
+    ];
+    let negative_count = negative.len();
+    for (method, path, body, want_status, want_code) in negative {
+        let method_label = method.as_str().to_string();
+        let (rust_status, rust_body, ts_status, ts_body) =
+            duel_pair(&client, &rust, &ts, method, path, body).await;
+        for (leg, status, body_json) in [
+            ("rust", rust_status, &rust_body),
+            ("ts", ts_status, &ts_body),
+        ] {
+            assert_eq!(
+                status, want_status,
+                "[{leg}] {method_label} {path} body={body_json}"
+            );
+            assert_eq!(
+                body_json["error"]["code"], want_code,
+                "[{leg}] {method_label} {path} body={body_json}"
+            );
+        }
+        assert_eq!(
+            (rust_status, rust_body.clone()),
+            (ts_status, ts_body.clone()),
+            "双端 error 信封不等：{method_label} {path}"
+        );
+    }
+    // 零副作用：负路径全程不落版本行、不落覆盖文件。
+    let (rust_status, rust_body, ts_status, ts_body) =
+        duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await;
+    assert_eq!((rust_status, ts_status), (200, 200));
+    assert_eq!(rust_body, ts_body);
+    assert_eq!(rust_body["versions"].as_array().map(Vec::len), Some(0));
+    assert!(!root.join("prompt").join(".versions.jsonl").exists());
+
+    // ── B) 跨端写读：每步两腿各写一次，应答全等，随后双端读面全等 ────────
+    let expect_pair = |label: &str, pair: (u16, Value, u16, Value), want_status: u16| {
+        let (rust_status, rust_body, ts_status, ts_body) = pair;
+        assert_eq!(rust_status, want_status, "[rust] {label}: {rust_body}");
+        assert_eq!(ts_status, want_status, "[ts] {label}: {ts_body}");
+        assert_eq!(rust_body, ts_body, "双端应答不等：{label}");
+        rust_body
+    };
+    let row_ts = |rows: &Value, index: usize| -> String {
+        rows["versions"][index]["ts"].as_str().unwrap().to_string()
+    };
+
+    // B1) put v1 ×2（两腿各一次）。
+    let body = expect_pair(
+        "put v1",
+        duel_pair(
+            &client,
+            &rust,
+            &ts,
+            Method::PUT,
+            writer_path,
+            Some(r##"{"content":"# v1"}"##),
+        )
+        .await,
+        200,
+    );
+    assert_eq!(body["prompt"]["content"], "# v1");
+    assert_eq!(body["prompt"]["source"], "project");
+    assert_eq!(body["prompt"]["path"], "prompt/longform/writer.md");
+    assert_eq!(body["regressionHint"], "prompt-changed");
+    let rows = expect_pair(
+        "versions after v1",
+        duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await,
+        200,
+    );
+    assert_eq!(rows["versions"].as_array().map(Vec::len), Some(2));
+    assert_eq!(rows["versions"][0]["action"], "put");
+    assert_eq!(rows["versions"][0]["content"], "# v1");
+    assert_eq!(rows["versions"][0]["preview"], "# v1");
+
+    // B2) put v2 ×2 → 4 行，最新在前。
+    expect_pair(
+        "put v2",
+        duel_pair(
+            &client,
+            &rust,
+            &ts,
+            Method::PUT,
+            writer_path,
+            Some(r##"{"content":"# v2"}"##),
+        )
+        .await,
+        200,
+    );
+    let rows = expect_pair(
+        "versions after v2",
+        duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await,
+        200,
+    );
+    assert_eq!(rows["versions"].as_array().map(Vec::len), Some(4));
+    let actions: Vec<&str> = rows["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["put", "put", "put", "put"]);
+    assert_eq!(rows["versions"][0]["content"], "# v2");
+    assert_eq!(rows["versions"][3]["content"], "# v1");
+
+    // B3) 回滚到最早那条 v1 行 ×2 → 覆盖文件 = v1，restore 行居首。
+    let v1_ts = row_ts(&rows, 3);
+    let body = expect_pair(
+        "restore v1",
+        duel_pair(
+            &client,
+            &rust,
+            &ts,
+            Method::POST,
+            restore_path,
+            Some(&format!(r#"{{"ts":"{v1_ts}"}}"#)),
+        )
+        .await,
+        200,
+    );
+    assert_eq!(body["prompt"]["content"], "# v1");
+    assert_eq!(std::fs::read_to_string(&override_file).unwrap(), "# v1");
+    let rows = expect_pair(
+        "versions after restore",
+        duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await,
+        200,
+    );
+    assert_eq!(rows["versions"].as_array().map(Vec::len), Some(6));
+    assert_eq!(rows["versions"][0]["action"], "restore");
+    assert_eq!(rows["versions"][0]["content"], "# v1");
+
+    // B4) 删除 ×2 → 回 builtin。
+    let body = expect_pair(
+        "delete",
+        duel_pair(&client, &rust, &ts, Method::DELETE, writer_path, None).await,
+        200,
+    );
+    assert_eq!(body["prompt"]["source"], "builtin");
+    assert_eq!(body["prompt"]["overridden"], false);
+    assert!(!override_file.exists());
+    let rows = expect_pair(
+        "versions after delete",
+        duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await,
+        200,
+    );
+    assert_eq!(rows["versions"].as_array().map(Vec::len), Some(8));
+    assert_eq!(rows["versions"][0]["action"], "delete");
+    let delete_ts = row_ts(&rows, 0);
+
+    // B5) 回滚到一条 v2 的 put 行 ×2 → 覆盖文件 = v2；prompt 列表双端全等。
+    let v2_ts = row_ts(&rows, 4);
+    let body = expect_pair(
+        "restore v2",
+        duel_pair(
+            &client,
+            &rust,
+            &ts,
+            Method::POST,
+            restore_path,
+            Some(&format!(r#"{{"ts":"{v2_ts}"}}"#)),
+        )
+        .await,
+        200,
+    );
+    assert_eq!(body["prompt"]["content"], "# v2");
+    let list = expect_pair(
+        "prompt list",
+        duel_pair(
+            &client,
+            &rust,
+            &ts,
+            Method::GET,
+            "/api/v1/prompt-packs",
+            None,
+        )
+        .await,
+        200,
+    );
+    let writer = list["prompts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|prompt| prompt["id"] == "longform.writer")
+        .cloned()
+        .expect("longform.writer 在列");
+    assert_eq!(writer["content"], "# v2");
+    assert_eq!(writer["overridden"], true);
+
+    // B6) 回滚到 delete 行 ×2 → 移除覆盖（回 builtin）。
+    let body = expect_pair(
+        "restore delete",
+        duel_pair(
+            &client,
+            &rust,
+            &ts,
+            Method::POST,
+            restore_path,
+            Some(&format!(r#"{{"ts":"{delete_ts}"}}"#)),
+        )
+        .await,
+        200,
+    );
+    assert_eq!(body["prompt"]["source"], "builtin");
+    assert!(!override_file.exists());
+    let rows = expect_pair(
+        "versions final",
+        duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await,
+        200,
+    );
+    assert_eq!(rows["versions"].as_array().map(Vec::len), Some(12));
+    eprintln!(
+        "prompt-packs 族对跑通过：负路径 {} 条 + 写读 6 步，双端全等",
+        negative_count
     );
 }
 

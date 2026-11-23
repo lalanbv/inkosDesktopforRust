@@ -9,6 +9,7 @@
  */
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { runSerially } from "./append-queue.js";
 import { writeTextAtomic } from "./atomic-write.js";
 
 export interface PromptVersionRecord {
@@ -34,19 +35,35 @@ function versionsPath(root: string): string {
   return join(root, "prompt", ".versions.jsonl");
 }
 
-export async function loadPromptVersions(root: string): Promise<PromptVersionRecord[]> {
-  let text: string;
+/** 读账本文本；缺失（或路径分量不是目录）= undefined，其余读错误上抛。 */
+async function readLedgerText(path: string): Promise<string | undefined> {
   try {
-    text = await readFile(versionsPath(root), "utf-8");
-  } catch {
-    return [];
+    return await readFile(path, "utf-8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
   }
+}
+
+/** 版本行形状守卫（Rust serde 同款：四个字段齐全且为串才算一行）。 */
+function isPromptVersionRecord(value: unknown): value is PromptVersionRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.ts === "string" && typeof record.promptId === "string"
+    && typeof record.action === "string" && typeof record.content === "string";
+}
+
+export async function loadPromptVersions(root: string): Promise<PromptVersionRecord[]> {
+  const text = await readLedgerText(versionsPath(root));
+  if (text === undefined) return [];
   const rows: PromptVersionRecord[] = [];
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      rows.push(JSON.parse(trimmed) as PromptVersionRecord);
+      const parsed: unknown = JSON.parse(trimmed);
+      if (isPromptVersionRecord(parsed)) rows.push(parsed);
     } catch {
       // 坏行跳过（宽容读）。
     }
@@ -54,6 +71,13 @@ export async function loadPromptVersions(root: string): Promise<PromptVersionRec
   return rows;
 }
 
+/**
+ * 1666 号两点加固（usage 账本同款，锁在 `ledger-append.flow.test`）：
+ * 1. 追加按账本路径进程内串行化——并发追加此前会丢行（20 路并发实测只剩
+ *    1 行）；丢掉的是版本行，对应版本从此无法回滚。
+ * 2. 读错误 ≠ 空账本——读不出来时上抛、追加中止，不用「只有新行」的内容
+ *    覆盖整本历史。
+ */
 export async function appendPromptVersion(
   root: string,
   promptId: string,
@@ -62,10 +86,13 @@ export async function appendPromptVersion(
   ts: string,
 ): Promise<void> {
   const row: PromptVersionRecord = { ts, promptId, action, content };
-  const existing = await loadPromptVersions(root);
-  const lines = [...existing, row].map((record) => JSON.stringify(record));
-  await mkdir(dirname(versionsPath(root)), { recursive: true });
-  await writeTextAtomic(versionsPath(root), lines.join("\n") + "\n");
+  const path = versionsPath(root);
+  await runSerially(path, async () => {
+    const existing = await loadPromptVersions(root);
+    const lines = [...existing, row].map((record) => JSON.stringify(record));
+    await mkdir(dirname(path), { recursive: true });
+    await writeTextAtomic(path, lines.join("\n") + "\n");
+  });
 }
 
 /** 某 prompt 版本列表（ts 降序=最新在前）。 */

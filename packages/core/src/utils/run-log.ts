@@ -123,6 +123,13 @@ export interface RunLogRecordInput {
  *
  * tookOver 与 Rust 同口径：仅成功且 attemptIndex > 0 || round > 1
  * （非 primary 命中 = R25 接管成功；2.0 无模型链，attemptIndex 恒 0）。
+ *
+ * 1666 号（勘误 1663 口径备案）：`round` 是 **R25 链轮**，不是同模型瞬态
+ * 重试的序号——Rust 的记录点在 `chat` 的 (chain_idx, round) 层，
+ * `chat_transient` 内环的 429/5xx 退避重试不单列（活体锁
+ * `engine-rs/tests/run_log_call_site.rs`）。调用点须把瞬态重试**折叠**进一条
+ * （2.0 无链 → round 恒 1、tookOver 恒 false）；把重试序号喂进 round 会把
+ * 同模型重试记成「接管」。
  */
 export function recordRunLogCall(input: RunLogRecordInput): void {
   const attemptIndex = input.attemptIndex ?? 0;

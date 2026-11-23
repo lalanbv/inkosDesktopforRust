@@ -255,6 +255,7 @@ export {
 } from "./utils/prompt-pack-store.js";
 export {
   budgetStatus,
+  serviceHostOf,
   usageProjection,
   type BudgetLevel,
   type BudgetStatus,

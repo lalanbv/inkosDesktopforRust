@@ -134,6 +134,78 @@ describe("PromptPacksPanel（R54/1659 号）", () => {
     const restore = fetchJsonMock.mock.calls.find(([path, init]) => path.includes("/versions/restore") && init?.method === "POST");
     expect(restore).toBeTruthy();
     expect(JSON.parse(restore![1]!.body!)).toEqual({ ts: "2026-11-23T01:00:00.000Z" });
+    // 成功提示=status 形态（与失败的 alert 区分）。
+    expect(document.querySelector('[data-prompt-notice]')?.getAttribute("data-prompt-notice-kind")).toBe("ok");
+    expect(document.querySelector('[data-prompt-notice]')?.getAttribute("role")).toBe("status");
+  });
+
+  // 1666 号：操作进行中锁定 prompt 选择与编辑——保存/回滚的收尾按发起时的
+  // prompt 刷新版本历史与草稿，中途切走会把旧 prompt 的历史挂到新选择底下。
+  it("保存进行中锁定 prompt 列表与编辑器，结束后解锁", async () => {
+    let releasePut: (() => void) | undefined;
+    const putGate = new Promise<void>((resolve) => { releasePut = resolve; });
+    fetchJsonMock.mockImplementation((path?: string, init?: { method?: string }) => {
+      if (typeof path !== "string") return Promise.resolve({});
+      if (path === "/prompt-packs" && !init) return Promise.resolve(packsPayload());
+      if (path === "/prompt-packs/longform.writer" && init?.method === "PUT") {
+        return putGate.then(() => ({ regressionHint: "prompt-changed" }));
+      }
+      if (path.includes("/versions") && !path.includes("/restore")) return Promise.resolve({ versions: [] });
+      return Promise.reject(new Error("unexpected path: " + path));
+    });
+    render(<PromptPacksPanel />);
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-item="longform.writer"]')).toBeTruthy();
+    });
+    fireEvent.click(document.querySelector('[data-prompt-item="longform.writer"]')!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-editor="longform.writer"]')).toBeTruthy();
+    });
+    expect(document.querySelector('[data-prompt-item="longform.writer"]')?.hasAttribute("disabled")).toBe(false);
+    fireEvent.change(document.querySelector('[data-prompt-editor="longform.writer"]')!, {
+      target: { value: "# 新覆盖内容" },
+    });
+    fireEvent.click(document.querySelector('[data-prompt-action="save"]')!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-editor="longform.writer"]')?.hasAttribute("disabled")).toBe(true);
+    });
+    expect(document.querySelector('[data-prompt-item="longform.writer"]')?.hasAttribute("disabled")).toBe(true);
+    releasePut!();
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-notice]')?.textContent).toContain("行为评测");
+    });
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-editor="longform.writer"]')?.hasAttribute("disabled")).toBe(false);
+    });
+    expect(document.querySelector('[data-prompt-item="longform.writer"]')?.hasAttribute("disabled")).toBe(false);
+  });
+
+  // 1666 号：失败提示此前与成功同形（同样的灰色 status）——改为 alert 形态并
+  // 透出服务端消息（fetchJson 取 error.message 信封）。
+  it("保存失败——提示为 alert 形态并带服务端消息", async () => {
+    fetchJsonMock.mockImplementation((path?: string, init?: { method?: string }) => {
+      if (typeof path !== "string") return Promise.resolve({});
+      if (path === "/prompt-packs" && !init) return Promise.resolve(packsPayload());
+      if (path === "/prompt-packs/longform.writer" && init?.method === "PUT") {
+        return Promise.reject(new Error("content must be a string"));
+      }
+      if (path.includes("/versions") && !path.includes("/restore")) return Promise.resolve({ versions: [] });
+      return Promise.reject(new Error("unexpected path: " + path));
+    });
+    render(<PromptPacksPanel />);
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-item="longform.writer"]')).toBeTruthy();
+    });
+    fireEvent.click(document.querySelector('[data-prompt-item="longform.writer"]')!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-action="save"]')).toBeTruthy();
+    });
+    fireEvent.click(document.querySelector('[data-prompt-action="save"]')!);
+    await waitFor(() => {
+      expect(document.querySelector('[data-prompt-notice]')?.textContent).toContain("content must be a string");
+    });
+    expect(document.querySelector('[data-prompt-notice]')?.getAttribute("data-prompt-notice-kind")).toBe("error");
+    expect(document.querySelector('[data-prompt-notice]')?.getAttribute("role")).toBe("alert");
   });
 
   it("端点不可达——降级空态（Node 回退腿缺该域）", async () => {

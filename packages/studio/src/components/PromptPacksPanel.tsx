@@ -47,7 +47,9 @@ export function PromptPacksPanel() {
   const [versions, setVersions] = useState<ReadonlyArray<VersionRow> | null>(null);
   const [diff, setDiff] = useState<{ versionTs: string; lines: ReadonlyArray<TextDiffLine> } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState("");
+  // 1666 号：提示带形态——失败与成功此前同形（同样的灰色 status），读屏也
+  // 一律当状态播报，「保存失败」和「已保存」在界面上分不出来。
+  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const [pendingReset, setPendingReset] = useState(false);
   const [pendingRestore, setPendingRestore] = useState<VersionRow | null>(null);
 
@@ -86,7 +88,7 @@ export function PromptPacksPanel() {
   useEffect(() => {
     setDraft(selected?.content ?? "");
     setDiff(null);
-    setNotice("");
+    setNotice(null);
     if (selectedId) void reloadVersions(selectedId);
     else setVersions(null);
   }, [selectedId, selected?.content]);
@@ -94,7 +96,7 @@ export function PromptPacksPanel() {
   const save = async () => {
     if (!selectedId) return;
     setBusy(true);
-    setNotice("");
+    setNotice(null);
     try {
       const result = await fetchJson<{ regressionHint?: string }>(
         `/prompt-packs/${encodeURIComponent(selectedId)}`,
@@ -102,13 +104,14 @@ export function PromptPacksPanel() {
       );
       await reload();
       await reloadVersions(selectedId);
-      setNotice(
-        result?.regressionHint === "prompt-changed"
+      setNotice({
+        kind: "ok",
+        text: result?.regressionHint === "prompt-changed"
           ? tr("已保存——prompt 已变更，建议跑一轮行为评测确认无回归。", "Saved — prompt changed; consider running a behavior eval to check for regressions.")
           : tr("已保存。", "Saved."),
-      );
+      });
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : tr("保存失败", "Save failed"));
+      setNotice({ kind: "error", text: cause instanceof Error ? cause.message : tr("保存失败", "Save failed") });
     } finally {
       setBusy(false);
     }
@@ -122,9 +125,9 @@ export function PromptPacksPanel() {
       await fetchJson(`/prompt-packs/${encodeURIComponent(selectedId)}`, { method: "DELETE" });
       await reload();
       await reloadVersions(selectedId);
-      setNotice(tr("已恢复 builtin 默认。", "Restored builtin default."));
+      setNotice({ kind: "ok", text: tr("已恢复 builtin 默认。", "Restored builtin default.") });
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : tr("恢复失败", "Reset failed"));
+      setNotice({ kind: "error", text: cause instanceof Error ? cause.message : tr("恢复失败", "Reset failed") });
     } finally {
       setBusy(false);
     }
@@ -143,9 +146,9 @@ export function PromptPacksPanel() {
       await reload();
       await reloadVersions(selectedId);
       setDiff(null);
-      setNotice(tr("已回滚到所选版本（回滚本身也记入历史）。", "Rolled back to the selected version (the rollback itself is recorded)."));
+      setNotice({ kind: "ok", text: tr("已回滚到所选版本（回滚本身也记入历史）。", "Rolled back to the selected version (the rollback itself is recorded).") });
     } catch (cause) {
-      setNotice(cause instanceof Error ? cause.message : tr("回滚失败", "Restore failed"));
+      setNotice({ kind: "error", text: cause instanceof Error ? cause.message : tr("回滚失败", "Restore failed") });
     } finally {
       setBusy(false);
     }
@@ -176,9 +179,10 @@ export function PromptPacksPanel() {
                   <button
                     key={promptId}
                     type="button"
+                    disabled={busy}
                     onClick={() => setSelectedId(promptId)}
                     data-prompt-item={promptId}
-                    className={`text-left text-xs rounded-lg px-2 py-1.5 transition ${
+                    className={`text-left text-xs rounded-lg px-2 py-1.5 transition disabled:opacity-40 disabled:hover:bg-transparent ${
                       selectedId === promptId
                         ? "bg-primary/15 text-primary font-bold"
                         : "text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -226,15 +230,26 @@ export function PromptPacksPanel() {
               </button>
             </div>
           </div>
+          {/* 1666 号：操作进行中锁定选择与编辑——保存/回滚的收尾会按发起时的
+              prompt 刷新版本历史与草稿，中途切走会把旧 prompt 的历史挂到新选择
+              底下、把保存期间的后续输入冲掉。 */}
           <textarea
             value={draft}
+            disabled={busy}
             onChange={(event) => setDraft(event.target.value)}
             rows={10}
             data-prompt-editor={selected.id}
             className="w-full rounded-xl border border-border/60 bg-background px-3 py-2 font-mono text-xs leading-5 text-foreground outline-none focus:border-primary/40"
           />
           {notice ? (
-            <p role="status" data-prompt-notice className="text-[11px] text-muted-foreground">{notice}</p>
+            <p
+              role={notice.kind === "error" ? "alert" : "status"}
+              data-prompt-notice
+              data-prompt-notice-kind={notice.kind}
+              className={`text-[11px] ${notice.kind === "error" ? "text-destructive" : "text-muted-foreground"}`}
+            >
+              {notice.text}
+            </p>
           ) : null}
         </div>
       ) : (
