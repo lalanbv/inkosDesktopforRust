@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -132,13 +132,15 @@ describe("write-face recycle routes (705: genre/experience/deconstruct)", () => 
     expect(put1Body.ok).toBe(true);
     expect(put1Body.entries).toHaveLength(1);
 
-    // 落盘形状：{ version: 1, entries }
-    const stored = JSON.parse(await readFile(join(root, "books", "b1", "story", "experience.json"), "utf-8")) as {
+    // 落盘形状：{ version: 1, entries }——1667 号：恒落 2.0 规范目录 works/<id>/source
+    // （此前落 books/<id> 幽灵树）。
+    const stored = JSON.parse(await readFile(join(root, "works", "b1", "source", "story", "experience.json"), "utf-8")) as {
       version: number;
       entries: ReadonlyArray<unknown>;
     };
     expect(stored.version).toBe(1);
     expect(stored.entries).toHaveLength(1);
+    await expect(readFile(join(root, "books", "b1", "story", "experience.json"), "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
 
     // PUT：同文本再沉淀 → 去重（merge 保序追加语义）
     const put2 = await app.request("/api/v1/books/b1/experience", {
@@ -163,6 +165,29 @@ describe("write-face recycle routes (705: genre/experience/deconstruct)", () => 
     expect(removedBody.entries).toHaveLength(0);
     const after = await app.request("/api/v1/books/b1/experience");
     expect((await after.json() as { entries: ReadonlyArray<unknown> }).entries).toHaveLength(0);
+
+    // 1667 号：legacy 布局存量条目（books/<id>/story/experience.json）读兜底可见；
+    // 再沉淀后合并结果落 works，legacy 原件不动。
+    const legacyStory = join(root, "books", "legacy1", "story");
+    await mkdir(legacyStory, { recursive: true });
+    await writeFile(
+      join(legacyStory, "experience.json"),
+      JSON.stringify({ version: 1, entries: [validEntry] }),
+      "utf-8",
+    );
+    const legacyGet = await app.request("/api/v1/books/legacy1/experience");
+    expect(((await legacyGet.json()) as { entries: ReadonlyArray<{ id: string }> }).entries.map((entry) => entry.id)).toEqual(["learned_1"]);
+    const legacyPut = await app.request("/api/v1/books/legacy1/experience", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries: [{ ...validEntry, id: "learned_9", text: "以动作代替心理独白" }] }),
+    });
+    expect(legacyPut.status).toBe(200);
+    const legacyStored = JSON.parse(await readFile(join(root, "works", "legacy1", "source", "story", "experience.json"), "utf-8")) as {
+      entries: ReadonlyArray<{ id: string }>;
+    };
+    expect(legacyStored.entries.map((entry) => entry.id)).toEqual(["learned_1", "learned_9"]);
+    expect(JSON.parse(await readFile(join(legacyStory, "experience.json"), "utf-8")).entries).toHaveLength(1);
   });
 
   it("deconstruct: 顶层包络（dossiers/pacing/markdown）+ 落盘 + publish 材料池", async () => {

@@ -24,41 +24,17 @@ const studioSrc = fileURLToPath(new URL("..", import.meta.url));
 const repoRoot = resolve(studioSrc, "..", "..", "..");
 
 /**
- * 零引用基线（1664 号首扫：218 条路由 / 184 覆盖 / 34 盲区，本轮清偿两条）。
+ * 零引用基线（1664 号首扫：218 条路由 / 184 覆盖 / 34 盲区，本轮清偿两条；
+ * 1667 号清偿 28 条：章版本读/恢复 + roster/confirm（book-data-path-family.test）、
+ * audit/revise/rewrite（fork-write-faces-llm.test，canonical walkthrough-mock 上游）、
+ * 其余 22 条不依赖 LLM 的校验/简单成功路径（route-baseline-batch2.test）。
+ * 余下 4 条均需 LLM 或重夹具（建书链 / 文风导入 / daemon 启动 / 翻译运行）。
  * 每条都是已知未测面——清偿一条就删一行；新条目不得加入。
  */
 const BASELINE: ReadonlyArray<string> = [
   "POST /api/v1/books/create",
-  "PUT /api/v1/books/:id/chapters/:num/workspace/brief",
-  "GET /api/v1/books/:id/chapters/:num/versions/:versionId",
-  "POST /api/v1/books/:id/chapters/:num/versions/:versionId/restore",
-  "POST /api/v1/books/:id/foundation/revise",
-  "POST /api/v1/books/:id/roster/confirm",
-  "POST /api/v1/books/:id/audit/:chapter",
-  "POST /api/v1/books/:id/revise/:chapter",
-  "POST /api/v1/books/:id/rewrite/:chapter",
   "POST /api/v1/books/:id/style/import",
-  "POST /api/v1/books/:id/import/chapters",
-  "POST /api/v1/books/:id/import/canon",
-  "POST /api/v1/books/:id/import/canon-file",
-  "GET /api/v1/cover/secret/:service",
-  "PUT /api/v1/cover/secret/:service",
   "POST /api/v1/daemon/start",
-  "POST /api/v1/daemon/stop",
-  "POST /api/v1/fanfic/init",
-  "POST /api/v1/imitation/init",
-  "POST /api/v1/import/canon/upload",
-  "PUT /api/v1/play/runs/:worldId/:runId/image-settings",
-  "POST /api/v1/play/runs/:worldId/:runId/generate-image",
-  "GET /api/v1/play/runs/:worldId/:runId/images/:file",
-  "GET /api/v1/project/artifacts/:file{.+}",
-  "PUT /api/v1/project/artifacts/:file{.+}",
-  "POST /api/v1/services/config/import-env",
-  "PUT /api/v1/sessions/:sessionId/play-mode",
-  "GET /api/v1/skills/trust",
-  "POST /api/v1/skills/trust",
-  "DELETE /api/v1/skills/trust",
-  "POST /api/v1/spinoff/init",
   "POST /api/v1/translations/:id/run",
 ];
 

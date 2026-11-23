@@ -4859,11 +4859,36 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
+  // ── 1667 号：fork 读/写面（701-707 号批次回收的 1.x 处理器）书内数据定位 ──
+  // 2.0 规范书目录 = state.bookDir(id)（works/<id>/source）。这批处理器沿用
+  // 1.x 的 join(root,"books",id,…)——对 2.0 书读写一棵幽灵树：roster/confirm
+  // 写 legacy 而 roster-candidates 读 works（确认即丢失）；timeline API 与管线
+  // timeline-settle（bookDir/story/timeline.json）各读各的文件；best-of-n /
+  // auto-beats / series-id 对存在的书报 not found，或把配置写进残缺幽灵文件。
+  // 差分器抓不到——其 TS 夹具是 legacy 书经迁移注册，读写恰好在同一棵树。
+  // 规则：读 = works 优先、legacy 兜底（迁移书存量数据不丢）；写 = 恒 works。
+  const legacyBookPath = (bookId: string, ...segments: string[]): string =>
+    join(root, "books", bookId, ...segments);
+  const bookDataPath = (bookId: string, ...segments: string[]): string =>
+    join(state.bookDir(bookId), ...segments);
+  const readBookDataFile = async (bookId: string, ...segments: string[]): Promise<string | null> => {
+    const primary = await readFile(bookDataPath(bookId, ...segments), "utf-8").catch(() => null);
+    if (primary !== null) return primary;
+    return readFile(legacyBookPath(bookId, ...segments), "utf-8").catch(() => null);
+  };
+  const writeBookDataFile = async (bookId: string, content: string, ...segments: string[]): Promise<void> => {
+    const path = bookDataPath(bookId, ...segments);
+    await mkdir(dirname(path), { recursive: true });
+    // 199 号同因：截断的 book.json / timeline.json = 整本书不可加载——原子替换写。
+    await writeTextAtomic(path, content);
+  };
+
   app.get("/api/v1/books/:id/best-of-n", async (c) => {
     const id = c.req.param("id");
-    const path = join(root, "books", id, "book.json");
+    const raw = await readBookDataFile(id, "book.json");
+    if (raw === null) return c.json({ enabled: false });
     try {
-      const book = JSON.parse(await readFile(path, "utf-8"));
+      const book = JSON.parse(raw);
       return c.json(book?.governance?.bestOfN ?? { enabled: false });
     } catch {
       return c.json({ enabled: false });
@@ -4873,12 +4898,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   app.put("/api/v1/books/:id/best-of-n", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json<{ enabled?: boolean; candidates?: number; minScore?: number }>();
-    const path = join(root, "books", id, "book.json");
-    let book: Record<string, unknown> = {};
+    // 1667 号：书不存在 → 404（此前在幽灵树写出只含 governance 的残缺 book.json）；
+    // 配置损坏 → 拒写（此前把损坏文件覆写成残缺配置 = 静默丢书）。
+    const raw = await readBookDataFile(id, "book.json");
+    if (raw === null) return c.json({ error: "Book not found" }, 404);
+    let book: Record<string, unknown>;
     try {
-      book = JSON.parse(await readFile(path, "utf-8"));
+      book = JSON.parse(raw) as Record<string, unknown>;
     } catch {
-      book = {};
+      return c.json({ error: "Book config is not valid JSON" }, 500);
     }
     // 704 号审查对齐 fork 契约：clamp 归一（candidates 2-3 截断 / minScore 0-100 截断），
     // enabled 恒布尔归一——701 graft 缺此三面（活体审查捕获）。
@@ -4892,15 +4920,15 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const governance = (book.governance as Record<string, unknown> | undefined) ?? {};
     governance.bestOfN = bestOfN;
     book.governance = governance;
-    await writeFile(path, JSON.stringify(book, null, 2), "utf-8");
+    await writeBookDataFile(id, JSON.stringify(book, null, 2), "book.json");
     return c.json(bestOfN);
   });
 
   app.get("/api/v1/books/:id/anti-ai-rules", async (c) => {
     const id = c.req.param("id");
-    const path = join(root, "books", id, "story", "anti_ai_rules.json");
+    const raw = await readBookDataFile(id, "story", "anti_ai_rules.json");
     try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      const parsed = JSON.parse(raw ?? "");
       if (Array.isArray(parsed.rules)) return c.json({ rules: parsed.rules, seeded: false });
       return c.json({ rules: ANTI_AI_RULE_SEEDS, seeded: true });
     } catch {
@@ -4920,9 +4948,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       else errors.push(...(result.errors ?? []).map((message) => `rules[${index}] ${message}`));
     });
     if (errors.length > 0) return c.json({ errors }, 400);
-    const dir = join(root, "books", id, "story");
-    await mkdir(dir, { recursive: true });
-    await writeFile(join(dir, "anti_ai_rules.json"), JSON.stringify({ version: 1, rules: valid }, null, 2), "utf-8");
+    await writeBookDataFile(id, JSON.stringify({ version: 1, rules: valid }, null, 2), "story", "anti_ai_rules.json");
     return c.json({ ok: true, rules: valid });
   });
 
@@ -5163,7 +5189,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!candidate || !["new-entity", "alias", "typo"].includes(action)) {
       return c.json({ error: "candidate and action (new-entity|alias|typo) are required" }, 400);
     }
-    const rosterPath = join(root, "books", id, "story", "entity_roster.md");
+    // 1667 号：与 roster-candidates 读面同分支——legacy 账本在位（1.x 迁移书）
+    // 读面走 books/ 树，2.0 原生书读面走 works 树。此前恒写 books/<id>：原生书
+    // 确认后读面永远看不到（候选恒为「新实体」），还多出一棵 books/<id> 杂树。
+    const legacyLedger = await access(legacyBookPath(id, "story", "memory.db")).then(() => true).catch(() => false);
+    const rosterPath = legacyLedger
+      ? legacyBookPath(id, "story", "entity_roster.md")
+      : bookDataPath(id, "story", "entity_roster.md");
     let roster: import("@actalk/inkos-core").RosterEntity[] = [];
     try {
       roster = parseEntityRoster(await readFile(rosterPath, "utf-8"));
@@ -5176,8 +5208,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       ...(typeof body.targetName === "string" ? { targetName: body.targetName } : {}),
       ...(typeof body.chapter === "number" ? { chapter: body.chapter } : {}),
     });
-    await mkdir(join(root, "books", id, "story"), { recursive: true });
-    await writeFile(rosterPath, renderEntityRoster(result.roster), "utf-8");
+    await mkdir(dirname(rosterPath), { recursive: true });
+    await writeTextAtomic(rosterPath, renderEntityRoster(result.roster));
     return c.json({ ok: true, applied: result.applied });
   });
 
@@ -5300,9 +5332,8 @@ function yamlScalar(value: unknown): string {
 
   app.get("/api/v1/books/:id/experience", async (c) => {
     const id = c.req.param("id");
-    const path = join(root, "books", id, "story", "experience.json");
     try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      const parsed = JSON.parse((await readBookDataFile(id, "story", "experience.json")) ?? "");
       return c.json({ entries: Array.isArray(parsed.entries) ? parsed.entries : [] });
     } catch {
       return c.json({ entries: [] });
@@ -5318,10 +5349,9 @@ function yamlScalar(value: unknown): string {
     const body = await c.req.json<{ entries?: unknown[] }>();
     if (!Array.isArray(body.entries)) return c.json({ error: "entries array required" }, 400);
     const core = await import("@actalk/inkos-core");
-    const path = join(root, "books", id, "story", "experience.json");
     let existing: unknown[] = [];
     try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      const parsed = JSON.parse((await readBookDataFile(id, "story", "experience.json")) ?? "");
       if (Array.isArray(parsed.entries)) existing = parsed.entries;
     } catch {
       existing = [];
@@ -5348,25 +5378,23 @@ function yamlScalar(value: unknown): string {
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 422);
     }
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(path, JSON.stringify({ version: 1, entries: merged }, null, 2), "utf-8");
+    await writeBookDataFile(id, JSON.stringify({ version: 1, entries: merged }, null, 2), "story", "experience.json");
     return c.json({ ok: true, entries: merged });
   });
 
   app.delete("/api/v1/books/:id/experience/:entryId", async (c) => {
     const id = c.req.param("id");
     const entryId = c.req.param("entryId");
-    const path = join(root, "books", id, "story", "experience.json");
     let entries: Array<Record<string, unknown>> = [];
     try {
-      const parsed = JSON.parse(await readFile(path, "utf-8"));
+      const parsed = JSON.parse((await readBookDataFile(id, "story", "experience.json")) ?? "");
       if (Array.isArray(parsed.entries)) entries = parsed.entries;
     } catch {
       entries = [];
     }
     const remaining = entries.filter((entry) => entry.id !== entryId);
     if (remaining.length === entries.length) return c.json({ error: `entry not found: ${entryId}` }, 404);
-    await writeFile(path, JSON.stringify({ version: 1, entries: remaining }, null, 2), "utf-8");
+    await writeBookDataFile(id, JSON.stringify({ version: 1, entries: remaining }, null, 2), "story", "experience.json");
     return c.json({ ok: true, entries: remaining });
   });
 
@@ -5438,14 +5466,17 @@ function yamlScalar(value: unknown): string {
   // fork server 同名 helper：原始 book.json 直读（loadBookConfig 强类型投影会
   // 裁掉 writing.autoTimelineBeats / seriesId 等未建模字段）。
   const loadRawBookConfig = async (bookId: string): Promise<Record<string, unknown>> => {
-    const raw = await readFile(join(root, "books", bookId, "book.json"), "utf-8");
+    // 1667 号：works 优先、legacy 兜底（此前恒读 books/<id>/book.json——2.0 书
+    // 恒 not found，auto-beats / series-id 等开关对存在的书报 404）。
+    const raw = await readBookDataFile(bookId, "book.json");
+    if (raw === null) throw new Error(`Book "${bookId}" not found`);
     return JSON.parse(raw) as Record<string, unknown>;
   };
 
   app.get("/api/v1/books/:id/timeline", async (c) => {
     const id = c.req.param("id");
     try {
-      const raw = await readFile(join(root, "books", id, "story", "timeline.json"), "utf-8");
+      const raw = (await readBookDataFile(id, "story", "timeline.json")) ?? "";
       const parsed = TimelineSchema.safeParse(JSON.parse(raw));
       if (!parsed.success) {
         console.warn(`[timeline] ${id} timeline.json 不可解析，按无时间线处理`);
@@ -5467,10 +5498,9 @@ function yamlScalar(value: unknown): string {
     if (parsed.data.bookId !== id) {
       return c.json({ error: "Timeline bookId does not match the route" }, 400);
     }
-    const path = join(root, "books", id, "story", "timeline.json");
-    await mkdir(dirname(path), { recursive: true });
-    // 199 号：timeline.json 损坏会被 GET 按「无时间线」静默吞掉——原子替换写。
-    await writeTextAtomic(path, `${JSON.stringify(parsed.data, null, 2)}\n`);
+    // 1667 号：写 works 树——与管线 timeline-settle（bookDir/story/timeline.json）
+    // 同一文件（此前 API 写 books/<id> 而管线读 works，用户编辑管线不可见）。
+    await writeBookDataFile(id, `${JSON.stringify(parsed.data, null, 2)}\n`, "story", "timeline.json");
     return c.json({ ok: true });
   });
 
@@ -5494,7 +5524,6 @@ function yamlScalar(value: unknown): string {
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
     const { enabled } = await c.req.json<{ enabled?: boolean }>();
     const next = enabled === true;
-    const rawBookPath = join(root, "books", bookId, "book.json");
     try {
       const rawBook = await loadRawBookConfig(bookId);
       if (next) {
@@ -5510,7 +5539,7 @@ function yamlScalar(value: unknown): string {
         rawBook.writing = Object.keys(writing).length > 0 ? writing : undefined;
       }
       // 199 号：原子替换写（截断的 book.json = 整本书不可加载）。
-      await writeTextAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
+      await writeBookDataFile(bookId, JSON.stringify(rawBook, null, 2), "book.json");
       return c.json({ ok: true, enabled: next });
     } catch {
       return c.json({ error: `Book "${bookId}" not found` }, 404);
@@ -5520,9 +5549,8 @@ function yamlScalar(value: unknown): string {
   // R20/390 号：书级系列绑定（book.json seriesId 读写；null/缺省=解绑）。
   app.get("/api/v1/books/:id/series-id", async (c) => {
     const id = c.req.param("id");
-    const path = join(root, "books", id, "book.json");
     try {
-      const book = JSON.parse(await readFile(path, "utf-8"));
+      const book = JSON.parse((await readBookDataFile(id, "book.json")) ?? "");
       return c.json({ seriesId: typeof book?.seriesId === "string" ? book.seriesId : null });
     } catch {
       return c.json({ seriesId: null });
@@ -5532,10 +5560,9 @@ function yamlScalar(value: unknown): string {
   app.put("/api/v1/books/:id/series-id", async (c) => {
     const id = c.req.param("id");
     const body = await c.req.json<{ seriesId?: string | null }>();
-    const path = join(root, "books", id, "book.json");
-    let book: Record<string, unknown> = {};
+    let book: Record<string, unknown>;
     try {
-      book = JSON.parse(await readFile(path, "utf-8"));
+      book = JSON.parse((await readBookDataFile(id, "book.json")) ?? "") as Record<string, unknown>;
     } catch {
       return c.json({ error: "Book not found" }, 404);
     }
@@ -5550,7 +5577,7 @@ function yamlScalar(value: unknown): string {
     }
     // 199 号：原子替换写（Rust put_series_id write_file_atomic 同构；fork 时代
     // 为普通 writeFile，契约面不可观测，向 Rust 侧收敛）。
-    await writeTextAtomic(path, JSON.stringify(book, null, 2));
+    await writeBookDataFile(id, JSON.stringify(book, null, 2), "book.json");
     return c.json({ ok: true, seriesId: raw });
   });
 
@@ -5586,13 +5613,13 @@ function yamlScalar(value: unknown): string {
 
   // ── 系列书回填（184 号 C3-b）：抽取/应用，交互「预览+逐项勾选」 ──
   const readSourceCanonFiles = async (sourceBookId: string): Promise<Array<{ name: string; content: string }>> => {
-    const bookDir = join(root, "books", sourceBookId);
     const files: Array<{ name: string; content: string }> = [];
     const rels = ["story/story_bible.md", "story/outline/story_frame.md"];
     for (const rel of rels) {
-      try {
-        files.push({ name: rel, content: await readFile(join(bookDir, ...rel.split("/")), "utf-8") });
-      } catch { /* 缺失静默跳过 */ }
+      // 1667 号：works 优先、legacy 兜底——此前恒读 books/<sourceBookId>，2.0
+      // 源书恒「无正典文件」（路由前一步却用 works 布局的 loadBookConfig 判存在）。
+      const content = await readBookDataFile(sourceBookId, ...rel.split("/"));
+      if (content !== null) files.push({ name: rel, content });
     }
     return files;
   };
@@ -5635,18 +5662,16 @@ function yamlScalar(value: unknown): string {
     }
     if (!Array.isArray(items) || items.length === 0) return c.json({ error: "LLM returned zero backfill items" }, 500);
     const draft = { version: 1, bookId: id, sourceBookId: body.sourceBookId, updatedAt: new Date().toISOString(), items };
-    const draftPath = join(root, "books", id, "story", "series_backfill_draft.json");
-    await mkdir(dirname(draftPath), { recursive: true });
     // 199 号：原子替换写（抽取草稿是 apply 的唯一数据源）。
-    await writeTextAtomic(draftPath, `${JSON.stringify(draft, null, 2)}\n`);
+    await writeBookDataFile(id, `${JSON.stringify(draft, null, 2)}\n`, "story", "series_backfill_draft.json");
     return c.json({ draft });
   });
 
   app.get("/api/v1/books/:id/series-backfill/existing", async (c) => {
     const id = c.req.param("id");
     try {
-      const content = await readFile(join(root, "books", id, "story", "series_backfill.md"), "utf-8");
-      return c.json({ content });
+      // 缺文件 = content:null（Rust 同形，差分器对拍面）——不可坍缩成空串。
+      return c.json({ content: await readBookDataFile(id, "story", "series_backfill.md") });
     } catch {
       return c.json({ content: null });
     }
@@ -5657,10 +5682,9 @@ function yamlScalar(value: unknown): string {
     const body = await c.req
       .json<{ itemIds?: string[]; mode?: string }>()
       .catch(() => ({}) as { itemIds?: string[]; mode?: string });
-    const draftPath = join(root, "books", id, "story", "series_backfill_draft.json");
     let draft: { sourceBookId: string; updatedAt: string; items: Array<{ id: string; category: string; title: string; content: string }> };
     try {
-      draft = JSON.parse(await readFile(draftPath, "utf-8"));
+      draft = JSON.parse((await readBookDataFile(id, "story", "series_backfill_draft.json")) ?? "");
     } catch {
       return c.json({ error: "No backfill draft found; run extract first" }, 400);
     }
@@ -5671,10 +5695,9 @@ function yamlScalar(value: unknown): string {
     const mode = body.mode ?? "overwrite";
     let merged = items;
     if (mode === "merge") {
-      const backfillPath = join(root, "books", id, "story", "series_backfill.md");
       const existingItems: Array<{ id: string; category: string; title: string; content: string }> = [];
       try {
-        const content = await readFile(backfillPath, "utf-8");
+        const content = (await readBookDataFile(id, "story", "series_backfill.md")) ?? "";
         let current: { category: string; title: string; lines: string[] } | null = null;
         for (const line of content.split("\n")) {
           const match = /^## \[([^\]]*)\] (.*)$/.exec(line);
@@ -5707,11 +5730,10 @@ function yamlScalar(value: unknown): string {
         if (!duplicate) merged = [...merged, item];
       }
     }
-    const path = join(root, "books", id, "story", "series_backfill.md");
     // 头部与 Rust render_backfill_markdown 逐字对齐（来源 id 双写）。199 号：原子替换写。
     let markdown = `# 系列设定回填\n\n来源：《${draft.sourceBookId}》（${draft.sourceBookId}） · 抽取于 ${draft.updatedAt} · 勾选 ${merged.length} 条\n\n`;
     for (const item of merged) markdown += `## [${item.category}] ${item.title}\n\n${item.content}\n\n`;
-    await writeTextAtomic(path, markdown);
+    await writeBookDataFile(id, markdown, "story", "series_backfill.md");
     return c.json({ ok: true, path: "story/series_backfill.md", applied: items.length, total: merged.length, mode });
   });
 
@@ -5801,7 +5823,6 @@ function yamlScalar(value: unknown): string {
     const bookId = c.req.param("id");
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
     const { mode } = await c.req.json<{ mode?: string }>();
-    const rawBookPath = join(root, "books", bookId, "book.json");
     try {
       const [projectConfig, rawBook] = await Promise.all([
         loadRawConfig(root),
@@ -5821,7 +5842,7 @@ function yamlScalar(value: unknown): string {
         };
       }
       // 199 号：book.json 损坏 = 整本书不可加载——原子替换写。
-      await writeTextAtomic(rawBookPath, JSON.stringify(rawBook, null, 2));
+      await writeBookDataFile(bookId, JSON.stringify(rawBook, null, 2), "book.json");
       const bookMode = readBookChapterReviewMode(rawBook);
       return c.json({
         ok: true,

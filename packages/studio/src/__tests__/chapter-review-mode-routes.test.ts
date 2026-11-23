@@ -22,8 +22,15 @@ describe("chapter-review-mode routes (709)", () => {
   const seedProject = async (extra: Record<string, unknown> = {}) => {
     await writeFile(join(root, "inkos.json"), JSON.stringify({ name: "t", ...extra }), "utf-8");
   };
-  const seedBook = async (bookId: string, extra: Record<string, unknown> = {}) => {
-    const dir = join(root, "books", bookId);
+  // 1667 号：书内数据写面恒落 2.0 规范目录 works/<id>/source（读 works 优先、
+  // legacy 兜底）。seedBook 缺省播 canonical 布局；legacy 布局仅用于兜底读用例。
+  const worksBookDir = (bookId: string) => join(root, "works", bookId, "source");
+  const seedBook = async (
+    bookId: string,
+    extra: Record<string, unknown> = {},
+    layout: "works" | "legacy" = "works",
+  ) => {
+    const dir = layout === "works" ? worksBookDir(bookId) : join(root, "books", bookId);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "book.json"), JSON.stringify({ id: bookId, title: "镜花缘", ...extra }), "utf-8");
   };
@@ -80,7 +87,7 @@ describe("chapter-review-mode routes (709)", () => {
       body: JSON.stringify({ mode: "auto" }),
     });
     expect(await putBook.json()).toEqual({ ok: true, mode: "auto", bookMode: "auto", projectMode: "manual" });
-    const raw = JSON.parse(await readFile_(join(root, "books", "b1", "book.json"))) as { writing?: Record<string, unknown> };
+    const raw = JSON.parse(await readFile_(join(worksBookDir("b1"), "book.json"))) as { writing?: Record<string, unknown> };
     expect(raw.writing?.reviewMode).toBe("auto");
 
     // GET：bookMode 在位
@@ -95,7 +102,7 @@ describe("chapter-review-mode routes (709)", () => {
     });
     expect(putInherit.status).toBe(200);
     expect(await putInherit.json()).toEqual({ ok: true, mode: "manual", bookMode: null, projectMode: "manual" });
-    const rawAfter = JSON.parse(await readFile_(join(root, "books", "b1", "book.json"))) as { writing?: Record<string, unknown> };
+    const rawAfter = JSON.parse(await readFile_(join(worksBookDir("b1"), "book.json"))) as { writing?: Record<string, unknown> };
     expect(rawAfter.writing).toBeUndefined();
 
     // inherit 保留同段其他键（autoTimelineBeats 不被连带删除）
@@ -105,8 +112,23 @@ describe("chapter-review-mode routes (709)", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "inherit" }),
     });
-    const rawKeep = JSON.parse(await readFile_(join(root, "books", "b1", "book.json"))) as { writing?: Record<string, unknown> };
+    const rawKeep = JSON.parse(await readFile_(join(worksBookDir("b1"), "book.json"))) as { writing?: Record<string, unknown> };
     expect(rawKeep.writing).toEqual({ autoTimelineBeats: true });
+
+    // 1667 号：legacy 布局存量书（books/<id>/book.json）——读兜底 legacy、写落
+    // works、legacy 原件不动（此前恒写 legacy 树 = 2.0 书对这些写面恒 404）。
+    await seedBook("legacy1", {}, "legacy");
+    const putLegacy = await app.request("/api/v1/books/legacy1/chapter-review-mode", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "manual" }),
+    });
+    expect(putLegacy.status).toBe(200);
+    const written = JSON.parse(await readFile_(join(worksBookDir("legacy1"), "book.json"))) as { id: string; writing?: Record<string, unknown> };
+    expect(written.id).toBe("legacy1");
+    expect(written.writing?.reviewMode).toBe("manual");
+    const untouched = JSON.parse(await readFile_(join(root, "books", "legacy1", "book.json"))) as { writing?: unknown };
+    expect(untouched.writing).toBeUndefined();
 
     // 缺书 404 + 非法 id 400（编码路径穿越，2.0 INVALID_BOOK_ID 中间件同口径）
     expect((await app.request("/api/v1/books/ghost/chapter-review-mode")).status).toBe(404);
@@ -147,7 +169,9 @@ describe("chapter-review-mode routes (709)", () => {
       body: JSON.stringify({ seriesId: "jing_hua_yuan" }),
     });
 
-    const stored = JSON.parse(await readFile_(join(root, "books", "b1", "book.json")));
+    // 1667 号：四写面直接落 canonical works 布局——此前落 legacy 树，本用例要
+    // 靠手工拷贝到 works 才能验证 StateManager 加载（测试自己知道写错了树）。
+    const stored = JSON.parse(await readFile_(join(worksBookDir("b1"), "book.json")));
     const { BookConfigSchema, StateManager } = await import("@actalk/inkos-core");
     const parsed = BookConfigSchema.parse(stored);
     expect(parsed.writing?.reviewMode).toBe("manual");
@@ -155,15 +179,13 @@ describe("chapter-review-mode routes (709)", () => {
     expect(parsed.governance?.bestOfN?.candidates).toBe(3);
     expect(parsed.seriesId).toBe("jing_hua_yuan");
 
-    // StateManager 强类型加载同锁（canonical works 布局同键共存形态：
-    // 迁移副本与 legacy 树同构，写面键集一致即双布局皆可加载）。
-    const { mkdir: mkdirFs, copyFile } = await import("node:fs/promises");
-    const worksDir = join(root, "works", "b1", "source");
-    await mkdirFs(worksDir, { recursive: true });
-    await copyFile(join(root, "books", "b1", "book.json"), join(worksDir, "book.json"));
+    // StateManager 强类型加载同锁——写后立即可加载，无需任何迁移拷贝。
     const loaded = await new StateManager(root).loadBookConfig("b1");
     expect(loaded.id).toBe("b1");
     expect(loaded.writing?.autoTimelineBeats).toBe(true);
+    expect(loaded.writing?.reviewMode).toBe("manual");
+    expect(loaded.governance?.bestOfN?.candidates).toBe(3);
+    expect(loaded.seriesId).toBe("jing_hua_yuan");
   });
 });
 

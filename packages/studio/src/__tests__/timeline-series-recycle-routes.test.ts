@@ -29,8 +29,15 @@ describe("timeline-series recycle routes (707)", () => {
     ],
   };
 
-  const seedBook = async (bookId: string, extra: Record<string, unknown> = {}) => {
-    const dir = join(root, "books", bookId);
+  // 1667 号：书内数据写面恒落 2.0 规范目录 works/<id>/source（读 works 优先、
+  // legacy 兜底）。seedBook 缺省播 canonical 布局；legacy 布局仅用于兜底读用例。
+  const worksBookDir = (bookId: string) => join(root, "works", bookId, "source");
+  const seedBook = async (
+    bookId: string,
+    extra: Record<string, unknown> = {},
+    layout: "works" | "legacy" = "works",
+  ) => {
+    const dir = layout === "works" ? worksBookDir(bookId) : join(root, "books", bookId);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "book.json"), JSON.stringify({ id: bookId, title: "镜花缘", ...extra }), "utf-8");
   };
@@ -81,8 +88,14 @@ describe("timeline-series recycle routes (707)", () => {
     });
     expect(put.status).toBe(200);
     expect(await put.json()).toEqual({ ok: true });
-    const stored = await readFile(join(root, "books", "b1", "story", "timeline.json"), "utf-8");
+    // 1667 号：落 works 树——且与管线 timeline-settle 读的是同一个文件
+    // （StateManager.bookDir/story/timeline.json）。此前 API 写 books/<id>、
+    // 管线读 works：用户在时间线页的编辑对写作链不可见。
+    const { StateManager } = await import("@actalk/inkos-core");
+    const pipelinePath = join(new StateManager(root).bookDir("b1"), "story", "timeline.json");
+    const stored = await readFile(pipelinePath, "utf-8");
     expect(stored.endsWith("\n")).toBe(true);
+    await expect(readFile(join(root, "books", "b1", "story", "timeline.json"), "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
 
     // GET 回读：解析后的 timeline 与写入一致
     const round = await app.request("/api/v1/books/b1/timeline");
@@ -90,9 +103,16 @@ describe("timeline-series recycle routes (707)", () => {
     expect(await round.json()).toEqual({ timeline: validTimeline });
 
     // GET：坏载荷 → {timeline:null}（静默吞掉 + 警告）
-    await writeFile(join(root, "books", "b1", "story", "timeline.json"), "{broken", "utf-8");
+    await writeFile(pipelinePath, "{broken", "utf-8");
     const corrupt = await app.request("/api/v1/books/b1/timeline");
     expect(await corrupt.json()).toEqual({ timeline: null });
+
+    // 1667 号：legacy 布局存量 timeline（books/<id>/story）读兜底可见
+    const legacyStory = join(root, "books", "legacy1", "story");
+    await mkdir(legacyStory, { recursive: true });
+    await writeFile(join(legacyStory, "timeline.json"), JSON.stringify({ ...validTimeline, bookId: "legacy1" }), "utf-8");
+    const legacyRead = await app.request("/api/v1/books/legacy1/timeline");
+    expect(await legacyRead.json()).toEqual({ timeline: { ...validTimeline, bookId: "legacy1" } });
   });
 
   it("timeline-auto-beats GET/PUT: 开关落 writing.autoTimelineBeats + 关闭删键", async () => {
@@ -117,7 +137,7 @@ describe("timeline-series recycle routes (707)", () => {
     });
     expect(on.status).toBe(200);
     expect(await on.json()).toEqual({ ok: true, enabled: true });
-    let book = JSON.parse(await readFile(join(root, "books", "b1", "book.json"), "utf-8")) as { writing?: Record<string, unknown> };
+    let book = JSON.parse(await readFile(join(worksBookDir("b1"), "book.json"), "utf-8")) as { writing?: Record<string, unknown> };
     expect(book.writing?.autoTimelineBeats).toBe(true);
 
     // GET：开启态 → {enabled:true, bookEnabled:true}
@@ -131,7 +151,7 @@ describe("timeline-series recycle routes (707)", () => {
       body: JSON.stringify({ enabled: false }),
     });
     expect(await disable.json()).toEqual({ ok: true, enabled: false });
-    book = JSON.parse(await readFile(join(root, "books", "b1", "book.json"), "utf-8"));
+    book = JSON.parse(await readFile(join(worksBookDir("b1"), "book.json"), "utf-8"));
     expect(book.writing).toBeUndefined();
 
     // 关闭时保留同段其他键：writing.reviewMode 不被连带删除
@@ -142,8 +162,21 @@ describe("timeline-series recycle routes (707)", () => {
       body: JSON.stringify({}),
     });
     expect(await disableKeep.json()).toEqual({ ok: true, enabled: false });
-    book = JSON.parse(await readFile(join(root, "books", "b1", "book.json"), "utf-8"));
+    book = JSON.parse(await readFile(join(worksBookDir("b1"), "book.json"), "utf-8"));
     expect(book.writing).toEqual({ reviewMode: "manual" });
+
+    // 1667 号：legacy 布局存量书——读兜底 legacy（此前 2.0 书恒 404）、写落 works
+    await seedBook("legacy1", { writing: { autoTimelineBeats: true } }, "legacy");
+    const legacyGet = await app.request("/api/v1/books/legacy1/timeline-auto-beats");
+    expect(await legacyGet.json()).toEqual({ enabled: true, bookEnabled: true });
+    const legacyPut = await app.request("/api/v1/books/legacy1/timeline-auto-beats", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    expect(await legacyPut.json()).toEqual({ ok: true, enabled: false });
+    expect(JSON.parse(await readFile(join(worksBookDir("legacy1"), "book.json"), "utf-8")).writing).toBeUndefined();
+    expect(JSON.parse(await readFile(join(root, "books", "legacy1", "book.json"), "utf-8")).writing.autoTimelineBeats).toBe(true);
   });
 
   it("series-id GET/PUT: 绑定/解绑 + isValidSeriesId 守卫 + 404", async () => {
@@ -182,7 +215,7 @@ describe("timeline-series recycle routes (707)", () => {
     });
     expect(bind.status).toBe(200);
     expect(await bind.json()).toEqual({ ok: true, seriesId: "jing_hua_yuan" });
-    let book = JSON.parse(await readFile(join(root, "books", "b1", "book.json"), "utf-8")) as { seriesId?: string };
+    let book = JSON.parse(await readFile(join(worksBookDir("b1"), "book.json"), "utf-8")) as { seriesId?: string };
     expect(book.seriesId).toBe("jing_hua_yuan");
 
     // GET：绑定态回读
@@ -196,7 +229,7 @@ describe("timeline-series recycle routes (707)", () => {
       body: JSON.stringify({ seriesId: null }),
     });
     expect(await unbind.json()).toEqual({ ok: true, seriesId: null });
-    book = JSON.parse(await readFile(join(root, "books", "b1", "book.json"), "utf-8"));
+    book = JSON.parse(await readFile(join(worksBookDir("b1"), "book.json"), "utf-8"));
     expect(book.seriesId).toBeUndefined();
   });
 
@@ -302,11 +335,12 @@ describe("timeline-series recycle routes (707)", () => {
     });
     expect(applyNoDraft.status).toBe(400);
 
-    // apply：播种草稿 → overwrite 全量渲染（头部与 Rust render_backfill_markdown 逐字）
-    const storyDir = join(root, "books", "b1", "story");
-    await mkdir(storyDir, { recursive: true });
+    // apply：播种草稿 → overwrite 全量渲染（头部与 Rust render_backfill_markdown 逐字）。
+    // 1667 号：草稿播在 legacy 树（books/<id>/story）= 读兜底面；产物落 works 树。
+    const legacyStoryDir = join(root, "books", "b1", "story");
+    await mkdir(legacyStoryDir, { recursive: true });
     await writeFile(
-      join(storyDir, "series_backfill_draft.json"),
+      join(legacyStoryDir, "series_backfill_draft.json"),
       JSON.stringify({
         version: 1,
         bookId: "b1",
@@ -332,9 +366,15 @@ describe("timeline-series recycle routes (707)", () => {
       total: 2,
       mode: "overwrite",
     });
-    const markdown = await readFile(join(storyDir, "series_backfill.md"), "utf-8");
+    const worksStoryDir = join(worksBookDir("b1"), "story");
+    const markdown = await readFile(join(worksStoryDir, "series_backfill.md"), "utf-8");
     expect(markdown.startsWith("# 系列设定回填\n\n来源：《src》（src） · 抽取于 2026-10-16T00:00:00.000Z · 勾选 2 条\n\n")).toBe(true);
     expect(markdown).toContain("## [worldview] 残卷设定\n\n上古残卷共三枚\n\n");
+    await expect(readFile(join(legacyStoryDir, "series_backfill.md"), "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+
+    // existing：works 产物回读
+    const existingAfter = await app.request("/api/v1/books/b1/series-backfill/existing");
+    expect(((await existingAfter.json()) as { content: string | null }).content).toBe(markdown);
 
     // apply：merge 模式——既有条目在前，勾选项按 (category, title) 去重后追加
     const applyMerge = await app.request("/api/v1/books/b1/series-backfill/apply", {
