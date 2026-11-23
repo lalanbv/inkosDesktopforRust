@@ -3156,7 +3156,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     try {
       const bookDir = state.bookDir(id);
       const chaptersDir = join(bookDir, "chapters");
-      const files = await readdir(chaptersDir);
+      // 1664 号：书/章目录不存在 = 章节不存在 → 404（Rust resolve_chapter_file
+      // 返回 None 同径）。此前 readdir 的 ENOENT 落外层 catch → 500 裸串，
+      // 对不存在的书与「章不存在」同因却异码。
+      const files = await readdir(chaptersDir).catch((error: unknown) => {
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code === "ENOENT" || code === "ENOTDIR") return [] as string[];
+        throw error;
+      });
       const paddedNum = String(num).padStart(4, "0");
       const chapterFile = files.find((file) => file.startsWith(paddedNum) && file.endsWith(".md"));
       if (!chapterFile) {
