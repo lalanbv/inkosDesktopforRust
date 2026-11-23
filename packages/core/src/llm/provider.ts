@@ -18,6 +18,7 @@ import { lookupModel } from "./providers/lookup.js";
 import { applyModelRequestCapabilities, resolveChatCompat } from "./model-request-capabilities.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 import { isApiKeyOptionalForEndpoint } from "../utils/llm-endpoint-auth.js";
+import { recordRunLogCall } from "../utils/run-log.js";
 import { createLeadingThinkTagStripper, stripLeadingThinkBlock } from "./think-tag-stripper.js";
 import {
   agentTrajectoryHeaders,
@@ -787,7 +788,7 @@ function isIncompleteLLMResponseError(error: unknown): boolean {
     || text.includes("llm returned empty response");
 }
 
-function isRetryableLLMError(error: unknown): boolean {
+export function isRetryableLLMError(error: unknown): boolean {
   // PartialResponseError = 流在生成中途被掐断（网关切长连接等）。重试会完整
   // 重新生成一次，比把半截内容当成功交付（截断的章节/设定文件）要正确。
   if (error instanceof LLMStreamInactivityError || error instanceof LLMRequestTimeoutError) return false;
@@ -1484,6 +1485,9 @@ export async function chatCompletion(
     // Diagnostics / connectivity checks want a fast pass-or-fail — set false to
     // skip the transient 502/503/429 retry+backoff (e.g. the doctor probe).
     readonly retry?: boolean;
+    // 1663 号：运行遥测标签（R26 run-log 的 agent 列）。缺省取轨迹角色
+    // （main/subagent/workflow），无轨迹作用域时为 "chat"。
+    readonly agentLabel?: string;
   },
 ): Promise<LLMResponse> {
   const resolved = {
@@ -1500,74 +1504,96 @@ export async function chatCompletion(
   const signal = options?.signal;
   const errorCtx = { baseUrl: client._piModel?.baseUrl ?? "(unknown)", model, service: client.service };
   const modelCall = beginAgentModelCall();
+  const runLogAgent = options?.agentLabel ?? modelCall?.agentRole ?? "chat";
+  const transport = async (attempt: number): Promise<LLMResponse> => {
+    const traceHeaders = agentTrajectoryHeaders(client._piModel?.baseUrl, modelCall, attempt, {
+      effort: client.defaults.thinkingBudget > 0 ? "enabled" : "disabled",
+      ...(client.defaults.thinkingBudget > 0
+        ? { budgetTokens: client.defaults.thinkingBudget }
+        : {}),
+    });
+    // Pipeline agents often perform long-form generation before yielding the
+    // first token. Keep that path bounded, but do not apply the tighter
+    // interactive-chat deadline to it. 898: buffered requests previously had
+    // NO deadline here — the fetch went out with a signal-less init, so a
+    // stalled endpoint hung the call until undici's own 5-min headers
+    // timeout, once per pipeline turn (suite-saturation flow-test victims
+    // lingered ~900s+ before worker teardown). Arm the same total-request
+    // deadline the pi-stream path already uses (300s default +
+    // INKOS_LLM_REQUEST_TIMEOUT_MS knob; non-retryable by design).
+    const deadline = client.stream
+      ? createStreamActivityDeadline(
+          signal,
+          {
+            firstEventTimeoutMs: DEFAULT_PIPELINE_FIRST_STREAM_EVENT_TIMEOUT_MS,
+            idleTimeoutMs: DEFAULT_PIPELINE_STREAM_IDLE_TIMEOUT_MS,
+          },
+          {
+            firstEventTimeoutMs: options?.firstEventTimeoutMs,
+            idleTimeoutMs: options?.streamIdleTimeoutMs,
+          },
+        )
+      : createRequestDeadline(signal);
+    assertWithinContextWindow({
+      piModel: resolvePiModel(client, model),
+      model,
+      estimatedInputTokens: estimateLLMMessagesTokens(messages),
+      reservedOutputTokens: resolved.maxTokens,
+    });
+    try {
+      if (shouldUseNativeCustomTransport(client)) {
+        return await chatCompletionViaCustomOpenAICompatible(
+          client,
+          model,
+          messages,
+          resolved,
+          onStreamProgress,
+          onTextDelta,
+          deadline?.signal ?? signal,
+          traceHeaders,
+          deadline?.activity,
+        );
+      }
+      return await chatCompletionViaPiAi(
+        client,
+        model,
+        messages,
+        resolved,
+        onStreamProgress,
+        onTextDelta,
+        deadline?.signal ?? signal,
+        traceHeaders,
+        deadline?.activity,
+      );
+    } catch (error) {
+      throw deadline?.timeoutError() ?? error;
+    } finally {
+      deadline?.stop();
+    }
+  };
 
   try {
     return await withTransientLLMRetry(
+      // 1663 号：R26 运行遥测——每个重试轮各记一条（只记元数据；失败类按
+      // 失败性质而非是否还有重试预算划分，与 Rust ChainFailure 同口径）。
+      // 预先中止的轮次未上线不计。
       async (attempt) => {
         signal?.throwIfAborted();
-        const traceHeaders = agentTrajectoryHeaders(client._piModel?.baseUrl, modelCall, attempt, {
-          effort: client.defaults.thinkingBudget > 0 ? "enabled" : "disabled",
-          ...(client.defaults.thinkingBudget > 0
-            ? { budgetTokens: client.defaults.thinkingBudget }
-            : {}),
-        });
-        // Pipeline agents often perform long-form generation before yielding the
-        // first token. Keep that path bounded, but do not apply the tighter
-        // interactive-chat deadline to it. 898: buffered requests previously had
-        // NO deadline here — the fetch went out with a signal-less init, so a
-        // stalled endpoint hung the call until undici's own 5-min headers
-        // timeout, once per pipeline turn (suite-saturation flow-test victims
-        // lingered ~900s+ before worker teardown). Arm the same total-request
-        // deadline the pi-stream path already uses (300s default +
-        // INKOS_LLM_REQUEST_TIMEOUT_MS knob; non-retryable by design).
-        const deadline = client.stream
-          ? createStreamActivityDeadline(
-              signal,
-              {
-                firstEventTimeoutMs: DEFAULT_PIPELINE_FIRST_STREAM_EVENT_TIMEOUT_MS,
-                idleTimeoutMs: DEFAULT_PIPELINE_STREAM_IDLE_TIMEOUT_MS,
-              },
-              {
-                firstEventTimeoutMs: options?.firstEventTimeoutMs,
-                idleTimeoutMs: options?.streamIdleTimeoutMs,
-              },
-            )
-          : createRequestDeadline(signal);
-        assertWithinContextWindow({
-          piModel: resolvePiModel(client, model),
-          model,
-          estimatedInputTokens: estimateLLMMessagesTokens(messages),
-          reservedOutputTokens: resolved.maxTokens,
-        });
+        const startedAt = Date.now();
         try {
-          if (shouldUseNativeCustomTransport(client)) {
-            return await chatCompletionViaCustomOpenAICompatible(
-              client,
-              model,
-              messages,
-              resolved,
-              onStreamProgress,
-              onTextDelta,
-              deadline?.signal ?? signal,
-              traceHeaders,
-              deadline?.activity,
-            );
-          }
-          return await chatCompletionViaPiAi(
-            client,
-            model,
-            messages,
-            resolved,
-            onStreamProgress,
-            onTextDelta,
-            deadline?.signal ?? signal,
-            traceHeaders,
-            deadline?.activity,
-          );
+          const response = await transport(attempt);
+          recordRunLogCall({ agent: runLogAgent, model, startedAt, ok: true, round: attempt });
+          return response;
         } catch (error) {
-          throw deadline?.timeoutError() ?? error;
-        } finally {
-          deadline?.stop();
+          recordRunLogCall({
+            agent: runLogAgent,
+            model,
+            startedAt,
+            ok: false,
+            round: attempt,
+            errorKind: isRetryableLLMError(error) ? "transient" : "fatal",
+          });
+          throw error;
         }
       },
       // Retrying after UI text deltas have been emitted can duplicate visible

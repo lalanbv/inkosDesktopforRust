@@ -388,10 +388,12 @@ async fn wait_ready(base: &str) {
     }
 }
 
-/// 688 号：TS 腿契约源探测——`/api/v1/prompt-packs` 是 fork 契约面（上游 2.0 已删）。
-/// 返回 "fork"（fork 契约对跑有效）或 "upstream-2.0"（范式替换后 TS 腿不再承载 fork 契约）。
+/// 688 号（1663 修订）：TS 腿契约源探测——判据原 `/api/v1/prompt-packs`
+/// （1662 起 TS 回退腿同构该族，判据失效——意外复活守卫打开 12 个早已
+/// 豁免的对跑=8 红黑盒真相）。迁 `/api/v1/health`（62/170 号 Rust 超集
+/// 端点，TS 无=真 fork 独有面，与 scripts 三脚本 1662 判据迁移一致）。
 async fn ts_leg_contract_source(ts: &str) -> &'static str {
-    match get_json(ts, "/api/v1/prompt-packs").await {
+    match get_json(ts, "/api/v1/health").await {
         (200, _) => "fork",
         _ => "upstream-2.0",
     }

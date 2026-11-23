@@ -2,7 +2,7 @@
 //! 镜像对拍）。R53 为纯前端功能（S 为主），Rust 侧 golden 纪律镜像——
 //! LCS 语义（kept/removed/added 序列）双端逐行一致。
 
-use inkos_engine::utils::text_diff::{diff_chapter_text, TextDiffKind};
+use inkos_engine::utils::text_diff::diff_chapter_text;
 
 const VECTORS: &str =
     include_str!("../../packages/core/src/__tests__/golden/text-diff-vectors.json");

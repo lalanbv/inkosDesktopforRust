@@ -15,6 +15,7 @@ import {
   createRequestDeadline,
   estimatePiContextTokens,
   guardAssistantMessageStream,
+  isRetryableLLMError,
   withTransientLLMRetry,
   type StreamDeadlineOptions,
 } from "../llm/provider.js";
@@ -22,6 +23,7 @@ import {
   agentTrajectoryHeaders,
   beginAgentModelCall,
 } from "../llm/agent-trajectory.js";
+import { recordRunLogCall, type RunLogErrorKind } from "../utils/run-log.js";
 import { fetchWithProxy } from "../utils/proxy-fetch.js";
 import { applyModelRequestCapabilities } from "../llm/model-request-capabilities.js";
 
@@ -29,6 +31,9 @@ import { applyModelRequestCapabilities } from "../llm/model-request-capabilities
  * The single Pi transport boundary used by both conversational and worker
  * agents. Pi keeps native tool calls; InkOS adds context guards, trajectory
  * headers, cancellation, and stream deadlines around the request.
+ *
+ * 1663 号：`attempt` = observe 层传输尝试轮次（重试递归 +1），只喂运行遥测的
+ * round/接管标记，不参与传输行为。
  */
 export function guardedPiStream<TApi extends Api>(
   model: Model<TApi>,
@@ -36,6 +41,7 @@ export function guardedPiStream<TApi extends Api>(
   options?: SimpleStreamOptions,
   emptyRetries = 1,
   deadlineOptions?: StreamDeadlineOptions,
+  attempt = 1,
 ): AssistantMessageEventStream {
   // Custom model entries default to text input. That SDK serialization hint
   // must not silently remove pixels already supplied by the author or a tool.
@@ -62,7 +68,7 @@ export function guardedPiStream<TApi extends Api>(
   });
   // 双 pi scope 缝合（fork earendil 0.87 provider 层 × 上游 2.0 mariozechner 0.67 观测层）：
   // 结构同形仅名义身份不同，边界 cast。结构漂移由 vitest 双分支流测试锁定。
-  return observeModelStream(model, modelCall?.modelCallId, guardAssistantMessageStream(
+  return observeModelStream(model, { modelCallId: modelCall?.modelCallId, agent: modelCall?.agentRole ?? "agent", round: attempt }, guardAssistantMessageStream(
     model as never,
     (signal) => streamSimple(model, context, {
       ...options,
@@ -78,7 +84,7 @@ export function guardedPiStream<TApi extends Api>(
         recordExecutionEvidence("model-request-prepared", { modelCallId: modelCall?.modelCallId, model: activeModel.id,
           api: activeModel.api,
           parameterKeys: prepared && typeof prepared === 'object' ? Object.entries(prepared).filter(([,value])=>value!==undefined).map(([key])=>key).sort() : [],
-          parameters: prepared && typeof prepared === "object" ? Object.fromEntries(Object.entries(prepared).filter(([key]) => ["stream", "thinking", "max_tokens", "max_completion_tokens", "max_output_tokens", "tool_choice"].includes(key))) : {} });
+          parameters: prepared && typeof prepared === 'object' ? Object.fromEntries(Object.entries(prepared).filter(([key])=>["stream", "thinking", "max_tokens", "max_completion_tokens", "max_output_tokens", "tool_choice"].includes(key))) : {} });
         return prepared;
       },
       signal,
@@ -87,7 +93,7 @@ export function guardedPiStream<TApi extends Api>(
     deadlineOptions,
   ) as never, emptyRetries > 0 && !options?.signal?.aborted ? (missingTool) => guardedPiStream(model,
     missingTool ? requiredToolRetryContext(context, (options as SimpleStreamOptions & {toolChoice?:unknown} | undefined)?.toolChoice) : context,
-    options, emptyRetries - 1, deadlineOptions) : undefined,
+    options, emptyRetries - 1, deadlineOptions, attempt + 1) : undefined,
   (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice);
 }
 
@@ -102,8 +108,9 @@ export function guardedPiNonStreaming<TApi extends Api>(
   options?: SimpleStreamOptions,
   proxyUrl?: string,
   emptyRetries = 1,
+  attempt = 1,
 ): AssistantMessageEventStream {
-  if (model.api !== "openai-completions") return guardedPiStream(model, context, options);
+  if (model.api !== "openai-completions") return guardedPiStream(model, context, options, 1, undefined, attempt);
   const reservedOutputTokens = Number.isFinite(options?.maxTokens)
     ? options!.maxTokens!
     : Number.isFinite(model.maxTokens)
@@ -179,9 +186,9 @@ export function guardedPiNonStreaming<TApi extends Api>(
       eventStream.end();
     }
   })();
-  return observeModelStream(model, modelCall?.modelCallId, eventStream, emptyRetries > 0 && !options?.signal?.aborted ? (missingTool) => guardedPiNonStreaming(model,
+  return observeModelStream(model, { modelCallId: modelCall?.modelCallId, agent: modelCall?.agentRole ?? "agent", round: attempt }, eventStream, emptyRetries > 0 && !options?.signal?.aborted ? (missingTool) => guardedPiNonStreaming(model,
     missingTool ? requiredToolRetryContext(context, (options as SimpleStreamOptions & {toolChoice?:unknown} | undefined)?.toolChoice) : context,
-    options, proxyUrl, emptyRetries - 1) : undefined,
+    options, proxyUrl, emptyRetries - 1, attempt + 1) : undefined,
     (options as SimpleStreamOptions & { toolChoice?: unknown } | undefined)?.toolChoice);
 }
 
@@ -208,9 +215,25 @@ function missingRequiredTool(message: AssistantMessage, choice: unknown): boolea
   return !message.content.some(part => part.type === "toolCall" && (!name || part.name === name));
 }
 
-function observeModelStream(model: Model<Api>, modelCallId: string | undefined, source: AssistantMessageEventStream, retry?: (missingTool?:boolean) => AssistantMessageEventStream, toolChoice?: unknown): AssistantMessageEventStream {
+function observeModelStream(model: Model<Api>, telemetry: {
+  readonly modelCallId: string | undefined;
+  readonly agent: string;
+  readonly round: number;
+}, source: AssistantMessageEventStream, retry?: (missingTool?:boolean) => AssistantMessageEventStream, toolChoice?: unknown): AssistantMessageEventStream {
+  const { modelCallId } = telemetry;
   const output = createAssistantMessageEventStream();
   let started = false;
+  // 1663 号：R26 运行遥测挂点——agent 路径每次传输尝试一条。observe 层重试
+  // （流僵死/空响应/缺必需工具）递归新开一层 guarded*=各成一条，本层只记
+  // 自己这次的终态；传输内部 429/5xx 退避不单列，体现在耗时与终态上。
+  // settled 防重：重试分支/终态事件/抛错三路只落一条。
+  const startedAt = Date.now();
+  let settled = false;
+  const record = (ok: boolean, errorKind: RunLogErrorKind = "fatal") => {
+    if (settled) return;
+    settled = true;
+    recordRunLogCall({ agent: telemetry.agent, model: model.id, startedAt, ok, round: telemetry.round, errorKind });
+  };
   const forward = (event: Parameters<typeof output.push>[0]) => {
     // Pi appends a transcript message on start. Transport attempts belong to
     // one logical response; a retry replaces its provisional partial message.
@@ -229,6 +252,7 @@ function observeModelStream(model: Model<Api>, modelCallId: string | undefined, 
           recordExecutionEvidence("model-call-completed", {modelCallId,status:"error",response:event.error,
             ...(lastPartial?.content.length?{partialOutput:lastPartial}:{})});
           recordExecutionEvidence("model-call-retry", {modelCallId,reason:"MODEL_STREAM_INACTIVITY"});
+          record(false, "transient");
           for await (const retried of retry()) forward(retried);
           return;
         }
@@ -237,6 +261,7 @@ function observeModelStream(model: Model<Api>, modelCallId: string | undefined, 
           && !lastPartial?.content.some(part => part.type === "toolCall")
           && !event.message.content.some(part => part.type === "toolCall" || (part.type === "text" && part.text.trim().length > 0))) {
           recordExecutionEvidence("model-call-completed", { modelCallId, status: "empty", response: event.message });
+          record(false, "transient");
           if (retry) {
             recordExecutionEvidence("model-call-retry", { modelCallId, reason: "MODEL_EMPTY_RESPONSE" });
             for await (const retried of retry()) forward(retried);
@@ -250,6 +275,7 @@ function observeModelStream(model: Model<Api>, modelCallId: string | undefined, 
         if (event.type === "done" && event.message.stopReason !== "length"
           && !discardedToolOutputs.has(event.message) && missingRequiredTool(event.message, toolChoice)) {
           recordExecutionEvidence("model-call-completed", { modelCallId, status: "invalid_tool_choice", response: event.message });
+          record(false, "transient");
           if (retry) {
             recordExecutionEvidence("model-call-retry", { modelCallId, reason: "MODEL_REQUIRED_TOOL_MISSING" });
             for await (const retried of retry(true)) forward(retried);
@@ -261,20 +287,35 @@ function observeModelStream(model: Model<Api>, modelCallId: string | undefined, 
           return;
         }
         if (pendingStart) { forward(pendingStart); pendingStart = undefined; }
-        if (event.type === "done" || event.type === "error") recordExecutionEvidence("model-call-completed", {
-          modelCallId, status: event.type, response: event.type === "done" ? event.message : event.error,
-          ...((event.type === "error" || (event.type === "done" && event.message.stopReason === "length")) && lastPartial?.content.length ? { partialOutput: lastPartial } : {}),
-        });
+        if (event.type === "done" || event.type === "error") {
+          recordExecutionEvidence("model-call-completed", {
+            modelCallId, status: event.type, response: event.type === "done" ? event.message : event.error,
+            ...((event.type === "error" || (event.type === "done" && event.message.stopReason === "length")) && lastPartial?.content.length ? { partialOutput: lastPartial } : {}),
+          });
+          record(event.type === "done", event.type === "error" ? runLogErrorKindOf(event.error) : "fatal");
+        }
         forward(event);
       }
     } catch (error) {
       const message = emptyAssistantMessage(model);
       message.stopReason = "error"; message.errorMessage = String(error);
       recordExecutionEvidence("model-call-completed", { modelCallId, status: "error", response: message, ...(lastPartial?.content.length ? { partialOutput: lastPartial } : {}) });
+      record(false, isRetryableLLMError(error) ? "transient" : "fatal");
       output.push({ type: "error", reason: "error", error: message });
     } finally { output.end(); }
   })();
   return output;
+}
+
+/** 1663 号：流终态 → 运行遥测失败类。observe 层可重试的三类按性质记瞬态
+ * （无论本次是否还有重试预算，与 Rust ChainFailure 同口径），用户中止记
+ * fatal，其余按 isRetryableLLMError。 */
+function runLogErrorKindOf(message: AssistantMessage): RunLogErrorKind {
+  if (message.stopReason === "aborted") return "fatal";
+  const errorCode = (message as AssistantMessage & { errorCode?: string }).errorCode;
+  if (errorCode === "MODEL_STREAM_INACTIVITY" || errorCode === "MODEL_EMPTY_RESPONSE"
+    || errorCode === "MODEL_REQUIRED_TOOL_MISSING") return "transient";
+  return isRetryableLLMError(new Error(message.errorMessage ?? "")) ? "transient" : "fatal";
 }
 
 function emptyAssistantMessage(model: Model<Api>): AssistantMessage {

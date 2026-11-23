@@ -391,6 +391,27 @@ http.createServer((req, res) => {
         emitSse(chunk, finish);
         return;
       }
+      // 1663 号：2.0 主智能体会话收尾协议分派（finish_turn）。会话 streamFn 恒
+      // toolChoice:"required"——每轮必须以工具调用收尾，通用收尾工具=
+      // finish_turn（{status,message}），真实模型照系统提示调用。此前 mock 无
+      // 此支：会话请求落 persona 文本支（纯文本）→ MODEL_REQUIRED_TOOL_MISSING
+      // → /agent 非 200（1662 备案误记为「works 布局适配缺口」，实为本夹具
+      // 缺口）。仅当工具表含 finish_turn 时命中；上方 submit_* 结构化工具支
+      // 工具表互斥，不被截胡。Rust 腿 chat 不带 tools，不受影响。
+      if (toolNames.includes("finish_turn")) {
+        const lastUser = [...msgs].reverse().find((m) => m.role === "user");
+        const asked = typeof lastUser?.content === "string" ? lastUser.content : "";
+        const args = JSON.stringify({ status: "answered", message: `（mock）已应答：${asked.slice(0, 40)}` });
+        const toolCall = { id: `call_finish_${++PROPOSE_SEQ}`, type: "function", function: { name: "finish_turn", arguments: args } };
+        if (!wantStream) {
+          emitJson({ role: "assistant", content: null, tool_calls: [toolCall] }, "tool_calls");
+          return;
+        }
+        const chunk = { choices: [{ delta: { tool_calls: [{ index: 0, id: toolCall.id, function: toolCall.function }] }, finish_reason: null }] };
+        const finish = { choices: [{ delta: {}, finish_reason: "tool_calls" }] };
+        emitSse(chunk, finish);
+        return;
+      }
       let content;
       // 958 号：compileStyleGuide 编译面（TS agents/style-guide.ts ↔ Rust
       // agents/style_guide.rs）——回显 system 首段+激活技能标题行+user 全文，

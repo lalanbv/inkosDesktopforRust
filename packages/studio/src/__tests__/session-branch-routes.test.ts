@@ -96,4 +96,37 @@ describe("session branch routes (R36, 692 重施)", () => {
     const missing = await app.request("/api/v1/sessions/sess-missing/branches");
     expect(missing.status).toBe(404);
   });
+
+  // 1663 号：derive/list 透出 head/branchCount（636 号契约面；692 号重施遗漏，
+  // Node 腿会话探针活体抓出）——Rust BookSession/BookSessionSummary 同形。
+  it("exposes head/branchCount on the session derive and list projections", async () => {
+    const app = createStudioServer({} as never, root);
+    const treeOf = (session: { head: unknown; branchCount: unknown }) => [session.head, session.branchCount];
+
+    // 分支前：head=链尾 seq=4，未分支
+    const before = await app.request(`/api/v1/sessions/${SESSION}`);
+    expect(before.status).toBe(200);
+    expect(treeOf(((await before.json()) as { session: { head: unknown; branchCount: unknown } }).session)).toEqual([4, 0]);
+    const listedBefore = await app.request("/api/v1/sessions?bookId=null");
+    const summariesBefore = (await listedBefore.json()) as { sessions: Array<{ sessionId: string; head: unknown; branchCount: unknown }> };
+    expect(treeOf(summariesBefore.sessions.find((s) => s.sessionId === SESSION)!)).toEqual([4, 0]);
+
+    // 分支后：derive 与 list 同步移动（与 branch 响应/branches 读面单源）
+    const branch = await app.request(`/api/v1/sessions/${SESSION}/branch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toSeq: 2 }),
+    });
+    expect(branch.status).toBe(200);
+    const after = await app.request(`/api/v1/sessions/${SESSION}`);
+    const derived = ((await after.json()) as { session: Record<string, unknown> }).session;
+    expect(treeOf(derived as { head: unknown; branchCount: unknown })).toEqual([2, 1]);
+    const listedAfter = await app.request("/api/v1/sessions?bookId=null");
+    const summariesAfter = (await listedAfter.json()) as { sessions: Array<{ sessionId: string; head: unknown; branchCount: unknown }> };
+    expect(treeOf(summariesAfter.sessions.find((s) => s.sessionId === SESSION)!)).toEqual([2, 1]);
+
+    // 2.0 会话形状字段不受加法影响
+    expect(derived.sessionId).toBe(SESSION);
+    expect(Array.isArray(derived.messages)).toBe(true);
+  });
 });

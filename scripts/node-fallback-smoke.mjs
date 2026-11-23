@@ -245,21 +245,20 @@ async function runEngineLeg(engine) {
   // active 路径。忙判定路径（轮进行中 409）依赖竞态窗口，不入冒烟（双端
   // 实现同构，路由单测/代码审读覆盖）。
   {
-    // 1662 号备案：2.0 深播（works 布局）下 chat 会话 agent 驱动链适配
-    // 缺口（正确判据首次激活该路径；此前旧判据误判 fork=浅播回声室全绿）
-    // ——1663 专项定性，本轮显性跳过（fork 腿照常跑）。
-    const deepSeedSkip = engine === "node";
-    if (deepSeedSkip) console.log("[smoke] [node] branch/transcript 探针跳过（1662 备案：2.0 works 布局 agent 会话链=1663 专项）");
-    const created = deepSeedSkip
-      ? { status: 200, body: { session: { sessionId: "skipped" } } }
-      : await api("/api/v1/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionKind: "chat" }),
-        });
-    const sessionId = created.body?.session?.sessionId;
+    // 1663 号结案：1662 把 node 腿显式跳过并备案为「2.0 works 布局 agent 会话
+    // 链适配缺口」——实为两处可修缺口，均与布局无关：①walkthrough-mock 无
+    // finish_turn 分支（2.0 会话 streamFn 恒 toolChoice:"required"，纯文本应答
+    // → MODEL_REQUIRED_TOOL_MISSING → /agent 非 200）；②TS derive/list 透出
+    // head/branchCount 随 2.0 会话形状遗失（692 号重施遗漏）。两项回座后
+    // 双腿恒跑全量会话探针，不再跳过（跳过态曾打出一枚伪造 200 的空虚 ✓）。
+    const created = await api("/api/v1/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionKind: "chat" }),
+    });
+    const sessionId = created?.body?.session?.sessionId;
     check(`[${engine}] branch 探针建会话`, created.status === 200 && !!sessionId);
-    if (sessionId && sessionId !== "skipped") {
+    if (sessionId) {
       const drive = await api("/api/v1/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -341,14 +340,19 @@ async function runEngineLeg(engine) {
     }
   }
 
-  // run-log 调用计数（写链遥测在位）。1662 号：node 深播腿的 total 语义
-  // 与 fixture 套件内 run-log 断言（已过）的口径差=1663 专项；此处 fork 腿
-  // 恒跑，node 腿显性跳过（不再靠旧回声室静默逃逸）。
-  if (engine === "rust") {
+  // run-log 调用计数（写链遥测在位）。1663 号勘误：1662 把 node 腿显性跳过并
+  // 备案为「口径差」——实为 TS 腿写入点自 688 号合并起缺失（model-chain.ts
+  // 退役带走唯一 append；701 号只回收了 GET 面=端点恒空的死面），本轮写入点
+  // 复座（pi-stream observe + chatCompletion），双腿恢复恒跑真实断言。
+  // fixture 对两腿均在 §3.6 run-log 断言之前 process.exit——此处是 Node 腿
+  // 「真实写链 → run-log 增长」的唯一活体证据，不得再跳过。
+  {
     const runLog = await api("/api/v1/run-log?limit=50");
-    check(`[${engine}] run-log 调用计数 > 0`, (runLog.body?.total ?? 0) > 0);
-  } else {
-    console.log("[smoke] [node] run-log 计数断言跳过（1662 备案：1663 专项）");
+    const entries = Array.isArray(runLog.body?.entries) ? runLog.body.entries : [];
+    check(
+      `[${engine}] run-log 调用计数 > 0`,
+      runLog.status === 200 && (runLog.body?.total ?? 0) > 0 && entries.length > 0,
+    );
   }
 
   // R41/564 号：context-meter 误差面双端对照（快照面需真实聊天轮，fixture

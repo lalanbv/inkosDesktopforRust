@@ -212,7 +212,8 @@ import {
 } from "@actalk/inkos-core";
 import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
-import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, syncWorkSourceArtifacts, loadWritingLog } from "@actalk/inkos-core";
+import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, sessionTreeProjection, syncWorkSourceArtifacts, loadWritingLog, promptOverridePath, writePromptOverride, removePromptOverride, appendPromptVersion, listPromptVersions, readPromptVersion } from "@actalk/inkos-core";
+import { BUILTIN_PROMPT_PACKS, BUILTIN_PROMPTS } from "@actalk/inkos-core/prompts/builtin-prompts-data";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { buildTarArchive, listArchiveFiles } from "../lib/tar-write.js";
 import { listBackupSnapshots, runBackupImport, runBackupRollback } from "./backup-snapshot.js";
@@ -2463,7 +2464,7 @@ async function probeServiceCapabilities(args: {
           // A connectivity probe wants a fast pass/fail — never the transient
           // retry+backoff, which would multiply the time when the upstream is
           // rate-limiting (and make the diagnostics page hang).
-          chatCompletion(client, model, [{ role: "user", content: "Reply with OK only." }], { maxTokens: 16, retry: false }),
+          chatCompletion(client, model, [{ role: "user", content: "Reply with OK only." }], { maxTokens: 16, retry: false, agentLabel: "service-probe" }),
           SERVICE_CHAT_PROBE_TIMEOUT_MS,
           "service connection test",
           lang,
@@ -2648,7 +2649,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
     const origin = c.req.header("Origin");
     if (origin && origin !== url.origin && !allowedOrigins.has(origin)) {
-      throw new ApiError(403, "STUDIO_ORIGIN_FORBIDDEN", "This browser origin is not allowed to access Studio.");
+      // W-A4a（173 号）：回环 Origin 放行——vite dev（localhost:5173/4567）
+      // → studio API 跨口为本地双工具链合法形态（Rust 腿同语义，duel
+      // bin_process_static_face 回环反射断言）。上游 2.0 重铺时该分支遗失，
+      // 1662 号 duel 真跑逼出、1663 号随端点族回座。
+      let originHostname = "";
+      try {
+        originHostname = new URL(origin).hostname;
+      } catch {
+        // 非 URL 形态 Origin 维持拒绝。
+      }
+      if (!loopbackHosts.has(originHostname)) {
+        throw new ApiError(403, "STUDIO_ORIGIN_FORBIDDEN", "This browser origin is not allowed to access Studio.");
+      }
     }
     await next();
   });
@@ -4646,6 +4659,98 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   });
 
+  // ── R54/1662-1663 号：prompt-packs 端点族（Node 回退腿；Rust
+  // skill_routes 镜像）——builtin 数据单源（core builtin-prompts-data
+  // 双环守卫）。duel 侧 688 守卫判据已迁 /api/v1/health（1663），本族
+  // 不再意外复活 2.0 迁移欠账豁免。
+  const promptOverrideProjection = async (promptId: string) => {
+    const builtin = BUILTIN_PROMPTS.find((entry) => entry.id === promptId);
+    if (!builtin) return null;
+    const path = promptOverridePath(root, promptId);
+    let overridden = false;
+    let content = builtin.content;
+    try {
+      content = await readFile(path, "utf-8");
+      overridden = true;
+    } catch {
+      // 无覆盖 → builtin 默认。
+    }
+    return {
+      id: builtin.id,
+      packId: builtin.packId,
+      title: builtin.title,
+      source: overridden ? "project" : "builtin",
+      overridden,
+      ...(overridden ? { path: relative(root, path) } : {}),
+      content,
+      defaultContent: builtin.content,
+    };
+  };
+
+  app.get("/api/v1/prompt-packs", async (c) => {
+    const prompts = await Promise.all(BUILTIN_PROMPTS.map((entry) => promptOverrideProjection(entry.id)));
+    return c.json({ packs: BUILTIN_PROMPT_PACKS, prompts: prompts.filter((entry) => entry !== null) });
+  });
+
+  app.put("/api/v1/prompt-packs/:promptId", async (c) => {
+    const promptId = c.req.param("promptId").trim().toLowerCase();
+    if (!BUILTIN_PROMPTS.some((entry) => entry.id === promptId)) {
+      return c.json({ error: { code: "PROMPT_PACK_PROMPT_NOT_FOUND", message: `Prompt pack prompt not found: ${promptId}` } }, 404);
+    }
+    const body = await c.req.json<{ content?: unknown }>().catch(() => null);
+    if (!body || typeof body !== "object" || typeof body.content !== "string") {
+      return c.json({ error: { code: "INVALID_PROMPT_PACK_PAYLOAD", message: "content must be a string" } }, 400);
+    }
+    await writePromptOverride(root, promptId, body.content);
+    await appendPromptVersion(root, promptId, "put", body.content, new Date().toISOString());
+    return c.json({ prompt: await promptOverrideProjection(promptId), regressionHint: "prompt-changed" });
+  });
+
+  app.delete("/api/v1/prompt-packs/:promptId", async (c) => {
+    const promptId = c.req.param("promptId").trim().toLowerCase();
+    if (!BUILTIN_PROMPTS.some((entry) => entry.id === promptId)) {
+      return c.json({ error: { code: "PROMPT_PACK_PROMPT_NOT_FOUND", message: `Prompt pack prompt not found: ${promptId}` } }, 404);
+    }
+    await removePromptOverride(root, promptId);
+    await appendPromptVersion(root, promptId, "delete", "", new Date().toISOString());
+    return c.json({ prompt: await promptOverrideProjection(promptId), regressionHint: "prompt-changed" });
+  });
+
+  app.get("/api/v1/prompt-packs/:promptId/versions", async (c) => {
+    const promptId = c.req.param("promptId").trim().toLowerCase();
+    const versions = await listPromptVersions(root, promptId);
+    return c.json({
+      versions: versions.map((record) => ({
+        ts: record.ts,
+        action: record.action,
+        preview: Array.from(record.content).slice(0, 80).join(""),
+        content: record.content,
+      })),
+    });
+  });
+
+  app.post("/api/v1/prompt-packs/:promptId/versions/restore", async (c) => {
+    const promptId = c.req.param("promptId").trim().toLowerCase();
+    if (!BUILTIN_PROMPTS.some((entry) => entry.id === promptId)) {
+      return c.json({ error: { code: "PROMPT_PACK_PROMPT_NOT_FOUND", message: `Prompt pack prompt not found: ${promptId}` } }, 404);
+    }
+    const body = await c.req.json<{ ts?: unknown }>().catch(() => null);
+    if (!body || typeof body !== "object" || typeof body.ts !== "string") {
+      return c.json({ error: { code: "INVALID_PROMPT_VERSION_PAYLOAD", message: "ts must be a string" } }, 400);
+    }
+    const record = await readPromptVersion(root, promptId, body.ts);
+    if (!record) {
+      return c.json({ error: { code: "PROMPT_VERSION_NOT_FOUND", message: "Prompt version not found" } }, 400);
+    }
+    if (record.action === "delete") {
+      await removePromptOverride(root, promptId);
+    } else {
+      await writePromptOverride(root, promptId, record.content);
+    }
+    await appendPromptVersion(root, promptId, "restore", record.content, new Date().toISOString());
+    return c.json({ prompt: await promptOverrideProjection(promptId), regressionHint: "prompt-changed" });
+  });
+
   app.get("/api/v1/writing-stats", async (c) => {
     try {
       const books = await state.listBooks();
@@ -5455,7 +5560,7 @@ function yamlScalar(value: unknown): string {
         { role: "system", content: system },
         { role: "user", content: user },
       ],
-      { temperature: 0.3, maxTokens: 2000 },
+      { temperature: 0.3, maxTokens: 2000, agentLabel: "series-backfill" },
     );
     const content = response.content;
     const start = content.indexOf("{");
@@ -7012,7 +7117,11 @@ function yamlScalar(value: unknown): string {
   app.get("/api/v1/sessions", async (c) => {
     const bookId = c.req.query("bookId");
     const sessions = await listBookSessions(root, bookId === undefined ? null : bookId === "null" ? null : bookId);
-    return c.json({ sessions });
+    // R36 树化（636 号；1663 号回座）：摘要透出 active 链 head / 分支计数
+    // ——692 号重施遗漏的 derive/list 投影面（Rust BookSessionSummary 同形）。
+    // 加法字段，不改 2.0 会话摘要形状。
+    const trees = await Promise.all(sessions.map((session) => sessionTreeProjection(root, session.sessionId)));
+    return c.json({ sessions: sessions.map((session, index) => ({ ...session, ...trees[index] })) });
   });
 
   app.get("/api/v1/sessions/:sessionId", async (c) => {
@@ -7020,7 +7129,14 @@ function yamlScalar(value: unknown): string {
     const session = await loadBookSession(root, sessionId);
     if (!session) return c.json({ error: "Session not found" }, 404);
     const task = await loadReconciledTaskSnapshot(sessionId);
-    return c.json({ session, chatRequest: await loadChatRequest(sessionId), ...(task ? { task } : {}) });
+    // R36 树化（636 号；1663 号回座）：derive 透出 active 链 head / 分支计数
+    // ——692 号重施只回座了 branch 端点与 /branches 读面，本字段随 2.0 会话
+    // 形状遗失（Node 腿会话探针活体抓出；Rust derive 一直在位）。
+    return c.json({
+      session: { ...session, ...(await sessionTreeProjection(root, sessionId)) },
+      chatRequest: await loadChatRequest(sessionId),
+      ...(task ? { task } : {}),
+    });
   });
 
   app.post("/api/v1/sessions", async (c) => {

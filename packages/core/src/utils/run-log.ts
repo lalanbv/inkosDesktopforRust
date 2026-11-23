@@ -95,3 +95,47 @@ export function projectRunLog(
 
 /** 进程级单例（studio server / engine 各自进程内）。 */
 export const globalRunLog = new RunLogBuffer();
+
+/** 调用点记录入参——纯元数据（不含 prompt/正文/错误原文，v5 隐私红线）。 */
+export interface RunLogRecordInput {
+  /** agent 名 / 调用标签。 */
+  readonly agent: string;
+  readonly model: string;
+  /** 调用起点（`Date.now()`），耗时由此推得。 */
+  readonly startedAt: number;
+  readonly ok: boolean;
+  /** 链内序号（缺省 0 = primary）。 */
+  readonly attemptIndex?: number;
+  /** 轮次（缺省 1）。 */
+  readonly round?: number;
+  /** 失败类（成功时忽略，落 null）。 */
+  readonly errorKind?: RunLogErrorKind | null;
+}
+
+/**
+ * 1663 号：调用点记录器——403 号 `runAndRecord` 的 2.0 复座。
+ *
+ * 688 号上游合并退役 `llm/model-chain.ts` 时带走了唯一写入点，701 号回收的
+ * GET /run-log 此后恒空（Node 回退腿 Dashboard「运行遥测」永不出现）——
+ * 端点在位掩盖了写入面失踪。写入点现收敛到 2.0 两条 LLM 传输边界：
+ * agent 路径 `agent/pi-stream.ts` observeModelStream、非 agent 路径
+ * `llm/provider.ts` chatCompletion。
+ *
+ * tookOver 与 Rust 同口径：仅成功且 attemptIndex > 0 || round > 1
+ * （非 primary 命中 = R25 接管成功；2.0 无模型链，attemptIndex 恒 0）。
+ */
+export function recordRunLogCall(input: RunLogRecordInput): void {
+  const attemptIndex = input.attemptIndex ?? 0;
+  const round = input.round ?? 1;
+  globalRunLog.append({
+    ts: new Date().toISOString(),
+    agent: input.agent,
+    model: input.model,
+    durationMs: Math.max(0, Date.now() - input.startedAt),
+    ok: input.ok,
+    attemptIndex,
+    round,
+    tookOver: input.ok && (attemptIndex > 0 || round > 1),
+    errorKind: input.ok ? null : input.errorKind ?? "fatal",
+  });
+}

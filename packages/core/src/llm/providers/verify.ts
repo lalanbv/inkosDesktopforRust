@@ -89,7 +89,7 @@ export async function verifyService(
       configSource: "studio",
       stream: false,
     }));
-    await chatCompletion(client, checkModel, [{ role: "user", content: "hi" }], { maxTokens: 10 });
+    await chatCompletion(client, checkModel, [{ role: "user", content: "hi" }], { maxTokens: 10, agentLabel: "verify" });
     return { recommendedTransport, probe: probeResult, chat: { ok: true, latencyMs: Date.now() - start } };
   } catch (error) {
     return {

@@ -134,8 +134,46 @@ describe("export routes (R50/1647)", () => {
     expect(invalid.status).toBe(500);
   });
 
-  // R54/1662 号：prompt-packs TS 腿端点族暂缓——tsx sidecar 对该路由注册
-  // 敏感（duel 8 红黑盒，1663 专项）；面板降级空态继续兜底。测试随端点回座。
+  it("prompt-packs 端点族全链（Node 回退腿，R54/1663 回座）", async () => {
+    const { app } = seedApp();
+    const list = await app.request("/api/v1/prompt-packs");
+    expect(list.status).toBe(200);
+    const listBody = (await list.json()) as { packs: ReadonlyArray<{ id: string }>; prompts: ReadonlyArray<{ id: string; packId: string; source: string; overridden: boolean }> };
+    expect(listBody.packs.map((pack) => pack.id)).toEqual(["longform", "play", "interactive-film"]);
+    expect(listBody.prompts).toHaveLength(12);
+    const writer = listBody.prompts.find((entry) => entry.id === "longform.writer")!;
+    expect(writer.source).toBe("builtin");
+    expect(writer.overridden).toBe(false);
+    const put = await app.request("/api/v1/prompt-packs/LONGFORM.Writer", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "# 回退腿覆盖" }),
+    });
+    expect(put.status).toBe(200);
+    const putBody = (await put.json()) as { prompt: { source: string; overridden: boolean; content: string }; regressionHint: string };
+    expect(putBody.prompt.source).toBe("project");
+    expect(putBody.prompt.content).toBe("# 回退腿覆盖");
+    expect(putBody.regressionHint).toBe("prompt-changed");
+    const versions = await app.request("/api/v1/prompt-packs/longform.writer/versions");
+    const versionsBody = (await versions.json()) as { versions: ReadonlyArray<{ ts: string; action: string; content: string }> };
+    expect(versionsBody.versions).toHaveLength(1);
+    expect(versionsBody.versions[0]!.action).toBe("put");
+    const restore = await app.request("/api/v1/prompt-packs/longform.writer/versions/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ts: versionsBody.versions[0]!.ts }),
+    });
+    expect(restore.status).toBe(200);
+    const after = (await (await app.request("/api/v1/prompt-packs/longform.writer/versions")).json()) as { versions: ReadonlyArray<{ action: string }> };
+    expect(after.versions.map((row) => row.action)).toEqual(["restore", "put"]);
+    const del = await app.request("/api/v1/prompt-packs/longform.writer", { method: "DELETE" });
+    expect(del.status).toBe(200);
+    const delBody = (await del.json()) as { prompt: { source: string; overridden: boolean } };
+    expect(delBody.prompt.source).toBe("builtin");
+    expect(delBody.prompt.overridden).toBe(false);
+    const unknown = await app.request("/api/v1/prompt-packs/ghost.prompt", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: "x" }) });
+    expect(unknown.status).toBe(404);
+  });
 
   it("GET /usage/budget-status——services 预算+账本投影（R55/1661）", async () => {
     const { root, app } = seedApp();

@@ -14,10 +14,37 @@ import {
   readTranscriptEvents,
   transcriptHead,
 } from "./session-transcript.js";
+import type { TranscriptEvent } from "./session-transcript-schema.js";
 
 export interface BranchBookSessionResult {
   readonly head: number | null;
   readonly branchCount: number;
+}
+
+/**
+ * R36 树化投影（636 号 derive/list 契约面）：active 链 head + 累计分支次数。
+ * 692 号重施只回座了 branch 端点与 /branches 读面——derive/list 响应里的
+ * 这两个字段随 2.0 会话形状遗失（1663 号 Node 腿会话探针活体抓出；Rust 的
+ * BookSession/BookSessionSummary 一直在位）。branch 结果、分支点读面与
+ * derive/list 透出共用本函数=单源。
+ */
+export interface SessionTreeProjection {
+  readonly head: number | null;
+  readonly branchCount: number;
+}
+
+export function projectSessionTree(events: ReadonlyArray<TranscriptEvent>): SessionTreeProjection {
+  return {
+    head: transcriptHead(events),
+    branchCount: events.filter((event) => event.type === "branch_moved").length,
+  };
+}
+
+export async function sessionTreeProjection(
+  projectRoot: string,
+  sessionId: string,
+): Promise<SessionTreeProjection> {
+  return projectSessionTree(await readTranscriptEvents(projectRoot, sessionId));
 }
 
 /**
@@ -54,10 +81,7 @@ export async function branchBookSession(
   if (!appended) return null;
 
   const events = await readTranscriptEvents(projectRoot, sessionId);
-  return {
-    head: transcriptHead(events),
-    branchCount: events.filter((event) => event.type === "branch_moved").length,
-  };
+  return projectSessionTree(events);
 }
 
 /** branch 目标 seq 不在事件流中（服务端映射 400 INVALID_BRANCH_TARGET）。 */
@@ -115,8 +139,7 @@ export async function deriveSessionBranchPoints(
   }
   return {
     sessionId,
-    head: transcriptHead(events),
-    branchCount: events.filter((event) => event.type === "branch_moved").length,
+    ...projectSessionTree(events),
     points,
   };
 }

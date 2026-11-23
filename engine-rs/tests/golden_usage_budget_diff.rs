@@ -63,6 +63,7 @@ fn default_true() -> bool {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExpectedStatus {
+    service_key: String,
     daily: u64,
     monthly: u64,
     ratio: f64,
@@ -119,6 +120,18 @@ fn usage_budget_matches_ts_golden_vectors() {
             total: vector.usage.total,
         };
         let status = budget_status(&vector.name, &usage, budget.as_ref());
+        // 1663 号：断言宽度补齐到 BudgetStatus 契约全六键——此前
+        // daily/monthly 反序列化后从不比较（clippy 死字段），serviceKey 未核。
+        assert_eq!(
+            (status.service_key.as_str(), status.daily, status.monthly),
+            (
+                vector.status.service_key.as_str(),
+                vector.status.daily,
+                vector.status.monthly
+            ),
+            "{} 服务键/窗口用量漂移",
+            vector.name
+        );
         let level = match status.level {
             inkos_engine::utils::usage_ledger::BudgetLevel::Ok => "ok",
             inkos_engine::utils::usage_ledger::BudgetLevel::Warn => "warn",
