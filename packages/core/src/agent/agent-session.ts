@@ -37,6 +37,7 @@ import {
   renderActionResultForAgent,
 } from "../harness/index.js";
 import {
+  activeChainEvents,
   appendTranscriptEvents,
   readTranscriptEvents,
 } from "../interaction/session-transcript.js";
@@ -270,6 +271,7 @@ interface CachedAgent {
   backgroundTaskContext: string | undefined;
   suppressProductionTools: boolean;
   currentAttachmentPaths: string[];
+  /** 见 `latestCommittedSeq`：active 链上最后提交 seq，即缓存有效性指纹。 */
   lastCommittedSeq: number;
   lastActive: number;
 }
@@ -485,11 +487,20 @@ async function runInAgentSessionQueue<T>(
   }
 }
 
+/**
+ * 缓存有效性指纹：active 链（root→head）上最后一个 `request_committed` 的 seq。
+ * R36 树化（636 号）：此前取全量最大提交 seq——分支只追加 branch_moved、不产生
+ * 新的提交，分支后指纹不变，缓存 Agent 的内存上下文原样带着已弃用的轮次进入
+ * 后续轮次的模型请求。链上最后提交 seq 唯一确定链上的已提交对话（父链路径
+ * 唯一），即缓存 Agent 内存里的已提交部分。
+ */
 async function latestCommittedSeq(projectRoot: string, sessionId: string): Promise<number> {
-  const events = await readTranscriptEvents(projectRoot, sessionId);
-  return events
-    .filter((event) => event.type === "request_committed")
-    .reduce((max, event) => Math.max(max, event.seq), 0);
+  let latest = 0;
+  // 链按 seq 升序：最后一个 request_committed 即最大。
+  for (const event of activeChainEvents(await readTranscriptEvents(projectRoot, sessionId))) {
+    if (event.type === "request_committed") latest = event.seq;
+  }
+  return latest;
 }
 
 function transcriptRoleForMessage(message: AgentMessage): TranscriptRole | null {

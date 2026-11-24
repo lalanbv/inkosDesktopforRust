@@ -78,6 +78,29 @@ export async function loadPromptVersions(root: string): Promise<PromptVersionRec
  * 2. 读错误 ≠ 空账本——读不出来时上抛、追加中止，不用「只有新行」的内容
  *    覆盖整本历史。
  */
+/**
+ * 版本以 (promptId, ts) 定位——同一 prompt 不得出现同 ts 两行（Rust
+ * `unique_version_ts` 同款）。同一毫秒内的两次写入（并发保存 / 回滚后紧接
+ * 保存）会让后一行被前一行遮蔽：`readPromptVersion` 只认一条、列表里同 ts 的
+ * 两行「旧的排在前」。撞键时把新行的 ts 顺推 1ms 直到不撞（顺推后的顺序 =
+ * 写入顺序）。只对 ISO 毫秒形态的 ts 顺推，其余原样写入。
+ */
+function uniqueVersionTs(
+  existing: ReadonlyArray<PromptVersionRecord>,
+  promptId: string,
+  ts: string,
+): string {
+  const time = Date.parse(ts);
+  // `Date.parse` 对 "1" 这类串也给日期——回写不等即不是 ISO 毫秒形态。
+  if (!Number.isFinite(time) || new Date(time).toISOString() !== ts) return ts;
+  const taken = new Set(
+    existing.filter((record) => record.promptId === promptId).map((record) => record.ts),
+  );
+  let candidate = time;
+  while (taken.has(new Date(candidate).toISOString())) candidate += 1;
+  return new Date(candidate).toISOString();
+}
+
 export async function appendPromptVersion(
   root: string,
   promptId: string,
@@ -85,31 +108,35 @@ export async function appendPromptVersion(
   content: string,
   ts: string,
 ): Promise<void> {
-  const row: PromptVersionRecord = { ts, promptId, action, content };
   const path = versionsPath(root);
   await runSerially(path, async () => {
     const existing = await loadPromptVersions(root);
+    // 1666 号：ts 在串行段内据最新账本定——撞键判定必须发生在读到最新账本之后。
+    const row: PromptVersionRecord = { ts: uniqueVersionTs(existing, promptId, ts), promptId, action, content };
     const lines = [...existing, row].map((record) => JSON.stringify(record));
     await mkdir(dirname(path), { recursive: true });
     await writeTextAtomic(path, lines.join("\n") + "\n");
   });
 }
 
-/** 某 prompt 版本列表（ts 降序=最新在前）。 */
+/** 某 prompt 版本列表（ts 降序=最新在前；同 ts 的历史行按写入序倒排）。 */
 export async function listPromptVersions(root: string, promptId: string): Promise<PromptVersionRecord[]> {
-  const rows = (await loadPromptVersions(root)).filter((record) => record.promptId === promptId);
-  return rows.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0));
+  const rows = (await loadPromptVersions(root))
+    .map((record, index) => ({ record, index }))
+    .filter(({ record }) => record.promptId === promptId);
+  rows.sort((a, b) => (a.record.ts < b.record.ts ? 1 : a.record.ts > b.record.ts ? -1 : b.index - a.index));
+  return rows.map(({ record }) => record);
 }
 
-/** 读指定版本（promptId+ts 定位；找不到 undefined）。 */
+/** 读指定版本（promptId+ts 定位；找不到 undefined；同 ts 的历史行取最后写入的）。 */
 export async function readPromptVersion(
   root: string,
   promptId: string,
   ts: string,
 ): Promise<PromptVersionRecord | undefined> {
-  return (await loadPromptVersions(root)).find(
-    (record) => record.promptId === promptId && record.ts === ts,
-  );
+  return (await loadPromptVersions(root))
+    .filter((record) => record.promptId === promptId && record.ts === ts)
+    .at(-1);
 }
 
 /** 覆盖写（原子）——restore 复写与 PUT 共用。 */

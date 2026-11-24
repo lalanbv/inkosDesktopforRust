@@ -194,11 +194,31 @@ pub async fn load_prompt_versions(root: &str) -> std::io::Result<Vec<PromptVersi
     Ok(parse_version_lines(&text))
 }
 
+/// 版本以 (promptId, ts) 定位——同一 prompt 不得出现同 ts 两行。同一毫秒内的
+/// 两次写入（并发保存 / 回滚后紧接保存）会让后一行被前一行遮蔽：读取只认
+/// 第一条、列表里同 ts 的两行「旧的排在前」。撞键时把新行的 ts 顺推 1ms 直到
+/// 不撞（顺推后的顺序 = 写入顺序）。非 ISO 毫秒形态的 ts 原样写入（无法顺推）。
+fn unique_version_ts(existing: &[PromptVersionRecord], prompt_id: &str, ts: &str) -> String {
+    let Some(mut millis) = crate::utils::utc_time::utc_iso_to_unix_millis(ts) else {
+        return ts.to_string();
+    };
+    let mut candidate = ts.to_string();
+    while existing
+        .iter()
+        .any(|record| record.prompt_id == prompt_id && record.ts == candidate)
+    {
+        millis += 1;
+        candidate = crate::utils::utc_time::unix_millis_to_utc_iso(millis);
+    }
+    candidate
+}
+
 /// 追加版本行（best-effort：失败仅日志，不 fail 覆盖写主链）。
 ///
-/// 1666 号：经 [`crate::utils::jsonl_ledger::append_jsonl`]——同一路径的追加
-/// 进程内串行（并发追加此前丢行：TS 腿 20 路并发实测只剩 1 行）；读不出来
-/// 即中止（既有历史保留）。
+/// 1666 号：经 [`crate::utils::jsonl_ledger::append_jsonl_derived`]——同一路径
+/// 的追加进程内串行（并发追加此前丢行：TS 腿 20 路并发实测只剩 1 行），且新行
+/// 在串行段内据最新账本定 ts（见 [`unique_version_ts`]）；读不出来即中止
+/// （既有历史保留）。
 pub async fn append_prompt_version(
     root: &str,
     prompt_id: &str,
@@ -206,13 +226,7 @@ pub async fn append_prompt_version(
     content: &str,
     ts: &str,
 ) {
-    let row = PromptVersionRecord {
-        ts: ts.to_string(),
-        prompt_id: prompt_id.to_string(),
-        action: action.to_string(),
-        content: content.to_string(),
-    };
-    let appended = crate::utils::jsonl_ledger::append_jsonl(
+    let appended = crate::utils::jsonl_ledger::append_jsonl_derived(
         &prompt_versions_path(root),
         |text| {
             parse_version_lines(text)
@@ -220,7 +234,16 @@ pub async fn append_prompt_version(
                 .map(|record| serde_json::to_string(record).unwrap_or_default())
                 .collect()
         },
-        vec![serde_json::to_string(&row).unwrap_or_default()],
+        |text| {
+            let existing = parse_version_lines(text);
+            let row = PromptVersionRecord {
+                ts: unique_version_ts(&existing, prompt_id, ts),
+                prompt_id: prompt_id.to_string(),
+                action: action.to_string(),
+                content: content.to_string(),
+            };
+            vec![serde_json::to_string(&row).unwrap_or_default()]
+        },
     )
     .await;
     if let Err(error) = appended {
@@ -228,21 +251,24 @@ pub async fn append_prompt_version(
     }
 }
 
-/// 某 prompt 的版本列表（ts 降序=最新在前）。读不出来 = Err。
+/// 某 prompt 的版本列表（ts 降序=最新在前；同 ts 的历史行按写入序倒排）。
+/// 读不出来 = Err。
 pub async fn list_prompt_versions(
     root: &str,
     prompt_id: &str,
 ) -> std::io::Result<Vec<PromptVersionRecord>> {
-    let mut versions: Vec<PromptVersionRecord> = load_prompt_versions(root)
+    let mut versions: Vec<(usize, PromptVersionRecord)> = load_prompt_versions(root)
         .await?
         .into_iter()
-        .filter(|record| record.prompt_id == prompt_id)
+        .enumerate()
+        .filter(|(_, record)| record.prompt_id == prompt_id)
         .collect();
-    versions.sort_by(|a, b| b.ts.cmp(&a.ts));
-    Ok(versions)
+    versions.sort_by(|(a_index, a), (b_index, b)| b.ts.cmp(&a.ts).then(b_index.cmp(a_index)));
+    Ok(versions.into_iter().map(|(_, record)| record).collect())
 }
 
-/// 读指定版本（promptId+ts 定位；找不到 None）。读不出来 = Err。
+/// 读指定版本（promptId+ts 定位；找不到 None；同 ts 的历史行取最后写入的）。
+/// 读不出来 = Err。
 pub async fn read_prompt_version(
     root: &str,
     prompt_id: &str,
@@ -251,6 +277,7 @@ pub async fn read_prompt_version(
     Ok(load_prompt_versions(root)
         .await?
         .into_iter()
+        .rev()
         .find(|record| record.prompt_id == prompt_id && record.ts == ts))
 }
 
@@ -371,5 +398,98 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(out, "BASE", "覆盖内容 trim 后为空 → 原样返回 base");
+    }
+
+    /// 1666 号：(promptId, ts) 是版本定位键——同一 prompt 同一毫秒写入两行时
+    /// 新行 ts 顺推 1ms，两行各可按 ts 取到、列表「最新在前」；别的 prompt 的同
+    /// ts 不受影响。
+    #[tokio::test]
+    async fn same_millisecond_versions_get_distinct_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().into_owned();
+        let ts = "2026-11-24T12:00:00.000Z";
+        let bumped = "2026-11-24T12:00:00.001Z";
+        append_prompt_version(&root, "p.one", "put", "第一版", ts).await;
+        append_prompt_version(&root, "p.one", "put", "第二版", ts).await;
+        append_prompt_version(&root, "p.two", "put", "别的", ts).await;
+
+        let versions = list_prompt_versions(&root, "p.one").await.unwrap();
+        assert_eq!(
+            versions.iter().map(|v| v.ts.as_str()).collect::<Vec<_>>(),
+            [bumped, ts],
+            "最新在前"
+        );
+        for (key, content) in [(ts, "第一版"), (bumped, "第二版")] {
+            assert_eq!(
+                read_prompt_version(&root, "p.one", key)
+                    .await
+                    .unwrap()
+                    .map(|r| r.content),
+                Some(content.to_string()),
+                "两行各可按 ts 取到"
+            );
+        }
+        assert_eq!(
+            read_prompt_version(&root, "p.two", ts)
+                .await
+                .unwrap()
+                .map(|r| r.content),
+            Some("别的".to_string())
+        );
+        // 非 ISO 毫秒形态的 ts 无法顺推：原样写入（不改写调用方给的键）。
+        append_prompt_version(&root, "p.three", "put", "任意键", "v1").await;
+        assert_eq!(
+            load_prompt_versions(&root)
+                .await
+                .unwrap()
+                .last()
+                .map(|r| r.ts.clone()),
+            Some("v1".to_string())
+        );
+    }
+
+    /// 1666 号：修复前落盘的同 ts 两行（撞键历史数据）——列表按写入序倒排、
+    /// 读取取最后写入的那行（与「最新在前」同一口径）。
+    #[tokio::test]
+    async fn legacy_tied_versions_read_latest_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tokio::fs::create_dir_all(root.join("prompt"))
+            .await
+            .unwrap();
+        let ts = "2026-11-24T12:00:00.000Z";
+        let rows = [("旧的", ts), ("新的", ts)]
+            .map(|(content, ts)| {
+                serde_json::to_string(&PromptVersionRecord {
+                    ts: ts.to_string(),
+                    prompt_id: "p.one".to_string(),
+                    action: "put".to_string(),
+                    content: content.to_string(),
+                })
+                .unwrap()
+            })
+            .join("\n");
+        tokio::fs::write(
+            prompt_versions_path(&root.to_string_lossy()),
+            format!("{rows}\n"),
+        )
+        .await
+        .unwrap();
+        let root = root.to_string_lossy().into_owned();
+        let versions = list_prompt_versions(&root, "p.one").await.unwrap();
+        assert_eq!(
+            versions
+                .iter()
+                .map(|v| v.content.as_str())
+                .collect::<Vec<_>>(),
+            ["新的", "旧的"]
+        );
+        assert_eq!(
+            read_prompt_version(&root, "p.one", ts)
+                .await
+                .unwrap()
+                .map(|r| r.content),
+            Some("新的".to_string())
+        );
     }
 }

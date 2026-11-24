@@ -6,17 +6,21 @@
 //   2. pnpm -r typecheck          三包双 tsconfig 类型检查（消费新鲜 dist）
 //   3. pnpm -r test               core+studio+cli 全量测试
 //   4. node scripts/audit-npm.mjs npm 依赖审计（白名单语义）
-//   5. node scripts/ensure-rust-bin.mjs       rust 活体腿二进制新鲜度闸
+//   5. node scripts/audit-semantic-patterns.mjs 语义/模板模式审计（白名单语义）
+//     （1666 号入常驻：848/850/1590 建的检测器此前不在任何门禁里——R48a/1641
+//     新增的章节结构事务触发一条 finding，一直红到 1670 无人见。静态 ~1s 零
+//     依赖，--fast 亦跑）
+//   6. node scripts/ensure-rust-bin.mjs       rust 活体腿二进制新鲜度闸
 //     （643 号：活体步骤消费磁盘既有 debug 二进制而 cargo test 不编译 bin
 //     目标——先 cargo build 增量核验/重建，拒绝以陈旧产物出具活体证据）
-//   6. node scripts/node-fallback-smoke.mjs   双引擎一致性（mock+fixture+端点）
-//   7. node scripts/engine-contract-diff.mjs  GET/写入/DELETE 契约差分
-//   8. node scripts/export-epub-smoke.mjs     EPUB 导出结构冒烟
-//   9. node scripts/work-domain-alternation.mjs work 域双引擎交替读写互证
+//   7. node scripts/node-fallback-smoke.mjs   双引擎一致性（mock+fixture+端点）
+//   8. node scripts/engine-contract-diff.mjs  GET/写入/DELETE 契约差分
+//   9. node scripts/export-epub-smoke.mjs     EPUB 导出结构冒烟
+//  10. node scripts/work-domain-alternation.mjs work 域双引擎交替读写互证
 //     （914 号入常驻：884 M1b 验收器械此前仅手动轮跑；works 域零 LLM/mock
 //     依赖、磁盘事务形态稳定性历史良好——「器械不留门禁=护栏半闭环」，
 //     与 913 docs 逻辑同型）
-//  10. node scripts/check-routes.mjs 路由注册 vs handler 机械对照（915 号
+//  11. node scripts/check-routes.mjs 路由注册 vs handler 机械对照（915 号
 //     入常驻：411/412 号孤儿端点两例实证的检测器，静态 0.07s 零依赖——
 //     「已实现 axum handler 但 mod.rs 未挂路由」的注册完整性哨）
 // Rust 门禁（clippy:gate / audit:rust / cargo test / duel / bench）不受本脚本
@@ -37,6 +41,8 @@ const steps = [
   ["typecheck", ["pnpm", ["-r", "typecheck"]]],
   ["test", ["pnpm", ["-r", "test"]]],
   ["audit:npm", ["node", ["scripts/audit-npm.mjs"]]],
+  // 1666 号：语义/模板模式审计入常驻（检测器不在门禁里=红了几十轮没人看）。
+  ["audit:semantic-patterns", ["node", ["scripts/audit-semantic-patterns.mjs"]]],
   ...(fast
     ? []
     : [

@@ -545,6 +545,7 @@ mod tests {
     //! **逐字共用**——双端恒等锁：任一端改 schema 而另一端不跟，必有一端红。
     use super::*;
     use crate::interaction::session_restore::message_events_to_interaction_messages;
+    use serde_json::json;
 
     /// 876 前 Rust（及 2.0 前 TS）写出的旧名形态。
     const GOLDEN_LEGACY_DISPLAY_LINE: &str = r#"{"type":"message","version":1,"sessionId":"s876","seq":3,"timestamp":1730000000000,"parentSeq":2,"requestId":"req-1","uuid":"u-3","parentUuid":null,"role":"assistant","legacyDisplay":{"toolExecutions":[{"id":"exec-1","tool":"draft_structure","label":"draft_structure","status":"completed"}]},"message":{"role":"assistant","content":[{"type":"text","text":"已生成结构"}]}}"#;
@@ -679,6 +680,241 @@ mod tests {
         assert!(
             !message_events_to_interaction_messages(&[&visible]).is_empty(),
             "无 visibility 正常投影"
+        );
+    }
+
+    /// 上游 2.0 TS 腿真实写出的一个完整回合（1666 号活体 transcript 逐字摘录，
+    /// 仅 id/时间戳定值）：`finish_turn` 收尾协议——工具调用与结果都是
+    /// `visibility:"model"`，作者可见答复在收尾消息的 `display.completion.message`，
+    /// 正文 `content:[]`。
+    const TS20_FINISH_TURN_LINES: [&str; 5] = [
+        r#"{"type":"message","version":1,"sessionId":"s20","seq":5,"timestamp":105,"parentSeq":4,"requestId":"req-20","uuid":"u-5","parentUuid":null,"role":"user","piTurnIndex":1,"message":{"role":"user","content":[{"type":"text","text":"打个招呼"}],"timestamp":105}}"#,
+        r#"{"type":"message","version":1,"sessionId":"s20","seq":6,"timestamp":106,"parentSeq":5,"requestId":"req-20","uuid":"u-6","parentUuid":"u-5","role":"assistant","visibility":"model","piTurnIndex":1,"toolCallId":"call-finish","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-finish","name":"finish_turn","arguments":{"status":"answered","message":"OK"}}],"stopReason":"toolUse","timestamp":106}}"#,
+        r#"{"type":"message","version":1,"sessionId":"s20","seq":7,"timestamp":107,"parentSeq":6,"requestId":"req-20","uuid":"u-7","parentUuid":"u-6","role":"toolResult","visibility":"model","piTurnIndex":1,"toolCallId":"call-finish","sourceToolAssistantUuid":"u-6","message":{"role":"toolResult","toolCallId":"call-finish","toolName":"finish_turn","content":[{"type":"text","text":"OK"}],"details":{"kind":"turn_completion","status":"answered","message":"OK"},"isError":false,"timestamp":107}}"#,
+        r#"{"type":"message","version":1,"sessionId":"s20","seq":8,"timestamp":108,"parentSeq":7,"requestId":"req-20","uuid":"u-8","parentUuid":"u-7","role":"assistant","piTurnIndex":2,"display":{"completion":{"status":"answered","message":"OK"}},"message":{"role":"assistant","content":[],"stopReason":"stop","timestamp":108}}"#,
+        r#"{"type":"request_committed","version":1,"sessionId":"s20","seq":9,"timestamp":109,"parentSeq":8,"requestId":"req-20"}"#,
+    ];
+
+    /// 把若干行写成一个会话 transcript 并走完整读面（derive）。
+    async fn derive_lines(lines: &[&str]) -> crate::interaction::session::BookSession {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        tokio::fs::create_dir_all(sessions_dir(root)).await.unwrap();
+        tokio::fs::write(
+            transcript_path(root, "s20"),
+            format!("{}\n", lines.join("\n")),
+        )
+        .await
+        .unwrap();
+        crate::interaction::session_restore::derive_book_session_from_transcript(root, "s20")
+            .await
+            .expect("transcript 非空必有会话")
+    }
+
+    fn project(lines: &[&str]) -> Vec<Value> {
+        let (events, _) = parse_transcript(&format!("{}\n", lines.join("\n")));
+        let committed: Vec<&TranscriptEvent> =
+            crate::interaction::session_restore::committed_message_events(&events, None);
+        message_events_to_interaction_messages(&committed)
+    }
+
+    /// 定值行与拼装行（owned）混排后的借用视图。
+    fn borrowed_lines(lines: &[String]) -> Vec<&str> {
+        lines.iter().map(String::as_str).collect()
+    }
+
+    /// 1666 号：2.0 收尾协议回合的作者可见答复不得丢——此前 Rust 不消费
+    /// `display.completion`，空正文收尾消息被当「只闭合模型轮」跳过，Node 腿 /
+    /// CLI 2.0 写的会话在产品引擎里读出来**每轮都没有助手回复**（duel 强制
+    /// 打开后 `聊天回合后双端会话读面不等价` 实录）。
+    #[tokio::test]
+    async fn ts20_finish_turn_reply_survives_the_read_face() {
+        let session = derive_lines(&TS20_FINISH_TURN_LINES).await;
+        assert_eq!(
+            serde_json::to_value(&session.messages).unwrap(),
+            json!([
+                { "role": "user", "content": "打个招呼", "timestamp": 105 },
+                { "role": "assistant", "content": "OK", "timestamp": 108 },
+            ]),
+            "答复在 display.completion.message；工具调用/结果为 model 可见不入 UI"
+        );
+        // 收尾答复优先于同事件的正文块（TS：completion.message ?? 正文）。
+        let both = TS20_FINISH_TURN_LINES.map(|line| {
+            if line.contains(r#""uuid":"u-8""#) {
+                line.replace(
+                    r#""content":[]"#,
+                    r#""content":[{"type":"text","text":"正文"}]"#,
+                )
+            } else {
+                line.to_string()
+            }
+        });
+        let both: Vec<&str> = both.iter().map(String::as_str).collect();
+        assert_eq!(project(&both)[1]["content"], "OK");
+    }
+
+    /// 1666 号：2.0 带附件的用户输入——作者可见正文 = 输入正文 + 附件清单。
+    #[test]
+    fn ts20_user_input_with_attachments_is_the_visible_user_content() {
+        let lines = [
+            r#"{"type":"message","version":1,"sessionId":"s20","seq":3,"timestamp":103,"parentSeq":2,"requestId":"req-20","uuid":"u-3","parentUuid":null,"role":"user","display":{"userInput":{"text":"看看这两份设定","language":"zh","attachments":[{"filename":"a.md"},{"filename":"b.png"}]}},"message":{"role":"user","content":[{"type":"text","text":"[附件]"}]}}"#,
+            r#"{"type":"request_committed","version":1,"sessionId":"s20","seq":4,"timestamp":104,"parentSeq":3,"requestId":"req-20"}"#,
+        ];
+        assert_eq!(
+            project(&lines)[0]["content"],
+            "看看这两份设定\n\n附件：\n- a.md\n- b.png"
+        );
+        let english = lines.map(|line| line.replace(r#""language":"zh""#, r#""language":"en""#));
+        let english = borrowed_lines(&english);
+        assert_eq!(
+            project(&english)[0]["content"],
+            "看看这两份设定\n\nAttachments:\n- a.md\n- b.png"
+        );
+    }
+
+    fn rust_turn(result_text: &str, is_error: bool) -> [String; 7] {
+        let result = json!({
+            "role": "toolResult", "toolCallId": "call-1", "toolName": "read",
+            "content": [{ "type": "text", "text": result_text }], "isError": is_error, "timestamp": 5,
+        });
+        [
+            r#"{"type":"session_created","version":1,"sessionId":"s20","seq":1,"timestamp":1,"parentSeq":null,"bookId":null,"title":null,"createdAt":1,"updatedAt":1}"#.to_string(),
+            r#"{"type":"request_started","version":1,"sessionId":"s20","seq":2,"timestamp":2,"parentSeq":1,"requestId":"req-1","sessionKind":"chat","input":"读文件"}"#.to_string(),
+            r#"{"type":"message","version":1,"sessionId":"s20","seq":3,"timestamp":3,"parentSeq":2,"requestId":"req-1","uuid":"u-3","parentUuid":null,"role":"user","message":{"role":"user","content":"读文件","timestamp":3}}"#.to_string(),
+            r#"{"type":"message","version":1,"sessionId":"s20","seq":4,"timestamp":4,"parentSeq":3,"requestId":"req-1","uuid":"u-4","parentUuid":"u-3","role":"assistant","message":{"role":"assistant","content":[{"type":"toolCall","id":"call-1","name":"read","arguments":{"path":"a.md"}}]}}"#.to_string(),
+            format!(r#"{{"type":"message","version":1,"sessionId":"s20","seq":5,"timestamp":5,"parentSeq":4,"requestId":"req-1","uuid":"u-5","parentUuid":"u-4","role":"toolResult","toolCallId":"call-1","sourceToolAssistantUuid":"u-4","message":{result}}}"#),
+            r#"{"type":"message","version":1,"sessionId":"s20","seq":6,"timestamp":6,"parentSeq":5,"requestId":"req-1","uuid":"u-6","parentUuid":null,"role":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"读完了"}]}}"#.to_string(),
+            r#"{"type":"request_committed","version":1,"sessionId":"s20","seq":7,"timestamp":7,"parentSeq":6,"requestId":"req-1"}"#.to_string(),
+        ]
+    }
+
+    /// 1666 号：读面不二次截断工具结果——此前 derive 再裁 200/500 且无省略号，
+    /// 重载后的历史比同轮实时流（写入点上限 2000/500）短，与 Node 腿读同一份
+    /// transcript 也不同长。上限由写入点定，读面原样透出。
+    #[test]
+    fn tool_result_is_not_truncated_a_second_time_on_the_read_face() {
+        let long_result = "字".repeat(1500);
+        let lines = rust_turn(&long_result, false);
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let messages = project(&lines);
+        assert_eq!(messages[1]["toolExecutions"][0]["result"], long_result);
+
+        let long_error = "误".repeat(600);
+        let lines = rust_turn(&long_error, true);
+        let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        assert_eq!(project(&lines)[1]["toolExecutions"][0]["error"], long_error);
+        // fork 自有工具名无 `能力域__` 前缀：标签与工具名不变。
+        assert_eq!(messages[1]["toolExecutions"][0]["label"], "读取文件");
+    }
+
+    /// 1666 号：2.0 动作授权工具名 `能力域__动作`——工具卡按动作段落（标签表
+    /// 取动作段）；沉浸场景结果（`details.presentation`）以独立卡还原，其后的
+    /// 收尾正文不并入该卡。
+    #[test]
+    fn ts20_action_tools_and_immersive_scenes_project_like_the_node_leg() {
+        let created = r#"{"type":"session_created","version":1,"sessionId":"s20","seq":1,"timestamp":1,"parentSeq":null,"bookId":null,"title":null,"createdAt":1,"updatedAt":1}"#;
+        let user = r#"{"type":"message","version":1,"sessionId":"s20","seq":2,"timestamp":2,"parentSeq":1,"requestId":"req-1","uuid":"u-2","parentUuid":null,"role":"user","message":{"role":"user","content":[{"type":"text","text":"往前走"}]}}"#;
+        let call = |id: &str, name: &str| {
+            format!(
+                r#"{{"type":"message","version":1,"sessionId":"s20","seq":3,"timestamp":3,"parentSeq":2,"requestId":"req-1","uuid":"u-3","parentUuid":"u-2","role":"assistant","message":{{"role":"assistant","content":[{{"type":"toolCall","id":"{id}","name":"{name}","arguments":{{"step":"向前"}}}}]}}}}"#
+            )
+        };
+        let result = |id: &str, name: &str, details: &str| {
+            format!(
+                r#"{{"type":"message","version":1,"sessionId":"s20","seq":4,"timestamp":4,"parentSeq":3,"requestId":"req-1","uuid":"u-4","parentUuid":"u-3","role":"toolResult","toolCallId":"{id}","message":{{"role":"toolResult","toolCallId":"{id}","toolName":"{name}","content":[{{"type":"text","text":"你站在门前。"}}]{details},"isError":false,"timestamp":4}}}}"#
+            )
+        };
+        let prose = r#"{"type":"message","version":1,"sessionId":"s20","seq":5,"timestamp":5,"parentSeq":4,"requestId":"req-1","uuid":"u-5","parentUuid":"u-4","role":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"场景旁白"}]}}"#;
+        let committed = r#"{"type":"request_committed","version":1,"sessionId":"s20","seq":6,"timestamp":6,"parentSeq":5,"requestId":"req-1"}"#;
+
+        // 沉浸场景：工具动作段不是 play_*（fork 自有名），独立卡判定只来自
+        // `details.presentation`。
+        let scene = vec![
+            created.to_string(),
+            user.to_string(),
+            call("call-s", "interactive_world__immersive_step"),
+            result(
+                "call-s",
+                "interactive_world__immersive_step",
+                r#","details":{"presentation":"immersive-scene"}"#,
+            ),
+            prose.to_string(),
+            committed.to_string(),
+        ];
+        let scene = borrowed_lines(&scene);
+        let card = &project(&scene)[1];
+        assert_eq!(card["role"], "assistant");
+        assert_eq!(
+            card["toolExecutions"][0]["tool"], "immersive_step",
+            "动作段"
+        );
+        assert_eq!(
+            card["toolExecutions"][0]["label"], "immersive_step",
+            "表外动作原样"
+        );
+        assert_eq!(card["toolExecutions"][0]["args"], json!({ "step": "向前" }));
+        assert_eq!(card["toolExecutions"][0]["result"], "你站在门前。");
+        assert_eq!(
+            card["toolExecutions"][0]["details"],
+            json!({ "presentation": "immersive-scene" })
+        );
+        assert_eq!(card["content"], "", "沉浸场景卡独立：收尾正文不并入该卡");
+        assert_eq!(card["thinking"], "场景旁白", "被抑制的正文转入思考");
+
+        // 对照：同一工具、结果无 presentation → 普通工具卡，挂到收尾助手消息上。
+        let plain = vec![
+            created.to_string(),
+            user.to_string(),
+            call("call-s", "interactive_world__immersive_step"),
+            result("call-s", "interactive_world__immersive_step", ""),
+            prose.to_string(),
+            committed.to_string(),
+        ];
+        let plain = borrowed_lines(&plain);
+        let attached = &project(&plain)[1];
+        assert_eq!(attached["content"], "场景旁白");
+        assert_eq!(attached["toolExecutions"][0]["tool"], "immersive_step");
+
+        // 2.0 长篇动作工具：标签表取动作段。
+        let review = vec![
+            created.to_string(),
+            user.to_string(),
+            call("call-r", "longform__review_chapter"),
+            result("call-r", "longform__review_chapter", ""),
+            prose.to_string(),
+            committed.to_string(),
+        ];
+        let review = borrowed_lines(&review);
+        let execution = &project(&review)[1]["toolExecutions"][0];
+        assert_eq!(execution["tool"], "review_chapter");
+        assert_eq!(execution["label"], "审查章节");
+    }
+
+    /// 协议工具测试的行（混 `&str` 与 `String`，统一成 owned）。
+    fn protocol_turn() -> Vec<String> {
+        vec![
+            TS20_FINISH_TURN_LINES[0].to_string(),
+            TS20_FINISH_TURN_LINES[1].replace(r#""visibility":"model","#, ""),
+            TS20_FINISH_TURN_LINES[2].replace(r#""visibility":"model","#, ""),
+            TS20_FINISH_TURN_LINES[3].to_string(),
+            TS20_FINISH_TURN_LINES[4].to_string(),
+        ]
+    }
+
+    /// 1666 号：会话协议工具（finish_turn）的调用块不进工具卡配对表——即便
+    /// 该结果对作者可见，也不带调用参数（TS `rememberToolCalls` 同款排除）；
+    /// 且挂着的协议结果卡不得让收尾答复被当成「空收尾」跳过。
+    #[test]
+    fn protocol_tool_calls_are_not_paired_into_tool_cards() {
+        let lines = protocol_turn();
+        let messages = project(&borrowed_lines(&lines));
+        assert_eq!(messages.len(), 2, "user + 带结果卡的收尾答复：{messages:?}");
+        assert_eq!(messages[1]["content"], "OK", "收尾答复不得被结果卡吞掉");
+        let execution = &messages[1]["toolExecutions"][0];
+        assert_eq!(execution["tool"], "finish_turn");
+        assert!(
+            execution.get("args").is_none(),
+            "协议工具调用参数不入卡：{execution}"
         );
     }
 }

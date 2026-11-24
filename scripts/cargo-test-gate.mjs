@@ -63,6 +63,12 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // 二进制缺失、总数定位不到、对应错位一律红。复活对跑时把地板上调、上限
 // 下调——两个数只许朝「少豁免」方向动。
 //
+// 水位沿革：首版地板 2 / 上限 11（当时真跑 2 / 豁免 11）。对跑夹具复活
+// （双根布局播种、mock 回 finish_turn、声明差异表、守卫重定）后 13 个对跑
+// 真跑 11 / 豁免 2——地板 11 / 上限 2。余下两个豁免是 cross_write_read 与
+// full_grey：它们要的是「Rust 写 TS 读得到」，两腿各写各的树（books/ ↔
+// works/），不是夹具能补的；存储模型定线后复活并把地板再上调。
+//
 // 测试总数怎么取：本脚本把 cargo 的 stdout 与 stderr **分开采集后拼接**
 // （stdout 在前、stderr 在后）。`Running <binary>` 走 stderr、`running N tests`
 // 走 stdout——两者在拼接输出里不相邻，不能按「节」取。靠序号对应：cargo
@@ -70,8 +76,8 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // ↔ 第 k 条 `test result:`，并用 `passed + failed + ignored === N` 交叉验证
 // 对应没错位（1666 首版按节取数在真实日志上取到 0——合成夹具没复现拼接
 // 形态，真实日志才暴露；夹具此后按真实拼接形态构造）。
-const DUEL_EXECUTED_FLOOR = 2;
-const DUEL_EXEMPT_CEILING = 11;
+const DUEL_EXECUTED_FLOOR = 11;
+const DUEL_EXEMPT_CEILING = 2;
 const DUEL_LEDGER_ENV = "INKOS_DUEL_LEDGER";
 
 const RUNNING_LINE_RE = /^running (\d+) tests?$/;
@@ -185,16 +191,16 @@ function duelSelfCheck() {
   const all = names("duel", 13);
   const first = (count) => all.slice(0, count);
   const cases = [
-    { label: "当前树形态（13 测 / 11 豁免 → 真跑 2）", wantOk: true,
-      fixture: duelFixture({ started: all, exempt: first(11) }),
-      verify: (p) => p.total === 13 && p.executed === 2 && p.exempted.length === 11 && p.exempted[10] === "duel_11" },
+    { label: "当前树形态（13 测 / 2 豁免 → 真跑 11，恰在地板与上限上）", wantOk: true,
+      fixture: duelFixture({ started: all, exempt: first(2) }),
+      verify: (p) => p.total === 13 && p.executed === 11 && p.exempted.length === 2 && p.exempted[1] === "duel_2" },
     { label: "复活后零豁免（13 测 / 0 豁免 → 真跑 13）", wantOk: true,
       fixture: duelFixture({ started: all, exempt: [] }),
       verify: (p) => p.executed === 13 && p.exempted.length === 0 },
-    { label: "真跑跌破地板（13 测 / 12 豁免 → 真跑 1）", wantOk: false, needle: "地板",
-      fixture: duelFixture({ started: all, exempt: first(12) }) },
-    { label: "豁免突破上限（20 测 / 12 豁免 → 真跑 8 但豁免 12 > 11）", wantOk: false, needle: "上限",
-      fixture: duelFixture({ tests: 20, started: names("duel", 20), exempt: names("duel", 12) }) },
+    { label: "真跑跌破地板（13 测 / 3 豁免 → 真跑 10，差 1）", wantOk: false, needle: "地板",
+      fixture: duelFixture({ started: all, exempt: first(3) }) },
+    { label: "豁免突破上限（20 测 / 3 豁免 → 真跑 17 达标但豁免 3 > 2）", wantOk: false, needle: "上限",
+      fixture: duelFixture({ tests: 20, started: names("duel", 20), exempt: names("duel", 3) }) },
     { label: "台账为空（通道失效≠零豁免）", wantOk: false, needle: "台账通道失效",
       fixture: { ...duelFixture({ started: all }), ledgerText: "" } },
     { label: "台账不完整（13 测只握了 12 次 start）", wantOk: false, needle: "台账通道失效",

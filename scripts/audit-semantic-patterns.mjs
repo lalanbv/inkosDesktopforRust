@@ -93,6 +93,11 @@ const ALLOWED_TOKEN_SITES = {
   "packages/core/src/harness/legacy-book-migration.ts": ["lengthWarning"],
   "packages/core/src/pipeline/runner.ts": ["lengthWarning", "hardMin"],
   "packages/core/src/state/manager.ts": ["lengthWarning"],
+  // 1666 号补登：R48a/1641 的章节结构事务（晚于 1590 清偿）给拆分新章初始化
+  // 空的长度警告清单——与 state/manager.ts 重建行同一个章节状态契约（Rust
+  // 镜像 chapter_structure.rs 同写 `length_warnings: Vec::new()`）。本审计此前
+  // 不在任何门禁里，这一条自 1641 起一直红到 1670 无人见——已接入 gate:ts。
+  "packages/core/src/state/chapter-structure.ts": ["lengthWarning"],
   "packages/core/src/utils/analytics.ts": ["qualityScore"],
   "packages/core/src/utils/asset-library.ts": [".max(20)"],
   "packages/core/src/utils/book-eval.ts": ["qualityScore"],

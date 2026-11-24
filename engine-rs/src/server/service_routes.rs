@@ -120,6 +120,38 @@ impl ServiceConfigEntry {
             confirm_at_budget: entry.get("confirmAtBudget").and_then(Value::as_bool),
         }
     }
+
+    /// 字段级合并：`update` 里出现的字段（`Some`）覆盖，未出现的保留旧值。
+    /// `service` 恒取更新值（对象形态的键即服务 id）。两个出现即生效的键见
+    /// [`UpdatePresence`]：带了空 `models` 数组 = 清空；`temperature: null` =
+    /// 恢复默认（删除）。
+    fn merged_with(
+        self,
+        update: ServiceConfigEntry,
+        presence: UpdatePresence,
+    ) -> ServiceConfigEntry {
+        ServiceConfigEntry {
+            service: update.service,
+            name: update.name.or(self.name),
+            base_url: update.base_url.or(self.base_url),
+            models: if presence.models_array {
+                update.models
+            } else {
+                update.models.or(self.models)
+            },
+            temperature: if presence.temperature_null {
+                None
+            } else {
+                update.temperature.or(self.temperature)
+            },
+            max_tokens: update.max_tokens.or(self.max_tokens),
+            api_format: update.api_format.or(self.api_format),
+            stream: update.stream.or(self.stream),
+            daily_token_budget: update.daily_token_budget.or(self.daily_token_budget),
+            monthly_token_budget: update.monthly_token_budget.or(self.monthly_token_budget),
+            confirm_at_budget: update.confirm_at_budget.or(self.confirm_at_budget),
+        }
+    }
 }
 
 /// 服务级模型清单解析（TS `normalizeServiceModelIds` 的宽松子集）：非字符串
@@ -265,31 +297,85 @@ fn percent_decode(value: &str) -> Option<String> {
 
 /// `normalizeServiceConfig`：数组形态 / 对象形态（服务 id 为键）/ 其他 → 空。
 pub fn normalize_service_config(raw: Option<&Value>) -> Vec<ServiceConfigEntry> {
-    match raw {
+    normalize_service_config_pairs(raw)
+        .into_iter()
+        .map(|(entry, _)| entry)
+        .collect()
+}
+
+/// 更新条目里两个「出现即生效」的键的原始出现信息。TS `mergeServiceConfig` 是
+/// 展开语义：条目里**出现**的键覆盖旧值、没出现的保留；Rust 归一把「带了空
+/// 数组 / 带了 null」折成 None，与「没带」不可分——合并时须据此区分。
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct UpdatePresence {
+    /// 原始条目带了 `models` 数组（清洗后为空 = 清空模型清单）。
+    pub models_array: bool,
+    /// 原始条目 `temperature: null`（= 恢复默认：不带该服务的 temperature）。
+    pub temperature_null: bool,
+}
+
+/// [`normalize_service_config`] 的成对形态：每个归一条目附带其原始出现信息。
+pub fn normalize_service_config_pairs(
+    raw: Option<&Value>,
+) -> Vec<(ServiceConfigEntry, UpdatePresence)> {
+    let pairs: Vec<(&Value, ServiceConfigEntry)> = match raw {
         Some(Value::Array(items)) => items
             .iter()
             .filter(|entry| entry.is_object())
-            .map(ServiceConfigEntry::from_json)
+            .map(|entry| (entry, ServiceConfigEntry::from_json(entry)))
             .collect(),
         Some(Value::Object(map)) => map
             .iter()
             .filter(|(_, value)| value.is_object())
-            .map(|(service_id, value)| normalize_service_entry(service_id, value))
+            .map(|(service_id, value)| (value, normalize_service_entry(service_id, value)))
             .collect(),
         _ => Vec::new(),
-    }
+    };
+    pairs
+        .into_iter()
+        .map(|(raw, entry)| {
+            let presence = UpdatePresence {
+                models_array: raw.get("models").is_some_and(Value::is_array),
+                temperature_null: raw.get("temperature") == Some(&Value::Null),
+            };
+            (entry, presence)
+        })
+        .collect()
 }
 
-/// `mergeServiceConfig`：updates 按 key 覆盖 existing（保持 existing 首现序）。
+/// `mergeServiceConfig`：updates 按 key **字段级**覆盖 existing（保持 existing
+/// 首现序）。条目里出现的键覆盖、未出现的保留（TS `{...previous, ...update}`
+/// 同款）。
+///
+/// 1666 号：此前同键整条替换——只提交预算会抹掉 baseUrl / models 等字段
+///（走查实证：设日预算后 custom 服务的端点丢失，预算读面按端点主机匹配账本
+/// 行随之恒 0、确认门永不触发）；界面保存服务（表单不带预算与 maxTokens 键）
+/// 则抹掉手工配置的预算与 maxTokens。Node 腿一直是字段级合并，两腿对同一
+/// 请求落盘结果不同。
 fn merge_service_config(
     existing: Vec<ServiceConfigEntry>,
     updates: Vec<ServiceConfigEntry>,
 ) -> Vec<ServiceConfigEntry> {
+    merge_service_config_with(
+        existing,
+        updates
+            .into_iter()
+            .map(|update| (update, UpdatePresence::default()))
+            .collect(),
+    )
+}
+
+/// [`merge_service_config`] 的成对形态（PUT 处理器用：带原始出现信息）。
+fn merge_service_config_with(
+    existing: Vec<ServiceConfigEntry>,
+    updates: Vec<(ServiceConfigEntry, UpdatePresence)>,
+) -> Vec<ServiceConfigEntry> {
     let mut merged: Vec<ServiceConfigEntry> = existing;
-    for update in updates {
+    for (update, presence) in updates {
         let key = service_config_key(&update);
         match merged.iter().position(|e| service_config_key(e) == key) {
-            Some(index) => merged[index] = update,
+            Some(index) => merged[index] = merged[index].clone().merged_with(update, presence),
+            // 新条目：`temperature: null` 即不带该键（归一已是 None）。
             None => merged.push(update),
         }
     }
@@ -839,12 +925,27 @@ pub async fn put_services_config(
     let llm = llm_map_mut(&mut config);
     if let Some(incoming) = payload.get("services") {
         let existing = normalize_service_config(llm.get("services"));
-        let updates = normalize_service_config(Some(incoming));
-        let merged = merge_service_config(existing, updates);
+        let updates = normalize_service_config_pairs(Some(incoming));
+        // 1666 号：`temperature: null` = 恢复默认——该服务的 temperature 删除；
+        // 被重置的是选中服务（请求指定，否则现有）时顶层 llm.temperature 一并
+        // 删除（TS PUT 处理器同款；此前 Rust 靠整条替换碰巧丢掉 temperature，
+        // 连同其它字段一起）。
+        let selected = payload
+            .get("service")
+            .and_then(Value::as_str)
+            .or_else(|| llm.get("service").and_then(Value::as_str));
+        let resets_selected = updates.iter().any(|(update, presence)| {
+            presence.temperature_null
+                && selected.is_some_and(|selected| service_config_key(update) == selected)
+        });
+        let merged = merge_service_config_with(existing, updates);
         llm.insert(
             "services".into(),
             json!(merged.iter().map(|e| e.to_json()).collect::<Vec<_>>()),
         );
+        if resets_selected {
+            llm.remove("temperature");
+        }
     }
     if let Some(default_model) = payload.get("defaultModel") {
         llm.insert("defaultModel".into(), default_model.clone());
@@ -2465,6 +2566,70 @@ mod tests {
         let merged = merge_service_config(merged, again);
         assert_eq!(merged.len(), 4);
         assert_eq!(merged[2].base_url.as_deref(), Some("https://new/v1"));
+    }
+
+    /// 1666 号：字段级合并——更新条目里没出现的字段保留（此前同键整条替换：
+    /// 只提交预算抹掉 baseUrl 等；界面保存服务抹掉预算与 maxTokens）。
+    #[test]
+    fn merge_keeps_fields_absent_from_the_update() {
+        let existing = vec![ServiceConfigEntry {
+            service: "custom".into(),
+            name: Some("Mock".into()),
+            base_url: Some("https://mock/v1".into()),
+            models: Some(vec!["m1".into(), "m2".into()]),
+            temperature: Some(0.3),
+            max_tokens: Some(4096.0),
+            api_format: Some("chat".into()),
+            stream: Some(false),
+            confirm_at_budget: Some(false),
+            ..Default::default()
+        }];
+        let pair_of = |raw: Value| normalize_service_config_pairs(Some(&raw)).remove(0);
+
+        // ① 只设预算（对象形态）：其余字段原样保留。
+        let (update, presence) = pair_of(json!({ "custom:Mock": { "dailyTokenBudget": 1 } }));
+        assert_eq!(presence, UpdatePresence::default());
+        let merged = merge_service_config_with(existing.clone(), vec![(update, presence)]);
+        assert_eq!(
+            merged[0],
+            ServiceConfigEntry {
+                daily_token_budget: Some(1),
+                ..existing[0].clone()
+            }
+        );
+
+        // ② 界面保存服务（数组形态；表单不带预算与 maxTokens 键）。
+        let (update, presence) = pair_of(json!([{
+            "service": "custom", "name": "Mock", "temperature": 0.9, "apiFormat": "chat",
+            "stream": true, "models": ["m1"], "baseUrl": "https://mock/v1",
+        }]));
+        let merged = merge_service_config_with(merged, vec![(update, presence)]);
+        assert_eq!(merged[0].temperature, Some(0.9));
+        assert_eq!(merged[0].stream, Some(true));
+        assert_eq!(
+            merged[0].models.as_deref(),
+            Some(["m1".to_string()].as_slice())
+        );
+        assert_eq!(merged[0].daily_token_budget, Some(1), "预算保留");
+        assert_eq!(merged[0].max_tokens, Some(4096.0), "maxTokens 保留");
+        assert_eq!(merged[0].confirm_at_budget, Some(false));
+
+        // ③ `temperature: null` = 恢复默认；`models: []` = 清空清单。
+        let (update, presence) = pair_of(json!([{
+            "service": "custom", "name": "Mock", "temperature": null, "models": [],
+        }]));
+        assert_eq!(
+            presence,
+            UpdatePresence {
+                models_array: true,
+                temperature_null: true,
+            }
+        );
+        let merged = merge_service_config_with(merged, vec![(update, presence)]);
+        assert_eq!(merged[0].temperature, None, "恢复默认 = 删除");
+        assert_eq!(merged[0].models, None, "空数组 = 清空");
+        assert_eq!(merged[0].base_url.as_deref(), Some("https://mock/v1"));
+        assert_eq!(merged[0].daily_token_budget, Some(1));
     }
 
     #[test]

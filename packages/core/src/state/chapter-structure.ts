@@ -281,9 +281,12 @@ export async function splitChapter(
   for (const [old, file] of affectedFiles) {
     const next = mapping.get(old);
     if (next === undefined || next === old) continue;
+    // 1666 号：重编号只改名，正文逐字节不动（Rust 纯 rename、reorder 同款）——
+    // 此前顺手补结尾换行，等于在一次「编号调整」里改写了未被操作的章正文，
+    // 两腿同一份书经同一次拆分后字节不再一致。
     writes.push({
       relativePath: `chapters/${chapterFileName(next, file.meta.title)}`,
-      content: ensureFresh(await readFile(join(deps.bookDir, "chapters", file.fileName), "utf-8")),
+      content: await readFile(join(deps.bookDir, "chapters", file.fileName), "utf-8"),
     });
     deletes.push(`chapters/${file.fileName}`);
     renumbered.push({ from: old, to: next });
@@ -406,7 +409,10 @@ export async function mergeChapters(
     deletes.push(`chapters/${file.fileName}`);
     renumbered.push({ from: old, to: next });
   }
-  writes.push({ relativePath: `chapters/${keepFile.fileName}`, content: `${merged}\n` });
+  // 1666 号：合并产物恒以单个换行收尾（Rust 同款同修）。此前直接补 `\n`——被并
+  // 章以换行收尾（写入惯例）时其尾部换行与补的收尾换行叠加成一个多余空行；被并
+  // 章为空白时分隔符的尾随空白同样在此剪掉。
+  writes.push({ relativePath: `chapters/${keepFile.fileName}`, content: `${merged.trimEnd()}\n` });
   for (const artifact of artifacts) {
     const relativePath = artifact.relativePath;
     const sub = relativePath.startsWith("story/runtime") ? "runtime" : "drafts";

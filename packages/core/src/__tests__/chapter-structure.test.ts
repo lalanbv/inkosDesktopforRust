@@ -91,6 +91,20 @@ describe("splitChapter（R48a/1641 号）", () => {
     expect(outcome.revision).toBe(chapterSetRevision(index));
   });
 
+  // 1666 号（章节结构对跑真执行逼出）：重编号只改名——未被拆分的后续章正文
+  // 逐字节不动。此前顺手补结尾换行，一次「编号调整」改写了未被操作的章。
+  it("拆分重编号不改写后续章正文（无尾换行的文件保持无尾换行）", async () => {
+    const { bookDir, deps } = seedBook();
+    const original = "# 收束\n\n第三章正文丙。";
+    writeFileSync(join(bookDir, "chapters", "0003_收束.md"), original);
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    const chapters = join(bookDir, "chapters");
+    expect(readFileSync(join(chapters, "0004_收束.md"), "utf-8")).toBe(original);
+    // 被拆章自身的两段照旧各以单个换行收尾。
+    expect(readFileSync(join(chapters, "0002_灵脉.md"), "utf-8")).toBe("# 灵脉\n\n");
+    expect(readFileSync(join(chapters, "0003_灵脉.md"), "utf-8")).toBe("第二章正文乙。\n");
+  });
+
   it("乐观并发：expectedRevision 不符 409 CHAPTER_SET_CONFLICT，缺省跳过", async () => {
     const { deps } = seedBook();
     const current = chapterSetRevision(await deps.loadChapterIndex());
@@ -134,6 +148,23 @@ describe("mergeChapters（R48a/1641 号）", () => {
     const { deps } = seedBook();
     await expect(mergeChapters(deps, "b1", 1, 3, undefined, undefined)).rejects.toMatchObject({ status: 400 });
     await expect(mergeChapters(deps, "b1", 2, 2, undefined, undefined)).rejects.toMatchObject({ status: 400 });
+  });
+
+  // 1666 号（章节结构对跑真执行逼出）：被并章以换行收尾（写入惯例）时，合并
+  // 产物恒以单个换行收尾——此前只剪被并章头部，其尾部换行与补的收尾换行叠加
+  // 成一个多余空行。
+  it("合并产物恒以单个换行收尾（被并章带尾换行 / 无尾换行 / 纯空白）", async () => {
+    const cases: ReadonlyArray<[removed: string, expected: string]> = [
+      ["# 收束\n\n第三章正文丙。\n", "# 灵脉\n\n第二章正文乙。\n\n# 收束\n\n第三章正文丙。\n"],
+      ["# 收束\n\n第三章正文丙。", "# 灵脉\n\n第二章正文乙。\n\n# 收束\n\n第三章正文丙。\n"],
+      ["  \n", "# 灵脉\n\n第二章正文乙。\n"],
+    ];
+    for (const [removed, expected] of cases) {
+      const { bookDir, deps } = seedBook();
+      writeFileSync(join(bookDir, "chapters", "0003_收束.md"), removed);
+      await mergeChapters(deps, "b1", 2, 3, undefined, undefined);
+      expect(readFileSync(join(bookDir, "chapters", "0002_灵脉.md"), "utf-8"), `被并章 = ${JSON.stringify(removed)}`).toBe(expected);
+    }
   });
 
   // 1647 号回归：merge 触发重编号路径（removed 之后仍有章）时索引不得丢章

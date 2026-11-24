@@ -8,6 +8,7 @@
 //! pi-agent 块模型的适配层——Rust agent loop 为 OpenAI 文本形态，历史本就
 //! text-only，无需该层（偏差备案见 68 号记录）。
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -74,6 +75,46 @@ fn has_tool_call_content(message: &Value) -> bool {
     })
 }
 
+/// 2.0 会话协议工具（收尾 / 交付源绑定）：调用块只走模型面，不进作者可见的
+/// 工具卡（TS `rememberToolCalls` 同款排除）。
+fn is_protocol_tool(name: &str) -> bool {
+    matches!(name, "finish_turn" | "bind_delivery_sources")
+}
+
+/// 2.0 沉浸场景（互动叙事回合）结果以独立卡还原：`details.presentation`。
+fn is_completed_immersive_scene(execution: &Value) -> bool {
+    execution["status"] == "completed"
+        && execution["details"].is_object()
+        && execution["details"]["presentation"] == "immersive-scene"
+}
+
+/// 2.0 带附件用户输入的作者可见正文（TS `messageEventToInteractionMessage`
+/// 同形：正文 / 空行 / 附件标题 / 逐条 `- 文件名`）。
+fn user_input_content(user_input: &Value) -> String {
+    let text = user_input
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let label = if user_input.get("language").and_then(Value::as_str) == Some("en") {
+        "Attachments:"
+    } else {
+        "附件："
+    };
+    let mut lines = vec![text.to_string(), String::new(), label.to_string()];
+    if let Some(attachments) = user_input.get("attachments").and_then(Value::as_array) {
+        for attachment in attachments {
+            lines.push(format!(
+                "- {}",
+                attachment
+                    .get("filename")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
 /// message 事件（宽松引用形态——借用事件字段）。
 struct MessageRef<'a> {
     request_id: &'a str,
@@ -82,6 +123,11 @@ struct MessageRef<'a> {
     tool_call_id: Option<&'a str>,
     legacy_thinking: Option<&'a str>,
     legacy_tool_executions: Option<&'a Vec<Value>>,
+    /// 2.0 收尾协议（`finish_turn`）下作者可见的答复：正文块为空，答复在
+    /// `display.completion.message`（TS `messageEventToInteractionMessage` 同序）。
+    completion: Option<&'a Value>,
+    /// 2.0 带附件的用户输入（`display.userInput`：正文 + 语言 + 附件清单）。
+    user_input: Option<&'a Value>,
     message: &'a Value,
 }
 
@@ -108,6 +154,8 @@ fn as_message_ref<'a>(event: &'a TranscriptEvent) -> Option<MessageRef<'a>> {
             tool_call_id: tool_call_id.as_deref(),
             legacy_thinking: display.as_ref().and_then(|d| d.thinking.as_deref()),
             legacy_tool_executions: display.as_ref().map(|d| &d.tool_executions),
+            completion: display.as_deref().and_then(|d| d.completion.as_ref()),
+            user_input: display.as_deref().and_then(|d| d.user_input.as_ref()),
             message,
         }),
         _ => None,
@@ -199,6 +247,13 @@ fn tool_label(tool: &str) -> &str {
         "create_narrative_forecast" => "剧情多线推演",
         "get_narrative_forecast" => "核验剧情推演",
         "select_narrative_branch" => "采用候选分支",
+        // 2.0 动作授权工具（`能力域__动作` 剥离前缀后的动作段）。
+        "create_book" => "创建长篇",
+        "revise_foundation" => "重建设定",
+        "write_chapters" => "写作章节",
+        "review_chapter" => "审查章节",
+        "revise_chapter" => "修订章节",
+        "export_book" => "导出作品",
         other => other,
     }
 }
@@ -250,12 +305,15 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
     let mut pending_thinking: Vec<Option<String>> = Vec::new();
     let mut active_request_id: Option<&str> = None;
 
+    // 独立卡判定：fork 写入的互动叙事工具（play_* 完成）与 2.0 写入的沉浸场景
+    // （`details.presentation`）——两形态的结果卡都不挂到前文助手消息上。
     let has_completed_play_tool = |executions: &[Value]| {
         executions.iter().any(|execution| {
-            execution["status"] == "completed"
+            (execution["status"] == "completed"
                 && ["play_start", "play_step", "play_revise"]
                     .iter()
-                    .any(|tool| execution["tool"] == *tool)
+                    .any(|tool| execution["tool"] == *tool))
+                || is_completed_immersive_scene(execution)
         })
     };
 
@@ -286,6 +344,9 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                     .and_then(Value::as_str)
                     .filter(|n| !n.is_empty())
                     .unwrap_or("tool");
+                if is_protocol_tool(tool) {
+                    continue;
+                }
                 let args = object_args(block.get("arguments"));
                 tool_calls.insert(
                     (reference.request_id.to_string(), id.to_string()),
@@ -310,6 +371,7 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                     .to_string();
             let legacy_tool_executions = reference.legacy_tool_executions;
             let has_legacy_display = current_thinking.is_some()
+                || reference.completion.is_some()
                 || (!is_skill_request && reference.legacy_thinking.is_some())
                 || legacy_tool_executions
                     .map(|execs| !execs.is_empty())
@@ -325,13 +387,20 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 continue;
             }
 
-            let raw_text =
-                text_from_content(reference.message.get("content").unwrap_or(&Value::Null));
+            // 2.0 收尾协议：`display.completion.message` 是作者可见答复，优先于
+            // 正文块（该形态正文恒空）。
+            let completion_message = reference
+                .completion
+                .and_then(|completion| completion.get("message"))
+                .and_then(Value::as_str);
+            let raw_text = completion_message.map(str::to_string).unwrap_or_else(|| {
+                text_from_content(reference.message.get("content").unwrap_or(&Value::Null))
+            });
             let suppress_text = has_completed_play_tool(&pending_tool_executions);
-            let content = if suppress_text {
-                String::new()
-            } else {
-                raw_text.clone()
+            let content = match completion_message {
+                Some(message) => message.to_string(),
+                None if suppress_text => String::new(),
+                None => raw_text.clone(),
             };
             let thinking = if is_skill_request {
                 None
@@ -401,8 +470,15 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 .map(str::to_string)
                 .or_else(|| call.map(|c| c.tool.clone()))
                 .unwrap_or_else(|| "tool".to_string());
+            // 2.0 动作授权工具名 `能力域__动作` 取动作段（fork 自有工具名无前缀，
+            // 原样接管；TS `toolExecutionFromResult` 同款剥离）。带前缀时借切片，
+            // 不再复制一份。
+            let action: Cow<'_, str> = match tool.find("__") {
+                Some(index) => Cow::Borrowed(&tool[index + 2..]),
+                None => Cow::Owned(tool),
+            };
             let args = call.and_then(|c| c.args.clone());
-            let agent = if tool == "sub_agent" {
+            let agent = if action == "sub_agent" {
                 args.as_ref()
                     .and_then(|a| a.get("agent"))
                     .and_then(Value::as_str)
@@ -415,19 +491,19 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 .to_string();
             let is_error = raw.get("isError") == Some(&Value::Bool(true));
             let details = raw.get("details").cloned();
-            let expired_skill = tool == "use_skill";
-            let label = if tool == "sub_agent" {
+            let expired_skill = action == "use_skill";
+            let label = if action == "sub_agent" {
                 agent
                     .as_deref()
                     .map(agent_label)
                     .unwrap_or("sub_agent")
                     .to_string()
             } else {
-                tool_label(&tool).to_string()
+                tool_label(&action).to_string()
             };
             let mut execution = json!({
                 "id": tool_call_id,
-                "tool": tool,
+                "tool": action,
                 "label": label,
                 "status": if is_error { "error" } else { "completed" },
                 "startedAt": call.map(|c| c.timestamp).unwrap_or(reference.timestamp),
@@ -440,24 +516,25 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
             if let Some(args) = args {
                 obj.insert("args".into(), args);
             }
+            // 读面不二次截断：结果上限由写入点定（fork 写入 ≤2000/错误 ≤500；
+            // 2.0 写入由各工具自定）。此前读面再裁 200/500 且无省略号——重载后的
+            // 历史比同轮实时流（≤2000）短，与 Node 腿（不裁）读同一份 transcript
+            // 也不同长（TS `toolExecutionFromResult` 同口径）。
             if is_error {
                 let error = if text.is_empty() {
                     "Tool execution failed".to_string()
                 } else {
-                    text.chars().take(500).collect()
+                    text
                 };
                 obj.insert("error".into(), json!(error));
             } else if expired_skill {
                 obj.insert("result".into(), json!(EXPIRED_SKILL_RESULT_TEXT));
                 obj.insert("details".into(), json!({ "kind": "skill_expired" }));
-            } else if !text.is_empty() {
-                obj.insert(
-                    "result".into(),
-                    json!(text.chars().take(200).collect::<String>()),
-                );
-            }
-            if let Some(details) = details {
-                if !expired_skill {
+            } else {
+                if !text.is_empty() {
+                    obj.insert("result".into(), json!(text));
+                }
+                if let Some(details) = details {
                     obj.insert("details".into(), details);
                 }
             }
@@ -468,7 +545,15 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
         // user / system
         pending_tool_executions.clear();
         pending_thinking.clear();
-        let content = text_from_content(reference.message.get("content").unwrap_or(&Value::Null));
+        // 2.0 带附件输入以 `display.userInput` 为作者可见正文（附件清单随文）。
+        let content = if reference.role == "user" {
+            match reference.user_input {
+                Some(user_input) => user_input_content(user_input),
+                None => text_from_content(reference.message.get("content").unwrap_or(&Value::Null)),
+            }
+        } else {
+            text_from_content(reference.message.get("content").unwrap_or(&Value::Null))
+        };
         if reference.role == "system" {
             if !content.is_empty() {
                 messages.push(json!({ "role": "system", "content": content, "timestamp": reference.timestamp }));

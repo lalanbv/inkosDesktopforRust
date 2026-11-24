@@ -1829,6 +1829,11 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
 
   return {
     service: serviceId,
+    // 1666 号：内置服务的自定义端点同样透传（Rust `ServiceConfigEntry::from_json`
+    // / `to_json` 不分内置与 custom；数组形态分支与两个 custom 分支也带）——此前
+    // 只有对象形态的内置分支漏了它：GET 归一后读面看不到，一次 PUT 就把它从盘上
+    // 抹掉，顶层镜像随之回落到预设端点（「归一不丢键」同族）。
+    ...(typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? { baseUrl: value.baseUrl } : {}),
     ...(Array.isArray(value.models) ? { models: normalizeServiceModelIds(value.models) } : {}),
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
     ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
@@ -1949,6 +1954,23 @@ async function loadRawConfig(root: string): Promise<Record<string, unknown>> {
   const configPath = join(root, "inkos.json");
   const raw = await readFile(configPath, "utf-8");
   return JSON.parse(raw) as Record<string, unknown>;
+}
+
+/**
+ * 读 inkos.json，**文件缺失**按空配置处理——LLM 服务配置族专用（services 的读
+ * 与写、env 导入、cover 的读与写）。Rust 同族处理器一律
+ * `load_raw_config(…).unwrap_or(json!({}))`；Node 腿此前直接 `readFile`，项目
+ * 没有 inkos.json 时这五个面全 500——而「保存配置」恰是能建出该文件的操作
+ * （1666 号观察项）。只容忍 ENOENT：损坏的 JSON 仍上抛（不拿空配置去覆盖一个
+ * 也许还能手工修复的文件）。
+ */
+async function loadRawConfigOrEmpty(root: string): Promise<Record<string, unknown>> {
+  try {
+    return await loadRawConfig(root);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return {};
+    throw error;
+  }
 }
 
 async function saveRawConfig(root: string, config: Record<string, unknown>): Promise<void> {
@@ -3853,7 +3875,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/services/config", async (c) => {
-    const config = await loadRawConfig(root);
+    const config = await loadRawConfigOrEmpty(root);
     const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
     const services = normalizeServiceConfig(llm.services);
     const envConfig = await readEnvConfigStatus(root);
@@ -3879,7 +3901,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }, 400);
     }
 
-    const config = await loadRawConfig(root);
+    const config = await loadRawConfigOrEmpty(root);
     config.llm = config.llm ?? {};
     const llm = config.llm as Record<string, unknown>;
     const existingServices = normalizeServiceConfig(llm.services);
@@ -3917,7 +3939,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.put("/api/v1/services/config", async (c) => {
     const body = await c.req.json<{ services?: unknown; defaultModel?: string; configSource?: LLMConfigSource; service?: string }>();
-    const config = await loadRawConfig(root);
+    const config = await loadRawConfigOrEmpty(root);
     config.llm = config.llm ?? {};
     const llm = config.llm as Record<string, unknown>;
     if (body.services !== undefined) {
@@ -3959,7 +3981,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/cover/config", async (c) => {
-    const config = await loadRawConfig(root);
+    const config = await loadRawConfigOrEmpty(root);
     const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
     const cover = normalizeCoverConfig(llm.cover);
     const secrets = await loadSecrets(root);
@@ -4010,7 +4032,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }, 400);
     }
 
-    const config = await loadRawConfig(root);
+    const config = await loadRawConfigOrEmpty(root);
     config.llm = config.llm ?? {};
     const llm = config.llm as Record<string, unknown>;
     llm.cover = {

@@ -5068,7 +5068,10 @@ mod config56_e2e {
         let root = dir.path().to_path_buf();
         fixture56(&root);
 
-        // GET：schema 默认（language zh / temperature 0.7 / stream true）。
+        // GET：schema 默认（language zh / stream true）。temperature 未配置时
+        // **不带该键**（1666 号对齐 TS：`currentConfig.llm.temperature` 为
+        // undefined 即不序列化；原 Rust 自加的 0.7 默认值无备案，双端对跑
+        // `/project` 即分歧——取证见 strangler_duel `strangler_readonly_face_duel`）。
         let (status, parsed) = call(app56(rt56(&root)), "GET", "/api/v1/project", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         assert_eq!(parsed["name"], "demo");
@@ -5077,7 +5080,10 @@ mod config56_e2e {
         assert_eq!(parsed["model"], "glm-5");
         assert_eq!(parsed["provider"], "custom");
         assert_eq!(parsed["baseUrl"], "https://api.example.com");
-        assert_eq!(parsed["temperature"], 0.7);
+        assert!(
+            parsed.get("temperature").is_none(),
+            "temperature 未配置时不应出现该键：{parsed}"
+        );
         assert_eq!(parsed["stream"], true);
 
         // PUT 合并（server.test.ts L792 同款场景）→ GET 回读。

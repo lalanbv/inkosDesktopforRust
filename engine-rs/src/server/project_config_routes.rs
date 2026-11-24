@@ -176,28 +176,30 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(true);
-    let temperature = effective
-        .get("temperature")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.7);
+    // 1666 号：temperature 只在**配置了**时出现——TS 为
+    // `temperature: currentConfig.llm.temperature`，未配置即 undefined，JSON
+    // 序列化不带该键。此前 Rust 在此补了个 0.7 默认值（56 号移植时自加、无
+    // 备案），双端对跑 `/project` 即分歧。这只改「读面报什么」，不改「对话用
+    // 什么温度」：Rust 腿交互对话温度仍恒 0.7（agent_route `RouterLoopChat`），
+    // 不随服务配置（TS 腿随配置并按模型卡钳制）——已立案，另案处理。
+    let temperature = effective.get("temperature").and_then(Value::as_f64);
     // TS `"language" in raw && raw.language !== ""`。
     let language_explicit = obj
         .get("language")
         .is_some_and(|v| v != &Value::Null && v.as_str() != Some(""));
 
-    (
-        StatusCode::OK,
-        Json(json!({
-            "name": name,
-            "language": language,
-            "languageExplicit": language_explicit,
-            "model": model,
-            "provider": provider,
-            "baseUrl": base_url,
-            "stream": stream,
-            "temperature": temperature,
-        })),
-    )
+    let mut body = Map::new();
+    body.insert("name".into(), json!(name));
+    body.insert("language".into(), json!(language));
+    body.insert("languageExplicit".into(), json!(language_explicit));
+    body.insert("model".into(), json!(model));
+    body.insert("provider".into(), json!(provider));
+    body.insert("baseUrl".into(), json!(base_url));
+    body.insert("stream".into(), json!(stream));
+    if let Some(temperature) = temperature {
+        body.insert("temperature".into(), json!(temperature));
+    }
+    (StatusCode::OK, Json(Value::Object(body)))
 }
 
 /// PUT /project：合并更新（server.ts L4324）。temperature/stream 走

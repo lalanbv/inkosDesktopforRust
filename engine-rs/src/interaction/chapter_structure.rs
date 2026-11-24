@@ -727,7 +727,10 @@ pub async fn merge_chapter(
         }
     }
     if rename_fail.is_none() {
-        match write_file_atomic(&keep_file.path, &format!("{merged}\n")).await {
+        // 1666 号：合并产物恒以单个换行收尾。此前直接补 `\n`——被并章以换行
+        // 收尾（写入惯例）时其尾部换行与补的收尾换行叠加成一个多余空行；被并章
+        // 为空白时分隔符的尾随空白同样在此剪掉。
+        match write_file_atomic(&keep_file.path, &format!("{}\n", merged.trim_end())).await {
             Ok(()) => written.push(keep_file.path.clone()),
             Err(e) => rename_fail = Some(e.to_string()),
         }
@@ -1312,6 +1315,89 @@ mod tests {
         assert!(chapters.join("0002_收束.md").exists(), "重编号文件在位");
         assert!(!chapters.join("0003_收束.md").exists());
         assert!(chapters.join(".trash/0002_灵脉.md").exists());
+    }
+
+    /// 1666 号（章节结构对跑真执行逼出）：被并章以换行收尾（写入惯例）时，
+    /// 合并产物恒以单个换行收尾——此前只剪被并章头部，其尾部换行与补的收尾
+    /// 换行叠加成一个多余空行。
+    #[tokio::test]
+    async fn merge_output_ends_with_exactly_one_newline() {
+        for (removed_body, expected) in [
+            (
+                "# 收束\n\n第三章正文丙。\n",
+                "# 灵脉\n\n第二章正文乙。\n\n# 收束\n\n第三章正文丙。\n",
+            ),
+            (
+                "# 收束\n\n第三章正文丙。",
+                "# 灵脉\n\n第二章正文乙。\n\n# 收束\n\n第三章正文丙。\n",
+            ),
+            ("  \n", "# 灵脉\n\n第二章正文乙。\n"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = seed_book(dir.path()).await;
+            let chapters = dir.path().join("books/b1/chapters");
+            tokio::fs::write(chapters.join("0003_收束.md"), removed_body)
+                .await
+                .unwrap();
+            merge_chapter(
+                &state,
+                "b1",
+                2,
+                3,
+                None,
+                None,
+                1700000000000,
+                "2026-11-21T01:00:00.000Z",
+            )
+            .await
+            .expect("merge");
+            let merged = tokio::fs::read_to_string(chapters.join("0002_灵脉.md"))
+                .await
+                .unwrap();
+            assert_eq!(merged, expected, "被并章 = {removed_body:?}");
+        }
+    }
+
+    /// 1666 号：重编号只改名——未被拆分的后续章正文逐字节不动。
+    #[tokio::test]
+    async fn split_renumber_keeps_shifted_chapter_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let chapters = dir.path().join("books/b1/chapters");
+        let original = "# 收束\n\n第三章正文丙。";
+        tokio::fs::write(chapters.join("0003_收束.md"), original)
+            .await
+            .unwrap();
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            6,
+            None,
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        assert_eq!(
+            tokio::fs::read_to_string(chapters.join("0004_收束.md"))
+                .await
+                .unwrap(),
+            original
+        );
+        // 被拆章自身的两段照旧各以单个换行收尾。
+        assert_eq!(
+            tokio::fs::read_to_string(chapters.join("0002_灵脉.md"))
+                .await
+                .unwrap(),
+            "# 灵脉\n\n"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(chapters.join("0003_灵脉.md"))
+                .await
+                .unwrap(),
+            "第二章正文乙。\n"
+        );
     }
 
     #[tokio::test]

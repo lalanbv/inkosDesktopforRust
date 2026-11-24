@@ -44,6 +44,33 @@ pub async fn append_jsonl(
     existing_lines: impl FnOnce(&str) -> Vec<String>,
     new_lines: Vec<String>,
 ) -> io::Result<()> {
+    append_with(path, |text| {
+        let mut lines = existing_lines(text);
+        lines.extend(new_lines);
+        lines
+    })
+    .await
+}
+
+/// 同 [`append_jsonl`]，但新行在**串行段内**由既有文本派生——新行须避开既有行
+/// 时用（1666 号：prompt 版本账本的 (promptId, ts) 撞键顺推，必须在读到最新
+/// 账本之后才能判定是否撞）。
+pub async fn append_jsonl_derived(
+    path: &Path,
+    existing_lines: impl FnOnce(&str) -> Vec<String>,
+    new_lines: impl FnOnce(&str) -> Vec<String>,
+) -> io::Result<()> {
+    append_with(path, |text| {
+        let mut lines = existing_lines(text);
+        lines.extend(new_lines(text));
+        lines
+    })
+    .await
+}
+
+/// 串行段内的「读旧 → 归一 → 拼新行 → 原子写」。`build` 收到既有文本，返回
+/// 整本新内容（既有行 + 新行）。
+async fn append_with(path: &Path, build: impl FnOnce(&str) -> Vec<String>) -> io::Result<()> {
     let lock = {
         let mut locks = path_locks().lock().expect("jsonl ledger lock map poisoned");
         locks
@@ -53,8 +80,7 @@ pub async fn append_jsonl(
     };
     let _guard = lock.lock().await;
     let text = read_ledger_text(path).await?;
-    let mut lines = existing_lines(&text);
-    lines.extend(new_lines);
+    let lines = build(&text);
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
@@ -115,6 +141,44 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(tokio::fs::read_to_string(&path).await.unwrap(), "a\nb\nc\n");
+    }
+
+    /// 1666 号：新行在串行段内由既有文本派生——并发追加各自看到的是最新账本
+    /// （此处以「既有行数」为序号：32 路并发后序号 0..32 无重复）。
+    #[tokio::test]
+    async fn derived_new_lines_see_the_latest_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.jsonl");
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let path = path.clone();
+            handles.push(tokio::spawn(async move {
+                let kept = |text: &str| {
+                    text.lines()
+                        .filter(|line| !line.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                };
+                append_jsonl_derived(&path, kept, |text| {
+                    vec![format!("seq-{}", kept(text).len())]
+                })
+                .await
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap().unwrap();
+        }
+        let text = tokio::fs::read_to_string(&path).await.unwrap();
+        let mut numbers: Vec<usize> = text
+            .lines()
+            .map(|line| line.trim_start_matches("seq-").parse::<usize>().unwrap())
+            .collect();
+        numbers.sort_unstable();
+        assert_eq!(
+            numbers,
+            (0..32).collect::<Vec<_>>(),
+            "派生新行读到的不是最新账本（序号重复）"
+        );
     }
 
     /// chmod 000 后账本读不出来：追加须中止（PermissionDenied），既有内容不被

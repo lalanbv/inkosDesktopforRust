@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { readTranscriptEvents } from "./session-transcript.js";
+import { activeChainEvents, readTranscriptEvents } from "./session-transcript.js";
 import {
   BookSessionSchema,
   type BookSession,
@@ -402,8 +402,14 @@ export async function restoreAgentMessagesFromTranscript(
   sessionKind?: SessionKind,
 ): Promise<AgentMessage[]> {
   const events = await readTranscriptEvents(projectRoot, sessionId);
-  const interrupted = interruptedMessageEvents(events, sessionKind);
-  const committed = [...committedMessageEvents(events, sessionKind), ...interrupted].sort((a, b) => a.seq - b.seq);
+  // R36 树化（636 号）：模型回放只看 root→head 的 active 链——分支即作者把
+  // 对话回退到该点，弃用分支上的轮次（已提交与中断皆然）整体剪除。纯
+  // legacy 文件（无 branch_moved）过滤退化为全量，旧行为零改写。
+  const chain = activeChainEvents(events);
+  const interrupted = interruptedMessageEvents(chain, sessionKind);
+  const committed = [...committedMessageEvents(chain, sessionKind), ...interrupted].sort((a, b) => a.seq - b.seq);
+  // 请求 kind 是请求自身的属性（非对话内容）：索引仍取全量，链上事件的过滤
+  // 结果与过滤前逐条相同。
   const requestKinds = new Map(
     events
       .filter((event) => event.type === "request_started")
@@ -423,7 +429,7 @@ export async function restoreAgentMessagesFromTranscript(
   );
   if (interrupted.length) restored.push(historicalContextMessage(
     {kind:'interrupted_requests',text:'Some earlier requests were interrupted. Their completed tool call/result pairs are retained as historical execution evidence; unfinished calls were discarded. These individual outcomes do not mean the whole request completed.'},
-    events.at(-1)?.timestamp ?? Date.now(),
+    chain.at(-1)?.timestamp ?? Date.now(),
   ));
   return restored;
 }
@@ -803,7 +809,9 @@ export async function deriveBookSessionFromTranscript(
 
   // Failed or interrupted requests remain visible to the author. Model replay
   // separately uses committedMessageEvents to avoid replaying unfinished calls.
-  const messages = messageEventsToInteractionMessages(visibleMessageEvents(events));
+  // R36 树化（636 号）：对话消息取 active 路径（元数据保持全局折叠，与
+  // engine-rs derive 同水位）——分支后弃用轮次不再出现在读面。
+  const messages = messageEventsToInteractionMessages(visibleMessageEvents(activeChainEvents(events)));
 
   if (title === null) {
     title = firstUserMessageTitle(messages);

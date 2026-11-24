@@ -62,6 +62,13 @@ fn repo_root() -> PathBuf {
 }
 
 fn write_fixture(root: &Path, llm: &str) {
+    write_fixture_with_chapters(root, llm, &[]);
+}
+
+/// `extra` = 追加章节 `(文件名词干, 标题, 正文)`，章号自 2 顺延——各 duel 的
+/// 既有基线仍是 1 章（`write_fixture`）；需要多章的对跑（章节结构操作）在此
+/// 补足。追加章须在迁移到 works 布局**之前**落盘，两棵树才同源。
+fn write_fixture_with_chapters(root: &Path, llm: &str, extra: &[(&str, &str, &str)]) {
     // 130 号：builtin 技能包根（TS file-relative 恒指向 packages/core/skills；
     // Rust in-process 面经 env 注入同一目录，bin 进程在 spawn 点显式传）。
     // 各 duel 测试并发设置同值——无害。
@@ -92,11 +99,21 @@ fn write_fixture(root: &Path, llm: &str) {
         "# 第1章 风起\n\n林动睁开双眼，灵气顺着经脉游走。",
     )
     .unwrap();
-    std::fs::write(
-        book.join("chapters").join("index.json"),
-        r#"[{"number":1,"title":"风起","status":"ready-for-review","wordCount":18,"createdAt":"2026-08-17T00:00:00.000Z","updatedAt":"2026-08-17T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]}]"#,
-    )
-    .unwrap();
+    let mut index = r#"[{"number":1,"title":"风起","status":"ready-for-review","wordCount":18,"createdAt":"2026-08-17T00:00:00.000Z","updatedAt":"2026-08-17T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]}"#.to_string();
+    for (offset, (stem, title, body)) in extra.iter().enumerate() {
+        let number = offset + 2;
+        std::fs::write(
+            book.join("chapters").join(format!("{stem}.md")),
+            format!("# 第{number}章 {title}\n\n{body}"),
+        )
+        .unwrap();
+        index.push_str(&format!(
+            r#",{{"number":{number},"title":"{title}","status":"ready-for-review","wordCount":{},"createdAt":"2026-08-17T00:00:00.000Z","updatedAt":"2026-08-17T00:00:00.000Z","auditIssues":[],"lengthWarnings":[]}}"#,
+            body.chars().count()
+        ));
+    }
+    index.push(']');
+    std::fs::write(book.join("chapters").join("index.json"), index).unwrap();
     std::fs::write(
         book.join("story").join("story_bible.md"),
         "# 故事圣经\n\n主角林动。",
@@ -120,6 +137,49 @@ fn write_fixture(root: &Path, llm: &str) {
         r#"{"services":{"custom:Duel":{"apiKey":"duel-key"}}}"#,
     )
     .unwrap();
+    migrate_fixture_to_works(root);
+}
+
+/// 1666 号：双根布局——同一份书同时存在于 `books/b1`（fork 引擎读）与
+/// `works/b1/source` + `work.json`（2.0 TS 腿按 works 清单发现作品）。经 TS 侧
+/// 同一个迁移函数生成（`scripts/migrate-legacy-works.mjs` →
+/// `core.migrateLegacyWorks`，与 CLI `inkos work migrate` 同源）：works 清单
+/// 形态不在这里手搓——手搓=第二真源，清单 schema 一变就是假红。
+///
+/// 只读面与「各腿写各读」的对跑据此成立。**跨引擎写读互证**（Rust 写 → TS 读
+/// 可见）不因此成立：两腿写的是各自的树，见 `duel_require_shared_storage!`。
+fn migrate_fixture_to_works(root: &Path) {
+    let repo = repo_root();
+    let output = std::process::Command::new("node")
+        .arg(repo.join("scripts").join("migrate-legacy-works.mjs"))
+        .arg(root)
+        .current_dir(&repo)
+        .output()
+        .expect("node 起动失败（夹具迁移到 works 布局）");
+    assert!(
+        output.status.success(),
+        "夹具迁移到 works 布局失败：{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// 1666 号：请求工具表是否含 `finish_turn`（2.0 会话收尾协议——TS 腿会话
+/// streamFn 恒 `toolChoice:"required"`，每轮须以工具调用收尾；Rust 腿聊天
+/// 请求的工具表没有它）。
+fn wants_finish_turn(body: &Value) -> bool {
+    body["tools"].as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool["function"]["name"] == "finish_turn")
+    })
+}
+
+/// finish_turn 调用 id（每次请求唯一，防同一会话两轮工具调用 id 相撞）。
+fn next_finish_turn_id() -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("call_finish_duel_{seq}")
 }
 
 /// 进程内 mock LLM（对跑不依赖真实端点——两侧读同一 inkos.json）。
@@ -129,6 +189,34 @@ async fn spawn_mock_llm() -> String {
     let app = axum::Router::new().route(
         "/chat/completions",
         axum::routing::post(|axum::Json(body): axum::Json<Value>| async move {
+            // 1666 号：2.0 会话收尾协议——工具表含 finish_turn 时回工具调用
+            //（walkthrough-mock 1663 同款）。此前只回纯文本 → TS 腿
+            // MODEL_REQUIRED_TOOL_MISSING → /agent 502；Rust 腿工具表无
+            // finish_turn，走原文本支不受影响。双形态：流式 → tool_calls 增量
+            // + finish_reason:"tool_calls"；非流式 → 整体 JSON。
+            if wants_finish_turn(&body) {
+                let id = next_finish_turn_id();
+                let function = serde_json::json!({
+                    "name": "finish_turn",
+                    "arguments": "{\"status\":\"answered\",\"message\":\"OK\"}",
+                });
+                if body["stream"].as_bool().unwrap_or(false) {
+                    let chunk = serde_json::json!({ "choices": [{ "delta": { "tool_calls": [{ "index": 0, "id": id, "function": function }] }, "finish_reason": null }] });
+                    let finish = serde_json::json!({ "choices": [{ "delta": {}, "finish_reason": "tool_calls" }] });
+                    let usage = serde_json::json!({ "choices": [], "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 } });
+                    return axum::response::IntoResponse::into_response((
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        format!("data: {chunk}\n\ndata: {finish}\n\ndata: {usage}\n\ndata: [DONE]\n\n"),
+                    ));
+                }
+                return axum::response::IntoResponse::into_response(axum::Json(serde_json::json!({
+                    "choices": [{
+                        "message": { "role": "assistant", "content": null, "tool_calls": [{ "id": id, "type": "function", "function": function }] },
+                        "finish_reason": "tool_calls",
+                    }],
+                    "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 },
+                })));
+            }
             // 双形态：流式请求 → SSE（129 号起带 reasoning_content 增量——
             // thinking 面对跑驱动）；非流式 → 整体 JSON（两侧客户端偏好不同）。
             if body["stream"].as_bool().unwrap_or(false) {
@@ -302,6 +390,33 @@ impl std::ops::Deref for TsSidecar {
 impl std::fmt::Display for TsSidecar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.base)
+    }
+}
+
+/// 1666 号：引擎 bin 子进程守卫（与 [`TsSidecar`] 的 RAII 同纪律）——Drop 即
+/// kill + wait，**断言失败的展开路径同样回收**。裸 `Child` 被 Drop 不会终止子
+/// 进程：此前三处起 bin 的对跑只在成功路径末尾 `kill + wait`，测试中途 panic
+/// 即留占口孤儿（实录：SSE 对跑间歇红一次，引擎 bin 存活到下一轮门禁）。
+/// `Child::kill` 对已 wait 的子进程不发信号，无 PID 复用误杀面。
+struct EngineBin(std::process::Child);
+
+impl Drop for EngineBin {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl std::ops::Deref for EngineBin {
+    type Target = std::process::Child;
+    fn deref(&self) -> &std::process::Child {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for EngineBin {
+    fn deref_mut(&mut self) -> &mut std::process::Child {
+        &mut self.0
     }
 }
 
@@ -549,41 +664,206 @@ async fn wait_ready(base: &str) {
     }
 }
 
-/// 688 号（1663 修订）：TS 腿契约源探测——判据原 `/api/v1/prompt-packs`
-/// （1662 起 TS 回退腿同构该族，判据失效——意外复活守卫打开 12 个早已
-/// 豁免的对跑=8 红黑盒真相）。迁 `/api/v1/health`（62/170 号 Rust 超集
-/// 端点，TS 无=真 fork 独有面，与 scripts 三脚本 1662 判据迁移一致）。
-async fn ts_leg_contract_source(ts: &str) -> &'static str {
-    match get_json(ts, "/api/v1/health").await {
-        (200, _) => "fork",
-        _ => "upstream-2.0",
+/// 1666 号：按路径剥键。路径是点分串，`name[]` = 先下钻 `name` 再对数组逐
+/// 元素下钻（如 `chapters[].status`）。路径不存在则无操作。
+fn remove_path(value: &mut Value, path: &str) {
+    let mut segments: Vec<&str> = Vec::new();
+    for part in path.split('.') {
+        match part.strip_suffix("[]") {
+            Some(name) => {
+                segments.push(name);
+                segments.push("[]");
+            }
+            None => segments.push(part),
+        }
+    }
+    remove_segments(value, &segments);
+}
+
+fn remove_segments(value: &mut Value, path: &[&str]) {
+    let Some((segment, rest)) = path.split_first() else {
+        return;
+    };
+    if *segment == "[]" {
+        if let Value::Array(items) = value {
+            for item in items.iter_mut() {
+                remove_segments(item, rest);
+            }
+        }
+    } else if rest.is_empty() {
+        if let Value::Object(map) = value {
+            map.remove(*segment);
+        }
+    } else if let Some(child) = value.get_mut(*segment) {
+        remove_segments(child, rest);
     }
 }
 
-/// 688 号契约源守卫：TS 腿非 fork 契约时，fork 契约对跑整体失效——
-/// 响亮记账后跳过本测（boot/readiness 已在前序 wait_ready 验证，不静默）。
-/// TS 恢复 fork 契约（2.0 迁移落地，见 688 号 §五）后守卫自动复活，无需改码。
+type DeclaredPaths = &'static [&'static str];
+
+/// 一条**已声明**的双端差异（698 号口径：共有键必须相等；各腿的超集键与已
+/// 备案的数据模型差须逐条声明，声明后才剥离；未声明的差异一律判红）。
+struct DeclaredDiff {
+    /// 端点匹配：整串相等；以 `*` 结尾 = 前缀匹配。
+    endpoint: &'static str,
+    /// 仅 Rust 有的键（从 Rust 侧剥）。
+    rust_only: DeclaredPaths,
+    /// 仅 TS 有的键（从 TS 侧剥）。
+    ts_only: DeclaredPaths,
+    /// 共有键但值口径不同（两侧都剥）——须附实证理由。
+    both: DeclaredPaths,
+    reason: &'static str,
+}
+
+/// 1666 号：双端已声明的差异清单。每条都是实测取证后的备案（强制打开守卫
+/// 的差异输出见变更记录 1666 ⑧），不是「对不上就豁免」：
+const DECLARED_DIFFS: &[DeclaredDiff] = &[
+    DeclaredDiff {
+        endpoint: "/api/v1/books",
+        rust_only: &[],
+        ts_only: &["incompleteWorkIds"],
+        both: &[],
+        reason: "书列表：2.0 加法字段 incompleteWorkIds（未完成迁移的 work 清单），fork 无",
+    },
+    DeclaredDiff {
+        endpoint: "/api/v1/books/b1",
+        rust_only: &[],
+        ts_only: &["chapters[].provenance", "chapters[].observations"],
+        // 1666 号章节结构对跑真执行后勘误：这三键不是「仅 Rust 有」——TS 腿对
+        // split 新切出的章同样透出（两腿磁盘同写 ready-for-review 惯例行），只是
+        // 迁移来的章在 TS 侧不带。改两侧都剥。
+        both: &["chapters[].status", "chapters[].auditIssues", "chapters[].lengthWarnings"],
+        reason: "章摘要形态：2.0（TS）迁移来的章只带 provenance/observations；status/auditIssues/lengthWarnings 两腿对结构操作新建的章都写、迁移章只在 fork（Rust）带——按键来源不定，两侧都剥",
+    },
+    DeclaredDiff {
+        endpoint: "/api/v1/books/b1/truth",
+        rust_only: &["files[].legacy"],
+        ts_only: &[],
+        both: &[],
+        reason: "truth 文件清单：白名单双端差（TS 9 项无 story_bible / Rust 15 项有）+ Rust 的 legacy 标记——只比交集文件",
+    },
+    DeclaredDiff {
+        endpoint: "/api/v1/books/b1/analytics",
+        rust_only: &[],
+        ts_only: &[],
+        both: &["auditPassRate", "statusDistribution"],
+        reason: "analytics：2.0 迁移不携带章状态（TS 章摘要 status 缺失→空串→通过率 0），Rust 按 legacy 索引 ready-for-review 计 100",
+    },
+    DeclaredDiff {
+        endpoint: "/api/v1/sessions/*",
+        rust_only: &["session.draftRounds", "session.events"],
+        ts_only: &[
+            "chatRequest",
+            "session.profileId",
+            "session.workId",
+            "session.proposalAction",
+            "session.modelOverride",
+            "session.serviceOverride",
+        ],
+        both: &[],
+        // 立案不改（fork 不变量，217/565 号）：Rust 读面只投影已提交请求，2.0
+        // 把失败/中断请求也留在读面（request_failed → system 消息）。对跑夹具
+        // 的回合恒提交，此差不出现在比对面上。
+        reason: "会话读面超集键：2.0 的会话元数据加法键 profileId/workId/proposalAction/modelOverride/serviceOverride 与 chatRequest/task（1666 活体逐键取证，schema session-transcript-schema.ts）；fork 的 draftRounds/events（共享界面均不消费）",
+    },
+];
+
+fn endpoint_matches(pattern: &str, endpoint: &str) -> bool {
+    match pattern.strip_suffix('*') {
+        Some(prefix) => endpoint.starts_with(prefix),
+        None => pattern == endpoint,
+    }
+}
+
+/// truth 清单只比交集文件名（白名单双端差：一侧多出的文件不是分歧）。
+fn intersect_truth_files(rust_body: &mut Value, ts_body: &mut Value) {
+    let names = |body: &Value| -> std::collections::BTreeSet<String> {
+        body["files"]
+            .as_array()
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(|file| file["name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let rust_names = names(rust_body);
+    let ts_names = names(ts_body);
+    for body in [rust_body, ts_body] {
+        if let Some(files) = body.get_mut("files").and_then(Value::as_array_mut) {
+            files.retain(|file| {
+                file["name"]
+                    .as_str()
+                    .is_some_and(|name| rust_names.contains(name) && ts_names.contains(name))
+            });
+        }
+    }
+}
+
+/// 对 (endpoint, 双端 body) 应用已声明的差异；返回生效的声明（供输出留痕）。
+fn apply_declared(endpoint: &str, rust_body: &mut Value, ts_body: &mut Value) -> Vec<&'static str> {
+    let mut applied = Vec::new();
+    for diff in DECLARED_DIFFS {
+        if !endpoint_matches(diff.endpoint, endpoint) {
+            continue;
+        }
+        for path in diff.rust_only {
+            remove_path(rust_body, path);
+        }
+        for path in diff.ts_only {
+            remove_path(ts_body, path);
+        }
+        for path in diff.both {
+            remove_path(rust_body, path);
+            remove_path(ts_body, path);
+        }
+        if diff.endpoint.ends_with("/truth") {
+            intersect_truth_files(rust_body, ts_body);
+        }
+        applied.push(diff.reason);
+    }
+    applied
+}
+
+/// 双端读面比较：应用已声明差异 → 波动键归一 → 状态码与 body 全等。
+/// 返回差异串（None = 一致）。`declared` 回收生效的声明，供调用方打印留痕。
+fn compare_face(
+    endpoint: &str,
+    rust_status: u16,
+    mut rust_body: Value,
+    ts_status: u16,
+    mut ts_body: Value,
+    declared: &mut Vec<&'static str>,
+) -> Option<String> {
+    declared.extend(apply_declared(endpoint, &mut rust_body, &mut ts_body));
+    normalize(&mut rust_body);
+    normalize(&mut ts_body);
+    if rust_status == ts_status && rust_body == ts_body {
+        return None;
+    }
+    Some(format!(
+        "DIFF {endpoint}\n  rust[{rust_status}]: {rust_body}\n  ts  [{ts_status}]: {ts_body}"
+    ))
+}
+
+/// 1666 号：**共享存储前提**守卫——用于「跨引擎写读互证」类对跑（Rust 写 →
+/// TS 读可见，或反之）。前提目前不成立：Rust 引擎读写 `books/<id>/`，2.0 TS
+/// 腿读写 `works/<id>/source/`，旧书迁移只在 CLI `inkos work migrate` 显式执行、
+/// 服务启动不自动迁移、Rust 不读 works。这不是夹具能补的：两腿写的是各自的
+/// 树。复活条件 = 存储模型定线（Rust 迁到 works，或自动双向桥接）。
 ///
-/// 1666 号实测补注：判据 `/api/v1/health` 是 Rust 超集独有面——TS 腿**没有
-/// 这条路由**，守卫对 TS 腿恒判「上游 2.0」= 受守卫的对跑恒跳过，而 libtest
-/// 把早退计成 ok（「N passed」里混着从未执行的对跑）。强制打开守卫实测 13 个
-/// 对跑：6 真绿 / 7 真红——4 个是 `write_fixture` 仍写 1.x `books/` 布局而
-/// TS 2.0 按 works 清单发现作品；1 个是 mock LLM 不回 finish_turn；3 个是真实
-/// 契约分歧（/project 的 temperature、series-backfill extract、会话读面形状）。
-/// 复活哪些、以何判据复活属 688 号迁移欠账的处置决策；本轮只让跳过不再
-/// 隐形：落 `exempt <test>` 台账行（见 `record_duel_ledger`；eprintln 被捕获，
-/// 门禁日志里看不见），cargo-test-gate 据此算「真跑 = start − exempt」，对真跑
-/// 数设地板、豁免数设上限。
-macro_rules! duel_require_fork_contract {
-    ($ts:expr) => {
-        if ts_leg_contract_source($ts).await != "fork" {
+/// 与旧守卫（`/api/v1/health` 判据，对 TS 腿恒判豁免）的区别：豁免理由写在
+/// 这里、按测试逐条声明，不再靠一个恒假的探测把 11 个对跑一并跳过。取证：
+/// `INKOS_DUEL_FORCE_OPEN=1` 解除豁免（解除即严格计失败）。
+macro_rules! duel_require_shared_storage {
+    ($what:expr) => {
+        if std::env::var_os("INKOS_DUEL_FORCE_OPEN").is_none() {
             record_duel_ledger("exempt");
             eprintln!(
-                "[duel:exempt] {}",
-                std::thread::current().name().unwrap_or("?")
-            );
-            eprintln!(
-                "[688 豁免记账] 契约源检测：TS 腿=上游 2.0（/api/v1/health 非 200）——fork 契约对跑失效，本测响亮跳过。\n                 [688 豁免记账] 差异面=2.0 迁移欠账（变更记录 688 号 §五），非 Rust 回归；迁移落地后本守卫自动复活。"
+                "[duel:exempt] {}（共享存储前提不成立：Rust books/ ↔ TS works/）——{}",
+                std::thread::current().name().unwrap_or("?"),
+                $what
             );
             return;
         }
@@ -605,7 +885,6 @@ async fn strangler_readonly_face_duel() {
     // sidecar 端口选随机高位（bind 冲突由 readiness 捕获）。
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
 
     // 98 号 runbook 只读桶（GET 面）。
     let endpoints = [
@@ -622,28 +901,41 @@ async fn strangler_readonly_face_duel() {
     ];
 
     let mut diffs: Vec<String> = Vec::new();
+    let mut declared: Vec<&'static str> = Vec::new();
     for endpoint in endpoints {
-        let (rust_status, mut rust_body) = get_json(&rust, endpoint).await;
-        let (ts_status, mut ts_body) = get_json(&ts, endpoint).await;
-        normalize(&mut rust_body);
-        normalize(&mut ts_body);
-        if rust_status != ts_status || rust_body != ts_body {
-            diffs.push(format!(
-                "DIFF {endpoint}\n  rust[{rust_status}]: {rust_body}\n  ts  [{ts_status}]: {ts_body}"
-            ));
+        let (rust_status, rust_body) = get_json(&rust, endpoint).await;
+        let (ts_status, ts_body) = get_json(&ts, endpoint).await;
+        if let Some(diff) = compare_face(
+            endpoint,
+            rust_status,
+            rust_body,
+            ts_status,
+            ts_body,
+            &mut declared,
+        ) {
+            diffs.push(diff);
         }
     }
 
+    // 生效的声明留痕（去重）——「一致」始终指「共有契约一致」。
+    declared.sort_unstable();
+    declared.dedup();
+    for reason in &declared {
+        eprintln!("[duel:declared] {reason}");
+    }
     if diffs.is_empty() {
-        eprintln!("对跑通过：{} 个只读端点全一致", endpoints.len());
+        eprintln!(
+            "对跑通过：{} 个只读端点共有契约全一致（已声明差异 {} 条）",
+            endpoints.len(),
+            declared.len()
+        );
     } else {
         eprintln!("对跑差异 {} 处：", diffs.len());
         for diff in &diffs {
             eprintln!("{diff}");
         }
     }
-    // 首轮目标为产出对跑报告——差异清零后此断言转为守门。
-    assert!(diffs.is_empty(), "只读面双端存在契约差异（见上）");
+    assert!(diffs.is_empty(), "只读面双端存在未声明的契约差异（见上）");
 }
 
 /// 118 号：跨端写读一致性对跑——A) Rust 写（章节 approve）→ 双端读一致且为
@@ -663,7 +955,9 @@ async fn strangler_cross_write_read_duel() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
+    duel_require_shared_storage!(
+        "Rust 写 approve → 双端读 approved；TS 写 review-mode → 双端读 manual"
+    );
 
     let client = loopback_client();
 
@@ -733,6 +1027,7 @@ async fn strangler_cross_write_read_duel() {
     for endpoint in endpoints {
         let (rust_status, mut rust_body) = get_json(&rust, endpoint).await;
         let (ts_status, mut ts_body) = get_json(&ts, endpoint).await;
+        apply_declared(endpoint, &mut rust_body, &mut ts_body);
         normalize(&mut rust_body);
         normalize(&mut ts_body);
         if rust_status != ts_status || rust_body != ts_body {
@@ -770,14 +1065,17 @@ async fn strangler_prompt_packs_duel() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    // 契约源探测用**族根端点自身**，不走 duel_require_fork_contract!：该宏
-    // 判据 `/api/v1/health` 是 Rust 超集独有面（TS 腿无此路由）→ 对 TS 腿恒判
-    // 「上游 2.0」→ 受守卫的对跑恒跳过却计 ok。本族 TS 回退腿 1663 号起同构，
-    // 以 `GET /prompt-packs` 200 为「族在位」判据。
+    // 族在位判据用**族根端点自身**（`GET /prompt-packs` 200）。本族 TS 回退腿
+    // 1663 号起同构；不在位则豁免并落台账（与 `duel_require_shared_storage!`
+    // 同款记账——早退不得计成一次真跑）。
     match get_json(&ts, "/api/v1/prompt-packs").await {
         (200, _) => {}
         (status, body) => {
-            eprintln!("[1666 记账] TS 腿无 prompt-packs 族（{status}）——本测响亮跳过。{body}");
+            record_duel_ledger("exempt");
+            eprintln!(
+                "[duel:exempt] {}（TS 腿无 prompt-packs 族：{status}）{body}",
+                std::thread::current().name().unwrap_or("?")
+            );
             return;
         }
     }
@@ -1129,7 +1427,6 @@ async fn strangler_session_domain_duel() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
     let client = loopback_client();
 
     // A) Rust 建会话（book 绑定）→ 双端 GET 等价。
@@ -1150,6 +1447,11 @@ async fn strangler_session_domain_duel() {
     assert_eq!(rust_status, 200, "rust body={rust_body}");
     assert_eq!(ts_status, 200, "TS 读不到 Rust 会话：{ts_body}");
     assert_eq!(rust_body["session"]["sessionId"], rust_session);
+    apply_declared(
+        &format!("/api/v1/sessions/{rust_session}"),
+        &mut rust_body,
+        &mut ts_body,
+    );
     normalize(&mut rust_body);
     normalize(&mut ts_body);
     assert_eq!(rust_body, ts_body, "Rust 建会话双端读面不等价");
@@ -1182,28 +1484,201 @@ async fn strangler_session_domain_duel() {
     }
 
     // C) TS 聊天回合（mock）→ 双端 GET 仍等价（transcript 追加面）。
+    chat_turn(&client, &ts, ts_session, "打个招呼").await;
+    let (rust_status, rust_body) = get_json(&rust, &format!("/api/v1/sessions/{ts_session}")).await;
+    let (ts_status, ts_body) = get_json(&ts, &format!("/api/v1/sessions/{ts_session}")).await;
+    assert_eq!(rust_status, 200);
+    assert_eq!(ts_status, 200);
+    // 1666 号：助手回复双端都在——Rust 腿此前不投影 `display.completion.message`，
+    // 读同一份 2.0 transcript 只剩 user 消息（修复前此处左值即实录）。先逐腿钉
+    // 形态，防两端同为空也「全等」。
+    assert_turn_face(
+        "C",
+        &[("user", "打个招呼"), ("assistant", "OK")],
+        &rust_body,
+        &ts_body,
+    );
+    assert_eq!(
+        session_face(&rust, &ts, ts_session).await,
+        Face::Equal,
+        "聊天回合后双端会话读面不等价"
+    );
+
+    // D) 1666 号：R36 会话树化双端对偶。TS 再聊一轮 → branch 回第一轮末尾 →
+    //    双端读面只剩第一轮（Node 腿此前读面、模型回放、缓存 Agent 三处都不按
+    //    active 链，分支后弃用轮次照常出现）；分支上再聊一轮 → 第一轮 + 新轮。
+    let turn_one: &[(&str, &str)] = &[("user", "打个招呼"), ("assistant", "OK")];
+    let turn_two: &[(&str, &str)] = &[("user", "再问一句"), ("assistant", "OK")];
+    let turn_three: &[(&str, &str)] = &[("user", "分支上的新问"), ("assistant", "OK")];
+    chat_turn(&client, &ts, ts_session, "再问一句").await;
+    let commits = committed_seqs(&root, ts_session);
+    assert_eq!(commits.len(), 2, "两轮各一个提交点：{commits:?}");
     let response = client
-        .post(format!("{ts}/api/v1/agent"))
+        .post(format!("{ts}/api/v1/sessions/{ts_session}/branch"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"toSeq":{}}}"#, commits[0]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200, "TS branch 失败");
+    assert_eq!(
+        session_face(&rust, &ts, ts_session).await,
+        Face::Equal,
+        "分支后双端会话读面不等价"
+    );
+    for base in [&*rust, &*ts] {
+        let (_, body) = get_json(base, &format!("/api/v1/sessions/{ts_session}")).await;
+        assert_eq!(
+            turn_texts(&body["session"]["messages"]),
+            face(turn_one),
+            "base={base} 分支后读面仍带弃用轮次"
+        );
+        assert_eq!(body["session"]["head"], commits[0], "base={base}");
+        assert_eq!(body["session"]["branchCount"], 1, "base={base}");
+    }
+
+    chat_turn(&client, &ts, ts_session, "分支上的新问").await;
+    assert_eq!(
+        session_face(&rust, &ts, ts_session).await,
+        Face::Equal,
+        "分支上新聊一轮后双端会话读面不等价"
+    );
+    for base in [&*rust, &*ts] {
+        let (_, body) = get_json(base, &format!("/api/v1/sessions/{ts_session}")).await;
+        assert_eq!(
+            turn_texts(&body["session"]["messages"]),
+            face(&[turn_one, turn_three].concat()),
+            "base={base} 分支上的新轮读面"
+        );
+    }
+
+    // E) Rust 腿执行分支：切回弃用的第二轮（两腿写的 branch_moved 互相可读——
+    //    parentSeq 戳记同构），双端读面回到「第一轮 + 第二轮」。
+    let commits = committed_seqs(&root, ts_session);
+    assert_eq!(commits.len(), 3, "三个提交点：{commits:?}");
+    let response = client
+        .post(format!("{rust}/api/v1/sessions/{ts_session}/branch"))
+        .header("content-type", "application/json")
+        .body(format!(r#"{{"toSeq":{}}}"#, commits[1]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200, "Rust branch 失败");
+    assert_eq!(
+        session_face(&rust, &ts, ts_session).await,
+        Face::Equal,
+        "Rust 分支后双端会话读面不等价"
+    );
+    for base in [&*rust, &*ts] {
+        let (_, body) = get_json(base, &format!("/api/v1/sessions/{ts_session}")).await;
+        assert_eq!(
+            turn_texts(&body["session"]["messages"]),
+            face(&[turn_one, turn_two].concat()),
+            "base={base} 切回弃用分支"
+        );
+        assert_eq!(body["session"]["head"], commits[1], "base={base}");
+        assert_eq!(body["session"]["branchCount"], 2, "base={base}");
+    }
+    eprintln!(
+        "会话域对跑通过：Rust 建会话双端等价 / TS 建+改名跨端可见 / 聊天回合后读面等价（助手回复双端在位）/ \
+         R36 树化三步（TS 分支→双端只剩第一轮、分支上新聊→第一轮+新轮、Rust 分支切回→第一轮+第二轮）双端等价"
+    );
+}
+
+/// 会话 transcript 里的提交点 seq（按出现序）。
+fn committed_seqs(root: &Path, session_id: &str) -> Vec<u64> {
+    let path = root
+        .join(".inkos")
+        .join("sessions")
+        .join(format!("{session_id}.jsonl"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{} 读取失败：{error}", path.display()));
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["type"] == "request_committed")
+        .filter_map(|event| event["seq"].as_u64())
+        .collect()
+}
+
+/// 对指定腿打一轮聊天（mock LLM 恒回 OK），断言 200。
+async fn chat_turn(client: &reqwest::Client, base: &str, session_id: &str, instruction: &str) {
+    let response = client
+        .post(format!("{base}/api/v1/agent"))
         .header("content-type", "application/json")
         .body(format!(
-            r#"{{"instruction":"打个招呼","sessionId":"{ts_session}"}}"#
+            r#"{{"instruction":"{instruction}","sessionId":"{session_id}"}}"#
         ))
         .send()
         .await
         .unwrap();
-    if response.status().as_u16() != 200 {
-        let text = response.text().await.unwrap_or_default();
-        panic!("TS 聊天回合失败: {text}");
+    assert_eq!(
+        response.status().as_u16(),
+        200,
+        "TS 聊天回合「{instruction}」失败: {}",
+        response.text().await.unwrap_or_default()
+    );
+}
+
+/// 读面消息 → `(role, content)` 序列。
+fn turn_texts(messages: &Value) -> Vec<(String, String)> {
+    messages
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|message| {
+                    (
+                        message["role"].as_str().unwrap_or_default().to_string(),
+                        message["content"].as_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 期望读面 `(role, content)` 序列。
+fn face(entries: &[(&str, &str)]) -> Vec<(String, String)> {
+    entries
+        .iter()
+        .map(|(role, content)| (role.to_string(), content.to_string()))
+        .collect()
+}
+
+/// 逐腿钉读面消息形态（防「对齐数据=回声室」：两端同为空也全等）。
+fn assert_turn_face(step: &str, expected: &[(&str, &str)], rust_body: &Value, ts_body: &Value) {
+    for (leg, body) in [("rust", rust_body), ("ts", ts_body)] {
+        assert_eq!(
+            turn_texts(&body["session"]["messages"]),
+            face(expected),
+            "步骤 {step}：{leg} 腿读面消息形态"
+        );
     }
-    let (rust_status, mut rust_body) =
-        get_json(&rust, &format!("/api/v1/sessions/{ts_session}")).await;
-    let (ts_status, mut ts_body) = get_json(&ts, &format!("/api/v1/sessions/{ts_session}")).await;
-    assert_eq!(rust_status, 200);
-    assert_eq!(ts_status, 200);
-    normalize(&mut rust_body);
-    normalize(&mut ts_body);
-    assert_eq!(rust_body, ts_body, "聊天回合后双端会话读面不等价");
-    eprintln!("会话域对跑通过：Rust 建会话双端等价 / TS 建+改名跨端可见 / 聊天回合后读面等价");
+}
+
+/// 双端会话读面比对结果（差异串留在变体里，供断言消息打印）。
+#[derive(Debug, PartialEq)]
+enum Face {
+    Equal,
+    Different(String),
+}
+
+/// 双端 `GET /sessions/:id` → 应用已声明差异 + 波动键归一 → 全等判定。
+async fn session_face(rust: &str, ts: &str, session_id: &str) -> Face {
+    let endpoint = format!("/api/v1/sessions/{session_id}");
+    let (rust_status, rust_body) = get_json(rust, &endpoint).await;
+    let (ts_status, ts_body) = get_json(ts, &endpoint).await;
+    match compare_face(
+        &endpoint,
+        rust_status,
+        rust_body,
+        ts_status,
+        ts_body,
+        &mut Vec::new(),
+    ) {
+        None => Face::Equal,
+        Some(diff) => Face::Different(diff),
+    }
 }
 
 /// 120 号：模型配置域对跑——A) 服务列表/密钥读面双端等价；B) 密钥跨端写读
@@ -1223,7 +1698,6 @@ async fn strangler_services_domain_duel() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
     let client = loopback_client();
 
     // A) 服务列表读面（fixture 服务项 + secrets 键集）。
@@ -1277,7 +1751,123 @@ async fn strangler_services_domain_duel() {
         );
     }
 
-    eprintln!("模型配置域对跑通过：服务列表面观察 / 密钥双向跨端写读 / 深链探测等价");
+    // D) 1666 号：服务配置是**字段级**合并（TS `{...previous, ...update}`）——
+    //    更新条目里没出现的字段保留；`temperature: null` = 恢复默认（选中服务时
+    //    顶层 llm.temperature 一并删除）。此前 Rust 同键整条替换：只提交预算会
+    //    抹掉 baseUrl 等字段（活体走查实证：设日预算后 custom 服务端点丢失，
+    //    预算读面按端点主机匹配账本行随之恒 0、确认门永不触发）。
+    //    两腿写的是同一个项目根：每条腿 PUT 后**立刻读盘**，观测这条腿自己的
+    //    落盘结果——读面会按选中服务重新推导温度，拿 GET /project 当「顶层键已
+    //    删除」的证据不成立（对跑级变异实证：关掉删除后对跑仍绿）。
+    let legs = [(&rust, "rust"), (&ts.base, "ts")];
+    let stored_llm = || -> Value {
+        let text = std::fs::read_to_string(root.join("inkos.json")).unwrap();
+        let config: Value = serde_json::from_str(&text).unwrap();
+        config["llm"].clone()
+    };
+    let stored_entry = |llm_config: &Value| -> Value {
+        llm_config["services"]
+            .as_array()
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry["service"] == "custom" && entry["name"] == "Duel")
+            })
+            .cloned()
+            .unwrap_or_else(|| panic!("custom:Duel 条目缺失：{llm_config}"))
+    };
+    // D1) 部分更新：只提交温度与日预算（不带 baseUrl / apiFormat / stream）。
+    for (base, leg) in &legs {
+        let (status, body) = send_json(
+            &client,
+            base,
+            reqwest::Method::PUT,
+            "/api/v1/services/config",
+            Some(r#"{"service":"custom:Duel","services":{"custom:Duel":{"temperature":0.5,"dailyTokenBudget":1}}}"#),
+        )
+        .await;
+        assert_eq!(status, 200, "{leg} 部分更新失败：{body}");
+        let stored = stored_llm();
+        let entry = stored_entry(&stored);
+        assert_eq!(
+            entry["baseUrl"], llm,
+            "{leg} 部分更新抹掉了 baseUrl：{entry}"
+        );
+        assert_eq!(
+            entry["apiFormat"], "chat",
+            "{leg} 部分更新抹掉了 apiFormat：{entry}"
+        );
+        assert_eq!(
+            entry["stream"], true,
+            "{leg} 部分更新抹掉了 stream：{entry}"
+        );
+        assert_eq!(entry["temperature"], 0.5, "{leg} 温度未落盘：{entry}");
+        assert_eq!(entry["dailyTokenBudget"], 1, "{leg} 预算未落盘：{entry}");
+        assert_eq!(stored["service"], "custom:Duel", "{leg} 选中服务：{stored}");
+        assert_eq!(
+            stored["temperature"], 0.5,
+            "{leg} 选中服务的温度应镜像到顶层：{stored}"
+        );
+    }
+    // D2) 恢复默认：`temperature: null`——条目与顶层镜像的 temperature 一并消失，
+    //     其余字段（端点、预算等）仍在。
+    for (base, leg) in &legs {
+        let (status, body) = send_json(
+            &client,
+            base,
+            reqwest::Method::PUT,
+            "/api/v1/services/config",
+            Some(r#"{"services":[{"service":"custom","name":"Duel","temperature":null}]}"#),
+        )
+        .await;
+        assert_eq!(status, 200, "{leg} 恢复默认失败：{body}");
+        let stored = stored_llm();
+        let entry = stored_entry(&stored);
+        assert!(
+            entry.get("temperature").is_none(),
+            "{leg} 恢复默认后条目仍带温度：{entry}"
+        );
+        assert_eq!(
+            entry["baseUrl"], llm,
+            "{leg} 恢复默认抹掉了 baseUrl：{entry}"
+        );
+        assert_eq!(
+            entry["apiFormat"], "chat",
+            "{leg} 恢复默认抹掉了 apiFormat：{entry}"
+        );
+        assert_eq!(
+            entry["stream"], true,
+            "{leg} 恢复默认抹掉了 stream：{entry}"
+        );
+        assert_eq!(
+            entry["dailyTokenBudget"], 1,
+            "{leg} 恢复默认抹掉了预算：{entry}"
+        );
+        assert!(
+            stored.get("temperature").is_none(),
+            "{leg} 顶层温度镜像未随恢复默认删除：{stored}"
+        );
+    }
+    // 读面复核：两腿读同一份盘上结果，形态一致。
+    let mut faces = Vec::new();
+    for (base, leg) in &legs {
+        let (status, body) = get_json(base, "/api/v1/services/config").await;
+        assert_eq!(status, 200, "{leg}");
+        let entry = stored_entry(&json!({ "services": body["services"] }));
+        assert_eq!(entry["baseUrl"], llm, "{leg} 读面端点：{entry}");
+        assert_eq!(entry["dailyTokenBudget"], 1, "{leg} 读面预算：{entry}");
+        assert!(
+            entry.get("temperature").is_none(),
+            "{leg} 读面温度：{entry}"
+        );
+        faces.push(entry);
+    }
+    assert_eq!(faces[0], faces[1], "恢复默认后两腿服务条目读面不等价");
+
+    eprintln!(
+        "模型配置域对跑通过：服务列表面观察 / 密钥双向跨端写读 / 深链探测等价 / \
+         服务配置字段级合并（部分更新不丢字段、恢复默认温度）逐腿读盘同果"
+    );
 }
 
 async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {
@@ -1315,7 +1905,9 @@ async fn strangler_full_grey_simulation() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
+    duel_require_shared_storage!(
+        "第二步 Rust 写 approve 后双端读一致；第三步 TS 写 review-mode 后双端读一致"
+    );
     let client = loopback_client();
 
     let readonly = [
@@ -1487,6 +2079,7 @@ async fn bin_process_write_next_llm_resolution() {
             std::fs::File::create("/tmp/duel-bin-err.log").unwrap(),
         ))
         .spawn()
+        .map(EngineBin)
         .expect("bin 起动失败");
     let base = format!("http://127.0.0.1:{port}");
     wait_child_ready(&mut command, &base, "/tmp/duel-bin-err.log").await;
@@ -1528,8 +2121,7 @@ async fn bin_process_write_next_llm_resolution() {
         "INKOS_LLM_* 启动端点被 write-next 触达——项目配置应优先（TS studio 消费者语义）"
     );
 
-    let _ = command.kill();
-    let _ = command.wait();
+    // 引擎 bin 由 EngineBin 守卫在作用域结束时回收（含上面的断言失败路径）。
     eprintln!(
         "bin 进程验收通过：write-next 走 inkos.json 服务项（{} 次触达），env 端点零触达",
         project_hits.load(Ordering::SeqCst)
@@ -1570,10 +2162,6 @@ async fn bin_process_static_face_duel() {
 
     // sidecar 起动时自写 dist/index.html；资产预先放入（按请求读，两侧同源）。
     let ts = spawn_ts_sidecar_ready(&root).await;
-    // 711 号：契约源守卫前置到 bin spawn 之前——守卫只探测 TS 腿，豁免早退
-    // 路径不再起动引擎子进程（clippy zombie_processes：spawn 后 early return
-    // 无 wait 的丢弃路径消除；跳过态还省一次引擎冷启）。
-    duel_require_fork_contract!(&ts);
     let dist = repo_root().join("packages").join("studio").join("dist");
     std::fs::create_dir_all(dist.join("assets")).unwrap();
     std::fs::write(dist.join("assets").join("app.js"), "console.log('duel')").unwrap();
@@ -1604,6 +2192,7 @@ async fn bin_process_static_face_duel() {
             std::fs::File::create("/tmp/duel-bin-static-err.log").unwrap(),
         ))
         .spawn()
+        .map(EngineBin)
         .expect("bin 起动失败");
     let bin = format!("http://127.0.0.1:{bin_port}");
     wait_child_ready(&mut command, &bin, "/tmp/duel-bin-static-err.log").await;
@@ -1737,13 +2326,17 @@ async fn bin_process_static_face_duel() {
         );
     }
 
-    let _ = command.kill();
-    let _ = command.wait();
+    // 引擎 bin 由 EngineBin 守卫在作用域结束时回收。
     eprintln!("静态面双端对跑通过：/ 与深链 SPA / 资产字节级一致，API 面不受干扰；CORS 面等价");
 }
 
-/// SSE 流事件采集：连接 → 触发聊天回合 → 等待终态事件后收束。
+/// SSE 流事件采集：连接 → **等订阅真正建立** → 触发聊天回合 → 等待终态事件后收束。
 /// 返回原始 (event, payload JSON) 序列（ping/task:snapshot 已滤）。
+///
+/// 1666 号：订阅自同步——两端 `/api/v1/events` 都是「先订阅、连接建立即发首个
+/// ping」，收到该 ping 即订阅已在服务端生效。此前 spawn 收集任务后立刻打回合：
+/// Rust 腿是进程内路由，回合抢在订阅前，首个事件 `agent:start` 广播给空集
+///（最终树门禁实录：`Rust 侧缺 agent:start`，间歇红）。
 async fn sse_chat_turn_events(
     base: &str,
     session_id: &str,
@@ -1753,6 +2346,8 @@ async fn sse_chat_turn_events(
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = events.clone();
     let target = base.to_string();
+    let (subscribed_tx, subscribed_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut subscribed_tx = Some(subscribed_tx);
     let collector = tokio::spawn(async move {
         // 1583 号：顶层便捷函数同族漏网（读 env/系统代理）——恒直连。
         let response = match loopback_client()
@@ -1788,7 +2383,16 @@ async fn sse_chat_turn_events(
                         data = value.trim().to_string();
                     }
                 }
-                if name.is_empty() || name == "ping" || name == "task:snapshot" {
+                if name.is_empty() {
+                    continue;
+                }
+                if name == "ping" {
+                    if let Some(signaller) = subscribed_tx.take() {
+                        let _ = signaller.send(());
+                    }
+                    continue;
+                }
+                if name == "task:snapshot" {
                     continue;
                 }
                 let payload = serde_json::from_str(&data).unwrap_or(Value::String(data));
@@ -1796,6 +2400,13 @@ async fn sse_chat_turn_events(
             }
         }
     });
+    // 订阅在服务端生效后才发起回合（未收到连接 ping = 订阅未就绪，判负而非赌时序）。
+    if !matches!(
+        tokio::time::timeout(Duration::from_secs(5), subscribed_rx).await,
+        Ok(Ok(()))
+    ) {
+        panic!("{base} SSE 订阅 5s 未就绪（未收到连接 ping）");
+    }
 
     // 建会话（已存在则忽略结果）+ 聊天回合。
     let client = loopback_client();
@@ -1894,9 +2505,6 @@ async fn sse_event_face_duel() {
     write_fixture(&root, &llm);
 
     let ts = spawn_ts_sidecar_ready(&root).await;
-    // 711 号：契约源守卫前置到 bin spawn 之前（zombie_processes 早退丢弃路径
-    // 消除，与 static_face 同型；守卫只探测 TS 腿，语义等价）。
-    duel_require_fork_contract!(&ts);
     let bin_port = next_sidecar_port().await;
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
         .env("INKOS_PROJECT_ROOT", &root)
@@ -1921,6 +2529,7 @@ async fn sse_event_face_duel() {
             std::fs::File::create("/tmp/duel-bin-sse-err.log").unwrap(),
         ))
         .spawn()
+        .map(EngineBin)
         .expect("bin 起动失败");
     let bin = format!("http://127.0.0.1:{bin_port}");
     wait_child_ready(&mut command, &bin, "/tmp/duel-bin-sse-err.log").await;
@@ -1931,15 +2540,48 @@ async fn sse_event_face_duel() {
     let rust_events =
         normalize_sse_face(sse_chat_turn_events(&bin, "1783100000002-sseeb", instruction).await);
 
-    // 事件名序列（排序后）等价。
+    // 七类事件齐全（Rust 侧回合健康性；llm:progress 不在普通聊天轮词汇——
+    // 128 号勘误：TS 仅 pipeline 面上报；thinking 三事件 129 号补齐）。
     let ts_names: Vec<&str> = ts_events.iter().map(|(name, _)| name.as_str()).collect();
-    let rust_names: Vec<&str> = rust_events.iter().map(|(name, _)| name.as_str()).collect();
+    let rust_all_names: Vec<&str> = rust_events.iter().map(|(name, _)| name.as_str()).collect();
+    for expected in [
+        "agent:start",
+        "thinking:start",
+        "thinking:delta",
+        "thinking:end",
+        "draft:delta",
+        "agent:complete",
+        "session:title",
+    ] {
+        assert!(
+            rust_all_names.contains(&expected),
+            "Rust 侧缺 {expected}：{rust_all_names:?}"
+        );
+    }
+
+    // 1666 号：已声明的 Rust 超集事件——fork 的流式增强（正文增量 + 思考流）。
+    // 2.0 TS 腿的会话每轮以 finish_turn 工具调用收尾，这样的回合不产生文本
+    // 增量/思考事件（强制打开守卫实测：TS 仅 agent:start / session:title /
+    // agent:complete）。声明后从 Rust 侧剥离，跨端只比**共有事件**的名序列与
+    // 负载；共有词汇里任何新出现的差异照旧判红。
+    const RUST_ONLY_EVENTS: [&str; 4] = [
+        "draft:delta",
+        "thinking:delta",
+        "thinking:end",
+        "thinking:start",
+    ];
+    let rust_common: Vec<(String, Value)> = rust_events
+        .iter()
+        .filter(|(name, _)| !RUST_ONLY_EVENTS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+    let rust_common_names: Vec<&str> = rust_common.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
-        rust_names, ts_names,
-        "事件名序列分歧\n  rust: {rust_names:?}\n  ts:   {ts_names:?}"
+        rust_common_names, ts_names,
+        "共有事件名序列分歧\n  rust: {rust_common_names:?}\n  ts:   {ts_names:?}"
     );
     for ((rust_name, rust_payload), (ts_name, ts_payload)) in
-        rust_events.iter().zip(ts_events.iter())
+        rust_common.iter().zip(ts_events.iter())
     {
         // sessionId 两端各自会话——剥除后负载应逐键等价。
         let mut rust_payload = rust_payload.clone();
@@ -1951,32 +2593,15 @@ async fn sse_event_face_duel() {
         }
         assert_eq!(
             rust_name, ts_name,
-            "排序后事件错位：{rust_events:?} vs {ts_events:?}"
+            "排序后事件错位：{rust_common:?} vs {ts_events:?}"
         );
         assert_eq!(
             rust_payload, ts_payload,
             "{rust_name} 负载分歧\n  rust: {rust_payload}\n  ts:   {ts_payload}"
         );
     }
-    // 七类事件齐全（回合健康性；llm:progress 不在普通聊天轮词汇——128 号
-    // 勘误：TS 仅 pipeline 面上报；thinking 三事件 129 号补齐）。
-    for expected in [
-        "agent:start",
-        "thinking:start",
-        "thinking:delta",
-        "thinking:end",
-        "draft:delta",
-        "agent:complete",
-        "session:title",
-    ] {
-        assert!(
-            rust_names.contains(&expected),
-            "Rust 侧缺 {expected}：{rust_names:?}"
-        );
-    }
 
-    let _ = command.kill();
-    let _ = command.wait();
+    // 引擎 bin 由 EngineBin 守卫在作用域结束时回收。
     eprintln!("SSE 事件面对跑通过：七类共享词汇事件（含 thinking 三事件）序列与负载形态双端等价");
 }
 
@@ -1998,7 +2623,6 @@ async fn strangler_timeline_duel() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
 
     let valid_timeline = json!({
         "version": 1,
@@ -2116,7 +2740,6 @@ async fn strangler_series_backfill_duel() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
 
     let mut diffs: Vec<String> = Vec::new();
 
@@ -2277,7 +2900,6 @@ async fn search_face_duel() {
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
 
     // score 剥离（词法实现面）：递归删除对象键 score。
     fn strip_scores(value: &mut Value) {
@@ -2331,6 +2953,10 @@ async fn search_face_duel() {
 /// 本测为 fork 契约复活面）。三操作在双端各自 root 上顺序执行同参数
 /// split→merge→reorder，随后对齐 `GET /books/b1` 的章清单与 `GET
 /// /chapters/:num` 内容（normalize 剥易变键后逐位比对）。
+///
+/// 1666 号：夹具补足 3 章（此前只有 1 章——split(2)/merge(3+4)/reorder 全打在
+/// 不存在的章上，两腿同为非 200，测试把「两腿全等的失败」也记成差异；三个
+/// 操作从未真执行过）。
 #[tokio::test]
 async fn chapter_structure_duel() {
     if !duel_enabled() {
@@ -2340,12 +2966,26 @@ async fn chapter_structure_duel() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
     let llm = spawn_mock_llm().await;
-    write_fixture(&root, &llm);
+    write_fixture_with_chapters(
+        &root,
+        &llm,
+        &[
+            (
+                "0002_云涌",
+                "云涌",
+                "云海翻涌不息，山雨欲来风满楼。少年握紧了拳。",
+            ),
+            (
+                "0003_潮生",
+                "潮生",
+                "潮声自远海而来，一如多年前的那个夜晚。",
+            ),
+        ],
+    );
 
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    duel_require_fork_contract!(&ts);
 
     async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {
         let response = loopback_client()
@@ -2363,16 +3003,22 @@ async fn chapter_structure_duel() {
 
     let mut diffs: Vec<String> = Vec::new();
 
-    // ── split：2 号章按 UTF-16 offset 8 切两章 ──
+    // ── split：2 号章按 UTF-16 offset 17 切两章（标题行 `# 第2章 云涌\n\n` 占 10，
+    //    其后「云海翻涌不息，」占 7——切在首段句读之后）──
     for (base, name) in [(&rust, "rust"), (&ts.base, "ts")] {
-        let (status, body) =
-            post_json(base, "/api/v1/books/b1/chapters/2/split", r#"{"offset":8}"#).await;
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/chapters/2/split",
+            r#"{"offset":17}"#,
+        )
+        .await;
         if status != 200 {
             diffs.push(format!("[{name}] split status={status} body={body}"));
         }
     }
     let (rust_status, mut rust_body) = get_json(&rust, "/api/v1/books/b1").await;
     let (ts_status, mut ts_body) = get_json(&ts, "/api/v1/books/b1").await;
+    apply_declared("/api/v1/books/b1", &mut rust_body, &mut ts_body);
     normalize(&mut rust_body);
     normalize(&mut ts_body);
     if rust_status != ts_status || rust_body != ts_body {
@@ -2395,6 +3041,7 @@ async fn chapter_structure_duel() {
     }
     let (rust_status, mut rust_body) = get_json(&rust, "/api/v1/books/b1").await;
     let (ts_status, mut ts_body) = get_json(&ts, "/api/v1/books/b1").await;
+    apply_declared("/api/v1/books/b1", &mut rust_body, &mut ts_body);
     normalize(&mut rust_body);
     normalize(&mut ts_body);
     if rust_status != ts_status || rust_body != ts_body {
@@ -2423,6 +3070,7 @@ async fn chapter_structure_duel() {
     ] {
         let (rust_status, mut rust_body) = get_json(&rust, endpoint).await;
         let (ts_status, mut ts_body) = get_json(&ts, endpoint).await;
+        apply_declared(endpoint, &mut rust_body, &mut ts_body);
         normalize(&mut rust_body);
         normalize(&mut ts_body);
         if rust_status != ts_status || rust_body != ts_body {
