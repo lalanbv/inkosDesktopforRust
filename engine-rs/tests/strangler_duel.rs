@@ -3367,10 +3367,12 @@ async fn bin_process_unconfigured_engine_answers_400() {
 // ── 1672 号：互动叙事换腿的数据根（现状钉）─────────────────────────────────────
 
 /// TS 腿原生写面的播种器（`strangler_duel/seedPlayWorld.mjs`：core 的 PlayStore /
-/// PlayDB——与 TS 腿同一份写入代码，不手搓夹具）。`args` = 脚本的命令与其余
-/// 参数（`["create", "<worldId>"]` / `["append-turn", "<worldId>", "<content>"]`）；
-/// 脚本的参数顺序是「命令 → 项目根 → 其余」。
-fn seed_works_world(root: &Path, args: &[&str]) {
+/// PlayDB / syncWorkSourceArtifacts——与 TS 腿同一份写入代码，不手搓夹具）。
+/// `args` = 脚本的命令与其余参数（`["create", "<worldId>"]` /
+/// `["append-turn", "<worldId>", "<content>"]` / `["turn-sync", "<worldId>"]` /
+/// `["live-checksum", "<worldId>"]`）；脚本的参数顺序是「命令 → 项目根 → 其余」。
+/// 返回脚本的 stdout。
+fn seed_works_world(root: &Path, args: &[&str]) -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("strangler_duel")
@@ -3383,12 +3385,14 @@ fn seed_works_world(root: &Path, args: &[&str]) {
         .args(rest)
         .output()
         .expect("node 起动失败（TS 腿原生世界播种）");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     assert!(
         output.status.success(),
         "TS 腿原生世界播种失败：{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
+        stdout,
         String::from_utf8_lossy(&output.stderr)
     );
+    stdout
 }
 
 /// 1672 号起：互动叙事（interactive world）换腿的数据根——**现状钉，不是契约**。
@@ -3694,6 +3698,44 @@ async fn interactive_world_node_created_world_is_shared_duel() {
             .count(),
         2,
         "{transcript}"
+    );
+
+    // 作品清单的版本索引（2.0 的「生成物与版本」）：Node 腿的回合收尾会把本回合改动的
+    // 文件登记成当前版本（create 末尾照做了一次）；产品引擎直接写盘不登记。所以此刻
+    // 索引停在 Node 腿那一轮，盘上已经是两轮——先把落差钉住。
+    let manifest_path = root.join("works").join(session_id).join("work.json");
+    let indexed_checksum = || -> String {
+        let manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        for artifact in manifest["artifacts"].as_array().expect("清单有 artifacts") {
+            for revision in artifact["revisions"].as_array().unwrap() {
+                if revision["path"] == "source/runs/main/transcript.jsonl"
+                    && revision["status"] == "current"
+                {
+                    return revision["checksum"].as_str().unwrap().to_string();
+                }
+            }
+        }
+        panic!("转录文件应已登记为当前版本：{}", manifest["artifacts"]);
+    };
+    let live = seed_works_world(&root, &["live-checksum", session_id]);
+    let live = live
+        .lines()
+        .find_map(|line| line.strip_prefix("[seed-play-world] live "))
+        .unwrap_or_else(|| panic!("live-checksum 输出不成形：{live}"))
+        .trim()
+        .to_string();
+    assert_ne!(
+        indexed_checksum(),
+        format!("sha256:{live}"),
+        "产品引擎写盘不登记版本——索引此刻不该跟上"
+    );
+    // 回到 Node 腿、下一次回合收尾的同步：不冲突，并把产品引擎写的内容收进新版本。
+    seed_works_world(&root, &["turn-sync", session_id]);
+    assert_eq!(
+        indexed_checksum(),
+        format!("sha256:{live}"),
+        "回合同步后索引应跟上盘上内容"
     );
 
     // 两腿都看到 2 轮、2 个实体。

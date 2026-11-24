@@ -2879,11 +2879,32 @@ async fn execute_play_start(
     let run_id = "main";
 
     on_progress("Starting interactive world...".to_string());
-    let mode = if mode.is_empty() {
-        play_mode.unwrap_or("open")
-    } else {
-        mode
+    // 世界已存在 → 更新，没传的字段保留（TS play_start 的 updateWorld 分支）。移植
+    // 当时（2026-08-16 的 761c0399）TS 还是无条件 createWorld，上游同日在 d1d6d8ec
+    // 改掉，这里没跟。无条件 create_world 会把标题换成模型这次传的、把没传的前提 /
+    // 契约清成空串、重置 createdAt——产品引擎认得 Node 腿建的世界之后，那就等于
+    // 覆盖另一条腿写下的世界定义。
+    let existing = crate::play::load_world(root, &world_id).await;
+    let existing_text = |field: &str| -> String {
+        existing
+            .as_ref()
+            .and_then(|world| world.get(field))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
     };
+    // 模式优先级同 TS：会话选的玩法 ?? 模型传的 ?? 现有世界的 ?? "open"。
+    let mode = play_mode
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| (!mode.is_empty()).then(|| mode.to_string()))
+        .unwrap_or_else(|| {
+            if existing.is_some() {
+                existing_text("mode")
+            } else {
+                "open".to_string()
+            }
+        });
     // TS 逐字：inferLanguage([title, premise, worldContract, visualContract,
     // initialScene].filter(Boolean).join("\n"))——空段剔除后按内容判 zh/en。
     let language_source = [
@@ -2905,19 +2926,41 @@ async fn execute_play_start(
     } else {
         "zh"
     };
-    let world = crate::play::create_world(
-        root,
-        &PlayWorldInput {
-            id: &world_id,
-            title,
-            premise,
-            world_contract,
-            visual_contract,
-            mode,
-            language,
-        },
-    )
-    .await?;
+    let world = if existing.is_some() {
+        // 传了就用传的（去首尾空白），没传保留原值；标题与 createdAt 不动。
+        let keep_or = |value: &str, field: &str| -> String {
+            if value.trim().is_empty() {
+                existing_text(field)
+            } else {
+                value.trim().to_string()
+            }
+        };
+        crate::play::update_world(
+            root,
+            &world_id,
+            &json!({
+                "premise": keep_or(premise, "premise"),
+                "worldContract": keep_or(world_contract, "worldContract"),
+                "visualContract": keep_or(visual_contract, "visualContract"),
+                "mode": mode,
+            }),
+        )
+        .await?
+    } else {
+        crate::play::create_world(
+            root,
+            &PlayWorldInput {
+                id: &world_id,
+                title,
+                premise,
+                world_contract,
+                visual_contract,
+                mode: &mode,
+                language,
+            },
+        )
+        .await?
+    };
     crate::play::ensure_run(root, &world_id, run_id).await?;
 
     let existing_transcript = crate::play::read_transcript(root, &world_id, run_id).await;
@@ -5349,6 +5392,190 @@ mod draft_structure_router_tests {
         )
         .unwrap();
         assert_eq!(saved["nodes"].as_array().map(Vec::len), Some(2));
+    }
+}
+
+/// play_start 对已存在的世界是「更新」而不是「重建」：TS 自 d1d6d8ec（2026-08-16）
+/// 起如此；端口搬的是重构前的无条件 create_world。产品引擎认得 Node 腿建的世界
+/// 之后，无条件重建等于覆盖另一条腿写下的世界定义。
+#[cfg(test)]
+mod play_start_existing_world_tests {
+    use super::*;
+
+    fn runtime(root: &Path) -> BooksRuntime {
+        BooksRuntime {
+            hub: Arc::new(crate::server::sse::BroadcastHub::new()),
+            state: Arc::new(crate::state::manager::StateManager::new(root.to_path_buf())),
+            router: Arc::new(crate::llm::agent_router::AgentRouter::new(
+                crate::llm::agent_router::LlmEndpointConfig {
+                    context_window_tokens: 128_000,
+                    base_url: crate::llm::agent_router::LLM_UNCONFIGURED_BASE_URL.into(),
+                    api_key: String::new(),
+                    model: "default".into(),
+                    max_tokens: 8192,
+                    extra_headers: HashMap::new(),
+                },
+                HashMap::new(),
+            )),
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        }
+    }
+
+    async fn start(
+        runtime: &BooksRuntime,
+        session: &str,
+        play_mode: Option<&str>,
+        title: &str,
+        premise: &str,
+        mode: &str,
+    ) -> Result<ToolOutcome, String> {
+        execute_play_start(
+            runtime,
+            session,
+            play_mode,
+            title,
+            premise,
+            "",
+            "",
+            mode,
+            "",
+            Vec::new(),
+            |_| {},
+        )
+        .await
+    }
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// Node 腿建的世界：只有 `works/<id>/source` 那棵树，已有一轮转录（不是首开，
+    /// 不调模型）。返回 source 目录。
+    fn node_leg_world(root: &Path, id: &str) -> std::path::PathBuf {
+        let source = root.join("works").join(id).join("source");
+        let run = source.join("runs").join("main");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(
+            source.join("world.json"),
+            json!({
+                "id": id, "title": "TS 腿世界", "premise": "雾港的渡轮只在午夜靠岸。",
+                "worldContract": "", "visualContract": "", "mode": "open", "language": "zh",
+                "createdAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:00.000Z",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            run.join("transcript.jsonl"),
+            "{\"role\":\"user\",\"content\":\"TS 腿第一问\",\"timestamp\":1}\n",
+        )
+        .unwrap();
+        source
+    }
+
+    #[tokio::test]
+    async fn a_node_leg_world_is_updated_in_place_not_clobbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = node_leg_world(root, "s-node");
+        let runtime = runtime(root);
+        start(&runtime, "s-node", None, "模型另起的标题", "", "")
+            .await
+            .unwrap();
+        let world = read_json(&source.join("world.json"));
+        assert_eq!(
+            world["title"], "TS 腿世界",
+            "标题不得被模型这次传的换掉：{world}"
+        );
+        assert_eq!(
+            world["premise"], "雾港的渡轮只在午夜靠岸。",
+            "没传的前提要保留：{world}"
+        );
+        assert_eq!(world["createdAt"], "2026-01-01T00:00:00.000Z", "{world}");
+        assert_ne!(
+            world["updatedAt"], "2026-01-01T00:00:00.000Z",
+            "更新要刷新 updatedAt：{world}"
+        );
+        assert_eq!(world["mode"], "open", "没传模式时保留现有模式：{world}");
+        assert!(!root.join("worlds").exists(), "不得另起 worlds/<id> 一棵树");
+        // 不是首开：转录不动。
+        let transcript =
+            std::fs::read_to_string(source.join("runs").join("main").join("transcript.jsonl"))
+                .unwrap();
+        assert_eq!(transcript.lines().count(), 1, "{transcript}");
+    }
+
+    #[tokio::test]
+    async fn passed_fields_replace_and_empty_ones_are_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = runtime(root);
+        crate::play::create_world(
+            root,
+            &crate::play::PlayWorldInput {
+                id: "w-legacy",
+                title: "旧标题",
+                premise: "旧前提",
+                world_contract: "旧契约",
+                visual_contract: "",
+                mode: "open",
+                language: "zh",
+            },
+        )
+        .await
+        .unwrap();
+        crate::play::append_transcript_turn(root, "w-legacy", "main", "user", "第一问")
+            .await
+            .unwrap();
+        start(&runtime, "w-legacy", None, "新标题", "  新前提  ", "guided")
+            .await
+            .unwrap();
+        let world = read_json(&root.join("worlds").join("w-legacy").join("world.json"));
+        assert_eq!(world["title"], "旧标题", "更新不改标题：{world}");
+        assert_eq!(
+            world["premise"], "新前提",
+            "传了就用传的（去首尾空白）：{world}"
+        );
+        assert_eq!(world["worldContract"], "旧契约", "没传保留：{world}");
+        assert_eq!(world["mode"], "guided", "{world}");
+    }
+
+    #[tokio::test]
+    async fn the_session_play_mode_outranks_the_model_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = runtime(root);
+        node_leg_world(root, "s-mode");
+        start(&runtime, "s-mode", Some("guided"), "标题", "", "open")
+            .await
+            .unwrap();
+        let world = read_json(
+            &root
+                .join("works")
+                .join("s-mode")
+                .join("source")
+                .join("world.json"),
+        );
+        assert_eq!(
+            world["mode"], "guided",
+            "会话选的玩法优先（TS：playMode ?? params.mode）：{world}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_new_world_is_still_created_from_the_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let runtime = runtime(root);
+        // 首开会试调模型开图谱；启动路由器是占位端点，失败按 fail-open 不阻断。
+        start(&runtime, "s-new", None, "新世界", "新前提", "")
+            .await
+            .unwrap();
+        let world = read_json(&root.join("worlds").join("s-new").join("world.json"));
+        assert_eq!(world["title"], "新世界");
+        assert_eq!(world["premise"], "新前提");
+        assert_eq!(world["mode"], "open");
     }
 }
 
