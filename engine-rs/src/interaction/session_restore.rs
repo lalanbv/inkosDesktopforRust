@@ -8,7 +8,6 @@
 //! pi-agent 块模型的适配层——Rust agent loop 为 OpenAI 文本形态，历史本就
 //! text-only，无需该层（偏差备案见 68 号记录）。
 
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -163,12 +162,17 @@ fn as_message_ref<'a>(event: &'a TranscriptEvent) -> Option<MessageRef<'a>> {
 }
 
 /// `committedMessageEvents`：仅取 request_committed（含 kind 过滤）的 message 事件。
+///
+/// 入参是事件**引用**切片（`active_chain_events` 的产出形态）。此前收自有切片：
+/// 会话读面与模型回放都得先把整条 active 链深克隆一遍才能调用——1671 号基准
+/// 实测 200 轮会话这次克隆占读面分配的六成（12,847 / 21,553 次）。
 pub fn committed_message_events<'e>(
-    events: &'e [TranscriptEvent],
+    events: &[&'e TranscriptEvent],
     session_kind: Option<&str>,
 ) -> Vec<&'e TranscriptEvent> {
     let request_kinds: HashMap<&'e str, Option<&'e str>> = events
         .iter()
+        .copied()
         .filter_map(|event| match event {
             TranscriptEvent::RequestStarted {
                 request_id,
@@ -180,6 +184,7 @@ pub fn committed_message_events<'e>(
         .collect();
     let committed: HashSet<&'e str> = events
         .iter()
+        .copied()
         .filter_map(|event| match event {
             TranscriptEvent::RequestCommitted { request_id, .. } => Some(request_id.as_str()),
             _ => None,
@@ -192,8 +197,9 @@ pub fn committed_message_events<'e>(
             }
         })
         .collect();
-    let mut messages: Vec<&TranscriptEvent> = events
+    let mut messages: Vec<&'e TranscriptEvent> = events
         .iter()
+        .copied()
         .filter(|event| {
             matches!(event, TranscriptEvent::Message { .. })
                 && event
@@ -260,10 +266,12 @@ fn tool_label(tool: &str) -> &str {
 
 const EXPIRED_SKILL_RESULT_TEXT: &str = "Skill instructions expired after their original turn.";
 
-struct RestoredToolCall {
+/// 调用配对表的行：id 与工具名借用事件里的串（1671 号：此前每条调用复制两个
+/// String，配对表的键再复制两个）。
+struct RestoredToolCall<'a> {
     #[allow(dead_code)]
-    id: String,
-    tool: String,
+    id: &'a str,
+    tool: &'a str,
     args: Option<Value>,
     timestamp: u64,
 }
@@ -282,12 +290,14 @@ fn object_args(value: Option<&Value>) -> Option<Value> {
 }
 
 /// `messageEventsToInteractionMessages`：工具执行卡聚合 + thinking 合并 + play 卡独立。
-pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Vec<Value> {
+pub fn message_events_to_interaction_messages<'a>(events: &[&'a TranscriptEvent]) -> Vec<Value> {
     let mut messages: Vec<Value> = Vec::new();
-    let mut tool_calls: HashMap<(String, String), RestoredToolCall> = HashMap::new();
+    // 调用配对表：键与行内字符串都借用事件（请求 id + 调用 id → 调用块）。
+    let mut tool_calls: HashMap<(&'a str, &'a str), RestoredToolCall<'a>> = HashMap::new();
     // use_skill 调用轮的 thinking 不还原（restore.ts requestIdsUsingSkill）
-    let skill_request_ids: HashSet<String> = events
+    let skill_request_ids: HashSet<&'a str> = events
         .iter()
+        .copied()
         .filter_map(|event| {
             let reference = as_message_ref(event)?;
             if reference.role != "assistant" {
@@ -297,7 +307,7 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 block.get("type").and_then(Value::as_str) == Some("toolCall")
                     && block.get("name").and_then(Value::as_str) == Some("use_skill")
             });
-            uses_skill.then_some(reference.request_id.to_string())
+            uses_skill.then_some(reference.request_id)
         })
         .collect();
 
@@ -317,7 +327,7 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
         })
     };
 
-    for event in events {
+    for event in events.iter().copied() {
         let Some(reference) = as_message_ref(event) else {
             continue;
         };
@@ -349,10 +359,10 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 }
                 let args = object_args(block.get("arguments"));
                 tool_calls.insert(
-                    (reference.request_id.to_string(), id.to_string()),
+                    (reference.request_id, id),
                     RestoredToolCall {
-                        id: id.to_string(),
-                        tool: tool.to_string(),
+                        id,
+                        tool,
                         args,
                         timestamp: reference.timestamp,
                     },
@@ -413,8 +423,11 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 }
                 join_thinking(parts)
             };
+            // 工具卡直接移入消息（1671 号：此前先 clone 一份、`json!` 再深克隆
+            // 一份）。能走到这里的分支里 pending 非空 ⇔ 消息必然发出（下方两处早退
+            // 都以 `!has_tools` 为条件），移走不影响「空收尾保持 pending」的语义。
             let tool_executions: Option<Vec<Value>> = if !pending_tool_executions.is_empty() {
-                Some(pending_tool_executions.clone())
+                Some(std::mem::take(&mut pending_tool_executions))
             } else {
                 legacy_tool_executions.cloned()
             };
@@ -431,18 +444,22 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
             if content.is_empty() && !has_tools {
                 continue;
             }
-            let mut message = json!({ "role": "assistant", "content": content, "timestamp": reference.timestamp });
-            let obj = message.as_object_mut().unwrap();
+            // 消息对象手工装配：正文 / 思考 / 工具卡移入，不经 `json!` 克隆。
+            let mut message = serde_json::Map::new();
+            message.insert("role".into(), json!("assistant"));
+            message.insert("content".into(), Value::String(content));
+            message.insert("timestamp".into(), json!(reference.timestamp));
+            let obj = &mut message;
             if let Some(thinking) = thinking {
-                obj.insert("thinking".into(), json!(thinking));
+                obj.insert("thinking".into(), Value::String(thinking));
             }
             if has_tools {
                 obj.insert(
                     "toolExecutions".into(),
-                    json!(tool_executions.unwrap_or_default()),
+                    Value::Array(tool_executions.unwrap_or_default()),
                 );
             }
-            messages.push(message);
+            messages.push(Value::Object(message));
             pending_tool_executions.clear();
             pending_thinking.clear();
             continue;
@@ -457,25 +474,23 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                 .get("toolCallId")
                 .and_then(Value::as_str)
                 .or(reference.tool_call_id)
-                .unwrap_or_default();
+                .unwrap_or("");
             if tool_call_id.is_empty() {
                 continue;
             }
-            let call =
-                tool_calls.get(&(reference.request_id.to_string(), tool_call_id.to_string()));
+            let call = tool_calls.get(&(reference.request_id, tool_call_id));
             let tool = raw
                 .get("toolName")
                 .and_then(Value::as_str)
                 .filter(|t| !t.is_empty())
-                .map(str::to_string)
-                .or_else(|| call.map(|c| c.tool.clone()))
-                .unwrap_or_else(|| "tool".to_string());
+                .or_else(|| call.map(|c| c.tool))
+                .unwrap_or("tool");
             // 2.0 动作授权工具名 `能力域__动作` 取动作段（fork 自有工具名无前缀，
-            // 原样接管；TS `toolExecutionFromResult` 同款剥离）。带前缀时借切片，
-            // 不再复制一份。
-            let action: Cow<'_, str> = match tool.find("__") {
-                Some(index) => Cow::Borrowed(&tool[index + 2..]),
-                None => Cow::Owned(tool),
+            // 原样接管；TS `toolExecutionFromResult` 同款剥离）。整段借用事件里的
+            // 串，不复制。
+            let action = match tool.find("__") {
+                Some(index) => &tool[index + 2..],
+                None => tool,
             };
             let args = call.and_then(|c| c.args.clone());
             let agent = if action == "sub_agent" {
@@ -499,17 +514,17 @@ pub fn message_events_to_interaction_messages(events: &[&TranscriptEvent]) -> Ve
                     .unwrap_or("sub_agent")
                     .to_string()
             } else {
-                tool_label(&action).to_string()
+                tool_label(action).to_string()
             };
             let mut execution = json!({
                 "id": tool_call_id,
                 "tool": action,
-                "label": label,
                 "status": if is_error { "error" } else { "completed" },
                 "startedAt": call.map(|c| c.timestamp).unwrap_or(reference.timestamp),
                 "completedAt": reference.timestamp,
             });
             let obj = execution.as_object_mut().unwrap();
+            obj.insert("label".into(), Value::String(label));
             if let Some(agent) = agent {
                 obj.insert("agent".into(), json!(agent));
             }
@@ -741,8 +756,9 @@ pub async fn derive_book_session_from_transcript(
         }
     }
 
-    // R36 树化（636 号）：对话消息取 active 路径（元数据保持全局扫描）。
-    let chain: Vec<TranscriptEvent> = active_chain_events(&events).into_iter().cloned().collect();
+    // R36 树化（636 号）：对话消息取 active 路径（元数据保持全局扫描）。链是
+    // 引用向量，直接交给已提交过滤（1671 号：此前深克隆整条链）。
+    let chain = active_chain_events(&events);
     let committed = committed_message_events(&chain, None);
     let messages = message_events_to_interaction_messages(&committed);
     if title.is_none() {
@@ -919,7 +935,7 @@ fn event_message(event: &TranscriptEvent) -> Option<&Value> {
 /// `buildHistoricalToolSummary`：全部已提交轮的工具动作摘要（system 消息，
 /// 最近 8 条；行格式 `- {tool}:{agent} {status} — {180 截断文本}`）。
 fn build_historical_tool_summary(
-    events: &[TranscriptEvent],
+    events: &[&TranscriptEvent],
     session_kind: Option<&str>,
 ) -> Option<LLMMessage> {
     let request_kinds: HashMap<&str, Option<&str>> = events
@@ -1157,34 +1173,33 @@ fn request_ids_with_tool_activity<'e>(events: &[&'e TranscriptEvent]) -> HashSet
 /// 窗口应用语义与 TS `restoreCommittedDialogueScan` 同构：取 seq 最大的
 /// compaction 事件，对话只回放 `first_kept_uuid` 起（含）的 committed 消息；
 /// 定位 uuid 找不到（损坏/跨版本清理）时忽略该 compaction 的安全网一致。
-pub struct CommittedDialogueScan {
+pub struct CommittedDialogueScan<'a> {
     pub messages: Vec<LLMMessage>,
     pub uuids: Vec<String>,
     pub active_compaction: Option<TranscriptEvent>,
-    /// 窗口化后的事件流（工具历史摘要基于它，避免复述已压缩掉的旧动作）。
-    pub windowed_events: Vec<TranscriptEvent>,
+    /// 窗口化后的事件流（工具历史摘要基于它，避免复述已压缩掉的旧动作）——
+    /// 入参事件的引用，不克隆。
+    pub windowed_events: Vec<&'a TranscriptEvent>,
 }
 
-pub fn restore_committed_dialogue_scan(
-    raw_events: &[TranscriptEvent],
+pub fn restore_committed_dialogue_scan<'a>(
+    raw_events: &'a [TranscriptEvent],
     session_kind: Option<&str>,
-) -> CommittedDialogueScan {
+) -> CommittedDialogueScan<'a> {
     // R36 树化（636 号）：入口先做 active 链过滤——恢复只看 root→head 路径上
     // 的事件，弃用分支整体剪除；纯 legacy 文件过滤退化为全量（零行为变更）。
     // compaction 随链生效：分支各自的压缩边界互不污染（546 施工图 §3.4）。
-    let chain: Vec<TranscriptEvent> = active_chain_events(raw_events)
-        .into_iter()
-        .cloned()
-        .collect();
-    let events: &[TranscriptEvent] = &chain;
-    let mut active_compaction: Option<&TranscriptEvent> = None;
-    for event in events {
+    // 链与窗口化都是引用（1671 号：此前把整条链与窗口化结果各深克隆一遍）。
+    let chain = active_chain_events(raw_events);
+    let events: &[&TranscriptEvent] = &chain;
+    let mut active_compaction: Option<&'a TranscriptEvent> = None;
+    for event in events.iter().copied() {
         if matches!(event, TranscriptEvent::Compaction { .. }) {
             active_compaction = Some(event);
         }
     }
 
-    let mut committed: Vec<&TranscriptEvent> = committed_message_events(events, session_kind);
+    let mut committed = committed_message_events(events, session_kind);
     if let Some(TranscriptEvent::Compaction {
         first_kept_uuid, ..
     }) = active_compaction
@@ -1206,18 +1221,19 @@ pub fn restore_committed_dialogue_scan(
         }
     }
 
-    let windowed_events: Vec<TranscriptEvent> = events
+    let windowed_events: Vec<&TranscriptEvent> = events
         .iter()
+        .copied()
         .filter(|event| {
             !matches!(event, TranscriptEvent::Message { .. })
                 || committed.iter().any(|kept| std::ptr::eq(*kept, *event))
         })
-        .cloned()
         .collect();
 
     let tool_request_ids = request_ids_with_tool_activity(&committed);
     let request_kinds: HashMap<&str, Option<&str>> = events
         .iter()
+        .copied()
         .filter_map(|event| match event {
             TranscriptEvent::RequestStarted {
                 request_id,
@@ -1246,9 +1262,10 @@ pub fn restore_committed_dialogue_scan(
         }
     }
 
+    let (messages, uuids): (Vec<LLMMessage>, Vec<String>) = pairs.into_iter().unzip();
     CommittedDialogueScan {
-        messages: pairs.iter().map(|(message, _)| message.clone()).collect(),
-        uuids: pairs.into_iter().map(|(_, uuid)| uuid).collect(),
+        messages,
+        uuids,
         active_compaction: active_compaction.cloned(),
         windowed_events,
     }
@@ -1324,6 +1341,11 @@ pub fn append_restored_history_boundary(
 mod restore_agent_tests {
     use super::*;
     use crate::interaction::session_transcript::TranscriptEvent;
+
+    /// 事件向量 → 引用切片（`build_historical_tool_summary` 的入参形态）。
+    fn refs(events: &[TranscriptEvent]) -> Vec<&TranscriptEvent> {
+        events.iter().collect()
+    }
 
     fn msg_event(seq: u64, request_id: &str, role: &str, message: Value) -> TranscriptEvent {
         TranscriptEvent::Message {
@@ -1425,7 +1447,7 @@ mod restore_agent_tests {
     #[test]
     fn tool_summary_folds_tool_activity_into_system_message() {
         let events = fixture_events();
-        let summary = build_historical_tool_summary(&events, Some("chat")).unwrap();
+        let summary = build_historical_tool_summary(&refs(&events), Some("chat")).unwrap();
         assert_eq!(summary.role, LLMRole::System);
         assert!(
             summary.content.starts_with("[历史状态摘要]"),
@@ -1614,7 +1636,7 @@ mod restore_agent_tests {
             tseq += 2;
         }
         tool_events.push(committed(tseq, "rt"));
-        let summary = build_historical_tool_summary(&tool_events, None).unwrap();
+        let summary = build_historical_tool_summary(&refs(&tool_events), None).unwrap();
         let lines: Vec<&str> = summary.content.lines().skip(2).collect();
         assert_eq!(lines.len(), 8);
         assert!(lines.last().unwrap().contains("结果9"), "lines: {lines:?}");
@@ -1646,7 +1668,7 @@ mod restore_agent_tests {
             ),
             committed(4, "r1"),
         ];
-        let summary = build_historical_tool_summary(&events, None).unwrap();
+        let summary = build_historical_tool_summary(&refs(&events), None).unwrap();
         let line = summary.content.lines().nth(2).unwrap();
         assert!(line.contains("..."), "line: {line}");
         assert!(line.encode_utf16().count() < 260, "line 应被截断: {line}");
@@ -1678,7 +1700,7 @@ mod restore_agent_tests {
             ),
             committed(4, "r1"),
         ];
-        let summary = build_historical_tool_summary(&events, None).unwrap();
+        let summary = build_historical_tool_summary(&refs(&events), None).unwrap();
         assert!(
             summary
                 .content

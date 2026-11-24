@@ -825,6 +825,316 @@ fn bench_book_search(c: &mut Criterion) {
     group.finish();
 }
 
+// ── 会话读面投影（1671 号）────────────────────────────────────────
+//
+// `GET /sessions/:id`、会话列表（逐会话 derive）与每轮聊天的缓存指纹都要走
+// 「active 链过滤 → 已提交过滤 → 消息投影」。此前不在基准套件里——1666/1671
+// 号逐项对齐 2.0 投影族时只有算法层面的论证，没有量化数字。
+
+/// 分配计数探针（仅本组的分配预算锁用）：全局分配器外面包一层「**布防时才
+/// 计数**」的探针——未布防时每次分配只多一次 Relaxed 原子读，对同文件其余
+/// 基准的测量条件无可见影响。
+mod alloc_probe {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+    static BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    pub struct Probe;
+
+    // SAFETY: 全部转发给系统分配器，只在布防期间累加计数；计数不参与分配决策。
+    unsafe impl GlobalAlloc for Probe {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            count(layout.size());
+            System.alloc(layout)
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            System.dealloc(ptr, layout)
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+            count(new_size);
+            System.realloc(ptr, layout, new_size)
+        }
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            count(layout.size());
+            System.alloc_zeroed(layout)
+        }
+    }
+
+    fn count(bytes: usize) {
+        if ARMED.load(Ordering::Relaxed) {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            BYTES.fetch_add(bytes, Ordering::Relaxed);
+        }
+    }
+
+    /// 运行 `body` 一次，返回其结果与期间的分配次数 / 字节数（单线程使用）。
+    pub fn measure<R>(body: impl FnOnce() -> R) -> (R, usize, usize) {
+        ALLOCS.store(0, Ordering::Relaxed);
+        BYTES.store(0, Ordering::Relaxed);
+        ARMED.store(true, Ordering::Relaxed);
+        let result = body();
+        ARMED.store(false, Ordering::Relaxed);
+        (
+            result,
+            ALLOCS.load(Ordering::Relaxed),
+            BYTES.load(Ordering::Relaxed),
+        )
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: alloc_probe::Probe = alloc_probe::Probe;
+
+/// transcript 行构建器：seq 递增、`parentSeq` 恒为上一个事件（分支后由调用方
+/// 改指分支目标），与真实追加助手的戳记一致。
+#[derive(Default)]
+struct TranscriptBuilder {
+    seq: u64,
+    parent: Option<u64>,
+    lines: Vec<String>,
+}
+
+impl TranscriptBuilder {
+    fn push(&mut self, members: Vec<(&str, serde_json::Value)>) {
+        self.seq += 1;
+        let mut event = serde_json::Map::new();
+        event.insert("version".into(), json!(1));
+        event.insert("sessionId".into(), json!("bench-read-face"));
+        event.insert("seq".into(), json!(self.seq));
+        event.insert("timestamp".into(), json!(self.seq));
+        event.insert("parentSeq".into(), json!(self.parent));
+        for (key, value) in members {
+            event.insert(key.into(), value);
+        }
+        // 真实 transcript 里每条消息事件都带 uuid——读边界对缺 uuid 的消息行是
+        // 静默丢弃的（夹具自检实录：1133 行只读出 667）。
+        if event.get("type").and_then(serde_json::Value::as_str) == Some("message") {
+            let seq = self.seq;
+            event
+                .entry("uuid")
+                .or_insert_with(|| json!(format!("u-{seq}")));
+            event.entry("parentUuid").or_insert(serde_json::Value::Null);
+        }
+        self.parent = Some(self.seq);
+        self.lines
+            .push(serde_json::Value::Object(event).to_string());
+    }
+}
+
+/// 200 轮混合回合的会话 transcript：三种形态轮转——纯文本 / 工具调用（产品
+/// 引擎写入形态）/ 2.0 `finish_turn` 收尾协议（工具调用与结果仅模型可见、答复在
+/// `display.completion.message`）。第 101 轮之后追加一条 `branch_moved` 回到第
+/// 100 轮末尾——第 101 轮的事件留在文件里但不在 active 链上。
+fn session_read_face_transcript() -> String {
+    let mut transcript = TranscriptBuilder::default();
+    let mut request_id;
+    let mut commit_of_100: u64 = 0;
+    // 回合一轮：`kind` = plain / tool / finish_turn。
+    for turn in 1..=200u32 {
+        let kind = match turn % 3 {
+            0 => "finish_turn",
+            1 => "plain",
+            _ => "tool",
+        };
+        request_id = format!("req-{turn}");
+        let input = format!("第 {turn} 轮提问");
+        transcript.push(vec![
+            ("type", json!("request_started")),
+            ("requestId", json!(request_id)),
+            ("input", json!(input)),
+        ]);
+        if kind == "finish_turn" {
+            transcript.push(vec![
+                ("type", json!("request_delivery")),
+                ("requestId", json!(request_id)),
+                (
+                    "state",
+                    json!({ "version": 1, "authorRequest": input, "declared": false, "steps": [], "receipts": [] }),
+                ),
+            ]);
+        }
+        transcript.push(vec![
+            ("type", json!("message")),
+            ("requestId", json!(request_id)),
+            ("uuid", json!(format!("u-{}", transcript.seq))),
+            ("parentUuid", serde_json::Value::Null),
+            ("role", json!("user")),
+            (
+                "message",
+                json!({ "role": "user", "content": if kind == "plain" { json!(input) } else { json!([{ "type": "text", "text": input }]) }, "timestamp": transcript.seq }),
+            ),
+        ]);
+        let call_id = format!("call-{turn}");
+        match kind {
+            "plain" => {
+                transcript.push(vec![
+                    ("type", json!("message")),
+                    ("role", json!("assistant")),
+                    ("requestId", json!(request_id)),
+                    (
+                        "message",
+                        json!({ "role": "assistant", "content": [{ "type": "text", "text": format!("第 {turn} 轮答复。") }] }),
+                    ),
+                ]);
+            }
+            "tool" => {
+                transcript.push(vec![
+                    ("type", json!("message")),
+                    ("role", json!("assistant")),
+                    ("requestId", json!(request_id)),
+                    (
+                        "message",
+                        json!({ "role": "assistant", "content": [{ "type": "toolCall", "id": call_id, "name": "read", "arguments": { "path": "a.md" } }] }),
+                    ),
+                ]);
+                transcript.push(vec![
+                    ("type", json!("message")),
+                    ("role", json!("toolResult")),
+                    ("toolCallId", json!(call_id)),
+                    ("requestId", json!(request_id)),
+                    (
+                        "message",
+                        json!({ "role": "toolResult", "toolCallId": call_id, "content": [{ "type": "text", "text": "字".repeat(600) }], "isError": false, "timestamp": transcript.seq }),
+                    ),
+                ]);
+                transcript.push(vec![
+                    ("type", json!("message")),
+                    ("role", json!("assistant")),
+                    ("requestId", json!(request_id)),
+                    (
+                        "message",
+                        json!({ "role": "assistant", "content": [{ "type": "text", "text": format!("第 {turn} 轮答复。") }] }),
+                    ),
+                ]);
+            }
+            _ => {
+                transcript.push(vec![
+                    ("type", json!("message")),
+                    ("role", json!("assistant")),
+                    ("visibility", json!("model")),
+                    ("toolCallId", json!(call_id)),
+                    ("requestId", json!(request_id)),
+                    (
+                        "message",
+                        json!({ "role": "assistant", "content": [{ "type": "toolCall", "id": call_id, "name": "finish_turn", "arguments": { "status": "answered", "message": format!("第 {turn} 轮答复。") } }], "stopReason": "toolUse" }),
+                    ),
+                ]);
+                transcript.push(vec![
+                    ("type", json!("message")),
+                    ("role", json!("toolResult")),
+                    ("visibility", json!("model")),
+                    ("toolCallId", json!(call_id)),
+                    ("requestId", json!(request_id)),
+                    (
+                        "message",
+                        json!({ "role": "toolResult", "toolCallId": call_id, "toolName": "finish_turn", "content": [{ "type": "text", "text": format!("第 {turn} 轮答复。") }], "isError": false }),
+                    ),
+                ]);
+                transcript.push(vec![
+                    ("type", json!("message")),
+                    ("role", json!("assistant")),
+                    ("requestId", json!(request_id)),
+                    (
+                        "display",
+                        json!({ "completion": { "status": "answered", "message": format!("第 {turn} 轮答复。") } }),
+                    ),
+                    (
+                        "message",
+                        json!({ "role": "assistant", "content": [], "stopReason": "stop" }),
+                    ),
+                ]);
+            }
+        }
+        transcript.push(vec![
+            ("type", json!("request_committed")),
+            ("requestId", json!(request_id)),
+        ]);
+        if turn == 100 {
+            commit_of_100 = transcript.seq;
+        }
+        if turn == 101 {
+            // 回到第 100 轮末尾：branch_moved 自身的父是移动前的 head（第 101 轮
+            // 提交点），其后续写入以**分支目标**为父——与真实追加助手的戳记
+            // 一致（分支元事件不入链）。
+            transcript.push(vec![
+                ("type", json!("branch_moved")),
+                ("fromSeq", json!(transcript.seq)),
+                ("toSeq", json!(commit_of_100)),
+            ]);
+            transcript.parent = Some(commit_of_100);
+        }
+    }
+    format!("{}\n", transcript.lines.join("\n"))
+}
+
+/// 200 轮读面投影的分配预算（次）。同一输入的分配次数是确定的，实测 5,416
+/// （1671 号清理前 21,553：整条 active 链深克隆 12,847 次、工具卡挂载时深克隆
+/// 两份、调用配对表每条复制四个 String）。预算只留不到 2% 余量——每条消息多出
+/// 一次字符串复制（+398）即越线；它锁的是「只为喂函数而复制」这类回退，不是
+/// 输出构造本身（每条消息约 13 次：对象节点、键名、正文、工具卡）。
+const SESSION_READ_FACE_ALLOC_BUDGET: usize = 5_500;
+
+fn bench_session_read_face(c: &mut Criterion) {
+    use inkos_engine::interaction::session_restore::{
+        committed_message_events, message_events_to_interaction_messages,
+    };
+    use inkos_engine::interaction::session_transcript::{
+        active_chain_events, read_transcript_events, transcript_path,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir_all(root.join(".inkos").join("sessions")).unwrap();
+    std::fs::write(
+        transcript_path(root, "bench-read-face"),
+        session_read_face_transcript(),
+    )
+    .unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let events = rt.block_on(read_transcript_events(root, "bench-read-face"));
+    // 夹具自检：66 个「纯文本 4 + 工具 6 + 收尾协议 7」轮转 + 第 199 轮（纯文本
+    // 4）+ 第 200 轮（工具 6）+ 一条 branch_moved。
+    assert_eq!(events.len(), 17 * 66 + 4 + 6 + 1, "夹具事件数不符");
+    let project = || {
+        // 与 `derive_book_session_from_transcript` 的三步同形（active 链 → 已提交 → 投影）。
+        let chain = active_chain_events(&events);
+        let committed = committed_message_events(&chain, None);
+        message_events_to_interaction_messages(&committed)
+    };
+    let (chain, chain_allocs, chain_bytes) = alloc_probe::measure(|| active_chain_events(&events));
+    let (committed, committed_allocs, committed_bytes) =
+        alloc_probe::measure(|| committed_message_events(&chain, None));
+    let (_, project_allocs, project_bytes) =
+        alloc_probe::measure(|| message_events_to_interaction_messages(&committed));
+    let (messages, allocs, bytes) = alloc_probe::measure(project);
+    // 第 101 轮在弃用分支上：读面 = 其余 199 轮 × (user + assistant)。
+    assert_eq!(messages.len(), 199 * 2, "夹具读面形态不符");
+    println!(
+        "session_read_face: events={} messages={} allocs={} bytes={}",
+        events.len(),
+        messages.len(),
+        allocs,
+        bytes
+    );
+    println!(
+        "session_read_face 分解: 链过滤 allocs={chain_allocs} bytes={chain_bytes} / 已提交过滤 allocs={committed_allocs} bytes={committed_bytes} / 消息投影 allocs={project_allocs} bytes={project_bytes}"
+    );
+    assert!(
+        allocs <= SESSION_READ_FACE_ALLOC_BUDGET,
+        "会话读面投影分配越预算：{allocs} > {SESSION_READ_FACE_ALLOC_BUDGET}（200 轮）"
+    );
+
+    let mut group = c.benchmark_group("session_read_face");
+    group.throughput(Throughput::Elements(messages.len() as u64));
+    group.bench_function(BenchmarkId::new("project", "200_turns"), |b| {
+        b.iter(&project)
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_sensitive_words,
@@ -836,6 +1146,7 @@ criterion_group!(
     bench_export_artifact,
     bench_backup_export,
     bench_read_chain,
-    bench_book_search
+    bench_book_search,
+    bench_session_read_face
 );
 criterion_main!(benches);

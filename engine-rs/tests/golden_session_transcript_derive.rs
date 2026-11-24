@@ -74,7 +74,7 @@ async fn golden_session_transcript_derive_replay() {
         );
 
         let kind = case["deriveSessionKind"].as_str();
-        let committed = committed_message_events(&events, kind);
+        let committed = committed_message_events(&events.iter().collect::<Vec<_>>(), kind);
         let committed_uuids: Vec<&str> = committed
             .iter()
             .filter_map(|event| event.message_uuid())

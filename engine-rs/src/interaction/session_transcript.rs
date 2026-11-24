@@ -714,7 +714,10 @@ mod tests {
     fn project(lines: &[&str]) -> Vec<Value> {
         let (events, _) = parse_transcript(&format!("{}\n", lines.join("\n")));
         let committed: Vec<&TranscriptEvent> =
-            crate::interaction::session_restore::committed_message_events(&events, None);
+            crate::interaction::session_restore::committed_message_events(
+                &events.iter().collect::<Vec<_>>(),
+                None,
+            );
         message_events_to_interaction_messages(&committed)
     }
 
