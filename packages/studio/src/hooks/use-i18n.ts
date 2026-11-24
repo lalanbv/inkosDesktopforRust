@@ -610,6 +610,12 @@ const strings = {
   "model.noMatch": { zh: "无匹配模型", en: "No matching models" },
   "model.manageServices": { zh: "管理服务商", en: "Manage services" },
   "book.bestOfNHint": { zh: "best-of-N：首版审查分数低于门槛时自动多版生成并选优", en: "Best-of-N: when the first draft scores below the gate, multiple versions are generated and the best is selected" },
+  // 1668 号：best-of-N 的执行方只在产品引擎管线——Node 回退腿如实标注。
+  "book.bestOfNNodeLegHint": {
+    zh: "需产品引擎：当前为 Node 回退服务，本开关不生效。",
+    en: "Needs the product engine: the Node fallback server is active, so this switch has no effect.",
+  },
+  "book.nodeLegBadge": { zh: "Node 回退", en: "Node fallback" },
   "settings.secretOptional": { zh: "secret (可选)", en: "secret (optional)" },
 } as const;
 

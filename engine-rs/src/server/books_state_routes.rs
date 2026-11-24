@@ -592,6 +592,14 @@ pub async fn put_workspace_brief(
         );
     };
     let number = number as u32;
+    // 1668 号：书不存在 → 404（TS 腿同码）。此前直接落盘——在不存在的书下写出
+    // 一棵只有 brief 的目录树（幽灵书写入）。
+    if runtime.state.load_book_config(&book_id).await.is_err() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Book not found" })),
+        );
+    }
     let book_dir = runtime
         .state
         .book_dir(&book_id)
@@ -648,10 +656,16 @@ pub async fn restore_chapter_version(
     State(runtime): State<BooksRuntime>,
     Path((book_id, chapter, version_id)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    // TS readChapterVersion 的 assert 错误落在外层 catch → 500。
+    // 1668 号：版本**查找**失败（非法章节号 / 非法版本 id / 缺文件）= 资源不存在
+    // → 404，与 GET …/versions/:versionId 及 TS 腿同码。此前落 500——忠实移植
+    // 1.x TS「readChapterVersion 的 assert 错误落在外层 catch」的形态。替换事务
+    // 失败仍 500（真内部错误）。
     let Some(number) = ts_parse_int(&chapter).filter(|n| *n >= 1) else {
         let display = ts_parse_int(&chapter).map_or("NaN".to_string(), |n| n.to_string());
-        return internal_error(format!("Invalid chapter number: {display}"));
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Invalid chapter number: {display}") })),
+        );
     };
     let number = number as u32;
     let book_dir = runtime
@@ -662,7 +676,12 @@ pub async fn restore_chapter_version(
     let full_text = match read_chapter_version(&FsStateStore, &book_dir, number, &version_id).await
     {
         Ok(content) => content,
-        Err(error) => return internal_error(error),
+        Err(error) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": error.to_string() })),
+            )
+        }
     };
     match execute_chapter_replace(
         &runtime.state,

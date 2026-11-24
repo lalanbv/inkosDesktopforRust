@@ -3162,6 +3162,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!Number.isInteger(num) || num < 1 || typeof body.brief !== "string") {
       return c.json({ error: "A valid chapter number and brief string are required" }, 400);
     }
+    // 1668 号：书不存在 → 404（Rust put_workspace_brief 同码）。此前直接落盘——在
+    // 不存在的书下写出一棵只有 brief 的目录树（幽灵书写入；1664 号立案 (a)）。
+    const bookExists = await state.loadBookConfig(id).then(() => true).catch(() => false);
+    if (!bookExists) return c.json({ error: "Book not found" }, 404);
     try {
       await saveChapterUserBrief(state.bookDir(id), num, body.brief);
       return c.json({ ok: true, chapterNumber: num, brief: body.brief.trim() });
@@ -3261,11 +3265,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const num = parseInt(c.req.param("num"), 10);
     const releaseLock = await state.acquireBookLock(id);
     try {
-      const fullText = await readChapterVersion(
-        state.bookDir(id),
-        num,
-        c.req.param("versionId"),
-      );
+      let fullText: string;
+      try {
+        fullText = await readChapterVersion(
+          state.bookDir(id),
+          num,
+          c.req.param("versionId"),
+        );
+      } catch (error) {
+        // 1668 号：版本**查找**失败（非法章节号/非法版本 id/缺文件）= 资源不存在 →
+        // 404，与 GET …/versions/:versionId 及 Rust restore_chapter_version 同码。
+        // 此前与替换事务错误一并落 500（忠实移植 1.x 的外层 catch 形态）。
+        return c.json({ error: error instanceof Error ? error.message : String(error) }, 404);
+      }
       const result = await executeEditTransaction(
         {
           bookDir: (bookId) => state.bookDir(bookId),
@@ -7180,18 +7192,63 @@ function yamlScalar(value: unknown): string {
     const worldId = normalizeApiBookId(c.req.param("worldId"), "worldId") ?? "default-world";
     const runId = normalizeApiBookId(c.req.param("runId"), "runId") ?? "default-run";
     type GenerateImageBody = {
-      target: "entity" | "scene";
-      entityId?: string;
+      target?: unknown;
+      entityId?: unknown;
     };
-    const body = await c.req.json<GenerateImageBody>().catch(() => ({ target: "entity" } as GenerateImageBody));
+    const body = await c.req.json<GenerateImageBody>().catch(() => ({} as GenerateImageBody));
+    const target = body.target === "scene" ? "scene" : "entity";
+    const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
+
+    // 1668 号：与 Rust post_play_generate_image 同次序的前置判定（1664 号立案 (d)）。
+    // 此前请求体不校验即进工具锁域——缺 work 时 executeExplicitCapabilityTool 第一步
+    // loadWorkManifest 的 ENOENT 以 400 裸串回显本地绝对路径。判定只读：不存在的
+    // world/run 不得被建出来（工具内 PlayDB 构造会 mkdirSync(runDir)）。
+    const store = new PlayStore(root);
+    const isMissing = (error: unknown): boolean => {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      return code === "ENOENT" || code === "ENOTDIR";
+    };
 
     try {
+      if (target === "entity" && !entityId) {
+        return c.json({ error: "entityId is required for an entity image" }, 400);
+      }
+      if (target === "scene") {
+        const scene = await store
+          .readProjection(worldId, runId, "projections/scene.md")
+          .then((text) => text.trim(), (error: unknown) => { if (isMissing(error)) return ""; throw error; });
+        if (!scene) return c.json({ error: "no current scene to illustrate" }, 400);
+      } else {
+        const worldExists = await store
+          .loadWorld(worldId)
+          .then((world) => world !== null, (error: unknown) => { if (isMissing(error)) return false; throw error; });
+        const graphExists = await access(join(store.runDir(worldId, runId), "play.db"))
+          .then(() => true, (error: unknown) => { if (isMissing(error)) return false; throw error; });
+        // Rust 对缺 work/run 取空图 → 实体不存在；同码同文。
+        if (!worldExists || !graphExists) return c.json({ error: `entity not found: ${entityId}` }, 404);
+      }
       const result = await executeExplicitCapabilityTool({projectRoot:root,workId:worldId,conversationId:worldId,
         binding:{capabilityId:"interactive-world",actionId:"generate_play_image",profileId:"interactive-world",risk:"recoverable-write"},
         tool:createPlayImageTool(root,worldId,runId),parameters:body,signal:c.req.raw.signal});
       return c.json(result.data ?? {});
     } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e), code:(e as {code?:string})?.code ?? "PLAY_IMAGE_FAILED" }, 400);
+      const code = (e as { code?: unknown } | null)?.code;
+      const message = e instanceof Error ? e.message : String(e);
+      if (target === "entity" && code === "PLAY_ENTITY_NOT_FOUND") {
+        return c.json({ error: `entity not found: ${entityId}` }, 404);
+      }
+      if (code === "PLAY_WORLD_NOT_FOUND") return c.json({ error: message }, 404);
+      if (target === "scene" && code === "PLAY_SCENE_REQUIRED") {
+        return c.json({ error: "no current scene to illustrate" }, 400);
+      }
+      if (e instanceof Error && e.name === "BookWriteLockError") {
+        return c.json({ error: { code: "BOOK_BUSY", message } }, 409);
+      }
+      // 文件系统错误只报类别，不回显本地路径。
+      if (typeof code === "string" && /^E[A-Z]+$/u.test(code)) {
+        return c.json({ error: `Play image generation failed (${code})` }, 500);
+      }
+      return c.json({ error: message }, 400);
     }
   });
 

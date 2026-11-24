@@ -160,12 +160,21 @@ describe("book data path family on native books (1667)", () => {
     expect(await read.json()).toEqual({ chapterNumber: 1, versionId, content: "# 风起\n\n旧版正文。\n" });
 
     const chapterPath = join(bookDir("b1"), "chapters", "0001_风起.md");
-    for (const bad of ["v1", missingId]) {
-      const restore = await app.request(`/api/v1/books/b1/chapters/1/versions/${bad}/restore`, { method: "POST" });
-      // 非法/缺失版本不得改写正文。状态码现为 500 裸串（Rust 同形，1664 号立案
-      // 的双端同形欠账）——双端同步修为 404 后本断言无需改动。
-      expect(restore.status).toBeGreaterThanOrEqual(400);
-      expect(await readFile(chapterPath, "utf-8")).toBe("# 风起\n\n现行正文。\n");
+    // 1668 号：版本**查找**失败（非法 id / 缺文件 / 非法章节号 / 书不存在）= 资源
+    // 不存在 → 404，与 GET …/versions/:versionId 及 Rust restore_chapter_version
+    // 同码（1664 号立案 (b)：此前与替换事务错误一并落 500 裸串）。
+    const lookupFailures: Array<[string, string]> = [
+      ["/api/v1/books/b1/chapters/1/versions/v1/restore", "Invalid chapter version id"],
+      [`/api/v1/books/b1/chapters/1/versions/${missingId}/restore`, "ENOENT"],
+      ["/api/v1/books/b1/chapters/abc/versions/v1/restore", "Invalid chapter number"],
+      [`/api/v1/books/ghost/chapters/1/versions/${versionId}/restore`, "ENOENT"],
+    ];
+    for (const [path, fragment] of lookupFailures) {
+      const restore = await app.request(path, { method: "POST" });
+      expect(restore.status, path).toBe(404);
+      expect(String(((await restore.json()) as { error: string }).error), path).toContain(fragment);
+      // 查找失败不得改写正文。
+      expect(await readFile(chapterPath, "utf-8"), path).toBe("# 风起\n\n现行正文。\n");
     }
 
     const restored = await app.request(`/api/v1/books/b1/chapters/1/versions/${versionId}/restore`, { method: "POST" });

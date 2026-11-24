@@ -3,9 +3,10 @@
 //! 三条 CRUD 链载荷断言（该面板状态自持无陈旧 props 风险，测试目的为锁定
 //! 合并与切换语义）。
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AntiAiAndExperiencePanel } from "./AntiAiAndExperiencePanel";
+import { resetEngineKindCache } from "../hooks/use-engine-kind";
 
 let rulesState = [
   { id: "seed_1", type: "phrase", pattern: "眼中闪过一丝", isRegex: false, severity: "warning", message: "高频 AI 神态套语", enabled: true },
@@ -37,10 +38,17 @@ vi.mock("../hooks/use-api", () => ({
 afterEach(() => {
   cleanup();
   fetchJsonMock.mockClear();
+  vi.unstubAllGlobals();
+  resetEngineKindCache();
   rulesState = [
     { id: "seed_1", type: "phrase", pattern: "眼中闪过一丝", isRegex: false, severity: "warning", message: "高频 AI 神态套语", enabled: true },
   ];
 });
+
+/** 腿型桩：health 404 = Node 回退腿；200 = 产品引擎。 */
+function stubEngine(healthStatus: number) {
+  vi.stubGlobal("fetch", vi.fn(async () => ({ ok: healthStatus === 200, status: healthStatus }) as Response));
+}
 
 describe("AntiAiAndExperiencePanel 交互（456 号）", () => {
   it("种子徽标与规则列表渲染", async () => {
@@ -120,5 +128,23 @@ describe("AntiAiAndExperiencePanel 交互（456 号）", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(await screen.findByText("经验已沉淀（同文本自动去重）")).toBeTruthy();
     expect(experiencePuts()).toHaveLength(1);
+  });
+
+  // 1668 号：规则禁则注入 / 审查扫描 / 经验注入的执行方只在产品引擎管线——
+  // Node 回退腿上保存后不参与写作，面板如实标明；产品引擎在位不标。
+  it("Node 回退腿——面板标明保存内容不参与写作与审查（1668 号）", async () => {
+    stubEngine(404);
+    render(<AntiAiAndExperiencePanel bookId="b1" />);
+    const note = await screen.findByRole("note");
+    expect(note.textContent).toContain("反AI规则与经验记忆由产品引擎执行");
+    expect(note.textContent).toContain("Node 回退服务");
+  });
+
+  it("产品引擎在位——不标不生效（功能真在跑）", async () => {
+    stubEngine(200);
+    render(<AntiAiAndExperiencePanel bookId="b1" />);
+    expect(await screen.findByText("内置种子（未落盘，保存后生效为本书规则）")).toBeTruthy();
+    await act(async () => {});
+    expect(screen.queryByRole("note")).toBeNull();
   });
 });

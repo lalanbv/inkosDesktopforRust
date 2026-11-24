@@ -11,6 +11,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { BookDetail } from "./BookDetail";
 import type { Nav } from "../lib/nav";
 import type { TFunction } from "../hooks/use-i18n";
+import { engineKind, resetEngineKindCache } from "../hooks/use-engine-kind";
 
 // 卡片面全部置空——本测只活章节表结构操作链（卡片各有自家测试面）。
 vi.mock("../components/QualityDebtsCard", () => ({ QualityDebtsCard: () => null }));
@@ -211,5 +212,35 @@ describe("BookDetail 拖拽重排链（R48b/1647 号组件级活体）", () => {
     });
     fireEvent.click(cancelBtn);
     expect(fetchJsonMock.mock.calls.find((args) => String(args[0]).includes("/rewrite/"))).toBeUndefined();
+  });
+});
+
+// 1668 号：best-of-N 的执行方只在产品引擎管线（2.0 core 无调用点）——Node
+// 回退腿上按钮如实标注不生效；产品引擎在位不标、开关照常可用。腿型桩：
+// /api/v1/health 404 = Node 回退腿 / 200 = 产品引擎。
+describe("BookDetail best-of-N 腿型标注（1668 号）", () => {
+  const stubEngine = (healthStatus: number) =>
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: healthStatus === 200, status: healthStatus }) as Response));
+  const toggle = () => screen.getByTestId("book-best-of-n-toggle");
+
+  // 腿型探测整页共享（模块级缓存）：本文件前面的用例已把缓存落成 unknown
+  // （jsdom 相对 URL 不可 fetch），每例前后都重置，防读到陈旧腿型。
+  beforeEach(() => resetEngineKindCache());
+  afterEach(() => resetEngineKindCache());
+
+  it("Node 回退腿——title 追加不生效提示 + 徽标", async () => {
+    stubEngine(404);
+    renderPage();
+    await vi.waitFor(() => expect(toggle().getAttribute("title")).toBe("book.bestOfNHint book.bestOfNNodeLegHint"));
+    expect(toggle().textContent).toContain("book.nodeLegBadge");
+  });
+
+  it("产品引擎在位——title 仅原提示、无徽标（探测已落定，非 checking 中间态）", async () => {
+    stubEngine(200);
+    renderPage();
+    expect(await engineKind()).toBe("rust");
+    await act(async () => {});
+    expect(toggle().getAttribute("title")).toBe("book.bestOfNHint");
+    expect(toggle().textContent).not.toContain("book.nodeLegBadge");
   });
 });

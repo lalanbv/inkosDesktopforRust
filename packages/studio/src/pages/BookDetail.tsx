@@ -27,6 +27,7 @@ import type { TFunction } from "../hooks/use-i18n";
 import type { SSEMessage } from "../hooks/use-sse";
 import { useColors } from "../hooks/use-colors";
 import { deriveBookActivity, isWriteStoppedMessage, shouldRefetchBookView, writeTaskSessionId } from "../hooks/use-book-activity";
+import { useEngineKind } from "../hooks/use-engine-kind";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { PromptDialog } from "../components/PromptDialog";
 import { GitBranch,
@@ -379,7 +380,11 @@ export function BookDetail({
   };
 
   // G11/373 号：best-of-N 多版选优开关（治理配置，默认关）。
+  // 1668 号：多版选优的执行方只在产品引擎管线（2.0 core 无调用点）——Node
+  // 回退腿上开关照常可存，但按钮如实标注不生效。
   const [bestOfN, setBestOfN] = useState(false);
+  const engineKind = useEngineKind();
+  const bestOfNInert = engineKind === "node";
   useEffect(() => {
     void (async () => {
       try {
@@ -913,7 +918,8 @@ export function BookDetail({
           {/* G11/373 号：best-of-N 多版选优（书籍级开关，默认关）。 */}
           <button
             onClick={handleToggleBestOfN}
-            title={t("book.bestOfNHint")}
+            data-testid="book-best-of-n-toggle"
+            title={bestOfNInert ? `${t("book.bestOfNHint")} ${t("book.bestOfNNodeLegHint")}` : t("book.bestOfNHint")}
             className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-xl border transition-all ${
               bestOfN
                 ? "bg-primary/10 text-primary border-primary/30"
@@ -922,6 +928,11 @@ export function BookDetail({
           >
             <GitBranch size={16} />
             best-of-N
+            {bestOfNInert && (
+              <span className="px-1.5 py-0.5 text-[10px] font-bold rounded bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                {t("book.nodeLegBadge")}
+              </span>
+            )}
           </button>
           <button
             onClick={handleToggleAutoBeats}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchJson } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
+import { RustEngineOnlyNotice } from "./RustEngineOnlyNotice";
 
 interface AntiAiRule {
   readonly id: string;
@@ -32,6 +33,9 @@ const severityClass: Record<AntiAiRule["severity"], string> = {
  * R5/366 号：反AI规则 + G13 经验条目面板（书籍详情挂载）。
  * 规则全量表编辑（写作禁则 + 审查扫描共用）；经验条目 merge 保存
  * （/learn 语义——同文本去重）。
+ *
+ * 1668 号：两项的消费方（写作禁则注入 / 审查扫描）只在产品引擎管线；Node
+ * 回退腿保存后不参与写作——面板如实标明，不做空开关。
  */
 export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
   const [rules, setRules] = useState<AntiAiRule[]>([]);
@@ -42,6 +46,7 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
     pattern: "", message: "", replacement: "", severity: "warning", isRegex: false,
   });
   const [entryText, setEntryText] = useState("");
+  const featureLabel = tr("反AI规则与经验记忆", "Anti-AI rules & experience");
 
   useEffect(() => {
     void (async () => {
@@ -146,8 +151,9 @@ export function AntiAiAndExperiencePanel({ bookId }: { bookId: string }) {
   return (
     <div className="rounded-lg border border-border/60 p-4 space-y-3">
       <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
-        {tr("反AI规则与经验记忆", "Anti-AI rules & experience")}
+        {featureLabel}
       </h3>
+      <RustEngineOnlyNotice feature={featureLabel} />
       {notice && <p className="text-[11px] text-emerald-600">{notice}</p>}
 
       <div className="space-y-1">

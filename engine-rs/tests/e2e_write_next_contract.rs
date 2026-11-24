@@ -2487,15 +2487,22 @@ mod books49_e2e {
         );
         assert_eq!(subscriber.recv().await.unwrap().event, "chapter:restored");
 
-        // 缺失版本 → 500（restore 走 catch，非 404）。
-        let (status, _) = call(
+        // 缺失版本 → 404（1668 号：查找失败=资源不存在，与 GET 同码；此前 500）。
+        let (status, parsed) = call(
             app49(rt49(&root)),
             "POST",
             "/api/v1/books/b1/chapters/2/versions/1782864000000_restore_11111111-1111-4111-8111-111111111111/restore",
             None,
         )
         .await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(status, StatusCode::NOT_FOUND, "body: {parsed}");
+        assert!(
+            parsed["error"]
+                .as_str()
+                .unwrap()
+                .contains("chapter version not found"),
+            "body: {parsed}"
+        );
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,13 +29,30 @@ describe("route coverage blind spots, batch 2 (1667)", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("chapter workspace brief: validation + persisted under the canonical book dir", async () => {
+  it("chapter workspace brief: validation, missing book 404, persisted under the canonical book dir", async () => {
     expect((await call("/api/v1/books/b1/chapters/0/workspace/brief", "PUT", { brief: "x" })).status).toBe(400);
     expect((await call("/api/v1/books/b1/chapters/1/workspace/brief", "PUT", { brief: 5 })).status).toBe(400);
 
+    // 1668 号：书不存在 → 404（Rust put_workspace_brief 同码）。此前 200 并在不
+    // 存在的书下写出一棵只有 brief 的目录树（1664 号立案 (a)）；校验 400 仍先于
+    // 存在性判定（与 Rust 分支次序一致）。
+    const ghost = await call("/api/v1/books/ghost/chapters/1/workspace/brief", "PUT", { brief: "给不存在的书写提示" });
+    expect(ghost).toEqual({ status: 404, body: { error: "Book not found" } });
+    await expect(
+      readFile(join(root, "works", "ghost", "source", "story", "runtime", "chapter-0001.user-brief.md"), "utf-8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    const sourceDir = join(root, "works", "b1", "source");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "book.json"), JSON.stringify({
+      id: "b1", title: "镜花水月", platform: "qidian", genre: "xuanhuan", status: "active",
+      targetChapters: 12, chapterWordCount: 3000, language: "zh",
+      createdAt: "2026-10-16T00:00:00.000Z", updatedAt: "2026-10-16T00:00:00.000Z",
+    }), "utf-8");
+
     const saved = await call("/api/v1/books/b1/chapters/1/workspace/brief", "PUT", { brief: "收紧节奏" });
     expect(saved).toEqual({ status: 200, body: { ok: true, chapterNumber: 1, brief: "收紧节奏" } });
-    const stored = await readFile(join(root, "works", "b1", "source", "story", "runtime", "chapter-0001.user-brief.md"), "utf-8");
+    const stored = await readFile(join(sourceDir, "story", "runtime", "chapter-0001.user-brief.md"), "utf-8");
     expect(stored).toContain("收紧节奏");
   });
 
@@ -57,12 +74,63 @@ describe("route coverage blind spots, batch 2 (1667)", () => {
     }
   });
 
-  it("daemon stop without a daemon, and play-run image faces on a missing run", async () => {
+  it("daemon stop without a daemon, and the play-run image file face on a missing run", async () => {
     expect(await call("/api/v1/daemon/stop", "POST", {})).toMatchObject({ status: 400, body: { error: "Daemon not running" } });
     expect((await call("/api/v1/play/runs/w1/r1/images/a.png")).status).toBe(404);
-    // 缺 work 的生图：不得 200。状态码现为 400 裸 ENOENT 串（应 404——1664 号
-    // 立案的双端同形欠账）；修为 404 后本断言无需改动。
-    expect((await call("/api/v1/play/runs/w1/r1/generate-image", "POST", {})).status).toBeGreaterThanOrEqual(400);
+  });
+
+  it("play-run image generation answers the Rust contract before touching any work (1668)", async () => {
+    const { PlayStore, createPlayDB } = await import("@actalk/inkos-core");
+    const generate = (body: unknown) => call("/api/v1/play/runs/w1/r1/generate-image", "POST", body);
+
+    // 缺 work：此前不校验即进工具锁域，executeExplicitCapabilityTool 第一步
+    // loadWorkManifest 的 ENOENT 以 400 裸串回显本地绝对路径。次序与文案同 Rust
+    // post_play_generate_image。
+    const noEntity = { status: 400, body: { error: "entityId is required for an entity image" } };
+    expect(await generate({ target: "entity" })).toEqual(noEntity);
+    expect(await generate({})).toEqual(noEntity);
+    expect(await generate({ target: "entity", entityId: "  " })).toEqual(noEntity);
+    expect(await generate({ target: "entity", entityId: "hero" })).toEqual({ status: 404, body: { error: "entity not found: hero" } });
+    expect(await generate({ target: "scene" })).toEqual({ status: 400, body: { error: "no current scene to illustrate" } });
+    // 判定只读：不存在的 world 不得被建出来。
+    await expect(readdir(join(root, "works"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // 世界在、run 不在：同 404。工具内 PlayDB 构造会 mkdirSync(runDir)——前置
+    // 判定必须先于它，否则为一个不存在的 run 建出目录与库文件。inkos.json = 真实
+    // 项目的前置（生图链读项目配置；缺失/不合 schema 即 500 非本面语义）。实体
+    // 生图不经 LLM，端点指向不可达回环口只为满足 schema。
+    await writeFile(join(root, "inkos.json"), JSON.stringify({
+      name: "play-image", version: "0.1.0",
+      llm: {
+        service: "custom", provider: "openai", configSource: "studio", model: "fixture-model",
+        services: [{ service: "custom", name: "Mock", models: ["fixture-model"], baseUrl: "http://127.0.0.1:9/v1", apiFormat: "chat", stream: false }],
+        baseUrl: "http://127.0.0.1:9/v1", apiFormat: "chat", stream: false,
+      },
+    }), "utf-8");
+    const store = new PlayStore(root);
+    await store.createWorld({
+      id: "w1", title: "闭门工坊", premise: "A closed workshop", worldContract: "Wait for player actions",
+      visualContract: "Ink illustration", mode: "guided", language: "zh",
+    });
+    expect(await generate({ target: "entity", entityId: "hero" })).toEqual({ status: 404, body: { error: "entity not found: hero" } });
+    expect(await generate({ target: "scene" })).toEqual({ status: 400, body: { error: "no current scene to illustrate" } });
+    await expect(readdir(join(root, "works", "w1", "source", "runs"))).rejects.toMatchObject({ code: "ENOENT" });
+
+    // run 在、实体不在：查找落在工具内（PLAY_ENTITY_NOT_FOUND）——同码同文，而非
+    // 400『Select an existing entity to illustrate』。
+    await store.ensureRun("w1", "r1");
+    const db = createPlayDB(store.runDir("w1", "r1"));
+    try { db.upsertEntity({ id: "guard", type: "actor", label: "守卫", summary: "" }); } finally { db.close?.(); }
+    expect(await generate({ target: "entity", entityId: "hero" })).toEqual({ status: 404, body: { error: "entity not found: hero" } });
+
+    // 实体在、生图链未配置：扁平 {error}（Rust 同分支另带 needsCoverConfig），不再
+    // 挂 code 键——防「一律 404」的假绿，也钉住通用分支的形状。
+    vi.stubEnv("INKOS_COVER_ENDPOINT", "");
+    vi.stubEnv("INKOS_COVER_BASE_URL", "");
+    const unconfigured = await generate({ target: "entity", entityId: "guard" });
+    expect(unconfigured.status).toBe(400);
+    expect(String(unconfigured.body.error)).toContain("cover endpoint is required");
+    expect(unconfigured.body).not.toHaveProperty("code");
   });
 
   it("play-run image settings: booleans normalized and persisted in the run's image settings file", async () => {
