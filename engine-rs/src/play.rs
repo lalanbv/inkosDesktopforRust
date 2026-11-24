@@ -27,11 +27,32 @@ fn is_safe_segment(value: &str) -> bool {
         && value != ".."
 }
 
+/// 1673 号（存储模型第一批）：世界的实际根。两腿原来各写各的树——产品引擎
+/// `worlds/<id>`、Node 回退腿 `works/<id>/source`——同一个世界换腿后互不可见。
+/// 这里让产品引擎认得 Node 腿创建的世界，**读写都按同一个解析结果走**：
+///
+/// 1. `worlds/<id>` 是目录 → 用它。产品引擎既有世界的行为不变；两棵树都在时也
+///    用它（显式迁移 `migrateLegacyWorks` 会留下一份拷贝，两边各认各的仍是既有
+///    的分叉，不在本批处理）。
+/// 2. 否则 `works/<id>/source/world.json` 在 → 用 `works/<id>/source`。这是 Node
+///    回退腿创建的世界。只回退读面的话，产品引擎接下来的回合会写进 `worlds/<id>`
+///    ——同一个世界立刻分叉成两份，所以写面一并跟过去。
+/// 3. 否则 → `worlds/<id>`（新建世界的默认根，产品引擎既有的落盘位置）。
+///
+/// 两种布局下 run 与世界级文件的相对路径相同，所有读写面都经 [`world_dir`] /
+/// [`run_dir`] 取路径——改这一处即全量生效。判定只做两次 stat。
 pub fn world_dir(project_root: &Path, world_id: &str) -> Result<PathBuf, String> {
     if !is_safe_segment(world_id) {
         return Err(format!("Unsafe play path segment: {world_id}"));
     }
-    Ok(project_root.join("worlds").join(world_id))
+    let legacy = project_root.join("worlds").join(world_id);
+    if !legacy.is_dir() {
+        let node_leg = project_root.join("works").join(world_id).join("source");
+        if node_leg.join("world.json").is_file() {
+            return Ok(node_leg);
+        }
+    }
+    Ok(legacy)
 }
 
 pub fn run_dir(project_root: &Path, world_id: &str, run_id: &str) -> Result<PathBuf, String> {
@@ -252,13 +273,19 @@ fn snapshot_from_sqlite(path: &Path) -> Option<Value> {
     }
     let mut edges: Vec<Value> = Vec::new();
     {
+        // 1673 号：Node 回退腿建的库没有 edges.confidence（上游 2.0 删了这一列）。
+        // 只读快照不写库——有这一列才选它。照旧 SELECT 会在 prepare 处失败，而失败
+        // 后的回退是文件后端 = 空图，等于把有数据的世界显示成空的。
+        let has_confidence = crate::play_graph::edges_has_confidence(&conn).ok()?;
         let mut stmt = conn
-            .prepare(
-                "SELECT id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength, confidence FROM edges ORDER BY id",
-            )
+            .prepare(if has_confidence {
+                "SELECT id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength, confidence FROM edges ORDER BY id"
+            } else {
+                "SELECT id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength FROM edges ORDER BY id"
+            })
             .ok()?;
         let rows = stmt
-            .query_map([], |row| {
+            .query_map([], move |row| {
                 let value: Value =
                     serde_json::from_str(&row.get::<_, String>(4).unwrap_or_default())
                         .unwrap_or_else(|_| json!({}));
@@ -276,7 +303,11 @@ fn snapshot_from_sqlite(path: &Path) -> Option<Value> {
                     "sourceEventId": row.get::<_, String>(7)?,
                     "visibility": visibility,
                     "strength": row.get::<_, Option<f64>>(9)?,
-                    "confidence": row.get::<_, Option<f64>>(10)?,
+                    "confidence": if has_confidence {
+                        row.get::<_, Option<f64>>(10)?
+                    } else {
+                        None
+                    },
                 }))
             })
             .ok()?;
@@ -1080,6 +1111,104 @@ mod tests {
         assert_eq!(edge["strength"], 0.8);
         assert_eq!(snapshot["stateSlots"][0]["value"], 42);
         assert_eq!(snapshot["events"][0]["actionKind"], "user_input");
+    }
+
+    /// 1673 号：Node 回退腿建的库是上游 2.0 的表结构——`edges` 没有 `confidence`
+    /// 列（2.0 在 2026-08-30 删了它）。只读快照不写库，但必须原样读出有数据的世界：
+    /// 照旧 `SELECT … confidence` 会在 prepare 处失败，失败后的回退是文件后端 = 空图。
+    #[test]
+    fn sqlite_snapshot_reads_a_node_leg_database_without_confidence() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let conn = rusqlite::Connection::open(dir.path().join("play.db")).unwrap();
+            // 表结构逐字取自 TS 2.0 的 PlayDB.initializeSchema。
+            conn.execute_batch(
+                "CREATE TABLE entities (id TEXT PRIMARY KEY, type TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', created_event TEXT, updated_event TEXT);
+                 CREATE TABLE edges (id TEXT PRIMARY KEY, from_id TEXT NOT NULL, type TEXT NOT NULL, to_id TEXT NOT NULL, value_json TEXT NOT NULL DEFAULT '{}', valid_from_event TEXT NOT NULL, valid_until_event TEXT, source_event_id TEXT NOT NULL, visibility_json TEXT NOT NULL DEFAULT '{}', strength REAL);
+                 CREATE TABLE state_slots (id TEXT PRIMARY KEY, owner_entity_id TEXT, kind TEXT NOT NULL, label TEXT NOT NULL, value_json TEXT NOT NULL, updated_event TEXT NOT NULL);
+                 CREATE TABLE events (id TEXT PRIMARY KEY, turn INTEGER NOT NULL, action_kind TEXT NOT NULL, raw_input TEXT NOT NULL, outcome_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+                 INSERT INTO entities VALUES ('hero','actor','雾港来客','','',NULL,NULL);
+                 INSERT INTO edges VALUES ('rel-1','hero','ally','npc','{\"bond\":1}','e1',NULL,'e2','{}',0.8);
+                 INSERT INTO events VALUES ('e1',0,'user_input','进屋','你进门','t1');",
+            )
+            .unwrap();
+        }
+        let snapshot = play_graph_snapshot(dir.path());
+        assert_eq!(snapshot["entities"][0]["label"], "雾港来客");
+        let edge = &snapshot["edges"][0];
+        assert_eq!(edge["value"]["bond"], 1);
+        assert_eq!(edge["strength"], 0.8);
+        assert!(edge["confidence"].is_null());
+        assert_eq!(snapshot["events"][0]["actionKind"], "user_input");
+    }
+
+    /// 1673 号：根解析——`worlds/<id>` 在就用它；否则 Node 腿那棵树
+    /// （`works/<id>/source`，须有 `world.json`）在就用它；否则默认 `worlds/<id>`。
+    #[test]
+    fn world_dir_prefers_legacy_then_node_leg_then_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let legacy = |id: &str| root.join("worlds").join(id);
+        let node_leg = |id: &str| root.join("works").join(id).join("source");
+
+        // 都不在：新建世界的默认根。
+        assert_eq!(world_dir(root, "w1").unwrap(), legacy("w1"));
+
+        // 只有 Node 腿那棵树；没有 world.json 不算世界。
+        std::fs::create_dir_all(node_leg("w2")).unwrap();
+        assert_eq!(world_dir(root, "w2").unwrap(), legacy("w2"));
+        std::fs::write(node_leg("w2").join("world.json"), "{}").unwrap();
+        assert_eq!(world_dir(root, "w2").unwrap(), node_leg("w2"));
+        assert_eq!(
+            run_dir(root, "w2", "main").unwrap(),
+            node_leg("w2").join("runs").join("main")
+        );
+
+        // 两棵树都在：用 worlds/（既有产品用户的连续性）。
+        std::fs::create_dir_all(legacy("w2")).unwrap();
+        assert_eq!(world_dir(root, "w2").unwrap(), legacy("w2"));
+
+        // 同名作品不是世界：works/<id>/source 下没有 world.json 就不认。
+        std::fs::create_dir_all(node_leg("b1")).unwrap();
+        std::fs::write(node_leg("b1").join("book.json"), "{}").unwrap();
+        assert_eq!(world_dir(root, "b1").unwrap(), legacy("b1"));
+
+        assert!(world_dir(root, "..").is_err());
+        assert!(world_dir(root, "a/b").is_err());
+    }
+
+    /// 1673 号：Node 回退腿异常退出会留下未检查点的 WAL。只读连接打不开需要恢复
+    /// 的 WAL 库——回退到文件后端又是空图（与 confidence 列同族的静默失败）。
+    #[test]
+    fn sqlite_snapshot_reads_a_hot_wal_left_by_a_crashed_writer() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live");
+        let crashed = dir.path().join("crashed");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::create_dir_all(&crashed).unwrap();
+        {
+            // 写者连接开着、帧还在 WAL 里（不自动检查点）时“崩溃”。
+            let conn = rusqlite::Connection::open(live.join("play.db")).unwrap();
+            conn.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA wal_autocheckpoint=0;
+                 CREATE TABLE entities (id TEXT PRIMARY KEY, type TEXT, label TEXT, summary TEXT, status TEXT, created_event TEXT, updated_event TEXT);
+                 CREATE TABLE edges (id TEXT PRIMARY KEY, from_id TEXT, type TEXT, to_id TEXT, value_json TEXT, valid_from_event TEXT, valid_until_event TEXT, source_event_id TEXT, visibility_json TEXT, strength REAL, confidence REAL);
+                 CREATE TABLE state_slots (id TEXT PRIMARY KEY, owner_entity_id TEXT, kind TEXT, label TEXT, value_json TEXT, updated_event TEXT);
+                 CREATE TABLE events (id TEXT PRIMARY KEY, turn INTEGER, action_kind TEXT, raw_input TEXT, outcome_summary TEXT, created_at TEXT);
+                 INSERT INTO entities VALUES ('hero','actor','雾港来客','旅人','active','e1',NULL);",
+            )
+            .unwrap();
+            // 崩溃现场 = db + wal，没有 shm。
+            std::fs::copy(live.join("play.db"), crashed.join("play.db")).unwrap();
+            std::fs::copy(live.join("play.db-wal"), crashed.join("play.db-wal")).unwrap();
+            assert!(live.join("play.db-wal").is_file());
+            let snapshot = play_graph_snapshot(&crashed);
+            assert_eq!(
+                snapshot["entities"][0]["label"], "雾港来客",
+                "崩溃遗留的 WAL 里有数据，快照却读不出：{snapshot}"
+            );
+        }
     }
 
     #[tokio::test]

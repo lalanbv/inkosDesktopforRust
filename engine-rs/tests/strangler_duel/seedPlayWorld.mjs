@@ -44,6 +44,8 @@ if (command === "create") {
   });
   await store.ensureRun(world.id, "main");
   const db = core.createPlayDB(store.runDir(world.id, "main"));
+  // 图谱里放一个实体：产品引擎要能从 Node 腿建的 play.db 里读出它。
+  db.upsertEntity({ id: "ts-hero", type: "actor", label: "雾港来客", summary: "" });
   db.close?.();
   await store.appendTranscriptTurn(world.id, "main", {
     role: "user",

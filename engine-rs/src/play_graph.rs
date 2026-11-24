@@ -96,7 +96,38 @@ fn ensure_sqlite_schema(conn: &rusqlite::Connection) -> Result<(), String> {
             id TEXT PRIMARY KEY, turn INTEGER NOT NULL, action_kind TEXT NOT NULL,
             raw_input TEXT NOT NULL, outcome_summary TEXT, created_at TEXT NOT NULL);",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    ensure_confidence_column(conn)
+}
+
+/// `edges` 表是否有 `confidence` 列。
+///
+/// 1673 号：这一列是 TS 1.x 的（2026-05 起），上游 2.0 在 2026-08-30 删掉了它。
+/// Node 回退腿建的 `play.db` 因此没有这一列——`CREATE TABLE IF NOT EXISTS` 对已
+/// 存在的表不补列，之后凡带这一列的 SELECT / INSERT 都会报「no such column」。
+pub(crate) fn edges_has_confidence(conn: &rusqlite::Connection) -> Result<bool, String> {
+    let mut statement = conn
+        .prepare("PRAGMA table_info(edges)")
+        .map_err(|e| e.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?;
+    for column in columns {
+        if column.map_err(|e| e.to_string())? == "confidence" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// 读写后端打开时补上 `confidence` 列。加列是纯增量：Node 腿的 INSERT 不列它、
+/// 读到也不认识，两腿互不影响。
+fn ensure_confidence_column(conn: &rusqlite::Connection) -> Result<(), String> {
+    if edges_has_confidence(conn)? {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE edges ADD COLUMN confidence REAL;")
+        .map_err(|e| e.to_string())
 }
 
 impl PlayGraphDb {
@@ -500,6 +531,27 @@ fn snapshot_from_sqlite(conn: &rusqlite::Connection) -> Value {
         };
         collected
     }
+    fn edge_row_with_confidence(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+        let value: Value =
+            serde_json::from_str(row.get::<_, String>(4).unwrap_or_default().as_str())
+                .unwrap_or_else(|_| json!({}));
+        let visibility: Value =
+            serde_json::from_str(row.get::<_, String>(8).unwrap_or_default().as_str())
+                .unwrap_or_else(|_| json!({}));
+        Ok(json!({
+            "id": row.get::<_, String>(0)?,
+            "fromId": row.get::<_, String>(1)?,
+            "type": row.get::<_, String>(2)?,
+            "toId": row.get::<_, String>(3)?,
+            "value": value,
+            "validFromEventId": row.get::<_, String>(5)?,
+            "validUntilEventId": row.get::<_, Option<String>>(6)?,
+            "sourceEventId": row.get::<_, String>(7)?,
+            "visibility": visibility,
+            "strength": row.get::<_, Option<f64>>(9)?,
+            "confidence": row.get::<_, Option<f64>>(10)?,
+        }))
+    }
 
     let entities = query_rows(conn,
         "SELECT id, type, label, summary, status, created_event, updated_event FROM entities ORDER BY id",
@@ -515,26 +567,35 @@ fn snapshot_from_sqlite(conn: &rusqlite::Connection) -> Value {
             }))
         },
     );
-    let edges = query_rows(conn,
-        "SELECT id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength, confidence FROM edges ORDER BY id",
-        |row| {
-            let value: Value = serde_json::from_str(row.get::<_, String>(4).unwrap_or_default().as_str()).unwrap_or_else(|_| json!({}));
-            let visibility: Value = serde_json::from_str(row.get::<_, String>(8).unwrap_or_default().as_str()).unwrap_or_else(|_| json!({}));
-            Ok(json!({
-                "id": row.get::<_, String>(0)?,
-                "fromId": row.get::<_, String>(1)?,
-                "type": row.get::<_, String>(2)?,
-                "toId": row.get::<_, String>(3)?,
-                "value": value,
-                "validFromEventId": row.get::<_, String>(5)?,
-                "validUntilEventId": row.get::<_, Option<String>>(6)?,
-                "sourceEventId": row.get::<_, String>(7)?,
-                "visibility": visibility,
-                "strength": row.get::<_, Option<f64>>(9)?,
-                "confidence": row.get::<_, Option<f64>>(10)?,
-            }))
-        },
-    );
+    // 1673 号：Node 回退腿建的库没有 edges.confidence——按实际表结构取，有这一列
+    // 才选它（读写后端打开时已补列；这里不依赖补列一定发生过）。
+    let edges = if edges_has_confidence(conn).unwrap_or(false) {
+        query_rows(conn,
+            "SELECT id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength, confidence FROM edges ORDER BY id",
+            edge_row_with_confidence,
+        )
+    } else {
+        query_rows(conn,
+            "SELECT id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength FROM edges ORDER BY id",
+            |row| {
+                let value: Value = serde_json::from_str(row.get::<_, String>(4).unwrap_or_default().as_str()).unwrap_or_else(|_| json!({}));
+                let visibility: Value = serde_json::from_str(row.get::<_, String>(8).unwrap_or_default().as_str()).unwrap_or_else(|_| json!({}));
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "fromId": row.get::<_, String>(1)?,
+                    "type": row.get::<_, String>(2)?,
+                    "toId": row.get::<_, String>(3)?,
+                    "value": value,
+                    "validFromEventId": row.get::<_, String>(5)?,
+                    "validUntilEventId": row.get::<_, Option<String>>(6)?,
+                    "sourceEventId": row.get::<_, String>(7)?,
+                    "visibility": visibility,
+                    "strength": row.get::<_, Option<f64>>(9)?,
+                    "confidence": Value::Null,
+                }))
+            },
+        )
+    };
     let state_slots = query_rows(conn,
         "SELECT id, owner_entity_id, kind, label, value_json, updated_event FROM state_slots ORDER BY id",
         |row| {
@@ -1265,6 +1326,62 @@ mod tests {
         let read_view = crate::play::play_graph_snapshot(dir.path());
         assert_eq!(read_view["entities"][0]["id"], "actor_player");
         assert_eq!(read_view["events"][0]["id"], "evt-1");
+    }
+
+    /// 1673 号：打开 Node 回退腿建的库（上游 2.0 的表结构——`edges` 没有
+    /// `confidence` 列）时补列：已有的行读得出来，产品引擎写得进去，Node 腿写法
+    /// （INSERT 不列 `confidence`）在补列之后照常。
+    #[test]
+    fn node_leg_database_gets_the_confidence_column_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("play.db");
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            // 表结构逐字取自 TS 2.0 的 PlayDB.initializeSchema。
+            conn.execute_batch(
+                "CREATE TABLE entities (id TEXT PRIMARY KEY, type TEXT NOT NULL, label TEXT NOT NULL, summary TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT '', created_event TEXT, updated_event TEXT);
+                 CREATE TABLE edges (id TEXT PRIMARY KEY, from_id TEXT NOT NULL, type TEXT NOT NULL, to_id TEXT NOT NULL, value_json TEXT NOT NULL DEFAULT '{}', valid_from_event TEXT NOT NULL, valid_until_event TEXT, source_event_id TEXT NOT NULL, visibility_json TEXT NOT NULL DEFAULT '{}', strength REAL);
+                 CREATE TABLE state_slots (id TEXT PRIMARY KEY, owner_entity_id TEXT, kind TEXT NOT NULL, label TEXT NOT NULL, value_json TEXT NOT NULL, updated_event TEXT NOT NULL);
+                 CREATE TABLE events (id TEXT PRIMARY KEY, turn INTEGER NOT NULL, action_kind TEXT NOT NULL, raw_input TEXT NOT NULL, outcome_summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+                 INSERT INTO edges VALUES ('rel-node','hero','ally','npc','{}','e1',NULL,'e2','{}',0.5);",
+            )
+            .unwrap();
+            assert!(!edges_has_confidence(&conn).unwrap());
+        }
+        let mut db = open_play_graph_db(dir.path()).unwrap();
+        let edge_of = |snapshot: &Value, id: &str| {
+            snapshot["edges"]
+                .as_array()
+                .and_then(|edges| edges.iter().find(|edge| edge["id"] == id))
+                .cloned()
+                .unwrap_or_else(|| panic!("快照里没有边 {id}：{snapshot}"))
+        };
+        // 已有的那条边读得出来，confidence 为 null。
+        let node_edge = edge_of(&db.snapshot(), "rel-node");
+        assert!(node_edge["confidence"].is_null());
+        assert_eq!(node_edge["strength"], 0.5);
+        // 产品引擎写得进带 confidence 的边。
+        db.upsert_edge(&json!({
+            "id": "rel-engine", "fromId": "hero", "type": "rival", "toId": "npc",
+            "value": {}, "validFromEventId": "e1", "validUntilEventId": null,
+            "sourceEventId": "e2", "visibility": {}, "strength": 0.9, "confidence": 0.7,
+        }))
+        .unwrap();
+        assert_eq!(edge_of(&db.snapshot(), "rel-engine")["confidence"], 0.7);
+        drop(db);
+        // 列真的补上了：Node 腿写法照常，读回 null；只读快照两条边都读得出。
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        assert!(edges_has_confidence(&conn).unwrap());
+        conn.execute(
+            "INSERT INTO edges (id, from_id, type, to_id, value_json, valid_from_event, valid_until_event, source_event_id, visibility_json, strength) VALUES ('rel-late','hero','ally','npc2','{}','e1',NULL,'e3','{}',0.3)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let read_view = crate::play::play_graph_snapshot(dir.path());
+        assert_eq!(read_view["edges"].as_array().map(Vec::len), Some(3));
+        assert_eq!(edge_of(&read_view, "rel-engine")["confidence"], 0.7);
+        assert!(edge_of(&read_view, "rel-late")["confidence"].is_null());
     }
 
     #[test]

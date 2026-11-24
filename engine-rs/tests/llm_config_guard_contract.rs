@@ -14,6 +14,9 @@
 //!   1670 号第二批 20 条），未配置引擎上一律 400。新增模型面必须登记在此。
 //! - `UNGUARDED_ROUTES`：**不该守**的面——诊断、启发式分析、嵌入可选的检索、
 //!   封面服务。错守会让未配置项目上这些功能被误拦。
+//! - `UNGUARDED_ROUTES_PROBED_STRUCTURALLY`：不该守、且**不能在测试里真打**的面
+//!   （处理器无条件出网）。负面清单对它改用结构断言：组合层里是裸挂载
+//!   （1673 号）。
 //! - 产品路径回归：启动路由器是占位、项目配置可用时，模型调用必须走项目配置
 //!   （1670 号修掉两处绕过项目配置直调启动路由器的处理器）。
 //!
@@ -127,6 +130,16 @@ const UNGUARDED_ROUTES: &[(Method, &str, &str)] = &[
         "互动叙事生图：走封面服务，不是文本模型",
     ),
 ];
+
+/// 不该守、但**不能在测试里真打**的面（路径, 组合层挂载表达式, 取证结论）：
+/// 处理器会打外网。守卫是 `route_layer`——未命中方法的 405 不经过守卫，所以也没法
+/// 用「错方法探测」区分有没有守卫。负面清单对它改用结构断言：组合层里这条路由
+/// 必须是裸挂载，不经 `guarded_post` / `llm_guarded`。
+const UNGUARDED_ROUTES_PROBED_STRUCTURALLY: &[(&str, &str, &str)] = &[(
+    "/api/v1/radar/rankings",
+    "post(ops_routes::post_radar_rankings)",
+    "雷达榜单：只抓网页（番茄 / 起点两个源），不调模型；处理器无条件出网，测试不打真实站点",
+)];
 
 struct App {
     router: axum::Router,
@@ -384,6 +397,39 @@ async fn faces_that_do_not_need_the_text_model_are_not_guarded() {
     let (status, body) = call(&app, Method::POST, "/api/v1/daemon/stop", Some(json!({}))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"], "Daemon not running", "{body}");
+}
+
+/// 负面清单（出网面）：组合层里是裸挂载。另用路由不接受的 method 打一下——405 由
+/// 方法匹配处直接应答，处理器不运行（不出网），顺带钉住这条路由确实挂着。
+#[tokio::test]
+async fn routes_that_reach_the_network_are_not_guarded_either() {
+    let composition = include_str!("../src/server/mod.rs");
+    for (path, mount, why) in UNGUARDED_ROUTES_PROBED_STRUCTURALLY {
+        let mut lines = composition
+            .lines()
+            .skip_while(|line| !line.contains(&format!("\"{path}\"")));
+        let declaration = lines
+            .next()
+            .unwrap_or_else(|| panic!("组合层里应有路由 {path}"));
+        assert!(
+            declaration.trim_start().starts_with('"'),
+            "{path}：路径字面量应独占一行，实得 {declaration}"
+        );
+        let mounted = lines
+            .next()
+            .unwrap_or_else(|| panic!("{path} 之后应有挂载行"));
+        assert!(
+            mounted.contains(mount),
+            "{path}（{why}）：挂载行应为 {mount}，实得 {}",
+            mounted.trim()
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    seed_engine_book(dir.path());
+    let app = build(dir.path(), unconfigured()).await;
+    let (status, body) = call(&app, Method::GET, "/api/v1/radar/rankings", None).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "{body}");
 }
 
 #[tokio::test]

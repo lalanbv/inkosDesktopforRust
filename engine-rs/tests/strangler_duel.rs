@@ -3391,28 +3391,23 @@ fn seed_works_world(root: &Path, args: &[&str]) {
     );
 }
 
-/// 1672 号：互动叙事（interactive world）换腿的数据根——**现状钉，不是契约**。
+/// 1672 号起：互动叙事（interactive world）换腿的数据根——**现状钉，不是契约**。
 ///
-/// 两腿都有互动叙事的读写面，各写各的树，而且有两层互相独立的差异：
+/// 存储模型定线为「自动双向桥接」（1673 号，分三批）。本测试钉的是**还没桥接的
+/// 那个方向**和一条解析规则：
 ///
-/// 1. **根不同**：产品引擎读写 `worlds/<id>/runs/<run>`（`play::world_dir` /
-///    `run_dir`，没有 works 兜底）；2.0 TS 腿读写 `works/<id>/source/runs/<run>`
-///    （`PlayStore` 经 `workDirectory`，按 works 清单发现世界）。
-/// 2. **图谱后端不同**：TS 腿的 `PlayDB` 只用 sqlite（`node:sqlite` 建
-///    `play.db`），读取面把「`play.db` 不存在」当作「运行不存在」；产品引擎的
-///    工厂是「`play.db` 已存在才走 sqlite，否则文件后端 `play-graph.json`」——
-///    新建的运行永远走文件后端。
+/// - 「产品引擎创建 → Node 腿读」仍未桥接（第二批）：产品引擎新建的运行走文件
+///   后端 `play-graph.json`，Node 腿的读取面只认 `play.db`，且按 works 清单发现
+///   世界——迁移前 404 `PLAY_WORLD_NOT_FOUND`，迁移（拷贝）后 404
+///   `PLAY_RUN_NOT_FOUND`。
+/// - 「Node 腿创建 → 产品引擎读写」已桥接（第一批，见
+///   [`interactive_world_node_created_world_is_shared_duel`]）。
+/// - 解析规则「`worlds/<id>` 在就用它」：显式迁移会留下 `works/<id>/source` 一份
+///   拷贝，两棵树都在时产品引擎仍用 `worlds/<id>`——既有产品用户的连续性不变，
+///   但与那份拷贝分叉（第三批处理：迁移不再拷贝 worlds；两棵树都在时做一次对账）。
 ///
-/// 本测试让两腿**各自原生**创建一个世界再互读，逐步钉住现状：①各腿只读得到
-/// 自己创建的；②TS 侧旧数据迁移（`migrateLegacyWorks`，拷贝）之后，TS 腿认出
-/// 产品引擎的世界却仍读不到它的运行（没有 `play.db`）；③迁移之后各写各的树。
-///
-/// 读取面的「不存在 → 404」两腿同码同形（1672 号把产品引擎从 200 空壳对齐过
-/// 来，单测在 `tests/play_run_not_found.rs`）；本测试钉的是剩下的存储层差异。
-///
-/// 不断言修复：存储模型定线（产品引擎迁到 works，或自动双向桥接）后，这里的
-/// 断言要改成「互读可见」——它就是为了在那天变红而存在的。读取面单边兜底不是
-/// 修复：同一个世界 id 会在两棵树上各有一份、状态分叉。
+/// 不断言修复：第二批、第三批落地时，对应断言要翻成「互读可见」「不再分叉」——
+/// 它就是为了在那天变红而存在的。
 #[tokio::test]
 async fn interactive_world_storage_roots_duel() {
     if !duel_enabled() {
@@ -3457,7 +3452,7 @@ async fn interactive_world_storage_roots_duel() {
     .await
     .unwrap();
 
-    // TS 腿原生创建：works/w-ts/source/…
+    // TS 腿原生创建：works/w-ts/source/…（第一批已桥接，这里只留一条对照）。
     seed_works_world(&root, &["create", "w-ts"]);
 
     // 文件系统面：两棵树、两种图谱后端。
@@ -3500,7 +3495,7 @@ async fn interactive_world_storage_roots_duel() {
     let run_path = |id: &str| format!("/api/v1/play/runs/{id}/main");
     let turns = |body: &Value| body["transcript"].as_array().map(Vec::len).unwrap_or(0);
 
-    // ① 各腿只读得到自己创建的世界。
+    // ① 产品引擎创建的世界：自己读得到；Node 腿读不到（未桥接的方向）。
     let (status, body) = get_json(&rust, &run_path("w-rust")).await;
     assert_eq!(
         (status, body["title"].clone(), turns(&body)),
@@ -3513,18 +3508,18 @@ async fn interactive_world_storage_roots_duel() {
         (404, json!("PLAY_WORLD_NOT_FOUND")),
         "{body}"
     );
+    // 对照：Node 腿创建的世界两腿都读得到（第一批）。
     let (status, body) = get_json(&ts, &run_path("w-ts")).await;
     assert_eq!(
         (status, body["title"].clone(), turns(&body)),
         (200, json!("TS 腿世界"), 1),
         "{body}"
     );
-    // 「不存在 → 404」两腿同码同形（1672 号把产品引擎从 200 空壳对齐过来——
-    // 空壳会把「数据在另一棵树上」伪装成「全新的空世界」）。
     let (status, body) = get_json(&rust, &run_path("w-ts")).await;
     assert_eq!(
-        (status, body),
-        (404, json!({ "error": { "code": "PLAY_WORLD_NOT_FOUND" } }))
+        (status, body["title"].clone(), turns(&body)),
+        (200, json!("TS 腿世界"), 1),
+        "{body}"
     );
     // 世界在、运行不在：两腿都是 PLAY_RUN_NOT_FOUND。
     let not_found = json!({ "error": { "code": "PLAY_RUN_NOT_FOUND" } });
@@ -3552,9 +3547,10 @@ async fn interactive_world_storage_roots_duel() {
             .is_file(),
         "迁移把产品引擎的运行拷进 works/"
     );
+    // 两棵树都在：产品引擎仍用 worlds/ 那份（既有行为不变）。
     let (status, body) = get_json(&rust, &run_path("w-rust")).await;
     assert_eq!((status, turns(&body)), (200, 1), "{body}");
-    // TS 腿按 works 清单认出了这个世界，但它的读取面要 play.db——产品引擎的运行
+    // Node 腿按 works 清单认出了这个世界，但它的读取面要 play.db——产品引擎的运行
     // 没有这个文件。
     let (status, body) = get_json(&ts, &run_path("w-rust")).await;
     assert_eq!(
@@ -3562,15 +3558,8 @@ async fn interactive_world_storage_roots_duel() {
         (404, json!("PLAY_RUN_NOT_FOUND")),
         "{body}"
     );
-    // 迁移是单向的（legacy → works）：TS 腿原生的世界产品引擎仍读不到。
-    let (status, body) = get_json(&rust, &run_path("w-ts")).await;
-    assert_eq!(
-        (status, body["error"]["code"].clone()),
-        (404, json!("PLAY_WORLD_NOT_FOUND")),
-        "{body}"
-    );
 
-    // ③ 迁移之后再写：各写各的树。
+    // ③ 迁移之后再写：产品引擎写进 worlds/ 那份——与 works/ 的拷贝分叉（第三批处理）。
     inkos_engine::play::append_transcript_turn(
         &root,
         "w-rust",
@@ -3582,15 +3571,138 @@ async fn interactive_world_storage_roots_duel() {
     .unwrap();
     let (_, body) = get_json(&rust, &run_path("w-rust")).await;
     assert_eq!(turns(&body), 2);
+    let lines = |path: &Path| {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count()
+    };
+    let copied_run = root
+        .join("works")
+        .join("w-rust")
+        .join("source")
+        .join("runs")
+        .join("main");
+    assert_eq!(
+        (
+            lines(&rust_run.join("transcript.jsonl")),
+            lines(&copied_run.join("transcript.jsonl")),
+        ),
+        (2, 1),
+        "两棵树都在：产品引擎写 worlds/ 那份，works/ 的拷贝停在迁移时刻"
+    );
+    assert!(!copied_run.join("play.db").exists());
     let (status, _) = get_json(&ts, &run_path("w-rust")).await;
-    assert_eq!(status, 404);
-    seed_works_world(&root, &["append-turn", "w-ts"]);
-    let (_, body) = get_json(&ts, &run_path("w-ts")).await;
-    assert_eq!(turns(&body), 2);
-    let (status, _) = get_json(&rust, &run_path("w-ts")).await;
     assert_eq!(status, 404);
 
     eprintln!(
-        "互动叙事数据根现状钉：根（worlds/ ↔ works/<id>/source）与图谱后端（play-graph.json ↔ play.db）两层差异；迁移是拷贝且救不了运行读取；「不存在 → 404」两腿同码"
+        "互动叙事数据根现状钉：产品引擎创建 → Node 腿读仍未桥接（文件后端 + works 清单）；两棵树都在时产品引擎用 worlds/ 那份、与拷贝分叉"
+    );
+}
+
+/// 1673 号（存储模型第一批）：Node 回退腿创建的世界，产品引擎读得到、接得上，而且
+/// **不分叉**——产品引擎的后续回合写在同一棵树（`works/<id>/source`）上，Node 腿
+/// 随后读得到那一轮。图谱层同样双向：Node 腿写进 `play.db` 的实体产品引擎读得出，
+/// 产品引擎补进图谱的实体 Node 腿读得出（两腿的 sqlite 表结构差一列
+/// `edges.confidence`——产品引擎读写时补上，只读快照有这列才选它）。
+///
+/// 世界 id 用会话 id 的形态：两腿都是「世界与会话 1:1 绑定，世界 id 即会话 id」，
+/// `PlayHud` 请求的正是 `/play/runs/<sessionId>/main`。
+#[tokio::test]
+async fn interactive_world_node_created_world_is_shared_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+    let session_id = "1783099000073-hud";
+    let path = format!("/api/v1/play/runs/{session_id}/main");
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+    let shape = |body: &Value| {
+        (
+            body["transcript"].as_array().map(Vec::len).unwrap_or(0),
+            body["graph"]["entities"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or(0),
+        )
+    };
+
+    // PlayHud 的请求形态：世界还没创建时两腿都是 404（HUD 对 404 静默回落到空状态）。
+    let not_found = json!({ "error": { "code": "PLAY_WORLD_NOT_FOUND" } });
+    let (status, body) = get_json(&rust, &path).await;
+    assert_eq!(
+        (status, body.clone()),
+        (404, not_found.clone()),
+        "产品引擎：{body}"
+    );
+    let (status, body) = get_json(&ts, &path).await;
+    assert_eq!((status, body.clone()), (404, not_found), "Node 腿：{body}");
+
+    // Node 腿创建（与其 play_start 同一份写入面，世界 id = 会话 id）+ 图谱里一个实体。
+    seed_works_world(&root, &["create", session_id]);
+    let node_run = root
+        .join("works")
+        .join(session_id)
+        .join("source")
+        .join("runs")
+        .join("main");
+
+    // 产品引擎读得到：标题、转录、图谱实体都来自 Node 腿那棵树。
+    let (status, body) = get_json(&rust, &path).await;
+    assert_eq!(status, 200, "产品引擎读不到 Node 腿创建的世界：{body}");
+    assert_eq!(body["title"], "TS 腿世界", "{body}");
+    assert_eq!(
+        shape(&body),
+        (1, 1),
+        "产品引擎读不出 Node 腿写进 play.db 的内容：{body}"
+    );
+    let (status, body) = get_json(&ts, &path).await;
+    assert_eq!((status, shape(&body)), (200, (1, 1)), "Node 腿：{body}");
+
+    // 不分叉：产品引擎续写一轮、图谱补一个实体，都落在 Node 腿那棵树上。
+    inkos_engine::play::append_transcript_turn(
+        &root,
+        session_id,
+        "main",
+        "assistant",
+        "产品引擎接上的那一轮",
+    )
+    .await
+    .unwrap();
+    let mut graph = inkos_engine::play_graph::open_play_graph_db(&node_run).unwrap();
+    graph
+        .upsert_entity(&json!({
+            "id": "engine-hero", "type": "actor", "label": "引擎来客", "summary": "",
+        }))
+        .unwrap();
+    drop(graph);
+    assert!(
+        !root.join("worlds").join(session_id).exists(),
+        "产品引擎另起了 worlds/<id> 一棵树——分叉"
+    );
+    let transcript = std::fs::read_to_string(node_run.join("transcript.jsonl")).unwrap();
+    assert_eq!(
+        transcript
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count(),
+        2,
+        "{transcript}"
+    );
+
+    // 两腿都看到 2 轮、2 个实体。
+    let (status, body) = get_json(&rust, &path).await;
+    assert_eq!((status, shape(&body)), (200, (2, 2)), "产品引擎：{body}");
+    let (status, body) = get_json(&ts, &path).await;
+    assert_eq!((status, shape(&body)), (200, (2, 2)), "Node 腿：{body}");
+
+    eprintln!(
+        "互动叙事第一批：Node 腿创建的世界产品引擎读得到、原地续写不分叉，图谱双向可见（含 edges.confidence 补列）"
     );
 }
