@@ -1386,8 +1386,12 @@ pub async fn post_workspace_inspiration(
         format!("当前章节：\n{chapter_content}")
     });
 
+    // 1670 号：此前直调 `runtime.router`（启动路由器）——桌壳直启不注入
+    // INKOS_LLM_*，启动路由器恒为未配置占位，项目配好了模型也连不上 discard
+    // 端点。与其余模型面一致走 effective_router 热解析。
     match runtime
-        .router
+        .effective_router()
+        .await
         .chat(
             "inspiration",
             vec![

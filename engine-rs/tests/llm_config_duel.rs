@@ -399,9 +399,11 @@ async fn llm_config_error_duel() {
     .await;
     assert_eq!(status, 200, "建会话失败：{body}");
 
-    // 两腿各自必须符合契约（防「对齐数据=回声室」），再断言 error 全等。
+    // 两腿各自必须符合契约（防「对齐数据=回声室」），再断言 error 全等。载荷取
+    // 能通过 TS 腿各自入参校验的形态（TS 的配置检查在处理器内部、校验之后）。
     let agent_body = json!({ "instruction": "你好", "sessionId": session_id }).to_string();
-    let faces: [(&str, &str, String); 3] = [
+    let reference_text = "这是一段足够长的参考文本，用来做文风分析。".repeat(6);
+    let faces: Vec<(&str, &str, String)> = vec![
         (
             "write-next",
             "/api/v1/books/b1/write-next",
@@ -409,6 +411,33 @@ async fn llm_config_error_duel() {
         ),
         ("audit", "/api/v1/books/b1/audit/1", "{}".to_string()),
         ("agent", "/api/v1/agent", agent_body),
+        // 1670 号第二批守卫里两腿都有的面。
+        (
+            "style analyze",
+            "/api/v1/style/analyze",
+            json!({ "text": reference_text }).to_string(),
+        ),
+        (
+            "imitation init",
+            "/api/v1/imitation/init",
+            json!({
+                "title": "仿写",
+                "referenceText": reference_text,
+                "storyIdea": "一个点子",
+            })
+            .to_string(),
+        ),
+        ("radar scan", "/api/v1/radar/scan", "{}".to_string()),
+        (
+            "radar analyze",
+            "/api/v1/radar/analyze",
+            json!({ "selection": { "platforms": [], "categories": [] } }).to_string(),
+        ),
+        (
+            "director directions",
+            "/api/v1/director/directions",
+            json!({ "inspiration": { "premise": "镜中图书馆" }, "count": 3 }).to_string(),
+        ),
     ];
     for (name, path, body) in faces {
         let (ts_status, ts_body) = post_json(&ts, path, &body).await;
@@ -426,7 +455,7 @@ async fn llm_config_error_duel() {
         );
     }
 
-    eprintln!("LLM 未配置对跑通过：write-next / audit / agent 双腿 400 LLM_CONFIG_ERROR 同码同文");
+    eprintln!("LLM 未配置对跑通过：write-next / audit / agent / 文风分析 / 仿写创建 / 雷达扫描与分析 / 导演方向 八面双腿 400 LLM_CONFIG_ERROR 同码同文");
 }
 
 /// 真实引擎二进制的产品路径直证：桌壳直启不注入 `INKOS_LLM_*` → bin 的缺省

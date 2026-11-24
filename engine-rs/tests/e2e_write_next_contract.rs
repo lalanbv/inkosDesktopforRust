@@ -9632,13 +9632,14 @@ mod agent67_e2e {
     }
 
     #[tokio::test]
-    async fn short_run_invalid_draft_and_missing_title_fail_with_502() {
+    async fn short_run_execution_failure_is_500_and_missing_title_is_400() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         fixture_project(&root);
-        // 893 号切链：short_run 走 2.0 结构化环——outline 轮 500 → 502 统一
-        // 错误面（AGENT_ACTION_FAILED；SSE-only 旧 mock58 不再兼容结构化请求，
-        // 失败面由 2.0 mock 显式注入）。
+        // 893 号切链：short_run 走 2.0 结构化环——outline 轮 500 → 确认动作错误
+        // 面（SSE-only 旧 mock58 不再兼容结构化请求，失败面由 2.0 mock 显式注入）。
+        // 1670 号对齐上游 b399a8d3：执行失败 = 500 INKOS_ACTION_ERROR + 语言前缀
+        // （此前 502 AGENT_ACTION_FAILED 原文——端口照搬的是重构前的 TS 形态）。
         let (llm, _mock_calls) =
             llm_mock_short_v2(vec![("submit_short_outline", MockTurn::Fail)]).await;
         let app = app67(rt67(&root, &llm));
@@ -9660,17 +9661,17 @@ mod agent67_e2e {
             )),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
-        assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
-        assert!(
-            !parsed["error"]["message"]
-                .as_str()
-                .unwrap_or_default()
-                .is_empty(),
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(parsed["error"]["code"], "INKOS_ACTION_ERROR");
+        let message = parsed["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.starts_with("InkOS 动作失败："), "body: {parsed}");
+        assert_eq!(
+            parsed["response"], parsed["error"]["message"],
             "body: {parsed}"
         );
 
-        // create_book 缺 title → 502 + 中文缺字段文案（TS：ApiError 被分支 catch 转写）。
+        // create_book 缺 title → 派发期载荷缺失 = 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE
+        // + 中文缺字段文案原文（TS requirePayloadText / 显式校验抛 ApiError 原样透出）。
         let (status, parsed) = call(
             app,
             "POST",
@@ -9680,8 +9681,11 @@ mod agent67_e2e {
             )),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
-        assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -9689,6 +9693,11 @@ mod agent67_e2e {
                 .contains("确认建书缺少书名"),
             "body: {parsed}"
         );
+        // 载荷缺失是请求问题，不带「动作失败」前缀。
+        assert!(!parsed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("InkOS 动作失败"));
     }
 
     #[tokio::test]
@@ -13239,7 +13248,7 @@ mod play73_e2e {
     }
 
     #[tokio::test]
-    async fn play_start_missing_title_fails_with_502() {
+    async fn play_start_missing_title_is_a_payload_error() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let llm = mock_play_llm().await;
@@ -13259,8 +13268,13 @@ mod play73_e2e {
             Some(r#"{"instruction":"开世界","sessionId":"1782991000001-play02","actionSource":"button","requestedIntent":"play_start"}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
-        assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
+        // 1670 号：派发期载荷缺失 = 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE（TS
+        // ApiError 原样透出）；此前落 502 AGENT_ACTION_FAILED。
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -13778,7 +13792,8 @@ mod image74_e2e {
             .iter()
             .all(|n| n["id"] != "end_good"));
 
-        // 缺 nodeId → 502 + 中文文案。
+        // 缺 nodeId → 派发期载荷缺失：400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE +
+        // 中文文案原文（1670 号对齐上游；此前 502 AGENT_ACTION_FAILED）。
         let (status, parsed) = call(
             app,
             "POST",
@@ -13786,7 +13801,11 @@ mod image74_e2e {
             Some(r#"{"instruction":"删","sessionId":"1782992000000-film01","actionSource":"button","requestedIntent":"remove_node","actionPayload":{"removeNode":{}}}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -13932,7 +13951,8 @@ mod translation75_e2e {
             .contains("Translation project \"山之书\" created."));
         assert!(exec["result"].as_str().unwrap().contains("Chapters: 1"));
 
-        // 缺 filePath → 502 中文文案。
+        // 缺 filePath → 派发期载荷缺失：400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE +
+        // 中文文案原文（1670 号对齐上游）。
         let (status, parsed) = call(
             app.clone(),
             "POST",
@@ -13940,7 +13960,11 @@ mod translation75_e2e {
             Some(r#"{"instruction":"翻译","sessionId":"1782993000000-tr01","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"sourceLanguage":"en","targetLanguage":"zh"}}}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -13949,7 +13973,8 @@ mod translation75_e2e {
             "body: {parsed}"
         );
 
-        // 文件不存在 → 502（创建失败面）。
+        // 文件不存在 → 执行失败面：500 INKOS_ACTION_ERROR + 语言前缀（TS
+        // formatAgentActionFailure 现行形态）。
         let (status, parsed) = call(
             app,
             "POST",
@@ -13957,7 +13982,18 @@ mod translation75_e2e {
             Some(r#"{"instruction":"翻译","sessionId":"1782993000000-tr01","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"filePath":"ghost.txt","sourceLanguage":"en","targetLanguage":"zh"}}}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"], "INKOS_ACTION_ERROR",
+            "body: {parsed}"
+        );
+        assert!(
+            parsed["error"]["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("InkOS 动作失败："),
+            "body: {parsed}"
+        );
     }
 
     /// 975 号：三输入形态确认卡（sourceText+glossary / registered sources / 歧义守卫）。
@@ -14060,7 +14096,8 @@ mod translation75_e2e {
         assert_eq!(lineage[0]["sourceArtifactId"], artifact_id);
         assert!(lineage[0]["sourceRevisionId"].is_string());
 
-        // 歧义守卫：filePath + sourceText 并给 → 502（CREATION_SOURCE_CONFLICT 执行面）。
+        // 歧义守卫：filePath + sourceText 并给 → 执行失败面（CREATION_SOURCE_CONFLICT）：
+        // 500 INKOS_ACTION_ERROR + 语言前缀（1670 号对齐上游；此前 502）。
         let (status, parsed) = call(
             app,
             "POST",
@@ -14068,7 +14105,11 @@ mod translation75_e2e {
             Some(r#"{"instruction":"歧义","sessionId":"1782993000000-tr03","actionSource":"button","requestedIntent":"translation_create","actionPayload":{"translationCreate":{"filePath":"novel.txt","sourceText":"双给","sourceLanguage":"en","targetLanguage":"zh"}}}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"], "INKOS_ACTION_ERROR",
+            "body: {parsed}"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -14162,7 +14203,12 @@ mod translation75_e2e {
             Some(r#"{"instruction":"骨架","sessionId":"1782993000001-tr02","actionSource":"button","requestedIntent":"draft_structure","actionPayload":{"draftStructure":{"instruction":"i","extra":1}}}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        // 1670 号：派发期载荷缺失（缺 project id）= 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE。
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -14357,7 +14403,12 @@ mod script76_e2e {
             Some(r#"{"instruction":"写剧本","sessionId":"1782994000000-sc01","actionSource":"button","requestedIntent":"script_create"}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        // 派发期载荷缺失 = 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE（1670 号对齐上游）。
+        assert_eq!(status, StatusCode::BAD_REQUEST, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -14427,7 +14478,8 @@ mod script76_e2e {
             Some(r#"{"instruction":"分镜","sessionId":"1782994000001-sb01","actionSource":"button","requestedIntent":"storyboard_create"}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        // 派发期载荷缺失 = 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE（1670 号对齐上游）。
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -14503,7 +14555,12 @@ mod script76_e2e {
             Some(r#"{"instruction":"封面","sessionId":"1782994000002-cv01","actionSource":"button","requestedIntent":"generate_cover"}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        // 派发期载荷缺失 = 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE（1670 号对齐上游）。
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -14529,7 +14586,12 @@ mod script76_e2e {
             Some(r#"{"instruction":"封面","sessionId":"1782994000003-cv02","actionSource":"button","requestedIntent":"generate_cover","actionPayload":{"generateCover":{"title":"无配置书"}}}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        // 执行失败面（书不存在）：500 INKOS_ACTION_ERROR（1670 号对齐上游；此前 502）。
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"], "INKOS_ACTION_ERROR",
+            "body: {parsed}"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -14776,7 +14838,12 @@ mod film77_e2e {
             Some(r#"{"instruction":"互动影游","sessionId":"1782994000007-if01","actionSource":"button","requestedIntent":"interactive_film_create"}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        // 派发期载荷缺失 = 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE（1670 号对齐上游）。
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            parsed["error"]["code"],
+            "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE"
+        );
         assert!(
             parsed["error"]["message"]
                 .as_str()
@@ -15281,7 +15348,13 @@ mod short78_e2e {
             Some(r#"{"instruction":"写一个短篇","sessionId":"1782994000010-sf02","actionSource":"button","requestedIntent":"short_run","actionPayload":{"shortRun":{"direction":"再来一个","charsPerChapter":700}}}"#),
         )
         .await;
-        assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
+        // 执行失败面（工具层校验）：500 INKOS_ACTION_ERROR + 语言前缀（1670 号对齐
+        // 上游；此前 502 AGENT_ACTION_FAILED 原文）。
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {parsed}");
+        assert_eq!(
+            parsed["error"]["code"], "INKOS_ACTION_ERROR",
+            "body: {parsed}"
+        );
         let message = parsed["error"]["message"].as_str().unwrap_or_default();
         assert!(
             message.contains("charsPerChapter=700 超出中文短篇的合法范围（每章 900-1200 个汉字）"),
@@ -21439,7 +21512,9 @@ mod sub101_e2e {
         assert_eq!(parsed["aborted"], true, "body: {parsed}");
 
         let (status, parsed) = task.await.unwrap();
-        // TS formatAgentActionFailure 非忙错误面：502 AGENT_ACTION_FAILED。
+        // 用户主动中止不是「失败」（188/209 号）：中性文案原文、既有状态面不变
+        // （1670 号把其余执行失败对齐上游改为 500 INKOS_ACTION_ERROR，中止面
+        // 刻意保留）。
         assert_eq!(status, StatusCode::BAD_GATEWAY, "body: {parsed}");
         assert_eq!(parsed["error"]["code"], "AGENT_ACTION_FAILED");
         assert_eq!(

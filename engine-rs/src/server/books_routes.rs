@@ -78,6 +78,23 @@ fn mtime_of(path: &std::path::Path) -> Option<std::time::SystemTime> {
         .and_then(|meta| meta.modified().ok())
 }
 
+tokio::task_local! {
+    /// 1670 号：本次请求**显式选定**的模型路由器（`/agent` 的 service / model
+    /// 覆盖）。确认式生产动作经 [`BooksRuntime::effective_router`] 取路由器；作用域
+    /// 内它优先于项目配置——97 号「命中即以 per-request router 覆盖本次请求的全部
+    /// 代理」（TS pipelineClient）。此前项目配置可用时 `effective_router` 返回的是
+    /// 项目默认路由器，界面选定被静默忽略（项目默认与选定一致时看不出差异）。
+    static REQUEST_ROUTER: Arc<AgentRouter>;
+}
+
+/// 在「显式选定路由器」的作用域内执行 `task`。
+pub async fn with_request_router<F: std::future::Future<Output = R>, R>(
+    router: Arc<AgentRouter>,
+    task: F,
+) -> R {
+    REQUEST_ROUTER.scope(router, task).await
+}
+
 impl BooksRuntime {
     /// 运行时有效 router（109 号，62 号备案升级件）：inkos.json 服务项选择 +
     /// secrets key + transport（apiFormat/stream）→ AgentRouter——TS 每次用
@@ -85,7 +102,11 @@ impl BooksRuntime {
     /// （studio 模式 env 忽略、服务项镜像、transport 默认链均已由
     /// `resolve_effective_llm_studio` 承担）。配置不可用（无 baseUrl/model/
     /// key 且非免 key 端点）回退启动 router；mtime + 启动态指纹缓存。
+    /// 本次请求显式选定了路由器时（[`with_request_router`]）直接返回它。
     pub async fn effective_router(&self) -> Arc<AgentRouter> {
+        if let Ok(router) = REQUEST_ROUTER.try_with(Arc::clone) {
+            return router;
+        }
         let root = self.state.project_root().to_path_buf();
         let key = (
             mtime_of(&root.join("inkos.json")),

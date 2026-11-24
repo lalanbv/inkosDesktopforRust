@@ -866,7 +866,17 @@ pub async fn post_agent(
             provider_label,
             model_label,
         };
-        return match agent_production::run_confirmed_production(&runtime, request).await {
+        let run = agent_production::run_confirmed_production(&runtime, request);
+        // 1670 号：界面显式选定了模型 → 本次请求的全部代理用选定路由器（97 号
+        // 「命中即以 per-request router 覆盖本次请求的全部代理」）。确认动作的
+        // 执行器经 `effective_router()` 取路由器，此前项目配置可用时拿到的是项目
+        // 默认路由器，选定被静默忽略。
+        let outcome = if model_override.is_some() {
+            crate::server::books_routes::with_request_router(runtime.router.clone(), run).await
+        } else {
+            run.await
+        };
+        return match outcome {
             Ok(outcome) => {
                 runtime.hub.broadcast(
                     "agent:complete",

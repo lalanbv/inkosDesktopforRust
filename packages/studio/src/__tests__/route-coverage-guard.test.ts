@@ -29,15 +29,15 @@ const repoRoot = resolve(studioSrc, "..", "..", "..");
  * audit/revise/rewrite（fork-write-faces-llm.test，canonical walkthrough-mock 上游）、
  * 其余 22 条不依赖 LLM 的校验/简单成功路径（route-baseline-batch2.test）。
  * 1669 号清偿 2 条：books/create 与 daemon/start 的「LLM 未配置 → 400
- * LLM_CONFIG_ERROR」负向路径（llm-config-error.test）——成功路径仍未覆盖，
- * 守卫只认引用，不认断言强度。
- * 余下 2 条需 LLM 或重夹具（文风导入 / 翻译运行）。
- * 每条都是已知未测面——清偿一条就删一行；新条目不得加入。
+ * LLM_CONFIG_ERROR」负向路径（llm-config-error.test）。
+ * 1670 号清偿最后 2 条：文风导入与翻译运行的同一负向路径（llm-config-error.test
+ * 的 1670 清单）——**基线清零**，每条 server.ts 路由都至少有一处测试/探针引用。
+ * 守卫只认引用，不认断言强度：这些面的成功路径仍多未经 LLM 实跑覆盖。
+ *
+ * 基线只许缩短：`BASELINE_CEILING` 钉住上限，往基线里加条目即红。
  */
-const BASELINE: ReadonlyArray<string> = [
-  "POST /api/v1/books/:id/style/import",
-  "POST /api/v1/translations/:id/run",
-];
+const BASELINE: ReadonlyArray<string> = [];
+const BASELINE_CEILING = 0;
 
 function walk(dir: string, out: string[] = []): string[] {
   let names: string[];
@@ -127,5 +127,11 @@ describe("route coverage guard (1664)", () => {
 
     // 棘轮单调性：盲区数不得超过基线规模。
     expect(uncovered.length).toBeLessThanOrEqual(BASELINE.length);
+    // 基线自身也只许缩短——往里加条目来消音等于把守卫关掉。
+    expect(
+      BASELINE.length,
+      "基线扩张：BASELINE 条目数超过上限（基线只许缩短；新路由必须补引用）",
+    ).toBeLessThanOrEqual(BASELINE_CEILING);
+    expect(uncovered, "零引用路由").toEqual([]);
   });
 });

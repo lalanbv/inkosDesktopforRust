@@ -45,6 +45,7 @@ pub mod write_next_route;
 pub use write_next_route::{WriteNextRunner, WriteNextRuntime};
 
 use crate::models::length_governance::LengthCountingMode;
+use crate::server::llm_config_guard::guarded_post;
 use crate::utils::{
     context_filter::{cap_context_block, ContextCapOptions},
     derive_book_id_from_title,
@@ -359,56 +360,47 @@ pub fn router_books(
     audit: audit_route::AuditRuntime,
     books: books_routes::BooksRuntime,
 ) -> Router {
-    // 1669 号：模型调用面统一挂 LLM 配置守卫——未配置时同步回 400
+    // 1669/1670 号：模型调用面统一挂 LLM 配置守卫——未配置时同步回 400
     // LLM_CONFIG_ERROR，而不是等后台任务/传输层以 500 暴露连接拒绝。
-    let llm_guard =
-        || llm_config_guard::LlmConfigGuard::new(books.state.project_root(), books.router.clone());
+    // 守哪些面由逐处理器取证确定（见 `tests/llm_config_guard_contract.rs`
+    // 的全清单与「不该守」负面清单）。
     runtime_routes(state, hub, write_next, Some(books.router.clone()))
         .merge(audit_route(audit))
         .route(
             "/api/v1/books/:id/plan",
-            llm_config_guard::llm_guarded(post(books_routes::plan), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::plan, &books),
         )
         .route(
             "/api/v1/books/:id/settle",
-            llm_config_guard::llm_guarded(post(books_routes::settle), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::settle, &books),
         )
         .route(
             "/api/v1/books/:id/draft",
-            llm_config_guard::llm_guarded(post(books_routes::draft), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::draft, &books),
         )
         .route(
             "/api/v1/books/:id/revise/:chapter",
-            llm_config_guard::llm_guarded(post(books_routes::revise), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::revise, &books),
         )
         .route(
             "/api/v1/books/:id/rewrite/:chapter",
-            llm_config_guard::llm_guarded(post(books_routes::rewrite), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::rewrite, &books),
         )
         .route(
             "/api/v1/books/:id/resync/:chapter",
-            llm_config_guard::llm_guarded(post(books_routes::resync), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::resync, &books),
         )
         .route(
             "/api/v1/books/:id/compose",
-            llm_config_guard::llm_guarded(post(books_routes::compose), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::compose, &books),
         )
         .route(
             "/api/v1/books/:id/consolidate",
-            llm_config_guard::llm_guarded(post(books_routes::consolidate_endpoint), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::consolidate_endpoint, &books),
         )
         .route(
             "/api/v1/books/:id/repair-state/:chapter",
-            llm_config_guard::llm_guarded(post(books_routes::repair_state), llm_guard())
-                .with_state(books.clone()),
+            guarded_post(books_routes::repair_state, &books),
         )
         .route(
             "/api/v1/books/:id/analytics",
@@ -456,7 +448,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/books/:id/series-backfill/extract",
-            post(series_backfill_routes::extract).with_state(books.clone()),
+            guarded_post(series_backfill_routes::extract, &books),
         )
         .route(
             "/api/v1/books/:id/series-backfill/apply",
@@ -536,7 +528,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/books/:id/chapters/:num/workspace/inspiration",
-            post(books_state_routes::post_workspace_inspiration).with_state(books.clone()),
+            guarded_post(books_state_routes::post_workspace_inspiration, &books),
         )
         // 52 号：检测域（全章扫描 / 历史统计 / 单章检测，纯规则无 LLM）。
         .route(
@@ -650,11 +642,11 @@ pub fn router_books(
         // 58 号：创建与导入链（staging 原子创建 + 章节导入回放）。
         .route(
             "/api/v1/books/create",
-            post(book_create_routes::create_book).with_state(books.clone()),
+            guarded_post(book_create_routes::create_book, &books),
         )
         .route(
             "/api/v1/books/:id/import/chapters",
-            post(book_create_routes::import_chapters_endpoint).with_state(books.clone()),
+            guarded_post(book_create_routes::import_chapters_endpoint, &books),
         )
         // 273 号：正典上传与 canon-file 导入（UI ImportManager 调用面）。
         .route(
@@ -663,36 +655,36 @@ pub fn router_books(
         )
         .route(
             "/api/v1/books/:id/import/canon-file",
-            post(style_routes::import_canon_file).with_state(books.clone()),
+            guarded_post(style_routes::import_canon_file, &books),
         )
         // 59 号：同人/番外/仿写创建域。
         .route(
             "/api/v1/fanfic/init",
-            post(fanfic_routes::fanfic_init).with_state(books.clone()),
+            guarded_post(fanfic_routes::fanfic_init, &books),
         )
         .route(
             "/api/v1/books/:id/fanfic/refresh",
-            post(fanfic_routes::fanfic_refresh).with_state(books.clone()),
+            guarded_post(fanfic_routes::fanfic_refresh, &books),
         )
         .route(
             "/api/v1/spinoff/init",
-            post(fanfic_routes::spinoff_init).with_state(books.clone()),
+            guarded_post(fanfic_routes::spinoff_init, &books),
         )
         .route(
             "/api/v1/imitation/init",
-            post(fanfic_routes::imitation_init).with_state(books.clone()),
+            guarded_post(fanfic_routes::imitation_init, &books),
         )
         .route(
             "/api/v1/style/analyze",
-            post(style_routes::style_analyze).with_state(books.clone()),
+            guarded_post(style_routes::style_analyze, &books),
         )
         .route(
             "/api/v1/books/:id/style/import",
-            post(style_routes::style_import).with_state(books.clone()),
+            guarded_post(style_routes::style_import, &books),
         )
         .route(
             "/api/v1/books/:id/import/canon",
-            post(style_routes::import_canon_endpoint).with_state(books.clone()),
+            guarded_post(style_routes::import_canon_endpoint, &books),
         )
         .route(
             "/api/v1/books/:id/fanfic",
@@ -790,7 +782,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/works/:id/capabilities/short-fiction/:actionId",
-            post(short_capability_route::post_short_capability_action).with_state(books.clone()),
+            guarded_post(short_capability_route::post_short_capability_action, &books),
         )
         .route(
             "/api/v1/episodes",
@@ -999,7 +991,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/translations/:id/run",
-            post(translation_routes::run_translation).with_state(books.clone()),
+            guarded_post(translation_routes::run_translation, &books),
         )
         .route(
             "/api/v1/translations/:id/export",
@@ -1008,7 +1000,7 @@ pub fn router_books(
         // 971 号 P5：段落修订 HTTP 面（TS 修订走代理工具；Rust 自有扩展同错误码面）。
         .route(
             "/api/v1/translations/:id/revise",
-            post(translation_routes::revise_translation).with_state(books.clone()),
+            guarded_post(translation_routes::revise_translation, &books),
         )
         // 71 号：play 域（互动世界游玩面）。
         .route(
@@ -1034,7 +1026,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/daemon/start",
-            post(ops_routes::post_daemon_start).with_state(books.clone()),
+            guarded_post(ops_routes::post_daemon_start, &books),
         )
         .route(
             "/api/v1/daemon/stop",
@@ -1050,7 +1042,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/radar/scan",
-            post(ops_routes::post_radar_scan).with_state(books.clone()),
+            guarded_post(ops_routes::post_radar_scan, &books),
         )
         // G14a/335 号：选后再析——免费扫榜 + 勾选范围分析。
         .route(
@@ -1059,7 +1051,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/radar/analyze",
-            post(ops_routes::post_radar_analyze).with_state(books.clone()),
+            guarded_post(ops_routes::post_radar_analyze, &books),
         )
         .route(
             "/api/v1/radar/history",
@@ -1181,7 +1173,7 @@ pub fn router_books(
         // G6/354 号：方向候选批量生成（灵感卡 → LLM）。
         .route(
             "/api/v1/director/directions",
-            post(ops_routes::post_direction_candidates).with_state(books.clone()),
+            guarded_post(ops_routes::post_direction_candidates, &books),
         )
         // G6/353 号：导演会话读写（含 G9 续跑建议）。
         .route(
@@ -1211,7 +1203,7 @@ pub fn router_books(
         )
         .route(
             "/api/v1/books/:id/foundation/revise",
-            post(book_create_routes::revise_foundation).with_state(books),
+            guarded_post(book_create_routes::revise_foundation, &books),
         )
         // 路径段守卫（201 号）：books/projects 的 id 段 percent-decode 后统一过
         // is_safe_book_id，拦 `..%2F` 注入穿越——对齐 Node 侧

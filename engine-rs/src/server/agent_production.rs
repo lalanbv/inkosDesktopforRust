@@ -15,9 +15,11 @@
 //!   改写 error 终态落盘（否则前端恢复出永远运行中的任务卡）。
 //! - **user 消息先写**：任务运行期间刷新页面时用户气泡可从 transcript 恢复；
 //!   完成/失败只追加助手工具消息（instruction 不写第二遍）。
-//! - **错误统一面**：执行器内一切失败（含 payload 缺失）由分支 catch 统一经
-//!   `formatAgentActionFailure`：busy → 409 BOOK_BUSY，其余 → 502
-//!   AGENT_ACTION_FAILED（TS 行为：ApiError 在 catch 里被转写，原 code 不透出）。
+//! - **错误面**（1670 号对齐上游 b399a8d3 后的 TS 形态）：busy → 409
+//!   BOOK_BUSY；执行失败 → 500 INKOS_ACTION_ERROR（语言前缀）；派发期载荷缺失
+//!   → 400 CONFIRMED_ACTION_PAYLOAD_INCOMPLETE；意图不在执行表 → 400
+//!   UNSUPPORTED_CONFIRMED_ACTION。（端口初版照搬的是重构前的「一律 502
+//!   AGENT_ACTION_FAILED」。）
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -914,17 +916,47 @@ pub fn format_agent_failure(message: &str, lang: &str) -> (StatusCode, &'static 
     }
 }
 
-/// `formatAgentActionFailure`：busy → 409 BOOK_BUSY；其余一律 502
-/// AGENT_ACTION_FAILED（消息原文，internal 类的改写文案不用于 action 面）。
-pub fn format_agent_action_failure(message: &str) -> (StatusCode, &'static str, String) {
+/// `formatAgentActionFailure`：busy → 409 BOOK_BUSY（消息原文）；用户主动中止 →
+/// 中性文案原文（既有状态面不变）；其余 → 500 INKOS_ACTION_ERROR（消息加语言前缀）。
+///
+/// 1670 号对齐上游：TS 在 b399a8d3（2026-08-30「replace legacy creative
+/// control paths」）把非忙面从 `502 AGENT_ACTION_FAILED` 改为
+/// `500 INKOS_ACTION_ERROR`——Rust 端口（2026-08-16）忠实搬的是重构前的形态，
+/// 上游改后未跟。载荷缺失与不支持的意图不再走本函数（见
+/// [`payload_incomplete_error`] / [`unsupported_action_error`]）。
+///
+/// 中止面是 Rust 侧的增强（209 号：`abort_text_with_partial` 的中性文案，TS 无
+/// 对应物），刻意不随上游改——套上「动作失败」前缀会与「用户请求停止」自相
+/// 矛盾（188 号：用户主动停止不是「失败」）。
+pub fn format_agent_action_failure(
+    lang: StudioLang,
+    message: &str,
+) -> (StatusCode, &'static str, String) {
     if agent_failure_busy_re().is_match(message.trim()) {
         return (StatusCode::CONFLICT, "BOOK_BUSY", message.to_string());
     }
+    if agent_abort_text_re().is_match(message.trim()) {
+        return (
+            StatusCode::BAD_GATEWAY,
+            "AGENT_ACTION_FAILED",
+            message.to_string(),
+        );
+    }
     (
-        StatusCode::BAD_GATEWAY,
-        "AGENT_ACTION_FAILED",
-        message.to_string(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "INKOS_ACTION_ERROR",
+        pick(
+            lang,
+            &format!("InkOS 动作失败：{message}"),
+            &format!("InkOS action failed: {message}"),
+        ),
     )
+}
+
+/// 用户主动中止的文案前缀（`abort_text_with_partial` 的两种语言形态）。
+fn agent_abort_text_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^(操作已中止|Operation aborted)").unwrap())
 }
 
 // ── 注册表（进程级内存；TS server 闭包内 Map 的等价物） ──────────
@@ -2652,8 +2684,11 @@ async fn execute_draft_structure(
         Err(_) => base_prompt.to_string(),
     };
     let user_prompt = format!("{context}\n\n骨架指令：{instruction}");
+    // 1670 号：此前直调 `runtime.router`（启动路由器）——产品路径上它是未配置
+    // 占位，项目配好了模型也连不上；与同文件其余确认动作一致走 effective_router。
     let outcome = runtime
-        .router
+        .effective_router()
+        .await
         .chat(
             "film-authoring",
             vec![
@@ -3160,7 +3195,7 @@ async fn run_confirmed_production_locked(
                     if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
                 })
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(lang, "确认短篇缺少方向，请重新生成确认卡。", "The short fiction confirmation is missing a direction. Regenerate the confirmation card."),
                     )
@@ -3218,7 +3253,7 @@ async fn run_confirmed_production_locked(
                     .filter(|s| !s.is_empty())
             };
             let title = field("title").ok_or_else(|| {
-                production_exec_error(
+                payload_incomplete_error(
                     lang,
                     pick(lang, "确认创建剧本缺少标题，请重新生成确认卡。", "The script creation confirmation is missing a title. Regenerate the confirmation card."),
                 )
@@ -3259,7 +3294,7 @@ async fn run_confirmed_production_locked(
                     .filter(|s| !s.is_empty())
             };
             let title = field("title").ok_or_else(|| {
-                production_exec_error(
+                payload_incomplete_error(
                     lang,
                     pick(lang, "确认创建分镜缺少标题，请重新生成确认卡。", "The storyboard creation confirmation is missing a title. Regenerate the confirmation card."),
                 )
@@ -3301,7 +3336,7 @@ async fn run_confirmed_production_locked(
                     .filter(|s| !s.is_empty())
             };
             let title = field("title").ok_or_else(|| {
-                production_exec_error(
+                payload_incomplete_error(
                     lang,
                     pick(lang, "确认创建互动影游缺少标题，请重新生成确认卡。", "The interactive film creation confirmation is missing a title. Regenerate the confirmation card."),
                 )
@@ -3342,7 +3377,7 @@ async fn run_confirmed_production_locked(
                     .filter(|s| !s.is_empty())
             };
             let title = field("title").ok_or_else(|| {
-                production_exec_error(
+                payload_incomplete_error(
                     lang,
                     pick(lang, "确认生成封面缺少标题，请重新生成确认卡。", "The cover generation confirmation is missing a title. Regenerate the confirmation card."),
                 )
@@ -3372,7 +3407,7 @@ async fn run_confirmed_production_locked(
             let source_text = field("sourceText");
             let sources_present = payload.and_then(|p| p.get("sources")).is_some();
             if file_path.is_none() && source_text.is_none() && !sources_present {
-                return Err(production_exec_error(
+                return Err(payload_incomplete_error(
                     lang,
                     pick(
                         lang,
@@ -3382,7 +3417,7 @@ async fn run_confirmed_production_locked(
                 ));
             }
             let source_language = field("sourceLanguage").ok_or_else(|| {
-                production_exec_error(
+                payload_incomplete_error(
                     lang,
                     pick(
                         lang,
@@ -3392,7 +3427,7 @@ async fn run_confirmed_production_locked(
                 )
             })?.to_string();
             let target_language = field("targetLanguage").ok_or_else(|| {
-                production_exec_error(
+                payload_incomplete_error(
                     lang,
                     pick(
                         lang,
@@ -3443,7 +3478,7 @@ async fn run_confirmed_production_locked(
             };
             let title = field("title")
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3454,7 +3489,7 @@ async fn run_confirmed_production_locked(
                 })?
                 .to_string();
             if field("sourceText").is_none() && field("sourcePath").is_none() {
-                return Err(production_exec_error(
+                return Err(payload_incomplete_error(
                     lang,
                     pick(
                         lang,
@@ -3497,7 +3532,7 @@ async fn run_confirmed_production_locked(
             };
             let source_path = field("sourcePath")
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3510,7 +3545,7 @@ async fn run_confirmed_production_locked(
             let book_id = field("bookId").unwrap_or_default().to_string();
             let title = field("title").unwrap_or_default();
             if book_id.is_empty() && title.is_empty() {
-                return Err(production_exec_error(
+                return Err(payload_incomplete_error(
                     lang,
                     pick(
                         lang,
@@ -3555,7 +3590,7 @@ async fn run_confirmed_production_locked(
             };
             let title = field("title")
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3569,7 +3604,7 @@ async fn run_confirmed_production_locked(
                 .map(String::from)
                 .or_else(|| request.book_id.map(String::from))
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3605,7 +3640,7 @@ async fn run_confirmed_production_locked(
             };
             let title = field("title")
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3617,7 +3652,7 @@ async fn run_confirmed_production_locked(
                 .to_string();
             let story_idea = field("storyIdea")
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3628,7 +3663,7 @@ async fn run_confirmed_production_locked(
                 })?
                 .to_string();
             if field("referenceText").is_none() && field("referencePath").is_none() {
-                return Err(production_exec_error(
+                return Err(payload_incomplete_error(
                     lang,
                     pick(
                         lang,
@@ -3665,7 +3700,7 @@ async fn run_confirmed_production_locked(
                 .cloned()
                 .filter(|node| node.is_object())
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3681,7 +3716,7 @@ async fn run_confirmed_production_locked(
                 .map(str::to_string)
                 .or_else(|| request.book_id.map(String::from))
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         "interactive-film action requires a project id (bookId)".to_string(),
                     )
@@ -3698,7 +3733,7 @@ async fn run_confirmed_production_locked(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3714,7 +3749,7 @@ async fn run_confirmed_production_locked(
                 .map(str::to_string)
                 .or_else(|| request.book_id.map(String::from))
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         "interactive-film action requires a project id (bookId)".to_string(),
                     )
@@ -3731,7 +3766,7 @@ async fn run_confirmed_production_locked(
                 .map(str::to_string)
                 .or_else(|| request.book_id.map(String::from))
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         "interactive-film action requires a project id (bookId)".to_string(),
                     )
@@ -3758,7 +3793,7 @@ async fn run_confirmed_production_locked(
             };
             let title = field("title")
                 .ok_or_else(|| {
-                    production_exec_error(
+                    payload_incomplete_error(
                         lang,
                         pick(
                             lang,
@@ -3808,7 +3843,7 @@ async fn run_confirmed_production_locked(
                 .map(str::trim)
                 .filter(|t| !t.is_empty())
                 .ok_or_else(|| {
-                    production_exec_error(lang, pick(
+                    payload_incomplete_error(lang, pick(
                         lang,
                         "确认建书缺少书名，请重新生成确认卡。",
                         "The book creation confirmation is missing a title. Regenerate the confirmation card.",
@@ -3849,7 +3884,7 @@ async fn run_confirmed_production_locked(
         }
         RequestedIntent::WriteNext => {
             let book_id = request.book_id.ok_or_else(|| {
-                production_exec_error(
+                payload_incomplete_error(
                     lang,
                     pick(
                         lang,
@@ -3871,10 +3906,7 @@ async fn run_confirmed_production_locked(
             let _ = chapter_count; // 消费面在执行器
         }
         other => {
-            return Err(production_exec_error(
-                lang,
-                format!("Unsupported confirmed action: {}", other.as_str()),
-            ));
+            return Err(unsupported_action_error(other));
         }
     }
     let tool_name = match request.intent {
@@ -3990,6 +4022,36 @@ async fn run_confirmed_production_locked(
                 .push(handle);
         }
     };
+    // 1670 号：需要文本模型的确认动作，在调用前做配置检查——TS 在管线构建时抛
+    // LLMConfigurationError、经 catch 映射 400 LLM_CONFIG_ERROR；此前 Rust 要等
+    // 请求发到 discard 端点才以 500 INKOS_ACTION_ERROR「error sending request」失败。
+    // 位置=载荷校验之后、执行之前（与 TS 次序一致：坏载荷先报
+    // CONFIRMED_ACTION_PAYLOAD_INCOMPLETE）。不走文本模型的意图不检查。收尾同 TS
+    // 对 ApiError 的处理：改写「创建中」状态 + book:error，不追加助手工具消息。
+    if confirmed_intent_needs_text_model(request.intent) {
+        if let Err(message) = runtime.require_llm_config().await {
+            if let Some(pending) = &pending_book_id {
+                crate::server::book_create_routes::set_create_status(
+                    pending,
+                    crate::server::book_create_routes::BookCreateStatus {
+                        status: "error".to_string(),
+                        error: Some(message.clone()),
+                    },
+                )
+                .await;
+                runtime.hub.broadcast(
+                    "book:error",
+                    &json!({ "bookId": pending, "sessionId": session_id, "error": message }),
+                );
+            }
+            return Err(ProductionError {
+                status: StatusCode::BAD_REQUEST,
+                code: crate::server::llm_config_guard::LLM_CONFIG_ERROR_CODE.to_string(),
+                message,
+                exec: None,
+            });
+        }
+    }
     let outcome = match request.intent {
         RequestedIntent::ShortRun => {
             let on_progress = make_on_progress;
@@ -4533,7 +4595,7 @@ async fn run_confirmed_production_locked(
                 request.session_kind,
             )
             .await;
-            let (status, code, message) = format_agent_action_failure(&message);
+            let (status, code, message) = format_agent_action_failure(lang, &message);
             Err(ProductionError {
                 status,
                 code: code.to_string(),
@@ -4544,14 +4606,54 @@ async fn run_confirmed_production_locked(
     }
 }
 
-/// 执行阶段错误（payload 缺失 / 未支持 intent）：与执行失败同错误面。
-fn production_exec_error(_lang: StudioLang, message: String) -> ProductionError {
-    let (status, code, message) = format_agent_action_failure(&message);
+/// 派发期的载荷缺失（标题 / 方向 / 原作资料等）——TS `requirePayloadText` 与各
+/// 意图的显式校验抛 `ApiError(400, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE")`，经
+/// catch 原样透出。1670 号对齐：此前与执行失败一并落 502 AGENT_ACTION_FAILED。
+fn payload_incomplete_error(_lang: StudioLang, message: String) -> ProductionError {
     ProductionError {
-        status,
-        code: code.to_string(),
+        status: StatusCode::BAD_REQUEST,
+        code: "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE".to_string(),
         message,
         exec: None,
+    }
+}
+
+/// 意图不在执行表内——TS `ApiError(400, "UNSUPPORTED_CONFIRMED_ACTION")`。
+fn unsupported_action_error(intent: RequestedIntent) -> ProductionError {
+    ProductionError {
+        status: StatusCode::BAD_REQUEST,
+        code: "UNSUPPORTED_CONFIRMED_ACTION".to_string(),
+        message: format!("Unsupported confirmed action: {}", intent.as_str()),
+        exec: None,
+    }
+}
+
+/// 确认意图是否需要**文本模型**（1670 号逐意图取证，对应上方执行 match 的各臂）。
+/// 穷尽 match、不设通配：新增 `RequestedIntent` 变体即编译红，逼出归类——漏归类
+/// = 未配置时仍以请求期错误暴露。
+fn confirmed_intent_needs_text_model(intent: RequestedIntent) -> bool {
+    match intent {
+        // 需要文本模型。
+        RequestedIntent::CreateBook
+        | RequestedIntent::WriteNext
+        | RequestedIntent::ShortRun
+        | RequestedIntent::PlayStart
+        | RequestedIntent::FanficInit
+        | RequestedIntent::ContinuationImport
+        | RequestedIntent::SpinoffCreate
+        | RequestedIntent::StyleImitation
+        | RequestedIntent::ScriptCreate
+        | RequestedIntent::StoryboardCreate
+        | RequestedIntent::InteractiveFilmCreate
+        | RequestedIntent::DraftStructure => true,
+        // 不走文本模型：生成封面走封面服务、翻译创建只建项目、连接选择与删除节点
+        // 是纯结构操作。
+        RequestedIntent::GenerateCover
+        | RequestedIntent::TranslationCreate
+        | RequestedIntent::ConnectChoice
+        | RequestedIntent::RemoveNode => false,
+        // 不可确认的意图（派发器落 UNSUPPORTED_CONFIRMED_ACTION）——到不了执行。
+        RequestedIntent::PlayStep | RequestedIntent::EditArtifact => false,
     }
 }
 
@@ -4940,17 +5042,35 @@ mod tests {
 
     #[test]
     fn agent_action_failure_classification() {
-        let (status, code, _) =
-            format_agent_action_failure("BookWriteLockError: locked by an active InkOS write");
+        let (status, code, _) = format_agent_action_failure(
+            StudioLang::Zh,
+            "BookWriteLockError: locked by an active InkOS write",
+        );
         assert_eq!((status, code), (StatusCode::CONFLICT, "BOOK_BUSY"));
 
+        // 1670 号上游对齐后的非忙面：500 INKOS_ACTION_ERROR + 语言前缀（重构前
+        // 是 502 AGENT_ACTION_FAILED 原文）。载荷缺失不再走本函数。
         let (status, code, message) =
-            format_agent_action_failure("确认建书缺少书名，请重新生成确认卡。");
+            format_agent_action_failure(StudioLang::Zh, "确认建书缺少书名，请重新生成确认卡。");
         assert_eq!(
             (status, code),
-            (StatusCode::BAD_GATEWAY, "AGENT_ACTION_FAILED")
+            (StatusCode::INTERNAL_SERVER_ERROR, "INKOS_ACTION_ERROR")
         );
-        assert_eq!(message, "确认建书缺少书名，请重新生成确认卡。");
+        assert_eq!(
+            message,
+            "InkOS 动作失败：确认建书缺少书名，请重新生成确认卡。"
+        );
+        let (_, _, english) = format_agent_action_failure(StudioLang::En, "boom");
+        assert_eq!(english, "InkOS action failed: boom");
+
+        let payload = payload_incomplete_error(
+            StudioLang::Zh,
+            "确认生成封面缺少标题，请重新生成确认卡。".to_string(),
+        );
+        assert_eq!(payload.status, StatusCode::BAD_REQUEST);
+        assert_eq!(payload.code, "CONFIRMED_ACTION_PAYLOAD_INCOMPLETE");
+        assert_eq!(payload.message, "确认生成封面缺少标题，请重新生成确认卡。");
+        assert!(payload.exec.is_none());
     }
 
     #[test]
@@ -5122,6 +5242,113 @@ mod tests {
         assert_eq!(to_base36(35), "z");
         assert_eq!(to_base36(36), "10");
         assert_eq!(to_base36(1782988000000), "mr3d0pog");
+    }
+}
+
+/// 1670 号：起草结构（draft_structure）的模型调用必须走项目配置。
+///
+/// 产品路径 = 桌壳直启、启动路由器是未配置占位；此前本动作直调 `runtime.router`，
+/// 项目配好了模型也连不上 discard 端点（同文件其余确认动作走 `effective_router`）。
+#[cfg(test)]
+mod draft_structure_router_tests {
+    use super::*;
+
+    /// 测试键：env 注入 + 非凭据回退（源码不落可用凭据字面量）。
+    fn test_key() -> String {
+        std::env::var("INKOS_TEST_LLM_KEY").unwrap_or_else(|_| "test-key-placeholder".to_string())
+    }
+
+    /// 进程内 mock LLM：记录命中数，非流式请求回 `content`。
+    async fn spawn_mock_llm(
+        content: &'static str,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(move || {
+                let content = content;
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({
+                        "choices": [{ "message": { "role": "assistant", "content": content }, "finish_reason": "stop" }],
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    #[tokio::test]
+    async fn draft_structure_uses_the_project_config_not_the_startup_router() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let graph = r#"{"nodes":[{"id":"n-start","title":"开场","type":"start","sceneDesc":"雨夜。"},{"id":"n-end","title":"结局","type":"ending","sceneDesc":"天亮了。"}]}"#;
+        let (base, hits) = spawn_mock_llm(graph).await;
+        std::fs::write(
+            root.join("inkos.json"),
+            format!(
+                r#"{{"version":"0.1.0","name":"影游","language":"zh","llm":{{"services":{{"custom:Mock":{{"service":"custom","name":"Mock","baseUrl":"{base}","apiFormat":"chat","stream":false}}}},"defaultModel":"mock-model"}},"notify":[]}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        let service_key = test_key();
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            json!({ "services": { "custom:Mock": { "apiKey": service_key } } }).to_string(),
+        )
+        .unwrap();
+        // 启动路由器 = bin 的未配置占位（桌壳直启形态）。
+        let placeholder = Arc::new(crate::llm::agent_router::AgentRouter::new(
+            crate::llm::agent_router::LlmEndpointConfig {
+                base_url: crate::llm::agent_router::LLM_UNCONFIGURED_BASE_URL.into(),
+                api_key: String::new(),
+                model: "default".into(),
+                max_tokens: 8192,
+                extra_headers: HashMap::new(),
+                context_window_tokens: 128_000,
+            },
+            HashMap::new(),
+        ));
+        let runtime = BooksRuntime {
+            hub: Arc::new(crate::server::sse::BroadcastHub::new()),
+            state: Arc::new(crate::state::manager::StateManager::new(root.to_path_buf())),
+            router: placeholder,
+            builtin_genres_dir: root.join("assets").join("genres"),
+            revision_gate: Default::default(),
+        };
+
+        let outcome =
+            execute_draft_structure(&runtime, "film-1670", "写一个两节点骨架", |_| {}).await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => panic!(
+                "起草结构失败（命中数 {}）：{error}",
+                hits.load(Ordering::SeqCst)
+            ),
+        };
+        // 模型调用必须打在项目配置的端点上（此前直调启动路由器 = 未配置占位）。
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert!(!outcome.is_error);
+        assert!(outcome.text.contains("2 nodes"), "{}", outcome.text);
+        let saved: Value = serde_json::from_str(
+            &std::fs::read_to_string(
+                root.join("interactive-films")
+                    .join("film-1670")
+                    .join("story-graph.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["nodes"].as_array().map(Vec::len), Some(2));
     }
 }
 

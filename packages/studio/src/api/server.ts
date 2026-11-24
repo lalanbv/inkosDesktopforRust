@@ -2810,6 +2810,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     }
   }
 
+  // 1670 号：即发即忘面（仿写 / 番外创建）的前置配置检查。这类面 HTTP 立刻回
+  // 200「creating」、模型在后台任务里才被调用——配置错误此前只能走 SSE，与 Rust
+  // 腿（组合层守卫同步 400）不同码。与 write-next 同口径：未配置就同步回 400，
+  // 不留一个注定失败的后台任务与「创建中」状态。
+  async function llmConfigPrecheck(c: Context): Promise<Response | null> {
+    return llmConfigResponse(c, await llmConfigProblem());
+  }
+
   // Read the project language fresh from inkos.json on every call, so a language
   // switch takes effect on the next request instead of being frozen at startup.
   // A missing/corrupt inkos.json means "no project language configured" -> zh.
@@ -9204,6 +9212,8 @@ function yamlScalar(value: unknown): string {
     if (await completeBookExists(state.bookDir(bookId))) {
       return c.json({ error: `Book "${bookId}" already exists` }, 409);
     }
+    const configFailure = await llmConfigPrecheck(c);
+    if (configFailure) return configFailure;
     broadcast("spinoff:start", { bookId, title: body.title, parentBookId: body.parentBookId });
     setBookCreateStatus(bookId, { status: "creating" });
     void (async () => {
@@ -9268,6 +9278,8 @@ function yamlScalar(value: unknown): string {
     if (await completeBookExists(state.bookDir(bookId))) {
       return c.json({ error: `Book "${bookId}" already exists` }, 409);
     }
+    const configFailure = await llmConfigPrecheck(c);
+    if (configFailure) return configFailure;
     broadcast("imitation:start", { bookId, title: body.title });
     setBookCreateStatus(bookId, { status: "creating" });
     void (async () => {

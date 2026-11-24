@@ -19,7 +19,7 @@ use axum::routing::MethodRouter;
 use axum::Json;
 
 use crate::llm::agent_router::AgentRouter;
-use crate::server::books_routes::{resolve_project_llm, ProjectLlmState};
+use crate::server::books_routes::{resolve_project_llm, BooksRuntime, ProjectLlmState};
 
 pub const LLM_CONFIG_ERROR_CODE: &str = "LLM_CONFIG_ERROR";
 
@@ -101,6 +101,21 @@ where
         guard,
         llm_config_guard,
     ))
+}
+
+/// `post(handler)` + 配置守卫 + 绑定 `BooksRuntime` 状态的简写（1670 号：组合层
+/// 批量接线）。守卫在处理器自身的一切校验之前——未配置的项目上，坏载荷也
+/// 先报配置问题（两者都是 400）。
+pub fn guarded_post<H, T>(handler: H, runtime: &BooksRuntime) -> MethodRouter
+where
+    H: axum::handler::Handler<T, BooksRuntime> + Clone + Send + Sync + 'static,
+    T: 'static,
+{
+    llm_guarded(
+        axum::routing::post(handler),
+        LlmConfigGuard::new(runtime.state.project_root(), runtime.router.clone()),
+    )
+    .with_state(runtime.clone())
 }
 
 #[cfg(test)]

@@ -141,3 +141,108 @@ describe("LLM configuration problems detected before any model call (1669)", () 
       .toEqual({ status: 400, body: { error: "feedback is required" } });
   });
 });
+
+/**
+ * 1670 号：Rust 侧第二批守卫的 20 个面在 TS 腿上的对应面（TS 无短篇能力路由与
+ * 翻译修订路由——那两条是 Rust 独有面）。逐条以**能通过各自入参校验**的载荷实跑：
+ * TS 的配置检查发生在处理器内部、入参校验之后（Rust 是组合层守卫在最前）——
+ * 坏载荷先报各自的 400，合法载荷才落到 LLM_CONFIG_ERROR。
+ *
+ * 探针实跑打出一处双端不同码：仿写 / 番外创建是即发即忘面（HTTP 立刻 200
+ * 「creating」，模型在后台任务里才调用，配置错误只能走 SSE）——现与 Rust 同码：
+ * 未配置同步回 400，不留注定失败的后台任务。
+ */
+describe("LLM configuration on the 1670 guard list, TypeScript leg", () => {
+  let root: string;
+  let app: ReturnType<typeof createStudioServer>;
+  const J = { "Content-Type": "application/json" };
+  const call = async (path: string, method = "POST", body?: unknown) => {
+    const res = await app.request(path, { method, headers: J, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { status: res.status, body: (await res.json().catch(() => null)) as any };
+  };
+  const referenceText = "这是一段足够长的参考文本，用来做文风分析。".repeat(6);
+  const MISSING_KEY = "Studio LLM API key not set. Open Studio services and save an API key for the selected service.";
+
+  /** 入参校验能通过的面（夹具：书 b1 带第 1 章与一份正典；书 b2 为回填目标）。 */
+  const faces = (): ReadonlyArray<readonly [string, string, unknown]> => [
+    ["inspiration", "/api/v1/books/b1/chapters/1/workspace/inspiration", { brief: "收紧节奏" }],
+    ["style analyze", "/api/v1/style/analyze", { text: referenceText }],
+    ["style import", "/api/v1/books/b1/style/import", { text: referenceText, sourceName: "参考" }],
+    ["import canon", "/api/v1/books/b1/import/canon", { fromBookId: "b0" }],
+    ["import canon-file", "/api/v1/books/b1/import/canon-file", { filePath: join(root, "canon.md") }],
+    ["fanfic init", "/api/v1/fanfic/init", { title: "同人", sourceText: referenceText }],
+    ["fanfic refresh", "/api/v1/books/b1/fanfic/refresh", { sourceText: referenceText }],
+    ["spinoff init", "/api/v1/spinoff/init", { title: "番外", parentBookId: "b1" }],
+    ["imitation init", "/api/v1/imitation/init", { title: "仿写", referenceText: referenceText, storyIdea: "一个点子" }],
+    ["import chapters", "/api/v1/books/b1/import/chapters", { text: "第一章 你好。\n\n正文。" }],
+    ["series-backfill extract", "/api/v1/books/b2/series-backfill/extract", { sourceBookId: "b1" }],
+    ["radar scan", "/api/v1/radar/scan", {}],
+    ["radar analyze", "/api/v1/radar/analyze", { selection: { platforms: [], categories: [] } }],
+    ["director directions", "/api/v1/director/directions", { inspiration: { premise: "镜中图书馆" }, count: 3 }],
+    ["translation run", "/api/v1/translations/t1/run", {}],
+  ];
+
+  const seedBook = async (id: string) => {
+    const source = join(root, "works", id, "source");
+    await mkdir(join(source, "chapters"), { recursive: true });
+    await mkdir(join(source, "story", "outline"), { recursive: true });
+    await writeFile(join(source, "book.json"), JSON.stringify({
+      id, title: `契约书 ${id}`, platform: "qidian", genre: "xuanhuan", status: "active",
+      targetChapters: 12, chapterWordCount: 3000, language: "zh",
+      createdAt: "2026-10-16T00:00:00.000Z", updatedAt: "2026-10-16T00:00:00.000Z",
+    }), "utf-8");
+    await writeFile(join(source, "chapters", "0001_风起.md"), "# 风起\n\n正文。\n", "utf-8");
+    await writeFile(join(source, "chapters", "index.json"), JSON.stringify([{
+      number: 1, title: "风起", status: "ready-for-review", wordCount: 2,
+      createdAt: "2026-10-16T00:00:00.000Z", updatedAt: "2026-10-16T00:00:00.000Z",
+    }]), "utf-8");
+  };
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "llm-config-1670-"));
+    for (const key of ["INKOS_LLM_API_KEY", "INKOS_LLM_BASE_URL", "INKOS_LLM_MODEL", "INKOS_LLM_SERVICE"]) vi.stubEnv(key, "");
+    await writeFile(join(root, "inkos.json"), JSON.stringify({
+      name: "llm-config-1670", version: "0.1.0", language: "zh",
+      llm: {
+        service: "custom", provider: "openai", configSource: "studio", model: "m",
+        services: [{ service: "custom", name: "Svc", models: ["m"], baseUrl: "https://example.invalid/v1", apiFormat: "chat", stream: false }],
+        baseUrl: "https://example.invalid/v1", apiFormat: "chat", stream: false,
+      },
+    }), "utf-8");
+    await seedBook("b1");
+    await seedBook("b2");
+    // 回填源书的正典（无正典会先报 400「Source book has no canon files」）。
+    await writeFile(join(root, "works", "b1", "source", "story", "outline", "story_frame.md"), "# 故事框架\n\n三幕结构。\n", "utf-8");
+    await writeFile(join(root, "canon.md"), "# 正典\n\n世界设定。\n", "utf-8");
+    app = createStudioServer({} as never, root);
+  });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("every face answers the same 400 envelope once its own input validation passes", async () => {
+    for (const [name, path, body] of faces()) {
+      expect(await call(path, "POST", body), name)
+        .toEqual({ status: 400, body: { error: { code: "LLM_CONFIG_ERROR", message: MISSING_KEY } } });
+    }
+  });
+
+  it("the fire-and-forget creation faces leave no background task or half-created book behind", async () => {
+    for (const [name, path, body] of faces().filter(([name]) => name === "spinoff init" || name === "imitation init" || name === "fanfic init")) {
+      expect((await call(path, "POST", body)).status, name).toBe(400);
+    }
+    // 只有夹具里的两本书——「创建中」不得先于配置检查发生。
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(join(root, "works"))).sort()).toEqual(["b1", "b2"]);
+  });
+
+  it("input validation still comes first on the TypeScript leg", async () => {
+    // 坏载荷报各自的 4xx，不被改写成配置错误（Rust 是守卫在最前——那边一律先报
+    // 配置问题；两边都是客户端错误，仅次序不同）。
+    expect(await call("/api/v1/books/b1/style/import", "POST", {}))
+      .toEqual({ status: 400, body: { error: "text is required" } });
+    expect(await call("/api/v1/spinoff/init", "POST", { title: "番外", parentBookId: "ghost" }))
+      .toEqual({ status: 404, body: { error: 'Parent book "ghost" not found' } });
+  });
+});
