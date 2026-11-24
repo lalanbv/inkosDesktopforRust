@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -22,13 +22,15 @@ import { globalRunLog } from "@actalk/inkos-core";
  */
 describe("route coverage blind spots (1664)", () => {
   let app: ReturnType<typeof createStudioServer>;
+  let root = "";
   let upstream: Server;
   let upstreamBase = "";
   let modelsReachable = true;
   let chatCalls = 0;
 
   beforeAll(async () => {
-    app = createStudioServer({} as never, mkdtempSync(join(tmpdir(), "route-blind-spots-")));
+    root = mkdtempSync(join(tmpdir(), "route-blind-spots-"));
+    app = createStudioServer({} as never, root);
     upstream = createServer((req, res) => {
       req.resume();
       req.on("end", () => {
@@ -59,6 +61,8 @@ describe("route coverage blind spots (1664)", () => {
 
   afterAll(async () => {
     await new Promise<void>((resolveClose) => upstream.close(() => resolveClose()));
+    // 1669 号：此前项目根不清理——每跑一次在系统 tmp 留一个 route-blind-spots-* 根。
+    if (root) rmSync(root, { recursive: true, force: true });
   });
 
   async function testService(body: Record<string, unknown>): Promise<{ status: number; body: Record<string, any> }> {

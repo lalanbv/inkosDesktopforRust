@@ -102,110 +102,12 @@ impl BooksRuntime {
                 }
             }
         }
-        let router = match crate::server::project_config_routes::load_raw_config(&root).await {
-            Some(config) => match config
-                .get("llm")
-                .and_then(serde_json::Value::as_object)
-                .cloned()
-            {
-                Some(llm) => {
-                    let effective =
-                        crate::server::service_routes::resolve_effective_llm_studio(&root, &llm)
-                            .await;
-                    let base_url = effective
-                        .get("baseUrl")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let model = effective
-                        .get("model")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let api_key = effective
-                        .get("apiKey")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    let key_optional =
-                        crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
-                            effective
-                                .get("provider")
-                                .and_then(serde_json::Value::as_str)
-                                .unwrap_or("openai"),
-                            Some(&base_url),
-                        );
-                    if !base_url.is_empty()
-                        && !model.is_empty()
-                        && (!api_key.is_empty() || key_optional)
-                    {
-                        let api_format = match effective
-                            .get("apiFormat")
-                            .and_then(serde_json::Value::as_str)
-                        {
-                            Some("responses") => {
-                                crate::llm::providers::TransportApiFormat::Responses
-                            }
-                            _ => crate::llm::providers::TransportApiFormat::Chat,
-                        };
-                        let stream = effective.get("stream").and_then(serde_json::Value::as_bool);
-                        // 126 号：流式进度钩子——llm:progress 广播（books 面不带
-                        // sessionId——TS 该面 pipeline 无 sessionIdForSSE）。
-                        let hub = self.hub.clone();
-                        // G16/346 号：项目级任务路由（.inkos/task-routing.json，缺省不注入）。
-                        let task_routing = tokio::fs::read_to_string(
-                            root.join(".inkos").join("task-routing.json"),
-                        )
-                        .await
-                        .ok()
-                        .and_then(|raw| serde_json::from_str(&raw).ok());
-                        Arc::new(
-                            AgentRouter::new(
-                                crate::llm::agent_router::LlmEndpointConfig {
-                                    base_url,
-                                    api_key,
-                                    model: model.clone(),
-                                    max_tokens: 8192,
-                                    extra_headers: HashMap::new(),
-                                    // 441 号：生效模型卡窗口（resolve_effective_llm_studio
-                                    // 注入；缺项按 TS 128k 缺省口径兜底）。
-                                    context_window_tokens: effective
-                                        .get("contextWindowTokens")
-                                        .and_then(serde_json::Value::as_u64)
-                                        .unwrap_or_else(|| {
-                                            crate::llm::lookup::builtin_context_window(
-                                                effective
-                                                    .get("service")
-                                                    .and_then(serde_json::Value::as_str)
-                                                    .unwrap_or("custom"),
-                                                &model,
-                                            )
-                                        }),
-                                },
-                                HashMap::new(),
-                            )
-                            .with_api_format(api_format)
-                            .with_stream(stream)
-                            .with_task_routing(task_routing)
-                            .with_progress_hook({
-                                std::sync::Arc::new(
-                                    move |progress: &crate::llm::provider::StreamProgress| {
-                                        hub.broadcast(
-                                            "llm:progress",
-                                            &serde_json::to_value(progress)
-                                                .unwrap_or_else(|_| serde_json::json!({})),
-                                        );
-                                    },
-                                )
-                            }),
-                        )
-                    } else {
-                        self.router.clone()
-                    }
-                }
-                None => self.router.clone(),
-            },
-            None => self.router.clone(),
+        let router = match resolve_project_llm(&root).await {
+            ProjectLlmState::Usable(project) => {
+                Arc::new(build_project_router(&root, project, self.hub.clone()).await)
+            }
+            // 配置不可用回退启动 router（Missing = 无配置文件 / 无 llm 对象）。
+            ProjectLlmState::Missing | ProjectLlmState::Unusable => self.router.clone(),
         };
         effective_router_cache()
             .lock()
@@ -219,6 +121,152 @@ impl BooksRuntime {
             );
         router
     }
+
+    /// 1669 号：启动路由器是否为「未配置」占位（bin 的 env 缺省——discard 端点
+    /// + 空 key）。桌壳直启不注入 `INKOS_LLM_*`，产品路径上恒为 true。
+    pub fn startup_router_unconfigured(&self) -> bool {
+        self.router.default_endpoint().is_unconfigured_placeholder()
+    }
+
+    /// 1669 号：模型调用前的 LLM 配置前置检查（与 TS 腿同码的 400
+    /// `LLM_CONFIG_ERROR` 信封的数据源）。项目配置可用，或启动路由器自带
+    /// 可用端点（env 配置的引擎）→ `Ok(())`；两头都没有 → `Err(message)`
+    /// （message 为 UI 文案表逐字锚文本，勿改写）。
+    pub async fn require_llm_config(&self) -> Result<(), String> {
+        crate::server::llm_config_guard::LlmConfigGuard::new(
+            self.state.project_root(),
+            self.router.clone(),
+        )
+        .check()
+        .await
+    }
+}
+
+/// 项目级生效 LLM 端点（109 号热解析的配置半段）。1669 号从
+/// `effective_router` 拆出——路由器构造与配置前置检查共用**同一份**可用性
+/// 判定，不各写一遍条件。
+pub(crate) struct ProjectLlm {
+    base_url: String,
+    api_key: String,
+    model: String,
+    api_format: crate::llm::providers::TransportApiFormat,
+    stream: Option<bool>,
+    context_window_tokens: u64,
+}
+
+pub(crate) enum ProjectLlmState {
+    Usable(ProjectLlm),
+    /// 无 inkos.json，或配置里没有 llm 对象。
+    Missing,
+    /// 有配置但不可用：无 baseUrl / model / key，且非免 key 端点。
+    Unusable,
+}
+
+/// inkos.json 服务项选择 + secrets key + transport（apiFormat/stream）的
+/// 有效端点——studio 模式 env 忽略、服务项镜像、transport 默认链均由
+/// `resolve_effective_llm_studio` 承担。
+pub(crate) async fn resolve_project_llm(root: &std::path::Path) -> ProjectLlmState {
+    let Some(config) = crate::server::project_config_routes::load_raw_config(root).await else {
+        return ProjectLlmState::Missing;
+    };
+    let Some(llm) = config
+        .get("llm")
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+    else {
+        return ProjectLlmState::Missing;
+    };
+    let effective = crate::server::service_routes::resolve_effective_llm_studio(root, &llm).await;
+    let base_url = effective
+        .get("baseUrl")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let model = effective
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let api_key = effective
+        .get("apiKey")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
+        effective
+            .get("provider")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("openai"),
+        Some(&base_url),
+    );
+    if base_url.is_empty() || model.is_empty() || (api_key.is_empty() && !key_optional) {
+        return ProjectLlmState::Unusable;
+    }
+    let api_format = match effective
+        .get("apiFormat")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some("responses") => crate::llm::providers::TransportApiFormat::Responses,
+        _ => crate::llm::providers::TransportApiFormat::Chat,
+    };
+    // 441 号：生效模型卡窗口（resolve_effective_llm_studio 注入；缺项按 TS
+    // 128k 缺省口径兜底）。
+    let context_window_tokens = effective
+        .get("contextWindowTokens")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_else(|| {
+            crate::llm::lookup::builtin_context_window(
+                effective
+                    .get("service")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("custom"),
+                &model,
+            )
+        });
+    ProjectLlmState::Usable(ProjectLlm {
+        base_url,
+        api_key,
+        model,
+        api_format,
+        stream: effective.get("stream").and_then(serde_json::Value::as_bool),
+        context_window_tokens,
+    })
+}
+
+async fn build_project_router(
+    root: &std::path::Path,
+    project: ProjectLlm,
+    hub: Arc<BroadcastHub>,
+) -> AgentRouter {
+    // G16/346 号：项目级任务路由（.inkos/task-routing.json，缺省不注入）。
+    let task_routing = tokio::fs::read_to_string(root.join(".inkos").join("task-routing.json"))
+        .await
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok());
+    // 126 号：流式进度钩子——llm:progress 广播（books 面不带 sessionId——
+    // TS 该面 pipeline 无 sessionIdForSSE）。
+    AgentRouter::new(
+        crate::llm::agent_router::LlmEndpointConfig {
+            base_url: project.base_url,
+            api_key: project.api_key,
+            model: project.model.clone(),
+            max_tokens: 8192,
+            extra_headers: HashMap::new(),
+            context_window_tokens: project.context_window_tokens,
+        },
+        HashMap::new(),
+    )
+    .with_api_format(project.api_format)
+    .with_stream(project.stream)
+    .with_task_routing(task_routing)
+    .with_progress_hook({
+        Arc::new(move |progress: &crate::llm::provider::StreamProgress| {
+            hub.broadcast(
+                "llm:progress",
+                &serde_json::to_value(progress).unwrap_or_else(|_| serde_json::json!({})),
+            );
+        })
+    })
 }
 
 // ── POST /api/v1/books/:id/plan ─────────────────────────────────

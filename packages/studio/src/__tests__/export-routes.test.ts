@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,9 +14,10 @@ import { createStudioServer } from "../api/server.js";
 describe("export routes (R50/1647)", () => {
   const roots: string[] = [];
   afterEach(() => {
+    // 1669 号：此前这里是空转（`void root`，注释称「清理交由进程退出」——进程
+    // 退出并不删临时目录），系统 tmp 累计 800+ 个 export-routes-* 根。
     for (const root of roots.splice(0)) {
-      // tmpdir 清理交由进程退出（createStudioServer 无常驻句柄面）。
-      void root;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

@@ -19,6 +19,7 @@ pub mod books_state_routes;
 pub mod fanfic_routes;
 pub mod genre_routes;
 pub mod interactive_film_routes;
+pub mod llm_config_guard;
 pub mod loopback_guard;
 pub mod ops_routes;
 pub mod parent_watchdog;
@@ -290,12 +291,23 @@ pub fn router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(api_no_store))
 }
 
-/// 带运行时句柄的组合路由（utility + SSE + write-next）。
-pub fn router_with_runtime(
+/// utility + SSE + write-next。`startup_router` = `Some` 时 write-next 挂 LLM
+/// 配置守卫（1669 号）：`WriteNextRuntime` 不持有启动路由器，只有组合到 books
+/// 域时才知道「项目配置不可用时回退的端点」是否也未配置——故守卫在组合层加。
+fn runtime_routes(
     state: AppState,
     hub: std::sync::Arc<sse::BroadcastHub>,
     write_next: write_next_route::WriteNextRuntime,
+    startup_router: Option<std::sync::Arc<crate::llm::agent_router::AgentRouter>>,
 ) -> Router {
+    let write_next_handler = post(write_next_route::write_next);
+    let write_next_handler = match startup_router {
+        Some(router) => llm_config_guard::llm_guarded(
+            write_next_handler,
+            llm_config_guard::LlmConfigGuard::new(&write_next.project_root, router),
+        ),
+        None => write_next_handler,
+    };
     router(state)
         // SSE 快照对账用引擎项目根（前端 EventSource 只传 sessionId；
         // write-next 运行时持有同一根——检查点落盘面与恢复面同源）。
@@ -308,8 +320,25 @@ pub fn router_with_runtime(
         )
         .route(
             "/api/v1/books/:id/write-next",
-            post(write_next_route::write_next).with_state(write_next),
+            write_next_handler.with_state(write_next),
         )
+}
+
+/// 带运行时句柄的组合路由（utility + SSE + write-next）。
+pub fn router_with_runtime(
+    state: AppState,
+    hub: std::sync::Arc<sse::BroadcastHub>,
+    write_next: write_next_route::WriteNextRuntime,
+) -> Router {
+    runtime_routes(state, hub, write_next, None)
+}
+
+/// audit 路由（守卫在 `audit_chapter` 处理器内——它持有启动路由器）。
+fn audit_route(audit: audit_route::AuditRuntime) -> Router {
+    Router::new().route(
+        "/api/v1/books/:id/audit/:chapter",
+        post(audit_route::audit_chapter).with_state(audit),
+    )
 }
 
 /// 完整组合路由（utility + SSE + write-next + audit）。
@@ -319,10 +348,7 @@ pub fn router_full(
     write_next: write_next_route::WriteNextRuntime,
     audit: audit_route::AuditRuntime,
 ) -> Router {
-    router_with_runtime(state, hub, write_next).route(
-        "/api/v1/books/:id/audit/:chapter",
-        post(audit_route::audit_chapter).with_state(audit),
-    )
+    runtime_routes(state, hub, write_next, None).merge(audit_route(audit))
 }
 
 /// books 域全量组合路由（+ plan/settle/draft/revise）。
@@ -333,42 +359,56 @@ pub fn router_books(
     audit: audit_route::AuditRuntime,
     books: books_routes::BooksRuntime,
 ) -> Router {
-    router_full(state, hub, write_next, audit)
+    // 1669 号：模型调用面统一挂 LLM 配置守卫——未配置时同步回 400
+    // LLM_CONFIG_ERROR，而不是等后台任务/传输层以 500 暴露连接拒绝。
+    let llm_guard =
+        || llm_config_guard::LlmConfigGuard::new(books.state.project_root(), books.router.clone());
+    runtime_routes(state, hub, write_next, Some(books.router.clone()))
+        .merge(audit_route(audit))
         .route(
             "/api/v1/books/:id/plan",
-            post(books_routes::plan).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::plan), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/settle",
-            post(books_routes::settle).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::settle), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/draft",
-            post(books_routes::draft).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::draft), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/revise/:chapter",
-            post(books_routes::revise).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::revise), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/rewrite/:chapter",
-            post(books_routes::rewrite).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::rewrite), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/resync/:chapter",
-            post(books_routes::resync).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::resync), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/compose",
-            post(books_routes::compose).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::compose), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/consolidate",
-            post(books_routes::consolidate_endpoint).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::consolidate_endpoint), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/repair-state/:chapter",
-            post(books_routes::repair_state).with_state(books.clone()),
+            llm_config_guard::llm_guarded(post(books_routes::repair_state), llm_guard())
+                .with_state(books.clone()),
         )
         .route(
             "/api/v1/books/:id/analytics",

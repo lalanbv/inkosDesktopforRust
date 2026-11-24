@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,9 +13,10 @@ import { chapterSetRevision } from "@actalk/inkos-core";
 describe("chapter structure routes (R48a/1641)", () => {
   const roots: string[] = [];
   afterEach(() => {
+    // 1669 号：此前空转（`void root`，注释称「清理交由进程退出」）——系统 tmp
+    // 累计 236 个 chapter-structure-routes-* 根。
     for (const root of roots.splice(0)) {
-      // tmpdir 清理交由进程退出（createStudioServer 无常驻句柄面）。
-      void root;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,8 +13,9 @@ import { chapterSetRevision } from "@actalk/inkos-core";
 describe("volume routes (R49/1644)", () => {
   const roots: string[] = [];
   afterEach(() => {
+    // 1669 号：此前空转（`void root`）——系统 tmp 累计 290 个 volume-routes-* 根。
     for (const root of roots.splice(0)) {
-      void root;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

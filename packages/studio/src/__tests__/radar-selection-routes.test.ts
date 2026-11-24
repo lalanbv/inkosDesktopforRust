@@ -46,25 +46,28 @@ describe("radar selection routes (707: G14a/335)", () => {
     expect(qidian?.entries.map((e) => e.title)).toContain("剑来");
   });
 
-  it("analyze: 空 selection 走全量 + 无 LLM 配置降级 500（radar:error 广播路径）", async () => {
+  it("analyze: 空 selection 走全量 + 无 LLM 配置 → 400 LLM_CONFIG_ERROR（radar:error 广播路径）", async () => {
     const app = createStudioServer({} as never, root);
-    // 临时根无 LLM 配置 → buildPipelineConfig 失败 → 500 + radar:error 广播
-    //（fork 原实现 catch 语义；路由在位证明 = 非 404）。
+    // 临时根无 LLM 配置 → buildPipelineConfig 抛 LLMConfigurationError → 400
+    // 信封（1669 号归一，此前 500 裸串）+ radar:error 广播照发（路由在位证明 =
+    // 非 404）。
     const res = await app.request("/api/v1/radar/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ selection: { platforms: [], categories: [] } }),
     });
-    expect(res.status).toBe(500);
-    const body = await res.json() as { error: string };
-    expect(typeof body.error).toBe("string");
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("LLM_CONFIG_ERROR");
+    expect(typeof body.error.message).toBe("string");
   });
 
   it("scan 既有面回归锁定：selection 缺省仍走 2.0 harness 全量扫描", async () => {
     const app = createStudioServer({} as never, root);
-    // 同一临时根无 LLM 配置 → 500（既有 /radar/scan 行为不变——707 嫁接
-    // 只增不改，daemon/tick 的 submitStructured 路径原样）。
+    // 同一临时根无 LLM 配置 → 400 LLM_CONFIG_ERROR（1669 号归一；既有
+    // /radar/scan 的全量扫描路径不变——707 嫁接只增不改，daemon/tick 的
+    // submitStructured 路径原样）。
     const res = await app.request("/api/v1/radar/scan", { method: "POST" });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
   });
 });

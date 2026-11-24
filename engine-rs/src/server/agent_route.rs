@@ -931,6 +931,36 @@ pub async fn post_agent(
         };
     }
 
+    // 1669 号：模型调用前的 LLM 配置前置检查 → 400 LLM_CONFIG_ERROR（TS 腿
+    // 同码）。只守聊天轮——它必然调用模型（落点 = per-request 覆盖端点；未命中
+    // 则用启动路由器，启动路由器自身是未配置占位即「真的没配」）。确认式生产
+    // 动作里有不走文本模型的（generate_cover 走封面服务、remove_node /
+    // connect_choice 是纯结构操作），不做统一前置检查。
+    if runtime.startup_router_unconfigured() {
+        let message = match crate::server::books_routes::resolve_project_llm(root).await {
+            crate::server::books_routes::ProjectLlmState::Missing => {
+                crate::server::llm_config_guard::LLM_CONFIG_ERROR_NO_SERVICE
+            }
+            _ => crate::server::llm_config_guard::LLM_CONFIG_ERROR_MISSING_KEY,
+        };
+        runtime.hub.broadcast(
+            "agent:error",
+            &json!({
+                "instruction": instruction,
+                "activeBookId": agent_book_id,
+                "sessionId": session_id,
+                "sessionKind": session_kind.as_str(),
+                "error": message,
+            }),
+        );
+        return api_error(
+            StatusCode::BAD_REQUEST,
+            crate::server::llm_config_guard::LLM_CONFIG_ERROR_CODE,
+            message,
+        )
+        .into_response();
+    }
+
     // ── agent 循环主路径（66 号：多轮 tool-use + SSE 增量 + abort 截断） ──
     // 220 号：per-session 串行——同会话并发请求在 queue 上排队（此前无条件
     // 覆盖注册表句柄：abort 链丢失 + 两轮 LLM 交错烧钱；TS 为 FIFO 排队）。

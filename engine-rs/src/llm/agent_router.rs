@@ -29,6 +29,12 @@ use crate::llm::streaming_client::{ChatCompletionParams, StreamError, StreamingC
 use crate::pipeline::chapter_review_cycle::{ChapterReviewCycleControlInput, CycleAuditor};
 use crate::pipeline::chapter_state_recovery::{SettlePort, SettleRequest};
 
+/// 未配置哨兵：`inkos-engine-server` 在 `INKOS_LLM_BASE_URL` 缺省时的默认端点
+/// （discard 端口——发出去必然连接拒绝）。桌壳直启引擎不注入任何 `INKOS_LLM_*`
+/// 环境变量，所以产品路径上启动路由器恒为此形态；有效配置只来自项目
+/// `inkos.json` 服务项 + secrets（`BooksRuntime::effective_router` 热解析）。
+pub const LLM_UNCONFIGURED_BASE_URL: &str = "http://127.0.0.1:9";
+
 /// 默认 LLM 端点配置。
 #[derive(Debug, Clone)]
 pub struct LlmEndpointConfig {
@@ -41,6 +47,15 @@ pub struct LlmEndpointConfig {
     /// `builtin_context_window` 解析——内建卡两层查，miss 128_000 缺省；
     /// 0 = 显式关闭预算（write-next compose 不做压缩））。
     pub context_window_tokens: u64,
+}
+
+impl LlmEndpointConfig {
+    /// 是否为「未配置」占位：bin 的 env 缺省形态（端点为
+    /// [`LLM_UNCONFIGURED_BASE_URL`] 且 key 为空）。1669 号模型调用前的配置前置
+    /// 检查据此区分「项目配置不可用但 env 端点可用」与「两头都没有」。
+    pub fn is_unconfigured_placeholder(&self) -> bool {
+        self.base_url == LLM_UNCONFIGURED_BASE_URL && self.api_key.is_empty()
+    }
 }
 
 /// 单 agent 覆盖。对齐 TS `AgentLLMOverride` 的 Rust 子集（字符串模型覆盖
@@ -139,6 +154,11 @@ impl AgentRouter {
     /// 当前流式偏好（探测/诊断面回显）。
     pub fn stream_preference(&self) -> Option<bool> {
         self.stream
+    }
+
+    /// 默认端点（未命中 agent 覆盖时的落点）。
+    pub fn default_endpoint(&self) -> &LlmEndpointConfig {
+        &self.default
     }
 
     /// 当前传输协议（探测/诊断面回显）。

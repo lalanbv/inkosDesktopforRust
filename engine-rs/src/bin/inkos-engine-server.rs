@@ -55,7 +55,11 @@ fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or_else(|| inkos_engine::llm::lookup::builtin_context_window("custom", &env_model));
     let default = LlmEndpointConfig {
-        base_url: env("INKOS_LLM_BASE_URL", "http://127.0.0.1:9"),
+        // 1669 号：缺省=未配置哨兵（常量与前置检查同源，勿各写各的字面量）。
+        base_url: env(
+            "INKOS_LLM_BASE_URL",
+            inkos_engine::llm::agent_router::LLM_UNCONFIGURED_BASE_URL,
+        ),
         api_key: env("INKOS_LLM_API_KEY", ""),
         model: env_model,
         max_tokens: env("INKOS_LLM_MAX_TOKENS", "8192").parse().unwrap_or(8192),

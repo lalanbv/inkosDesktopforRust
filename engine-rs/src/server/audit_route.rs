@@ -3,7 +3,8 @@
 //! 移植 Node 契约（server.ts L5570-5598）：**同步**流程（非 fire-and-forget）——
 //! 读章节文件（缺失 404）→ 真实 `audit_chapter`（11 路真相文件 + 维度审计）→
 //! 返回 AuditResult JSON；SSE 广播 `audit:start` / `audit:complete {passed}` /
-//! `audit:error`。失败返回 500 `{error}`。
+//! `audit:error`。失败返回 500 `{error}`；LLM 未配置（模型调用前检出）返回
+//! 400 `{error:{code:"LLM_CONFIG_ERROR",message}}`（1669 号，TS 腿同码）。
 
 use std::sync::Arc;
 
@@ -42,6 +43,16 @@ impl AuditRuntime {
         .effective_router()
         .await
     }
+
+    /// 1669 号：模型调用前的 LLM 配置前置检查（判定与 `BooksRuntime` 同源）。
+    pub async fn require_llm_config(&self) -> Result<(), String> {
+        crate::server::llm_config_guard::LlmConfigGuard::new(
+            self.state.project_root(),
+            self.router.clone(),
+        )
+        .check()
+        .await
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -63,6 +74,12 @@ pub async fn audit_chapter(
             Json(serde_json::json!({ "error": format!("invalid chapter number: {chapter}") })),
         );
     };
+
+    // 1669 号：模型调用前的 LLM 配置前置检查——未配置同步回 400
+    // LLM_CONFIG_ERROR（TS 腿同码），不发 audit:start / audit:error。
+    if let Err(message) = runtime.require_llm_config().await {
+        return crate::server::llm_config_guard::llm_config_error(&message);
+    }
 
     runtime.hub.broadcast(
         "audit:start",

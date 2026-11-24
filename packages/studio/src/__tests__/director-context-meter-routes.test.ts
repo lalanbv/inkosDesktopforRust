@@ -112,7 +112,7 @@ describe("director + context-meter recycle routes (713)", () => {
     expect(typeof untouched.session.updatedAt).toBe("number");
   });
 
-  it("directions POST: premise 缺失 400 + 无 LLM 路由在位 500", async () => {
+  it("directions POST: premise 缺失 400 + 无 LLM 配置 400 LLM_CONFIG_ERROR", async () => {
     const app = createStudioServer({} as never, root);
 
     // 空载荷（缺 premise）→ 400（守卫链先于 LLM）。
@@ -124,20 +124,21 @@ describe("director + context-meter recycle routes (713)", () => {
     expect(noPremise.status).toBe(400);
     expect(((await noPremise.json()) as { error: string }).error).toContain("premise");
 
-    // 合法灵感但测试环境无 LLM → 500（路由在位；LLM 面状态码口径同 708 号）。
+    // 合法灵感但测试环境无 LLM → 400 LLM_CONFIG_ERROR 信封（1669 号归一：模型
+    // 调用前检出的配置问题不再落 500 裸串；路由在位证明 = 非 404）。
     // 回归锁（713 号）：premise-only（keywords 缺席）必须先过 InspirationCardSchema
     // 归一——fork 旧版 `as never` 裸传时 buildDirectionCandidatesPrompt 读
     // keywords.length 即炸（TypeError），与「LLM 未配置」失败形态混淆；归一后
-    // 失败面只剩 LLM 链（错误体非 TypeError）。
+    // 失败面只剩 LLM 配置链。
     const noLlm = await app.request("/api/v1/director/directions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ inspiration: { premise: "镜中图书馆" }, count: 3 }),
     });
-    expect(noLlm.status).toBe(500);
-    const noLlmBody = (await noLlm.json()) as { error: string };
-    expect(noLlmBody.error).toBeTruthy();
-    expect(noLlmBody.error).not.toContain("TypeError");
+    expect(noLlm.status).toBe(400);
+    const noLlmBody = (await noLlm.json()) as { error: { code: string; message: string } };
+    expect(noLlmBody.error.code).toBe("LLM_CONFIG_ERROR");
+    expect(noLlmBody.error.message).not.toContain("TypeError");
   });
 
   it("context-meter GET: 缺参 400 / 未知会话 404（typed 错误体双端同形）", async () => {

@@ -13,7 +13,7 @@
 //
 //   node scripts/cargo-test-gate.mjs             # 两把 crate 全跑
 //   node scripts/cargo-test-gate.mjs engine-rs   # 只跑指定 crate 目录
-//   node scripts/cargo-test-gate.mjs --self-check-only   # 只跑 duel 台账解析器必红自检
+//   node scripts/cargo-test-gate.mjs --self-check-only   # 只跑必红自检（duel 台账解析器 + 日志清理器）
 //
 // 前置与环境：
 // - 第一步固定跑 audit:rust（RustSec 供应链审计，570 号接入）——需 cargo-audit
@@ -29,9 +29,11 @@
 //   clippy:gate 同纪律，禁止为提速注 skip/过滤洗门禁。
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -226,10 +228,115 @@ function duelSelfCheck() {
   return bad === 0;
 }
 
+// ── 1669 号：门禁日志目录保留期 ──
+//
+// 每跑一次在系统 tmp 留一个 `cargo-test-gate-<随机>` 目录（output.log +
+// duel-ledger.log），脚本从不清理——累计 200 个。只保留最近 LOG_DIR_KEEP 份
+// （按 mtime 新→旧），其余删除。清理是附带品不是判据：删除失败只告警，不影响
+// 门禁结论。LOG_DIR_MIN_AGE_MS 内改动过的目录一律不动——另一会话可能有门禁
+// 正在跑，其日志目录正当在用（在用保护优先于保留份数）。
+const LOG_DIR_PREFIX = "cargo-test-gate-";
+const LOG_DIR_KEEP = 10;
+const LOG_DIR_MIN_AGE_MS = 5 * 60_000;
+
+/** 唯一清理路径：真清理与自检共用——自检证明的就是这段代码真会删、且只删该删的。 */
+function pruneGateLogs(tmpRoot, { keep, now, minAgeMs }) {
+  let entries;
+  try {
+    entries = readdirSync(tmpRoot, { withFileTypes: true });
+  } catch {
+    return { removed: 0, kept: 0, errors: ["tmpdir 不可读"] };
+  }
+  const dirs = [];
+  const errors = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(LOG_DIR_PREFIX)) continue;
+    try {
+      dirs.push({ path: join(tmpRoot, entry.name), mtimeMs: statSync(join(tmpRoot, entry.name)).mtimeMs });
+    } catch (error) {
+      errors.push(`${entry.name}: ${error.message}`);
+    }
+  }
+  dirs.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  let removed = 0;
+  let kept = 0;
+  dirs.forEach((dir, index) => {
+    if (index < keep || now - dir.mtimeMs < minAgeMs) {
+      kept += 1;
+      return;
+    }
+    try {
+      rmSync(dir.path, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      errors.push(`${dir.path}: ${error.message}`);
+    }
+  });
+  return { removed, kept, errors };
+}
+
+/** 清理器必红自检：旧目录真删、按新旧保留、无关目录与在用目录不动。 */
+function pruneSelfCheck() {
+  /** 造 n 个日志目录；ageMs 为距 now 的时长（0 = 刚建，在用；旧目录逐个再旧一分钟）。 */
+  const makeDirs = (root, prefix, count, ageMs) => Array.from({ length: count }, (_, index) => {
+    const path = join(root, `${LOG_DIR_PREFIX}${prefix}${index}`);
+    mkdirSync(path);
+    const at = new Date(Date.now() - ageMs - (ageMs > 0 ? index * 60_000 : 0));
+    utimesSync(path, at, at);
+    return basename(path);
+  });
+  const scenario = (label, run) => {
+    const root = mkdtempSync(join(tmpdir(), "cargo-test-gate-selfcheck-"));
+    try {
+      const { wantRemoved, wantRemaining } = run(root);
+      const result = pruneGateLogs(root, { keep: 10, now: Date.now(), minAgeMs: LOG_DIR_MIN_AGE_MS });
+      const remaining = readdirSync(root).sort();
+      const ok = result.removed === wantRemoved && JSON.stringify(remaining) === JSON.stringify(wantRemaining.sort());
+      return { label, ok, detail: `removed=${result.removed}/${wantRemoved} remaining=${remaining.length}/${wantRemaining.length}${result.errors.length ? ` errors=${result.errors.join(";")}` : ""}` };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  const stale = 3_600_000;
+  const results = [
+    scenario("基本保留", (root) => {
+      // 15 个一小时前的目录（逐个更旧）+ 1 个在用 + 2 个无关目录。
+      const old = makeDirs(root, "old", 15, stale);
+      const fresh = makeDirs(root, "fresh", 1, 0);
+      const unrelated = ["cargo-test-gatex", "other-prefix"];
+      for (const name of unrelated) mkdirSync(join(root, name));
+      // 保留份数含在用的那 1 个：fresh + 最新的 9 个旧目录留下，最旧的 6 个被删。
+      return { wantRemoved: 6, wantRemaining: [...old.slice(0, 9), ...fresh, ...unrelated] };
+    }),
+    scenario("在用保护优先于保留份数", (root) => {
+      // 12 个在用目录（两套门禁并行）+ 15 个旧目录：在用的全留，旧的全删。
+      const busy = makeDirs(root, "busy", 12, 0);
+      makeDirs(root, "old", 15, stale);
+      return { wantRemoved: 15, wantRemaining: busy };
+    }),
+  ];
+  return results;
+}
+
 {
   console.log("== 必红自检（duel 真跑地板解析器） ==");
   if (!duelSelfCheck()) {
     console.error("✗ duel 解析器自检失败——检测器失效，门禁结论不可信，拒绝放行");
+    process.exit(1);
+  }
+  console.log("== 必红自检（门禁日志清理器） ==");
+  let pruneBad = 0;
+  for (const result of pruneSelfCheck()) {
+    if (result.ok) {
+      console.log(`✓ 自检：${result.label}——${result.detail}`);
+    } else {
+      pruneBad += 1;
+      console.error(`✗ 自检失败：${result.label}——${result.detail}`);
+    }
+  }
+  if (pruneBad > 0) {
+    console.error("✗ 日志清理器自检失败——清理器行为与声明不符，拒绝放行");
     process.exit(1);
   }
 }
@@ -342,6 +449,15 @@ for (const crate of crates) {
   }
 
   console.log(`✓ ${crate}: ${oks} 个目标全绿，累计 ${passedTotal} passed（日志 ${logFile}）`);
+}
+
+// 1669 号：日志目录保留期——只留最近 LOG_DIR_KEEP 份（本轮的目录在用保护内）。
+{
+  const pruned = pruneGateLogs(tmpdir(), { keep: LOG_DIR_KEEP, now: Date.now(), minAgeMs: LOG_DIR_MIN_AGE_MS });
+  if (pruned.removed > 0 || pruned.errors.length > 0) {
+    const failures = pruned.errors.length ? `；失败 ${pruned.errors.length}：${pruned.errors.slice(0, 3).join("；")}` : "";
+    console.log(`\n日志目录清理：删 ${pruned.removed} / 留 ${pruned.kept}（保留最近 ${LOG_DIR_KEEP} 份）${failures}`);
+  }
 }
 
 process.exit(failed ? 1 : 0);

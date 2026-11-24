@@ -987,6 +987,27 @@ function validateAgentActionExecution(args: {
   return undefined;
 }
 
+/**
+ * 1669 号：处理器 catch 的失败归一化单源。「模型调用**之前**就能检出的 LLM
+ * 配置问题」（`LLMConfigurationError`：缺 API key / 无 inkos.json / 配置不是
+ * 合法 JSON）是客户端可纠正的配置错误，不是内部错误 → 400 `LLM_CONFIG_ERROR`
+ * 信封（与 Rust 腿同码同形）。此前只有冒泡到全局 `onError` 的才被映射；处理器
+ * 自带 try/catch 的一律转成 500 裸串。message 是 UI 文案表（core
+ * llm/error-copy）的逐字锚文本，勿改写。
+ *
+ * 用法：`return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);`
+ * ——非 LLM 配置错误返回 null，各处原有的失败口径逐字保留。
+ */
+function llmConfigErrorBody(error: unknown): { code: "LLM_CONFIG_ERROR"; message: string } | null {
+  if (!(error instanceof LLMConfigurationError)) return null;
+  return { code: "LLM_CONFIG_ERROR", message: error.message };
+}
+
+function llmConfigResponse(c: Context, error: unknown): Response | null {
+  const body = llmConfigErrorBody(error);
+  return body ? c.json({ error: body }, 400) : null;
+}
+
 function formatAgentFailure(
   error: unknown,
   lang: StudioLanguage = "zh",
@@ -2726,9 +2747,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (error instanceof ApiError) {
       return c.json({ error: { code: error.code, message: error.message } }, error.status as 400);
     }
-    if (error instanceof LLMConfigurationError) {
-      return c.json({ error: { code: "LLM_CONFIG_ERROR", message: error.message } }, 400);
-    }
+    const llmConfigFailure = llmConfigResponse(c, error);
+    if (llmConfigFailure) return llmConfigFailure;
     console.error("[studio] Unexpected server error", { method: c.req.method, path: new URL(c.req.url).pathname, aborted: c.req.raw.signal.aborted }, error);
     return c.json(
       { error: { code: "INTERNAL_ERROR", message: "Unexpected server error." } },
@@ -2775,6 +2795,19 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const freshConfig = await loadProjectConfig(root, { ...options, consumer: "studio" });
     cachedConfig = freshConfig;
     return freshConfig;
+  }
+
+  // 1669 号：模型调用前的 LLM 配置前置检查。与管线同一条解析路径
+  // （requireApiKey 缺省）——`/agent` 自身按 requireApiKey:false 加载，缺 key
+  // 此前要等到请求发出才以模型错误失败。配置问题以 core
+  // `LLMConfigurationError` 原文返回（文案表逐字锚）；非配置错误不在此吞。
+  async function llmConfigProblem(): Promise<unknown> {
+    try {
+      await loadProjectConfig(root, { consumer: "studio" });
+      return null;
+    } catch (error) {
+      return error instanceof LLMConfigurationError ? error : null;
+    }
   }
 
   // Read the project language fresh from inkos.json on every call, so a language
@@ -3151,7 +3184,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         canDelete: num === latestChapter,
       });
     } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 
@@ -3170,7 +3203,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       await saveChapterUserBrief(state.bookDir(id), num, body.brief);
       return c.json({ ok: true, chapterNumber: num, brief: body.brief.trim() });
     } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 
@@ -3241,7 +3274,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       return c.json({ chapterNumber: num, card });
     } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 
@@ -3295,7 +3328,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       broadcast("chapter:restored", { bookId: id, chapterNumber: num });
       return c.json({ ok: true, chapterNumber: num, versionId: c.req.param("versionId"), result });
     } catch (e) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     } finally {
       await releaseLock();
     }
@@ -3341,7 +3374,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       );
       return c.json({ ok: true, chapterNumber: num, result });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     } finally {
       await releaseLock();
     }
@@ -3368,7 +3401,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         e.status as 400 | 404 | 409,
       );
     }
-    return c.json({ error: String(e) }, 500);
+    return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
   };
 
   app.post("/api/v1/books/:id/chapters/:num/split", async (c) => {
@@ -3511,7 +3544,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       await writeTextAtomic(bookPath, JSON.stringify(rawBook, null, 2));
       return c.json({ ok: true, volumes: sortVolumesCore(body.volumes) });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     } finally {
       await releaseLock();
     }
@@ -3544,7 +3577,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       await state.saveChapterIndex(id, nextIndex);
       return c.json({ ok: true, chapterNumber: num, volumeId: body.volumeId });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     } finally {
       await releaseLock();
     }
@@ -3722,7 +3755,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return c.json({ ok: true });
     } catch (e) {
       broadcast("foundation:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -4565,7 +4598,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const projection = projectRunLog(globalRunLog.snapshot(), limit);
       return c.json(projection);
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -4584,7 +4617,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const { curve, warnings } = analyzeTensionCurve(rows);
       return c.json({ curve, warnings });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -4624,7 +4657,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }));
       return c.json({ profiles: items.filter(Boolean) });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -4714,7 +4747,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       });
       return c.json({ statuses, todayKey });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -4870,7 +4903,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const perBook = stats.passRateByBook(rows, 30, new Date().toISOString());
       return c.json({ ...aggregate, passRateByBook: perBook });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -4887,7 +4920,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }
       return c.json({ rows });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -5041,7 +5074,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const weakRuns = detectWeakHookRuns({ summaries: summaryRows });
       return c.json({ timeline, pacingDebts, weakRuns, currentChapter });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -5079,7 +5112,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           : 1;
         return c.json({ trend, urgency: rankUrgency(memory.getAllHooks(), currentChapter), currentChapter });
       } catch (e) {
-        return c.json({ error: String(e) }, 500);
+        return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
       }
     }
     // 808 号：账本缺席（2.0 原生书——无 review_metrics 写链）改走正典派生，不再返回
@@ -5116,7 +5149,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }).catch(() => []);
       return c.json({ trend, urgency: rankUrgency(hooks, currentChapter), currentChapter });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -5134,7 +5167,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const debts = memory.listDebts(undefined, statusFilter);
       return c.json({ debts });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -5170,7 +5203,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           .map((s) => ({ chapter: s.chapter, characters: s.characters ?? "" }));
         return c.json(await resolve(summaries, join(root, "books", id, "story", "entity_roster.md")));
       } catch (e) {
-        return c.json({ error: String(e) }, 500);
+        return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
       }
     }
     // 809 号：账本缺席（2.0 原生书——无 MemoryDB 写链）改走正典派生，不再返回死空壳
@@ -5189,7 +5222,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }).catch(() => []);
       return c.json(await resolve(rows, join(storyDir, "entity_roster.md")));
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -5358,7 +5391,7 @@ function yamlScalar(value: unknown): string {
       await copyFile(join(builtinDir, `${genreId}.md`), join(projectGenresDir, `${genreId}.md`));
       return c.json({ ok: true, path: `genres/${genreId}.md` });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -5936,7 +5969,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ directions });
     } catch (e) {
       broadcast("director:error", { error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6042,7 +6075,7 @@ function yamlScalar(value: unknown): string {
       return c.json(result);
     } catch (e) {
       broadcast("consolidate:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6054,7 +6087,7 @@ function yamlScalar(value: unknown): string {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
       return c.json(await pipeline.planChapter(id, body.context));
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6066,7 +6099,7 @@ function yamlScalar(value: unknown): string {
       const pipeline = new PipelineRunner(await buildPipelineConfig());
       return c.json(await pipeline.composeChapter(id, body.context));
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6081,7 +6114,7 @@ function yamlScalar(value: unknown): string {
       return c.json(result);
     } catch (e) {
       broadcast("repair-state:error", { bookId: id, chapter: chapterNum, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6097,7 +6130,7 @@ function yamlScalar(value: unknown): string {
       await state.saveChapterIndex(id, updated);
       return c.json({ ok: true, chapterNumber: num, status: "approved" });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6121,7 +6154,7 @@ function yamlScalar(value: unknown): string {
         discarded,
       });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6251,7 +6284,7 @@ function yamlScalar(value: unknown): string {
       const core = await import("@actalk/inkos-core");
       return c.json(await core.evaluateBookQuality({ state, bookId: id, chapters }));
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6272,7 +6305,7 @@ function yamlScalar(value: unknown): string {
       const result = analyzeAITells(content);
       return c.json({ chapterNumber: chapterNum, ...result });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6297,7 +6330,7 @@ function yamlScalar(value: unknown): string {
       );
       return c.json({ bookId: id, results });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6421,7 +6454,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ ok: true });
     } catch (e) {
       broadcast("fanfic:refresh:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -6635,7 +6668,7 @@ function yamlScalar(value: unknown): string {
       await writeFileFs(configPath, JSON.stringify(existing, null, 2), "utf-8");
       return c.json({ ok: true });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -7071,7 +7104,7 @@ function yamlScalar(value: unknown): string {
       });
       return c.json({ ok: true, running: true });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8119,6 +8152,13 @@ function yamlScalar(value: unknown): string {
             setBookCreateStatus(pendingBookId, { status: "error", error: message });
             broadcast("book:error", { bookId: pendingBookId, sessionId: streamSessionId, error: message });
           }
+          // 1669 号：需要模型的确认动作在模型调用前抛出的配置问题 → 400 同码同形
+          // （确认动作不做统一前置检查——其中有不走文本模型的）。
+          const confirmedConfigError = llmConfigErrorBody(error);
+          if (confirmedConfigError) {
+            broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, sessionKind, error: confirmedConfigError.message });
+            return c.json({ error: confirmedConfigError, response: confirmedConfigError.message }, 400);
+          }
           if (error instanceof ApiError) {
             broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, sessionKind, error: message });
             return c.json({
@@ -8147,6 +8187,16 @@ function yamlScalar(value: unknown): string {
           activeConfirmedTasks.delete(taskId);
           reservedProductionSessions.delete(reservedSessionId);
         }
+      }
+
+      // 1669 号：模型调用前的 LLM 配置前置检查 → 400 LLM_CONFIG_ERROR（Rust 腿
+      // 同码）。只守聊天轮——它必然调用模型；确认式生产动作里有不走文本模型的
+      // （generate_cover 走封面服务、remove_node / connect_choice 是纯结构操作），
+      // 不得被聊天模型的缺 key 误拦。免 key 端点（本地/回环）不拦。
+      const chatConfigError = llmConfigErrorBody(await llmConfigProblem());
+      if (chatConfigError) {
+        broadcast("agent:error", { instruction, activeBookId: agentBookId, sessionId: bookSession.sessionId, sessionKind, error: chatConfigError.message });
+        return c.json({ error: chatConfigError, response: chatConfigError.message }, 400);
       }
 
       // The surface agent should speak the user's language, not just the project default.
@@ -8435,6 +8485,13 @@ function yamlScalar(value: unknown): string {
         const boundMessage = e instanceof Error ? e.message : String(e);
         throw new ApiError(409, "SESSION_ALREADY_BOUND", boundMessage);
       }
+      // 1669 号：模型调用前的 LLM 配置问题 → 400 LLM_CONFIG_ERROR（此前落
+      // INKOS_ACTION_ERROR 500 信封）；response 文本照给聊天气泡。
+      const llmConfigError = llmConfigErrorBody(e);
+      if (llmConfigError) {
+        broadcast("agent:error", { instruction, activeBookId, sessionId, sessionKind: reqSessionKind, error: llmConfigError.message });
+        return c.json({ error: llmConfigError, response: llmConfigError.message }, 400);
+      }
       const msg = e instanceof Error ? e.message : String(e);
       broadcast("agent:error", { instruction, activeBookId, sessionId, sessionKind: reqSessionKind, error: msg });
 
@@ -8476,7 +8533,7 @@ function yamlScalar(value: unknown): string {
       await writeFileFs(configPath, JSON.stringify(existing, null, 2), "utf-8");
       return c.json({ ok: true, language });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8501,7 +8558,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ summary: result?.summary ?? action.summary, observations: result?.observations ?? [] });
     } catch (e) {
       broadcast("audit:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8536,7 +8593,7 @@ function yamlScalar(value: unknown): string {
       return c.json(action.data ?? action);
     } catch (e) {
       broadcast("revise:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8624,7 +8681,7 @@ function yamlScalar(value: unknown): string {
       if (e instanceof ChapterExportSourceError) return c.json({error:e.message,code:e.code,details:e.details},409);
       // 1647 号：message 裸形态（Rust export_save 返回裸错误串——此前
       // String(e) 带 "Error: " 前缀=同端点双端文案漂移，live 探针逼出）。
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
     }
   });
 
@@ -8760,7 +8817,7 @@ function yamlScalar(value: unknown): string {
       broadcast("book:deleted", { bookId: id });
       return c.json({ ok: true, bookId: id });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8796,7 +8853,7 @@ function yamlScalar(value: unknown): string {
       await state.saveBookConfig(id, updated);
       return c.json({ ok: true, book: updated });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8841,7 +8898,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ status: "complete", bookId: id, chapter: chapterNum, result: action.data ?? action });
     } catch (e) {
       broadcast("rewrite:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8866,7 +8923,7 @@ function yamlScalar(value: unknown): string {
       });
       return c.json(action.data ?? action);
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8881,7 +8938,7 @@ function yamlScalar(value: unknown): string {
       const insights = analyzeDetectionInsights(history);
       return c.json(insights);
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8904,7 +8961,7 @@ function yamlScalar(value: unknown): string {
       });
       return c.json({ guide });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8933,7 +8990,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("style:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8963,7 +9020,7 @@ function yamlScalar(value: unknown): string {
       return c.json(result);
     } catch (e) {
       broadcast("import:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -8989,7 +9046,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ ok: true, result: action.data });
     } catch (e) {
       broadcast("import:error", { bookId: id, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -9036,7 +9093,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ ok: true, material, result: action.data });
     } catch (error) {
       broadcast("import:error", { bookId: id, type: "canon-file", error: String(error) });
-      return c.json({ error: String(error) }, 500);
+      return llmConfigResponse(c, error) ?? c.json({ error: String(error) }, 500);
     }
   });
 
@@ -9096,7 +9153,7 @@ function yamlScalar(value: unknown): string {
       return c.json({ ok: true, bookId: createdBookId });
     } catch (e) {
       broadcast("fanfic:error", { bookId, error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -9261,7 +9318,7 @@ function yamlScalar(value: unknown): string {
       return c.json(result);
     } catch (e) {
       broadcast("radar:error", { error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -9275,7 +9332,7 @@ function yamlScalar(value: unknown): string {
       const rankings = await fetchRankings();
       return c.json({ rankings });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -9291,7 +9348,7 @@ function yamlScalar(value: unknown): string {
       return c.json(result);
     } catch (e) {
       broadcast("radar:error", { error: String(e) });
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -9300,7 +9357,7 @@ function yamlScalar(value: unknown): string {
       const items = await loadRadarHistory(root);
       return c.json({ items });
     } catch (e) {
-      return c.json({ error: String(e) }, 500);
+      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });
 
@@ -9545,6 +9602,10 @@ function yamlScalar(value: unknown): string {
       return c.json(result.data);
     } catch (error) {
       if (error instanceof ApiError) throw error;
+      // 1669 号：模型调用前的 LLM 配置问题 → 400 LLM_CONFIG_ERROR（此前与动作
+      // 失败一并落 500 INKOS_TRANSLATION_ACTION_FAILED 信封）。
+      const llmConfigFailure = llmConfigResponse(c, error);
+      if (llmConfigFailure) return llmConfigFailure;
       const message = error instanceof Error ? error.message : String(error);
       throw new ApiError(
         500,

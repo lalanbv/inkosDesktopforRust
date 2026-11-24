@@ -28,13 +28,14 @@ const repoRoot = resolve(studioSrc, "..", "..", "..");
  * 1667 号清偿 28 条：章版本读/恢复 + roster/confirm（book-data-path-family.test）、
  * audit/revise/rewrite（fork-write-faces-llm.test，canonical walkthrough-mock 上游）、
  * 其余 22 条不依赖 LLM 的校验/简单成功路径（route-baseline-batch2.test）。
- * 余下 4 条均需 LLM 或重夹具（建书链 / 文风导入 / daemon 启动 / 翻译运行）。
+ * 1669 号清偿 2 条：books/create 与 daemon/start 的「LLM 未配置 → 400
+ * LLM_CONFIG_ERROR」负向路径（llm-config-error.test）——成功路径仍未覆盖，
+ * 守卫只认引用，不认断言强度。
+ * 余下 2 条需 LLM 或重夹具（文风导入 / 翻译运行）。
  * 每条都是已知未测面——清偿一条就删一行；新条目不得加入。
  */
 const BASELINE: ReadonlyArray<string> = [
-  "POST /api/v1/books/create",
   "POST /api/v1/books/:id/style/import",
-  "POST /api/v1/daemon/start",
   "POST /api/v1/translations/:id/run",
 ];
 

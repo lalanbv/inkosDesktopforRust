@@ -1,8 +1,8 @@
 import { globalRunLog, recordRunLogCall } from "@actalk/inkos-core";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createStudioServer } from "../api/server.js";
 
 /**
@@ -15,8 +15,17 @@ import { createStudioServer } from "../api/server.js";
  * run-log-writer.test 直锁两条 LLM 传输边界）。
  */
 describe("run-log route (R26/403, 1663 回座)", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    // 1669 号：此前无清理——每跑一次在系统 tmp 留一个 run-log-route-* 根。
+    for (const root of roots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   function seedApp() {
     const root = mkdtempSync(join(tmpdir(), "run-log-route-"));
+    roots.push(root);
     return createStudioServer({} as never, root);
   }
 
