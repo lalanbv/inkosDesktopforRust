@@ -6343,6 +6343,87 @@ mod skills60_e2e {
         assert_eq!(parsed["error"]["code"], "PROMPT_VERSION_NOT_FOUND");
     }
 
+    /// 1666 号：回滚到 delete 版本之后，**对这条新历史行再回滚**不得把提示词
+    /// 覆盖写成空串。「回滚到 delete 版」的效果是移除覆盖（回 builtin），此前
+    /// 却记成 `restore` + 空 content——与「回滚到空 put 版」同形，再回滚时走
+    /// 写覆盖分支 → 0 字节覆盖文件生效（正文写手提示词被静默清空；活体走查
+    /// 实证）。账本行语义 = 对覆盖文件的效果：put(c)=写、delete=移除、
+    /// restore(c)=按历史内容写；回滚到 delete 版的效果即「移除」→ 记 delete
+    /// 行。TS 腿同形同修；双端对跑见 strangler_duel
+    /// `strangler_prompt_packs_duel` B6/B7。
+    #[tokio::test]
+    async fn prompt_pack_rollback_to_builtin_history_row_stays_builtin() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let override_file = root.join("prompt").join("longform").join("writer.md");
+        let prompt_uri = "/api/v1/prompt-packs/longform.writer";
+        let versions_uri = "/api/v1/prompt-packs/longform.writer/versions";
+        let restore_uri = "/api/v1/prompt-packs/longform.writer/versions/restore";
+
+        // ① PUT → DELETE：delete 行入账（按 action 取行，不依赖 ts 排序）。
+        call(
+            app60(&root),
+            "PUT",
+            prompt_uri,
+            Some(r##"{ "content": "# 覆盖" }"##),
+        )
+        .await;
+        let (status, parsed) = call(app60(&root), "DELETE", prompt_uri, None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert!(!override_file.exists());
+        let (_, versions) = call(app60(&root), "GET", versions_uri, None).await;
+        let delete_ts = versions["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["action"] == "delete")
+            .expect("delete 行在列")["ts"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // ② 再写一次覆盖 → 回滚到 delete 版：回 builtin，新行记 delete（效果=移除）。
+        call(
+            app60(&root),
+            "PUT",
+            prompt_uri,
+            Some(r##"{ "content": "# 又一次覆盖" }"##),
+        )
+        .await;
+        let (status, parsed) = call(
+            app60(&root),
+            "POST",
+            restore_uri,
+            Some(&format!(r#"{{ "ts": "{delete_ts}" }}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["prompt"]["source"], "builtin");
+        assert!(!override_file.exists());
+        let (_, versions) = call(app60(&root), "GET", versions_uri, None).await;
+        let rows = versions["versions"].as_array().unwrap();
+        assert_eq!(rows.len(), 4, "{rows:?}");
+        assert_eq!(
+            rows[0]["action"], "delete",
+            "回滚到 delete 版的历史行须记 delete（效果=移除覆盖）：{rows:?}"
+        );
+        let rollback_ts = rows[0]["ts"].as_str().unwrap().to_string();
+
+        // ③ 对这条新行再回滚 → 仍是 builtin（修复前：写入 0 字节覆盖，
+        //    source=project、content=""）。
+        let (status, parsed) = call(
+            app60(&root),
+            "POST",
+            restore_uri,
+            Some(&format!(r#"{{ "ts": "{rollback_ts}" }}"#)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        assert_eq!(parsed["prompt"]["source"], "builtin");
+        assert_eq!(parsed["prompt"]["overridden"], false);
+        assert!(!override_file.exists());
+    }
+
     /// 1666 号：versions / restore 的 :promptId 白名单。TS 回退腿的 versions
     /// 端点此前漏了这步校验（未知 id → 200 空列表）——本测把 Rust 的参照行为
     /// 钉成运行时事实；双端对跑见 strangler_duel `strangler_prompt_packs_duel`。
@@ -7538,6 +7619,56 @@ mod services63_e2e {
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
         let text = parsed.to_string();
         assert!(!text.contains("dailyTokenBudget"), "{text}");
+    }
+
+    /// 1666 号：服务级 `models` 归一透传——Node 腿为自定义服务保存的模型清单，
+    /// Rust 腿 PUT（动的是别的条目）不得抹掉；载荷里的 models 也落盘（非字符串
+    /// 与空串项清洗掉）。
+    #[tokio::test]
+    async fn put_services_config_keeps_models_of_existing_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::write(
+            root.join("inkos.json"),
+            r#"{"llm":{"services":[{"service":"custom","name":"Local","baseUrl":"http://127.0.0.1:9/v1","models":["m-a","m-b"]}]}}"#,
+        )
+        .unwrap();
+        // 动的是另一条目：Local 的模型清单须原样保留。
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/config",
+            Some(r#"{"services":[{"service":"deepseek"}]}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let saved = std::fs::read_to_string(root.join("inkos.json")).unwrap();
+        assert!(
+            saved.contains("m-a") && saved.contains("m-b"),
+            "既有条目的 models 被抹掉：{saved}"
+        );
+        // 载荷里的 models 落盘；"" 与 42 清洗掉。
+        let (status, parsed) = call(
+            app63(&root),
+            "PUT",
+            "/api/v1/services/config",
+            Some(r#"{"services":[{"service":"custom","name":"Other","baseUrl":"http://127.0.0.1:9/v1","models":["m-c","",42,"m-d"]}]}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let saved = std::fs::read_to_string(root.join("inkos.json")).unwrap();
+        assert!(
+            saved.contains("m-c") && saved.contains("m-d") && !saved.contains("\"\""),
+            "载荷 models 落盘/清洗不符：{saved}"
+        );
+        // 读回面（归一后的条目）同样带着模型清单。
+        let (status, parsed) = call(app63(&root), "GET", "/api/v1/services/config", None).await;
+        assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        let read = parsed.to_string();
+        assert!(
+            read.contains("m-a") && read.contains("m-d"),
+            "读回面缺 models：{read}"
+        );
     }
 
     #[tokio::test]

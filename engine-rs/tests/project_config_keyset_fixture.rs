@@ -79,11 +79,31 @@ fn project_config_serialized_value_matches_fixture() {
     );
     let fixture_raw = std::fs::read_to_string(fixture_path)
         .unwrap_or_else(|e| panic!("fixture 缺失（{fixture_path}）：{e}\nACTUAL_FIXTURE={value}——本测红即键面/默认值漂移信号"));
-    let fixture: serde_json::Value = serde_json::from_str(&fixture_raw).expect("fixture JSON 合法");
+    let mut fixture: serde_json::Value =
+        serde_json::from_str(&fixture_raw).expect("fixture JSON 合法");
+
+    // 1666 号：持久化形态样本不是 ProjectConfig 序列化的产物——比对前摘出，
+    // 单独与 `ServiceConfigEntry` 全键样本对拍。原守卫只盯配置 schema 结构体
+    // `LLMServiceEntry`，而 PUT 落盘用的是 `ServiceConfigEntry`（多出预算三键 /
+    // maxTokens / models）：后者新增的键对 TS strict zod schema 不可见，预算键
+    // 一旦真落盘，Node 回退腿加载项目配置即崩（活体走查实证）。
+    let persisted_full = fixture
+        .as_object_mut()
+        .and_then(|map| map.remove("serviceEntryPersistedFull"))
+        .unwrap_or_else(|| {
+            panic!("fixture 缺 serviceEntryPersistedFull（ServiceConfigEntry 持久化形态全键样本）")
+        });
 
     assert_eq!(
         value, fixture,
         "ProjectConfig 序列化键面/默认值漂移——定性后同步更新 fixture，\
          并按 parity 测试信号决定 TS zod schema 是否跟随"
+    );
+    assert_eq!(
+        inkos_engine::server::service_routes::service_config_entry_full_key_sample(),
+        persisted_full,
+        "ServiceConfigEntry 持久化键面漂移——定性后同步更新 fixture 的 \
+         serviceEntryPersistedFull，并按 TS parity 测试信号决定 zod \
+         LLMServiceEntrySchema 是否跟随"
     );
 }

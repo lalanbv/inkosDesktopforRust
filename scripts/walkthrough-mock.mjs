@@ -193,12 +193,18 @@ http.createServer((req, res) => {
       let sys = "";
       let msgs = [];
       let wantStream = true;
+      // 1666 号：协议保真——usage 块只在请求方带 `stream_options.include_usage`
+      // 时才在流尾给出（OpenAI / DeepSeek / vLLM 等主流端点的真实行为；TS 腿
+      // pi-ai 与 Rust streaming_client 都会带）。此前 SSE 恒不给 usage，R55 用量
+      // 账本在流式走查里恒空，「写入点从未落账」与「端点不给 usage」分不开。
+      let wantUsage = false;
       let toolNames = [];
       try {
         const p = JSON.parse(body);
         sys = p?.messages?.[0]?.content ?? "";
         msgs = p?.messages ?? [];
         wantStream = p?.stream !== false;
+        wantUsage = p?.stream_options?.include_usage === true;
         // 714 号：TS planner 工具协议识别（submitStructured submit_chapter_memo）
         // ——见下方分派支；解析与 persona 特征同源同块，避免块级作用域引用。
         toolNames = (p?.tools ?? []).map((t) => t?.function?.name ?? t?.name ?? "");
@@ -219,9 +225,15 @@ http.createServer((req, res) => {
           usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
         }));
       };
+      // 流尾 usage 块单源：全部三个流式收尾（emitSse + emitSseSlow 即时/慢速）
+      // 共用。只接 emitSse 时纯文本分支（emitSseSlow）仍不给 usage——Rust 腿
+      // 普通对话恰走该分支，「写入点从未落账」与「端点不给 usage」仍分不开。
+      const usageChunk = wantUsage
+        ? `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } })}\n\n`
+        : "";
       const emitSse = (chunk, finish) => {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+        res.end(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(finish)}\n\n${usageChunk}data: [DONE]\n\n`);
       };
       // 644 号：慢速流形态（WALKTHROUGH_MOCK_STREAM_DELAY_MS>0 时启用）——正文
       // 按 8 字符/块逐块发射，块间 delay；finish chunk 与 [DONE] 收尾保持 OpenAI
@@ -231,7 +243,7 @@ http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         const delta = (c) => `data: ${JSON.stringify({ choices: [{ delta: { content: c }, finish_reason: null }] })}\n\n`;
         if (!(STREAM_DELAY_MS > 0)) {
-          res.end(`${delta(content)}data: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+          res.end(`${delta(content)}data: ${JSON.stringify(finish)}\n\n${usageChunk}data: [DONE]\n\n`);
           return;
         }
         const pieces = [];
@@ -246,7 +258,7 @@ http.createServer((req, res) => {
             res.write(delta(pieces[idx++]));
           } else {
             clearInterval(timer);
-            res.end(`data: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`);
+            res.end(`data: ${JSON.stringify(finish)}\n\n${usageChunk}data: [DONE]\n\n`);
           }
         }, STREAM_DELAY_MS);
         // 连接提前断开（引擎 abort→provider 断流）即停发射。挂 res 不挂 req：

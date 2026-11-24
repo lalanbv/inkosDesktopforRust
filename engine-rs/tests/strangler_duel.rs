@@ -344,6 +344,99 @@ async fn spawn_ts_sidecar(root: &Path, port: u16) -> TsSidecar {
     }
 }
 
+/// 1666 号：日志尾（早退诊断用——stderr 全文可能很长）。
+fn log_tail(path: &str) -> String {
+    std::fs::read_to_string(path)
+        .map(|text| {
+            let len = text.chars().count();
+            text.chars().skip(len.saturating_sub(600)).collect()
+        })
+        .unwrap_or_else(|error| format!("<{path} 读取失败：{error}>"))
+}
+
+/// 1666 号：单次就绪探测的限时。探测请求本身必须限时——占口者若「收连接
+/// 不应答」，不带限时的 `.send().await` 会把整个等待卡死，60s 截止永远检查
+/// 不到（注入故障实验实录：被占端口挂着不回话，用例 600s 不返回）。
+const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// 1666 号：带子进程句柄的就绪探测——与 [`wait_ready`] 同判据
+/// （`/api/v1/books` 成功），另加「进程早退」分支：进程已死却还在等就绪 =
+/// 必红，立即返回并附 stderr 日志尾，不再空等 60s。
+///
+/// testgate 实录：TS sidecar 端口交接竞态（`next_sidecar_port` 的 bind(:0)+
+/// drop 与 tsx 真正 listen 之间端口被占，EADDRINUSE 127.0.0.1:64750）→
+/// 「60s 未就绪」假红，真因要到 /tmp/duel-tsx-err.log 里翻。超时不是竞态
+/// 形态，沿用 `wait_ready` 的断言语义（panic，不交调用方重试）。
+async fn probe_child_ready(
+    child: &mut std::process::Child,
+    base: &str,
+    err_log: &str,
+) -> Result<(), String> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        // 先看进程：已死就不必再探（占口者只收连接不应答时，探测要空等到
+        // 限时才返回）。
+        if let Some(status) = child.try_wait().expect("子进程 try_wait") {
+            return Err(format!(
+                "{base} 子进程早退 {status:?}；{err_log} 尾：{}",
+                log_tail(err_log)
+            ));
+        }
+        // 1583 号：回环直连（见 loopback_client）。
+        let responded = match loopback_client()
+            .get(format!("{base}/api/v1/books"))
+            .timeout(PROBE_TIMEOUT)
+            .send()
+            .await
+        {
+            Ok(response) => response.status().is_success(),
+            Err(_) => false,
+        };
+        // 应答成功但进程随即退出（罕见）不算就绪——下一轮落到早退分支。
+        if responded && child.try_wait().expect("子进程 try_wait").is_none() {
+            return Ok(());
+        }
+        assert!(Instant::now() < deadline, "{base} 60s 未就绪");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// 1666 号：引擎 bin 子进程的就绪等待——早退即 panic（附 stderr 尾）。
+/// 不重试：Command 构造在各调用点（竞态同形但本批未实录；换口重试见
+/// [`spawn_ts_sidecar_ready`]）。
+async fn wait_child_ready(child: &mut std::process::Child, base: &str, err_log: &str) {
+    if let Err(exit) = probe_child_ready(child, base, err_log).await {
+        panic!("{exit}");
+    }
+}
+
+/// 1666 号：sidecar 起动换口重试上限。
+const SIDECAR_SPAWN_ATTEMPTS: u32 = 5;
+
+/// 1666 号：TS sidecar 起动握手——取口 → 起进程 → 就绪；早退则换口重试。
+///
+/// 端口交接窗口内的占用是非确定性竞态（同二进制复跑 6 轮全绿；并发压力
+/// 探针 26 万次交接零冲突——不可复现、无法事后还原占口者），换口重来即过。
+/// 启动即崩的产品缺陷（如 schema 拒启）每次同样早退——重试耗尽后 panic
+/// 并附最后一次的 stderr 尾，不被重试掩盖。
+async fn spawn_ts_sidecar_ready(root: &Path) -> TsSidecar {
+    let mut last_exit = String::new();
+    for attempt in 1..=SIDECAR_SPAWN_ATTEMPTS {
+        let port = next_sidecar_port().await;
+        let mut sidecar = spawn_ts_sidecar(root, port).await;
+        match probe_child_ready(&mut sidecar.child, &sidecar.base, "/tmp/duel-tsx-err.log").await {
+            Ok(()) => return sidecar,
+            Err(exit) => {
+                eprintln!(
+                    "[duel] sidecar 第 {attempt}/{SIDECAR_SPAWN_ATTEMPTS} 次起动早退，换口重试：{exit}"
+                );
+                last_exit = exit;
+            }
+        }
+    }
+    panic!("TS sidecar {SIDECAR_SPAWN_ATTEMPTS} 次起动均早退：{last_exit}");
+}
+
 /// 回环直连 client（1583 号）：默认构造（`Client::new()`）无条件读 env/系统
 /// 代理（auto_sys_proxy → macOS SCDynamicStore，不读 ExceptionsList），回环
 /// 目标被劫持去本机代理——代理转发回环成功时绿（劫持不可见），代理对回环
@@ -439,8 +532,11 @@ async fn wait_ready(base: &str) {
         // 1583 号补：顶层便捷函数 `reqwest::get()` 内部构造默认 Client（读
         // env/系统代理）——与本文件 `Client::new()` 站点同族漏网（死代理 env
         // 下探活 60s 全败实证），统一走 loopback_client 恒直连。
+        // 1666 号：单次探测限时（PROBE_TIMEOUT）——否则「收连接不应答」的
+        // 占口者让下面的 60s 截止永远检查不到。
         if let Ok(response) = loopback_client()
             .get(format!("{base}/api/v1/books"))
+            .timeout(PROBE_TIMEOUT)
             .send()
             .await
         {
@@ -507,10 +603,8 @@ async fn strangler_readonly_face_duel() {
 
     let rust = spawn_rust_engine(&root, &llm).await;
     // sidecar 端口选随机高位（bind 冲突由 readiness 捕获）。
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
 
     // 98 号 runbook 只读桶（GET 面）。
@@ -567,10 +661,8 @@ async fn strangler_cross_write_read_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
 
     let client = loopback_client();
@@ -676,10 +768,8 @@ async fn strangler_prompt_packs_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     // 契约源探测用**族根端点自身**，不走 duel_require_fork_contract!：该宏
     // 判据 `/api/v1/health` 是 Rust 超集独有面（TS 腿无此路由）→ 对 TS 腿恒判
     // 「上游 2.0」→ 受守卫的对跑恒跳过却计 ok。本族 TS 回退腿 1663 号起同构，
@@ -981,13 +1071,43 @@ async fn strangler_prompt_packs_duel() {
     assert_eq!(body["prompt"]["source"], "builtin");
     assert!(!override_file.exists());
     let rows = expect_pair(
-        "versions final",
+        "versions after restore delete",
         duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await,
         200,
     );
     assert_eq!(rows["versions"].as_array().map(Vec::len), Some(12));
+    // 1666 号：回滚到 delete 版的新行记 delete（效果=移除覆盖）——此前记
+    // `restore` + 空 content，与「回滚到空 put 版」同形（见 B7）。
+    assert_eq!(rows["versions"][0]["action"], "delete");
+    let rollback_ts = rows["versions"][0]["ts"].as_str().unwrap().to_string();
+
+    // B7) 对「回滚到 delete 版」产生的新行再回滚 → 仍是 builtin（修复前双端
+    //     都写入 0 字节覆盖文件：source=project、content=""）。双端共用项目根，
+    //     每步两腿各落一行：12 + 2。
+    let body = expect_pair(
+        "restore rollback-to-builtin row",
+        duel_pair(
+            &client,
+            &rust,
+            &ts,
+            Method::POST,
+            restore_path,
+            Some(&format!(r#"{{"ts":"{rollback_ts}"}}"#)),
+        )
+        .await,
+        200,
+    );
+    assert_eq!(body["prompt"]["source"], "builtin");
+    assert_eq!(body["prompt"]["overridden"], false);
+    assert!(!override_file.exists());
+    let rows = expect_pair(
+        "versions final",
+        duel_pair(&client, &rust, &ts, Method::GET, versions_path, None).await,
+        200,
+    );
+    assert_eq!(rows["versions"].as_array().map(Vec::len), Some(14));
     eprintln!(
-        "prompt-packs 族对跑通过：负路径 {} 条 + 写读 6 步，双端全等",
+        "prompt-packs 族对跑通过：负路径 {} 条 + 写读 7 步，双端全等",
         negative_count
     );
 }
@@ -1007,10 +1127,8 @@ async fn strangler_session_domain_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
     let client = loopback_client();
 
@@ -1103,10 +1221,8 @@ async fn strangler_services_domain_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
     let client = loopback_client();
 
@@ -1197,10 +1313,8 @@ async fn strangler_full_grey_simulation() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
     let client = loopback_client();
 
@@ -1375,7 +1489,7 @@ async fn bin_process_write_next_llm_resolution() {
         .spawn()
         .expect("bin 起动失败");
     let base = format!("http://127.0.0.1:{port}");
-    wait_ready(&base).await;
+    wait_child_ready(&mut command, &base, "/tmp/duel-bin-err.log").await;
 
     // 装配冒烟：真实产物全量路由可服务。
     let (status, _) = get_json(&base, "/api/v1/health").await;
@@ -1455,12 +1569,10 @@ async fn bin_process_static_face_duel() {
     write_fixture(&root, &llm);
 
     // sidecar 起动时自写 dist/index.html；资产预先放入（按请求读，两侧同源）。
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     // 711 号：契约源守卫前置到 bin spawn 之前——守卫只探测 TS 腿，豁免早退
     // 路径不再起动引擎子进程（clippy zombie_processes：spawn 后 early return
     // 无 wait 的丢弃路径消除；跳过态还省一次引擎冷启）。
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
     let dist = repo_root().join("packages").join("studio").join("dist");
     std::fs::create_dir_all(dist.join("assets")).unwrap();
@@ -1494,7 +1606,7 @@ async fn bin_process_static_face_duel() {
         .spawn()
         .expect("bin 起动失败");
     let bin = format!("http://127.0.0.1:{bin_port}");
-    wait_ready(&bin).await;
+    wait_child_ready(&mut command, &bin, "/tmp/duel-bin-static-err.log").await;
 
     for path in [
         "/",
@@ -1781,11 +1893,9 @@ async fn sse_event_face_duel() {
     let llm = spawn_mock_llm().await;
     write_fixture(&root, &llm);
 
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     // 711 号：契约源守卫前置到 bin spawn 之前（zombie_processes 早退丢弃路径
     // 消除，与 static_face 同型；守卫只探测 TS 腿，语义等价）。
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
     let bin_port = next_sidecar_port().await;
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_inkos-engine-server"))
@@ -1813,7 +1923,7 @@ async fn sse_event_face_duel() {
         .spawn()
         .expect("bin 起动失败");
     let bin = format!("http://127.0.0.1:{bin_port}");
-    wait_ready(&bin).await;
+    wait_child_ready(&mut command, &bin, "/tmp/duel-bin-sse-err.log").await;
 
     let instruction = "帮我看下第二章节奏";
     let ts_events =
@@ -1886,10 +1996,8 @@ async fn strangler_timeline_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
 
     let valid_timeline = json!({
@@ -2006,10 +2114,8 @@ async fn strangler_series_backfill_duel() {
     .unwrap();
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
 
     let mut diffs: Vec<String> = Vec::new();
@@ -2169,10 +2275,8 @@ async fn search_face_duel() {
     write_search_fixture(&root);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
 
     // score 剥离（词法实现面）：递归删除对象键 score。
@@ -2239,10 +2343,8 @@ async fn chapter_structure_duel() {
     write_fixture(&root, &llm);
 
     let rust = spawn_rust_engine(&root, &llm).await;
-    let ts_port = next_sidecar_port().await;
-    let ts = spawn_ts_sidecar(&root, ts_port).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
     wait_ready(&rust).await;
-    wait_ready(&ts).await;
     duel_require_fork_contract!(&ts);
 
     async fn post_json(base: &str, path: &str, body: &str) -> (u16, Value) {

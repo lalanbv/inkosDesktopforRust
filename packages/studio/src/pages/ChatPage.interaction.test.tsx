@@ -97,7 +97,9 @@ describe("ChatPage IME 组合回车守卫（1169 修复面·1428 逐功能补测
  * - 判据=**当前所用服务**的预算行，而非「任意服务需确认」（服务 A 超支不该
  *   拦住在服务 B 上的对话）；
  * - 确认旁路一次性：确认后的 onSend 若早退，旁路不得残留到下一条消息；
- * - 弹层打开期间换会话 = 待确认发送作废（不把旧会话文本发进新会话）。
+ * - 弹层打开期间换会话 = 待确认发送作废（不把旧会话文本发进新会话）；
+ * - 告警条在本轮对话结束（忙→闲）后刷新：80% 的 warn 档只经告警条传递，
+ *   只在挂载/切会话时查 = 越线的那一轮会话里恒不出现（真人走查实证）。
  */
 describe("ChatPage 预算确认门（1666 交互边界）", () => {
   type BudgetRow = { serviceKey: string; ratio: number; level: string; confirmRequired: boolean };
@@ -106,9 +108,15 @@ describe("ChatPage 预算确认门（1666 交互边界）", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    Reflect.deleteProperty(Element.prototype, "scrollTo");
   });
 
-  function mount(selectedService: string | null, statuses: BudgetRow[]) {
+  function mount(selectedService: string | null, statuses: BudgetRow[] | (() => BudgetRow[] | Promise<BudgetRow[]>)) {
+    // jsdom 无 Element.scrollTo：对话转「忙」会触发生产自动滚动 effect（rAF
+    // 回调里 scrollTo）——桩成空函数，免得未捕获异常污染测试进程（afterEach 摘除）。
+    if (!("scrollTo" in Element.prototype)) {
+      Object.defineProperty(Element.prototype, "scrollTo", { configurable: true, value: () => undefined });
+    }
     // 形参显式声明（调用面逐参断言需要非零长元组类型；运行时为 spy 换装）。
     const sendMessageSpy = vi.fn(
       async (_sessionId: string, _text: string, _opts?: unknown) => {},
@@ -134,7 +142,10 @@ describe("ChatPage 预算确认门（1666 交互边界）", () => {
     fetchJsonMock.mockImplementation((path: string) => {
       if (path === "/usage/budget-status") {
         budgetFetches += 1;
-        return Promise.resolve({ statuses });
+        // 函数形态 = 查询时取当前预算（本轮对话中途越线的走查形态）；返回
+        // Promise = 该次查询的应答时机由用例掌控（重叠查询用例）。
+        const rows = typeof statuses === "function" ? statuses() : statuses;
+        return Promise.resolve(rows).then((current) => ({ statuses: current }));
       }
       return Promise.resolve({});
     });
@@ -151,7 +162,12 @@ describe("ChatPage 预算确认门（1666 交互边界）", () => {
       await flush();
     };
     const confirmButton = () => screen.queryByText("Send anyway");
-    return { sendMessageSpy, flush, send, confirmButton, budgetFetches: () => budgetFetches, textarea,
+    // 本轮对话忙/闲：会话对象上的 isStreaming 即选择器 isActiveSessionStreaming 的读点。
+    const setStreaming = (flag: boolean) => act(() => {
+      useChatStore.setState((s) => ({ sessions: { ...s.sessions, s1: { ...s.sessions.s1, isStreaming: flag } } }) as never);
+    });
+    const notice = () => document.querySelector('[data-budget-notice="warn"]');
+    return { sendMessageSpy, flush, send, confirmButton, budgetFetches: () => budgetFetches, textarea, setStreaming, notice,
       // 同一组件实例换 props（state 保留）：用于在弹层打开期间改变 onSend 的早退条件。
       rerenderWith: (activeBookId: string | undefined) =>
         view.rerender(<ChatPage activeBookId={activeBookId} mode="project-chat" nav={nav} theme={theme} t={t} sse={sse} />) };
@@ -218,6 +234,48 @@ describe("ChatPage 预算确认门（1666 交互边界）", () => {
     await flush();
     expect(confirmButton()).toBeNull();
     expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("告警条在本轮对话结束（忙→闲）后刷新——不必切会话；挂载与忙期间不重复查", async () => {
+    let level: BudgetRow["level"] = "ok";
+    const { flush, budgetFetches, setStreaming, notice } = mount("svc-b", () => [
+      { serviceKey: "svc-b", ratio: level === "ok" ? 0.5 : 0.85, level, confirmRequired: false },
+    ]);
+    await flush();
+    const fetchesAtMount = budgetFetches();
+    expect(fetchesAtMount).toBe(1);
+    expect(notice()).toBeNull();
+    // 本轮对话进行中越线到 warn 档：忙期间不查（预算在变，查了也是中间态）。
+    level = "warn";
+    setStreaming(true);
+    await flush();
+    expect(budgetFetches()).toBe(fetchesAtMount);
+    expect(notice()).toBeNull();
+    // 本轮结束 → 再查一次 → 告警条出现（留在原会话即可见）。
+    setStreaming(false);
+    await flush();
+    expect(budgetFetches()).toBe(fetchesAtMount + 1);
+    expect(notice()?.textContent).toBe("Usage budget: svc-b 85%");
+  });
+
+  it("告警条查询重叠：先发后到的旧响应不覆盖新值", async () => {
+    let call = 0;
+    let resolveStale: (rows: BudgetRow[]) => void = () => undefined;
+    const stale = new Promise<BudgetRow[]>((resolve) => { resolveStale = resolve; });
+    const warn: BudgetRow = { serviceKey: "svc-b", ratio: 0.85, level: "warn", confirmRequired: false };
+    const { flush, notice } = mount("svc-b", () => {
+      call += 1;
+      return call === 1 ? stale : [warn];
+    });
+    await flush();
+    expect(notice()).toBeNull();
+    // 切会话 = 第二次查询（立即返回 warn）；第一次查询的应答此时尚未到达。
+    act(() => { useChatStore.setState({ activeSessionId: "s2" } as never); });
+    await flush();
+    expect(notice()?.textContent).toBe("Usage budget: svc-b 85%");
+    resolveStale([{ serviceKey: "svc-b", ratio: 0.5, level: "ok", confirmRequired: false }]);
+    await flush();
+    expect(notice()?.textContent).toBe("Usage budget: svc-b 85%");
   });
 
   it("服务未知（选择未就绪）→ 退回『任意服务需确认』；预算面不可达 → 不拦发送", async () => {

@@ -512,7 +512,8 @@ pub async fn get_prompt_pack_versions(
 }
 
 /// POST /api/v1/prompt-packs/:promptId/versions/restore —— body {ts}；
-/// 读版本行内容复写覆盖文件 + 追加 restore 行（回滚本身可再回滚）。
+/// 读版本行内容复写覆盖文件 + 追加 restore 行（回滚本身可再回滚；回滚到
+/// delete 行 = 移除覆盖，新行记 delete——行效果与对覆盖文件的动作一致）。
 pub async fn restore_prompt_pack_version(
     State(runtime): State<BooksRuntime>,
     AxumPath(prompt_id): AxumPath<String>,
@@ -545,8 +546,9 @@ pub async fn restore_prompt_pack_version(
     let Some(record) = record else {
         return bad_request("PROMPT_VERSION_NOT_FOUND", "Prompt version not found");
     };
-    if record.action == "delete" {
-        // 回滚到 delete 行 = 移除覆盖（回 builtin）。
+    // 回滚到 delete 行 = 移除覆盖（回 builtin）。
+    let to_builtin = record.action == "delete";
+    if to_builtin {
         let file = PathBuf::from(prompt_override_path(&root.to_string_lossy(), &prompt_id));
         if let Err(e) = tokio::fs::remove_file(&file).await {
             if e.kind() != std::io::ErrorKind::NotFound {
@@ -566,10 +568,17 @@ pub async fn restore_prompt_pack_version(
             return internal_error(&e);
         }
     }
+    // 1666 号：历史行的 action = 对覆盖文件的效果（put=写 / delete=移除 /
+    // restore=按历史内容写）——(action, content) 须唯一决定回滚到该行的结果。
+    // 回滚到 delete 版的效果是「移除」，故记 delete 行。此前恒记 `restore` +
+    // 空 content，与「回滚到空 put 版」同形：对这条新行再回滚会走写覆盖分支，
+    // 写入 0 字节覆盖文件（提示词被静默清空；活体走查实证）。空覆盖是合法
+    // 状态（加载面：内容为空=不追加该 prompt 指导），不能拿「空内容」当
+    // 「回 builtin」的判据。TS 腿同形同修。
     crate::prompts::prompt_pack::append_prompt_version(
         &root.to_string_lossy(),
         &prompt_id,
-        "restore",
+        if to_builtin { "delete" } else { "restore" },
         &record.content,
         &crate::utils::utc_time::utc_now_iso(),
     )

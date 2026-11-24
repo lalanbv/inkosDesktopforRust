@@ -102,6 +102,22 @@
     "enabled": true,
     "provider": "tavily"
   },
+  "serviceEntryPersistedFull": {
+    "apiFormat": "chat",
+    "baseUrl": "https://svc.example.com/v1",
+    "confirmAtBudget": false,
+    "dailyTokenBudget": 1000,
+    "maxTokens": 4096.0,
+    "models": [
+      "fixture-model-a",
+      "fixture-model-b"
+    ],
+    "monthlyTokenBudget": 50000,
+    "name": "FixtureFull",
+    "service": "custom",
+    "stream": true,
+    "temperature": 0.5
+  },
   "version": "0.1.0",
   "writing": {
     "reviewMode": "auto",

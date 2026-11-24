@@ -7,6 +7,18 @@ export const LLMServiceEntrySchema = z.object({
   baseUrl: z.string().url().optional(),
   models: z.array(z.string().min(1)).optional(),
   temperature: z.number().min(0).max(2).optional(),
+  // 1666 号：以下四键对齐 Rust `ServiceConfigEntry::to_json`（PUT services 的
+  // 持久化形态）——此前 strict schema 不认它们：预算键一旦真的落进 inkos.json
+  // （1661 加了 Rust 结构体与 studio 归一化，漏了这里；1666 修好「PUT 存得下
+  // 预算」后在活体走查中暴露），Node 回退腿加载项目配置即抛
+  // `Unrecognized key(s)`，/agent 对话整个不可用。`maxTokens` 是更早的同族
+  // 漂移（Rust 腿保存过带 maxTokens 的条目后，Node 腿读同一份配置即崩）。
+  // 数值一律宽松（Rust 为 f64 / u64，0 与负数由归一层判「未设」）：schema 层
+  // 拒绝合法落盘值=又一次「读不了配置」。
+  maxTokens: z.number().optional(),
+  dailyTokenBudget: z.number().optional(),
+  monthlyTokenBudget: z.number().optional(),
+  confirmAtBudget: z.boolean().optional(),
   apiFormat: z.enum(LLM_API_FORMATS).optional(),
   stream: z.boolean().optional(),
 }).strict();

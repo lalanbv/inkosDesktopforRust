@@ -145,6 +145,14 @@ fn normalize_prompt_id(prompt_id: &str) -> String {
 // （action = put | delete | restore；delete 行 content 空）。回滚 = 取版本行
 // 内容复写覆盖文件（复用 PUT 语义）+ 追加 restore 行——回滚本身也是一次
 // 可再回滚的变更（append-only 语义闭环）。
+//
+// 1666 号不变量：行的 (action, content) 唯一决定「回滚到该行」的结果——
+// action 即对覆盖文件的效果：put(c)=写、restore(c)=按历史内容写、delete=移除
+// （回 builtin）。回滚到 delete 版的效果是移除，故新行记 delete 而非
+// `restore`+空内容（后者与「回滚到空 put 版」同形，再回滚会写入空覆盖；
+// 空覆盖是合法状态，不能拿空内容当「回 builtin」的判据）。修复前账本里
+// 已有的 `restore`+空内容行仍按「空覆盖」回滚——如遇，对该 prompt 再点一次
+// 「恢复 builtin」即可。
 
 /// 版本行（serde camelCase）。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

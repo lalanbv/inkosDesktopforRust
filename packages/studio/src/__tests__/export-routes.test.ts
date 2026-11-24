@@ -175,6 +175,53 @@ describe("export routes (R50/1647)", () => {
     expect(unknown.status).toBe(404);
   });
 
+  it("回滚到 delete 版的历史行记 delete；对该行再回滚仍是 builtin——不写空覆盖（1666 活体走查缺陷）", async () => {
+    const { root, app } = seedApp();
+    const overrideFile = join(root, "prompt", "longform", "writer.md");
+    const versionsOf = async () =>
+      ((await (await app.request("/api/v1/prompt-packs/longform.writer/versions")).json()) as {
+        versions: ReadonlyArray<{ ts: string; action: string; content: string }>;
+      }).versions;
+    const restore = (ts: string) =>
+      app.request("/api/v1/prompt-packs/longform.writer/versions/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ts }),
+      });
+    const put = () =>
+      app.request("/api/v1/prompt-packs/longform.writer", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "# 覆盖" }),
+      });
+
+    // ① PUT → DELETE：delete 行入账（按 action 取行，不依赖 ts 排序）。
+    expect((await put()).status).toBe(200);
+    expect((await app.request("/api/v1/prompt-packs/longform.writer", { method: "DELETE" })).status).toBe(200);
+    expect(existsSync(overrideFile)).toBe(false);
+    const deleteTs = (await versionsOf()).find((row) => row.action === "delete")!.ts;
+
+    // ② 再写一次覆盖 → 回滚到 delete 版：回 builtin，新行记 delete（效果=移除）。
+    expect((await put()).status).toBe(200);
+    const rolled = await restore(deleteTs);
+    expect(rolled.status).toBe(200);
+    expect(((await rolled.json()) as { prompt: { source: string } }).prompt.source).toBe("builtin");
+    expect(existsSync(overrideFile)).toBe(false);
+    const rows = await versionsOf();
+    expect(rows.map((row) => row.action).sort()).toEqual(["delete", "delete", "put", "put"]);
+    const rollbackTs = rows.find((row) => row.action === "delete" && row.ts !== deleteTs)!.ts;
+
+    // ③ 对这条新行再回滚 → 仍是 builtin（修复前：写入 0 字节覆盖，
+    //    source=project、content=""）。
+    const again = await restore(rollbackTs);
+    expect(again.status).toBe(200);
+    const againBody = (await again.json()) as { prompt: { source: string; overridden: boolean; content: string } };
+    expect(againBody.prompt.source).toBe("builtin");
+    expect(againBody.prompt.overridden).toBe(false);
+    expect(againBody.prompt.content).toContain("long-form chapter writer");
+    expect(existsSync(overrideFile)).toBe(false);
+  });
+
   it("prompt-packs 负路径矩阵——与 Rust put_prompt_pack_invalid_branches / prompt_pack_versions_unknown_prompt_is_not_found 同负载（1666）", async () => {
     const { root, app } = seedApp();
     const send = (method: string, path: string, body?: string) =>
@@ -328,6 +375,78 @@ describe("export routes (R50/1647)", () => {
     }));
     const body = await fetchBudget(app);
     expect(body.statuses.map((row) => row.serviceKey)).toEqual(["valid"]);
+  });
+
+  it("模型选择器的服务 id 与预算行 serviceKey 同形（确认门按当前服务匹配的前提）", async () => {
+    const { root, app } = seedApp();
+    // 1666 号：ChatPage 确认门判据=「当前所用服务」的预算行，匹配方式是客户端
+    // 服务 id 与 budget-status 的 serviceKey 字符串相等。两者必须出自同一归一化
+    // （custom:{name ?? "Custom"}）——否则判据收窄后会从「多拦」变成「永不拦」。
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({
+      llm: { services: {
+        "custom:Local%20Gateway": { baseUrl: "http://127.0.0.1:9/v1", models: ["fixture-model"], dailyTokenBudget: 1000 },
+        custom: { name: "Plain", baseUrl: "http://127.0.0.1:9/v1", dailyTokenBudget: 1000 },
+      } },
+    }));
+    // 1015/855 号惯用形：测试凭据走 env 注入 + 非凭据回退。
+    const testKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
+    mkdirSync(join(root, ".inkos"), { recursive: true });
+    writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({
+      services: { "custom:Local Gateway": { apiKey: testKey }, "custom:Plain": { apiKey: testKey } },
+    }));
+    const picker = await (await app.request("/api/v1/services/models/custom")).json() as { groups: Array<{ service: string }> };
+    const budget = await fetchBudget(app);
+    const pickerIds = picker.groups.map((group) => group.service).sort();
+    const budgetKeys = budget.statuses.map((row) => row.serviceKey).sort();
+    expect(pickerIds).toEqual(["custom:Local Gateway", "custom:Plain"]);
+    expect(budgetKeys).toEqual(pickerIds);
+  });
+
+  // 1666 号活体走查抓到的崩溃：预算键真正落盘后，Node 回退腿加载项目配置
+  // （core zod LLMServiceEntrySchema，strict）即抛 Unrecognized key(s)，
+  // /api/v1/agent 对话整个不可用。此前被「PUT 存不下预算」巧合掩盖。
+  it("services 条目带预算键 / maxTokens 时项目配置可加载——/agent 走到会话检查而非 schema 崩溃", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({
+      name: "预算走查", version: "0.1.0",
+      llm: {
+        service: "custom:Local", defaultModel: "m",
+        services: [
+          { service: "custom", name: "Local", baseUrl: "http://127.0.0.1:9/v1", models: ["m"], dailyTokenBudget: 100, monthlyTokenBudget: 5000, confirmAtBudget: false, maxTokens: 2048 },
+          { service: "deepseek", dailyTokenBudget: 0, maxTokens: 1.5 },
+        ],
+      },
+    }));
+    mkdirSync(join(root, ".inkos"), { recursive: true });
+    const testKey = process.env.INKOS_TEST_LLM_KEY ?? "test-key-placeholder";
+    writeFileSync(join(root, ".inkos", "secrets.json"), JSON.stringify({ services: { "custom:Local": { apiKey: testKey } } }));
+    const res = await app.request("/api/v1/agent", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: "no-such-session", instruction: "你好" }),
+    });
+    // 配置加载在会话加载之前：schema 崩溃时这里是 500（INKOS_ACTION_ERROR），
+    // 修复后走到会话检查 = 404 SESSION_NOT_FOUND。
+    const text = await res.text();
+    expect(res.status, text).toBe(404);
+    expect((JSON.parse(text) as { error: { code: string } }).error.code).toBe("SESSION_NOT_FOUND");
+  });
+
+  it("服务级 maxTokens 经 PUT 往返保留（Rust 持久化键，归一透传）", async () => {
+    const { root, app } = seedApp();
+    writeFileSync(join(root, "inkos.json"), JSON.stringify({
+      llm: { services: [{ service: "custom", name: "Local", baseUrl: "http://127.0.0.1:9/v1", models: ["m"], maxTokens: 2048 }] },
+    }));
+    const res = await app.request("/api/v1/services/config", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ services: [{ service: "deepseek", baseUrl: "https://api.deepseek.com" }] }),
+    });
+    expect(res.status).toBe(200);
+    const saved = JSON.parse(readFileSync(join(root, "inkos.json"), "utf-8")) as { llm: { services: Array<Record<string, unknown>> } };
+    const local = saved.llm.services.find((entry) => entry.name === "Local");
+    expect(local).toMatchObject({ maxTokens: 2048, models: ["m"] });
+    // 载荷里的 maxTokens 也落盘（Rust from_json 同款）。
+    const deepseek = saved.llm.services.find((entry) => entry.service === "deepseek");
+    expect(deepseek).not.toHaveProperty("maxTokens");
   });
 
   it("PUT /services/config 数组载荷不丢预算键，二次保存既有条目预算保留（数据丢失点回归锁）", async () => {

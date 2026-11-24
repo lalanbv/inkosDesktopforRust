@@ -250,6 +250,27 @@ fn inject_trajectory_headers(
     req
 }
 
+/// 本请求的 `stream_options` 是否为传输层**自动加的**（流式且 extra 未显式指定）。
+/// 自动回退只对它生效——用户经 extra 显式给出的是意图，不替用户改写。
+fn stream_options_auto_added(params: &ChatCompletionParams<'_>, body: &serde_json::Value) -> bool {
+    params.stream
+        && body.get("stream_options").is_some()
+        && !params
+            .extra
+            .is_some_and(|extra| extra.contains_key("stream_options"))
+}
+
+/// 端点报文是否点名拒绝 `stream_options`（4xx 且提及该参数）。各家措辞不一
+/// （Unknown parameter / Additional properties are not allowed / Unrecognized
+/// request argument），共同点是都带参数名。
+fn is_stream_options_rejection(status: u16, text: &str) -> bool {
+    if !(400..500).contains(&status) {
+        return false;
+    }
+    let lower = text.to_lowercase();
+    lower.contains("stream_options") || lower.contains("include_usage")
+}
+
 /// 构造 OpenAI chat completions 请求体（pure，可单测）。对齐 TS provider 的请求形状。
 ///
 /// 保留字段（max_tokens/temperature/model/messages/stream）不被 extra 覆盖（对齐 stripReservedKeys）。
@@ -322,12 +343,30 @@ pub fn build_chat_completion_request(params: &ChatCompletionParams) -> serde_jso
             .expect("body 是对象")
             .insert("tools".to_string(), tools.clone());
     }
+    // 1666 号：流式请求向 provider 索要 usage。OpenAI 兼容的流式接口**默认不在
+    // 流里给 usage**，须显式 `stream_options.include_usage`（TS 腿 pi-ai 对所有
+    // OpenAI 兼容端点默认都带）。此前 Rust 从不请求 → 流式（默认）模式下
+    // `total_tokens` 恒缺 → R55 用量账本的 chat 写入点永不落行，预算面在主路径
+    // 上形同虚设。Responses 协议在 `response.completed` 自带 usage，不在此列。
+    // extra 在其后合并：可覆盖；`"stream_options": null` = 显式不带。个别拒绝
+    // 该参数的端点另有自动回退（见 `chat_completion`）。
+    if params.stream {
+        body.as_object_mut().expect("body 是对象").insert(
+            "stream_options".to_string(),
+            serde_json::json!({ "include_usage": true }),
+        );
+    }
     if let Some(extra) = params.extra {
         let obj = body.as_object_mut().expect("body 是对象");
         for (k, v) in extra {
-            if !reserved.contains(&k.as_str()) {
-                obj.insert(k.clone(), v.clone());
+            if reserved.contains(&k.as_str()) {
+                continue;
             }
+            if k == "stream_options" && v.is_null() {
+                obj.remove("stream_options");
+                continue;
+            }
+            obj.insert(k.clone(), v.clone());
         }
     }
     body
@@ -516,17 +555,6 @@ impl StreamingChatClient {
         params: &ChatCompletionParams<'_>,
     ) -> Result<StreamedCompletion, StreamError> {
         let body = build_chat_completion_request(params);
-        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-        let mut req = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.api_key)
-            .header("Content-Type", "application/json")
-            .json(&body);
-        for (k, v) in &self.extra_headers {
-            req = req.header(k, v);
-        }
-        let req = inject_trajectory_headers(req, &self.base_url, &params.trajectory);
         // 898 号同族修复：非流式此前无看门狗（TS chatCompletion buffered 同洞
         // 同修）——端点停摆时 send/错误体/响应体均可永久挂死。总窗覆盖三面，
         // 到期报 RequestTimeout（TS LLM_REQUEST_TIMEOUT 同款文案；不可重试
@@ -541,28 +569,47 @@ impl StreamingChatClient {
             .stream
             .then(|| std::time::Duration::from_millis(params.deadline.first_event_ms));
         let armed_at = first_window.map(|_| tokio::time::Instant::now());
-        let resp = match (armed_at, first_window) {
-            (Some(armed), Some(window)) => tokio::time::timeout_at(armed + window, req.send())
-                .await
-                .map_err(|_| StreamError::Inactivity {
-                    stage: InactivityStage::FirstEvent,
-                    timeout_ms: params.deadline.first_event_ms,
-                })?
-                .map_err(StreamError::Http)?,
-            _ => match non_stream_total {
-                Some(total) => match tokio::time::timeout_at(total, req.send()).await {
-                    Ok(response) => response.map_err(StreamError::Http)?,
-                    Err(_) => {
-                        return Err(StreamError::RequestTimeout {
-                            timeout_ms: params.deadline.request_ms,
-                        });
-                    }
+        // 1666 号：请求体最多发两次——首次带自动加的 stream_options；端点因不
+        // 认识该参数而拒绝（4xx 且报文点名）时去掉它重试一次。时间窗只布防
+        // 一次，回退共享同一窗口（拒绝响应都是秒回，不重置窗口以免放大停摆）。
+        let mut request_body = body.clone();
+        let mut stream_options_fallback_used = false;
+        let resp = loop {
+            let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+            let mut req = self
+                .http
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .header("Content-Type", "application/json")
+                .json(&request_body);
+            for (k, v) in &self.extra_headers {
+                req = req.header(k, v);
+            }
+            let req = inject_trajectory_headers(req, &self.base_url, &params.trajectory);
+            let resp = match (armed_at, first_window) {
+                (Some(armed), Some(window)) => tokio::time::timeout_at(armed + window, req.send())
+                    .await
+                    .map_err(|_| StreamError::Inactivity {
+                        stage: InactivityStage::FirstEvent,
+                        timeout_ms: params.deadline.first_event_ms,
+                    })?
+                    .map_err(StreamError::Http)?,
+                _ => match non_stream_total {
+                    Some(total) => match tokio::time::timeout_at(total, req.send()).await {
+                        Ok(response) => response.map_err(StreamError::Http)?,
+                        Err(_) => {
+                            return Err(StreamError::RequestTimeout {
+                                timeout_ms: params.deadline.request_ms,
+                            });
+                        }
+                    },
+                    None => req.send().await?,
                 },
-                None => req.send().await?,
-            },
-        };
-        let status = resp.status();
-        if !status.is_success() {
+            };
+            let status = resp.status();
+            if status.is_success() {
+                break resp;
+            }
             // 899：流面错误体读取此前无窗——错误体挂起即永久卡死。TS 流面
             // fetch signal=deadline.signal 同样约束 body 读，超时映射
             // first-event 不活动错误；Rust 用布防时刻起的同一时钟窗逐字对齐。
@@ -590,8 +637,20 @@ impl StreamingChatClient {
                     None => resp.text().await.unwrap_or_default(),
                 },
             };
+            // 只回退「传输层自动加的」stream_options——用户经 extra 显式指定的
+            // 不动（那是用户的意图，报错原样上抛）；只回退一次。
+            if !stream_options_fallback_used
+                && stream_options_auto_added(params, &body)
+                && is_stream_options_rejection(status.as_u16(), &text)
+            {
+                stream_options_fallback_used = true;
+                if let Some(object) = request_body.as_object_mut() {
+                    object.remove("stream_options");
+                }
+                continue;
+            }
             return Err(StreamError::BadStatus(status.as_u16(), text));
-        }
+        };
         // 非流式（108 号 stream 维度）：整体 JSON——choices[0].message.content +
         // message.tool_calls + usage（TS chatCompletion 非流式同构）。
         if !params.stream {
@@ -1846,6 +1905,178 @@ mod tests {
         params.stream = false;
         let completion = client.stream_chat(&params).await.unwrap();
         assert_eq!(completion.content, "非流式正文。");
+    }
+
+    // ── 1666 号：流式请求索要 usage（stream_options.include_usage）──────────
+
+    /// OpenAI 兼容 mock 的**真实行为**：usage 块只在请求带
+    /// `stream_options.include_usage` 时才在流尾给出；`reject` = 端点不认识
+    /// 该参数，见了就以 400 点名拒绝。返回 (base, 请求体记录)。
+    async fn spawn_openai_like_llm(
+        reject_stream_options: bool,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) {
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_state = seen.clone();
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            axum::routing::post(
+                move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let seen = seen_state.clone();
+                    async move {
+                        seen.lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(body.clone());
+                        if reject_stream_options && body.get("stream_options").is_some() {
+                            return axum::response::Response::builder()
+                                .status(400)
+                                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                                .body(axum::body::Body::from(
+                                    r#"{"error":{"message":"Unrecognized request argument supplied: stream_options","type":"invalid_request_error"}}"#,
+                                ))
+                                .unwrap();
+                        }
+                        let wants_usage = body
+                            .pointer("/stream_options/include_usage")
+                            .and_then(Value::as_bool)
+                            == Some(true);
+                        let mut stream = format!("{}{}", content_chunk("正文"), finish_chunk("stop"));
+                        if wants_usage {
+                            stream.push_str(&sse(&serde_json::json!({
+                                "choices": [],
+                                "usage": { "prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150 }
+                            })));
+                        }
+                        stream.push_str(DONE);
+                        axum::response::Response::builder()
+                            .status(200)
+                            .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+                            .body(axum::body::Body::from(stream))
+                            .unwrap()
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    fn walk_spec() -> StreamDeadlineSpec {
+        StreamDeadlineSpec {
+            first_event_ms: 5_000,
+            idle_ms: 5_000,
+            request_ms: 300_000,
+        }
+    }
+
+    fn recorded(
+        seen: &std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) -> Vec<serde_json::Value> {
+        seen.lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    #[test]
+    fn stream_options_only_for_streaming_and_extra_can_override_or_omit() {
+        let streaming = build_chat_completion_request(&deadline_params(walk_spec()));
+        assert_eq!(streaming["stream_options"]["include_usage"], true);
+        let mut buffered = deadline_params(walk_spec());
+        buffered.stream = false;
+        assert!(build_chat_completion_request(&buffered)
+            .get("stream_options")
+            .is_none());
+        static OVERRIDE: std::sync::OnceLock<HashMap<String, Value>> = std::sync::OnceLock::new();
+        static OMIT: std::sync::OnceLock<HashMap<String, Value>> = std::sync::OnceLock::new();
+        let mut overridden = deadline_params(walk_spec());
+        overridden.extra = Some(OVERRIDE.get_or_init(|| {
+            [(
+                "stream_options".to_string(),
+                serde_json::json!({ "include_usage": false }),
+            )]
+            .into_iter()
+            .collect()
+        }));
+        assert_eq!(
+            build_chat_completion_request(&overridden)["stream_options"]["include_usage"],
+            false
+        );
+        let mut omitted = deadline_params(walk_spec());
+        omitted.extra = Some(OMIT.get_or_init(|| {
+            [("stream_options".to_string(), Value::Null)]
+                .into_iter()
+                .collect()
+        }));
+        assert!(build_chat_completion_request(&omitted)
+            .get("stream_options")
+            .is_none());
+    }
+
+    /// 修前红：Rust 流式请求从不带 stream_options → mock 不给 usage →
+    /// `total_tokens` 恒缺 → R55 账本的 chat 写入点在流式（默认）模式下永不落行。
+    #[tokio::test]
+    async fn streaming_chat_requests_and_receives_usage() {
+        let (base, seen) = spawn_openai_like_llm(false).await;
+        let client = StreamingChatClient::new(base, "key".to_string(), HashMap::new());
+        let completion = client
+            .stream_chat(&deadline_params(walk_spec()))
+            .await
+            .unwrap();
+        assert_eq!(completion.content, "正文");
+        assert_eq!(completion.total_tokens, Some(150));
+        assert_eq!(completion.prompt_tokens, Some(100));
+        let bodies = recorded(&seen);
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(
+            bodies[0].pointer("/stream_options/include_usage"),
+            Some(&Value::Bool(true))
+        );
+    }
+
+    #[tokio::test]
+    async fn picky_endpoint_rejection_falls_back_once_without_stream_options() {
+        let (base, seen) = spawn_openai_like_llm(true).await;
+        let client = StreamingChatClient::new(base, "key".to_string(), HashMap::new());
+        let completion = client
+            .stream_chat(&deadline_params(walk_spec()))
+            .await
+            .unwrap();
+        assert_eq!(completion.content, "正文");
+        // 回退后不带 stream_options → 端点不给 usage（没有就如实没有）。
+        assert_eq!(completion.total_tokens, None);
+        let bodies = recorded(&seen);
+        assert_eq!(bodies.len(), 2, "只回退一次");
+        assert!(bodies[0].get("stream_options").is_some());
+        assert!(bodies[1].get("stream_options").is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_extra_stream_options_is_not_second_guessed() {
+        let (base, seen) = spawn_openai_like_llm(true).await;
+        let client = StreamingChatClient::new(base, "key".to_string(), HashMap::new());
+        static EXTRA: std::sync::OnceLock<HashMap<String, Value>> = std::sync::OnceLock::new();
+        let mut params = deadline_params(walk_spec());
+        params.extra = Some(EXTRA.get_or_init(|| {
+            [(
+                "stream_options".to_string(),
+                serde_json::json!({ "include_usage": false }),
+            )]
+            .into_iter()
+            .collect()
+        }));
+        let error = client.stream_chat(&params).await.unwrap_err();
+        assert!(
+            matches!(error, StreamError::BadStatus(400, _)),
+            "用户显式指定的参数被拒应原样上抛：{error}"
+        );
+        assert_eq!(recorded(&seen).len(), 1, "不替用户改写、不重试");
     }
 
     // ── 134 号：轨迹观测头注入面（真 HTTP mock 记录请求头） ─────────────

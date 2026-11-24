@@ -1608,6 +1608,8 @@ interface ServiceConfigEntry {
   baseUrl?: string;
   models?: string[];
   temperature?: number;
+  /** 1666 号：服务级 maxTokens（Rust ServiceConfigEntry 持久化键——归一透传，防跨腿保存丢键）。 */
+  maxTokens?: number;
   apiFormat?: LLMApiFormat;
   stream?: boolean;
   /** R55/1661 号：用量预算软顶（token/日、token/月；无=不限）。 */
@@ -1768,6 +1770,15 @@ function budgetFieldsOf(value: Record<string, unknown>): Pick<ServiceConfigEntry
   };
 }
 
+/**
+ * 服务级 `maxTokens` 归一透传（四分支共用单源）。1666 号：Rust
+ * `ServiceConfigEntry` 会持久化该键；Node 腿归一若不带它，一次 PUT 就把它抹掉
+ * （「归一不丢键」同族）。数值宽松——非法值由消费方忽略，不在归一层裁决。
+ */
+function maxTokensFieldOf(value: Record<string, unknown>): Pick<ServiceConfigEntry, "maxTokens"> {
+  return typeof value.maxTokens === "number" ? { maxTokens: value.maxTokens } : {};
+}
+
 function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>): ServiceConfigEntry {
   if (serviceId.startsWith("custom:")) {
     return {
@@ -1778,7 +1789,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-      ...budgetFieldsOf(value),
+      ...budgetFieldsOf(value), ...maxTokensFieldOf(value),
     };
   }
 
@@ -1791,7 +1802,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
       ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
       ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
       ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-      ...budgetFieldsOf(value),
+      ...budgetFieldsOf(value), ...maxTokensFieldOf(value),
     };
   }
 
@@ -1801,7 +1812,7 @@ function normalizeServiceEntry(serviceId: string, value: Record<string, unknown>
     ...(typeof value.temperature === "number" ? { temperature: value.temperature } : {}),
     ...(isLLMApiFormat(value.apiFormat) ? { apiFormat: value.apiFormat } : {}),
     ...(typeof value.stream === "boolean" ? { stream: value.stream } : {}),
-    ...budgetFieldsOf(value),
+    ...budgetFieldsOf(value), ...maxTokensFieldOf(value),
   };
 }
 
@@ -1824,7 +1835,7 @@ function normalizeServiceConfig(raw: unknown): ServiceConfigEntry[] {
         // 1666 号：数组形态分支此前漏透传预算键（对象形态三分支与 Rust
         // from_json 都有）——数组形态配置在 Node 腿经任何「归一→落盘」路径
         // （如 PUT /services/config）会被静默抹掉 dailyTokenBudget 等设置。
-        ...budgetFieldsOf(entry),
+        ...budgetFieldsOf(entry), ...maxTokensFieldOf(entry),
       }));
   }
 
@@ -4803,12 +4814,21 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     if (!record) {
       return c.json({ error: { code: "PROMPT_VERSION_NOT_FOUND", message: "Prompt version not found" } }, 400);
     }
-    if (record.action === "delete") {
+    // 回滚到 delete 行 = 移除覆盖（回 builtin）。
+    const toBuiltin = record.action === "delete";
+    if (toBuiltin) {
       await removePromptOverride(root, promptId);
     } else {
       await writePromptOverride(root, promptId, record.content);
     }
-    await appendPromptVersion(root, promptId, "restore", record.content, new Date().toISOString());
+    // 1666 号：历史行的 action = 对覆盖文件的效果（put=写 / delete=移除 /
+    // restore=按历史内容写）——(action, content) 须唯一决定回滚到该行的结果
+    //（Rust restore_prompt_pack_version 同款）。回滚到 delete 版的效果是
+    // 「移除」，故记 delete 行。此前恒记 `restore` + 空 content，与「回滚到
+    // 空 put 版」同形：对这条新行再回滚会走写覆盖分支，写入 0 字节覆盖文件
+    //（提示词被静默清空）。空覆盖是合法状态，不能拿「空内容」当「回
+    // builtin」的判据。
+    await appendPromptVersion(root, promptId, toBuiltin ? "delete" : "restore", record.content, new Date().toISOString());
     return c.json({ prompt: await promptOverrideProjection(promptId), regressionHint: "prompt-changed" });
   });
 

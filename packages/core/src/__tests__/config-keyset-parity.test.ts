@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { DetectionConfigSchema, ProjectConfigSchema } from "../models/project.js";
+import { DetectionConfigSchema, LLMServiceEntrySchema, ProjectConfigSchema } from "../models/project.js";
 
 /**
  * 1604 号：跨语言键集 parity 锁——「Rust serde 键面 vs TS zod schema」一致性
@@ -13,6 +13,14 @@ import { DetectionConfigSchema, ProjectConfigSchema } from "../models/project.js
  * 反序列化→序列化值（serde default 全填充、camelCase 全键形态）。两侧守卫
  * 语义：Rust struct 键面/默认值变化 → Rust 守卫红 → 人工定性更新 fixture →
  * 本测试的键集对比与全文 parse 给出 TS zod schema 是否需要跟随的信号。
+ *
+ * 1666 号扩面：原守卫是**单向**的——只核「夹具里有的键 ⊆ zod shape」，对
+ * 夹具没覆盖到的可选键没有信号。服务条目上 Rust 有两个类型：配置 schema 的
+ * `LLMServiceEntry`（夹具来源）与 PUT 落盘用的 `ServiceConfigEntry`；后者多出
+ * 的预算三键 / maxTokens 从不进夹具，strict 的 `LLMServiceEntrySchema` 也就
+ * 没跟上——预算键一旦真落盘，Node 回退腿加载项目配置即崩。现由 Rust
+ * `service_config_entry_full_key_sample()` 产出持久化形态全键样本
+ * （`serviceEntryPersistedFull`），本文件对它做**键集相等**比对 + 值面 parse。
  */
 
 const fixturePath = join(
@@ -21,6 +29,10 @@ const fixturePath = join(
   "project-config-keyset.json",
 );
 const fixture: Record<string, unknown> = JSON.parse(readFileSync(fixturePath, "utf-8"));
+/** 服务条目持久化形态全键样本（不是 ProjectConfig 序列化的产物，全文 parse 前摘出）。 */
+const { serviceEntryPersistedFull, ...configFixture } = fixture as {
+  serviceEntryPersistedFull: Record<string, unknown>;
+} & Record<string, unknown>;
 
 /** 递归提取对象键集（段内嵌套展开，数组取首元素形态）。 */
 function collectKeys(value: unknown, prefix = ""): string[] {
@@ -40,7 +52,7 @@ describe("ProjectConfig 键面 parity（Rust fixture ↔ TS zod schema）", () =
   it("fixture 顶层/段内键集 ⊆ TS zod shape 键集（容键白名单外零缺口）", () => {
     const shapeKeys = new Set(Object.keys(ProjectConfigSchema.shape));
     const missing: string[] = [];
-    for (const key of Object.keys(fixture)) {
+    for (const key of Object.keys(configFixture)) {
       if (!shapeKeys.has(key) && !toleratedExtraKeys.has(key)) missing.push(key);
     }
     expect(missing).toEqual([]);
@@ -74,7 +86,7 @@ describe("ProjectConfig 键面 parity（Rust fixture ↔ TS zod schema）", () =
     // zod .optional() 只容 undefined——nullable 补齐后此处才绿。
     // 1605 号：fixture cover 扩展为对象形态（三键全量进 parity），null 形态
     // 回归锁移至下方独立用例（两形态都锁）。
-    const parsed = ProjectConfigSchema.parse(fixture);
+    const parsed = ProjectConfigSchema.parse(configFixture);
     expect(parsed.name).toBe("fixture");
     expect(parsed.llm.cover?.service).toBe("kkaiapi");
     expect(parsed.llm.cover?.model).toBe("fixture-cover-model");
@@ -99,10 +111,42 @@ describe("ProjectConfig 键面 parity（Rust fixture ↔ TS zod schema）", () =
 
   it("cover:null 形态仍容（1604 nullable 回归锁，Rust Option 序列化形态）", () => {
     const withNullCover = {
-      ...fixture,
+      ...configFixture,
       llm: { ...(fixture.llm as Record<string, unknown>), cover: null },
     };
     const parsed = ProjectConfigSchema.parse(withNullCover);
     expect(parsed.llm.cover).toBeNull();
+  });
+
+  // ── 1666 号：服务条目**持久化形态** ↔ zod LLMServiceEntrySchema ──────────
+
+  it("持久化形态全键样本（Rust ServiceConfigEntry）与 zod 服务条目键集相等，且值面 parse 通过", () => {
+    expect(Object.keys(serviceEntryPersistedFull).sort()).toEqual(
+      Object.keys(LLMServiceEntrySchema.shape).sort(),
+    );
+    const parsed = LLMServiceEntrySchema.safeParse(serviceEntryPersistedFull);
+    expect(parsed.success, JSON.stringify(parsed.success ? "" : parsed.error.issues)).toBe(true);
+  });
+
+  it("预算键 / maxTokens 进 inkos.json 后，项目配置整体可解析（Node 回退腿加载不崩）", () => {
+    // 活体走查实证的崩溃形态：PUT 把 dailyTokenBudget 真正落盘后，
+    // /api/v1/agent 加载项目配置即抛 Unrecognized key(s)。
+    const withBudgets = {
+      ...configFixture,
+      llm: {
+        ...(configFixture.llm as Record<string, unknown>),
+        services: [serviceEntryPersistedFull, { service: "deepseek", dailyTokenBudget: 0, maxTokens: 1.5 }],
+      },
+    };
+    const parsed = ProjectConfigSchema.parse(withBudgets);
+    expect(parsed.llm.services?.[0]).toMatchObject({
+      dailyTokenBudget: 1000, monthlyTokenBudget: 50000, confirmAtBudget: false, maxTokens: 4096,
+    });
+    // 数值宽松：0 / 小数由归一层判「未设」，schema 层拒绝合法落盘值 = 读不了配置。
+    expect(parsed.llm.services?.[1]).toMatchObject({ dailyTokenBudget: 0, maxTokens: 1.5 });
+  });
+
+  it("strict 语义保留：样本之外的真未知键仍被拒绝", () => {
+    expect(LLMServiceEntrySchema.safeParse({ ...serviceEntryPersistedFull, typoKey: 1 }).success).toBe(false);
   });
 });

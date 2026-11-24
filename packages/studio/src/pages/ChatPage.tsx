@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
 import { useI18n } from "../hooks/use-i18n";
@@ -695,23 +695,46 @@ export function ChatPage({ activeBookId, activeWorkId, workProfileId, mode = act
   // 只看这一个服务的预算行——此前判据是「任意服务需确认」：配了预算的服务 A
   // 超支会拦住在服务 B 上的对话，而弹层文案说的是「所选服务已达 100%」。
   const effectiveServiceId = activeSession?.serviceOverride ?? selectedService;
+  // 1666 号：告警条查询单源（挂载/切会话 + 本轮对话结束共用）。序号守卫：
+  // 两次查询重叠时只认最后一次——先发后到的旧响应不得覆盖新值。
+  const budgetNoticeSeqRef = useRef(0);
+  const refreshBudgetNotice = useCallback(async () => {
+    const seq = budgetNoticeSeqRef.current + 1;
+    budgetNoticeSeqRef.current = seq;
+    try {
+      const payload = await fetchJson<{ statuses: Array<{ serviceKey: string; ratio: number; level: string; confirmRequired: boolean }> }>("/usage/budget-status");
+      if (seq !== budgetNoticeSeqRef.current) return;
+      const warned = (payload.statuses ?? []).filter((entry) => entry.level !== "ok");
+      if (warned.length === 0) {
+        setBudgetNotice(null);
+        return;
+      }
+      const overLabel = isZh ? "（已超预算）" : " (over budget)";
+      const parts = warned.map((entry) => `${entry.serviceKey} ${Math.round(entry.ratio * 100)}%${entry.level === "over" ? overLabel : ""}`);
+      setBudgetNotice(parts.join(" · "));
+    } catch {
+      if (seq === budgetNoticeSeqRef.current) setBudgetNotice(null);
+    }
+  }, [isZh]);
   useEffect(() => {
     // 1666 号：换会话 = 待确认的发送作废（否则「仍要发送」会把上一个会话的
     // 文本发进新会话）。
     setPendingBudgetSend(null);
-    void fetchJson<{ statuses: Array<{ serviceKey: string; ratio: number; level: string; confirmRequired: boolean }> }>("/usage/budget-status")
-      .then((payload) => {
-        const warned = (payload.statuses ?? []).filter((entry) => entry.level !== "ok");
-        if (warned.length === 0) {
-          setBudgetNotice(null);
-          return;
-        }
-        const overLabel = isZh ? "（已超预算）" : " (over budget)";
-        const parts = warned.map((entry) => `${entry.serviceKey} ${Math.round(entry.ratio * 100)}%${entry.level === "over" ? overLabel : ""}`);
-        setBudgetNotice(parts.join(" · "));
-      })
-      .catch(() => setBudgetNotice(null));
   }, [activeSessionId]);
+  useEffect(() => {
+    void refreshBudgetNotice();
+  }, [activeSessionId, refreshBudgetNotice]);
+  // 1666 号：本轮对话结束（忙→闲）后再查一次。80% 的 warn 档只经告警条传递
+  //（确认门只在 100% 档）——此前只在挂载/切会话时查，越线的那一轮会话里
+  // 告警条恒不出现（真人走查实证：越线后留在原会话无告警，切走再切回才
+  // 出现）。只在「忙→闲」沿触发：挂载时上面的 effect 已查过。
+  const budgetWasBusyRef = useRef(false);
+  const budgetBusy = chatStreaming || loading;
+  useEffect(() => {
+    const wasBusy = budgetWasBusyRef.current;
+    budgetWasBusyRef.current = budgetBusy;
+    if (wasBusy && !budgetBusy) void refreshBudgetNotice();
+  }, [budgetBusy, refreshBudgetNotice]);
 
   const onSend = async (text: string) => {
     // 1666 号：确认旁路**一次性**——在任何早退之前消费。此前在早退检查之后

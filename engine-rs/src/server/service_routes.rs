@@ -42,6 +42,10 @@ pub struct ServiceConfigEntry {
     pub service: String,
     pub name: Option<String>,
     pub base_url: Option<String>,
+    /// 1666 号：服务级模型清单（Node 腿自定义服务的模型列表键）。Rust 腿不
+    /// 消费，但**归一透传**——此前持久化形态没有该键，Rust 腿一次 PUT 就抹掉
+    /// Node 腿为自定义服务保存的模型清单（「归一不丢键」同族，反向）。
+    pub models: Option<Vec<String>>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<f64>,
     pub api_format: Option<String>,
@@ -64,6 +68,9 @@ impl ServiceConfigEntry {
             if !base_url.is_empty() {
                 map.insert("baseUrl".into(), json!(base_url));
             }
+        }
+        if let Some(models) = &self.models {
+            map.insert("models".into(), json!(models));
         }
         if let Some(temperature) = self.temperature {
             map.insert("temperature".into(), json!(temperature));
@@ -103,6 +110,7 @@ impl ServiceConfigEntry {
                 .unwrap_or_else(|| "custom".into()),
             name: str_field("name").filter(|s| !s.is_empty()),
             base_url: str_field("baseUrl").filter(|s| !s.is_empty()),
+            models: models_field(entry),
             temperature: entry.get("temperature").and_then(Value::as_f64),
             max_tokens: entry.get("maxTokens").and_then(Value::as_f64),
             api_format: str_field("apiFormat").filter(|v| v == "chat" || v == "responses"),
@@ -112,6 +120,49 @@ impl ServiceConfigEntry {
             confirm_at_budget: entry.get("confirmAtBudget").and_then(Value::as_bool),
         }
     }
+}
+
+/// 服务级模型清单解析（TS `normalizeServiceModelIds` 的宽松子集）：非字符串
+/// 项与空串丢弃；清洗后为空 = 未设（不落盘）。
+fn models_field(value: &Value) -> Option<Vec<String>> {
+    let items: Vec<String> = value
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    (!items.is_empty()).then_some(items)
+}
+
+/// 1666 号：服务条目**持久化形态的全键样本**（每个可落盘键都置非默认值）——
+/// 键集 parity 守卫的夹具来源（`tests/project_config_keyset_fixture.rs` →
+/// `fixtures/project-config-keyset.json` 的 `serviceEntryPersistedFull`）。
+///
+/// 为什么需要：配置 schema 结构体 `LLMServiceEntry`（serde，对未知键宽容）与
+/// 这里的 `ServiceConfigEntry`（PUT 的落盘形态）是**两个类型**；原守卫只盯
+/// 前者，后者新增的键（预算三键 / maxTokens）对 TS 的 strict zod schema
+/// 不可见——预算键一旦真落盘，Node 回退腿加载项目配置即崩。新增字段时本
+/// 函数须同步置值，否则 Rust 守卫与 TS 键集比对同时给出信号。
+pub fn service_config_entry_full_key_sample() -> Value {
+    ServiceConfigEntry {
+        service: "custom".into(),
+        name: Some("FixtureFull".into()),
+        base_url: Some("https://svc.example.com/v1".into()),
+        models: Some(vec!["fixture-model-a".into(), "fixture-model-b".into()]),
+        temperature: Some(0.5),
+        max_tokens: Some(4096.0),
+        api_format: Some("chat".into()),
+        stream: Some(true),
+        daily_token_budget: Some(1000),
+        monthly_token_budget: Some(50000),
+        confirm_at_budget: Some(false),
+    }
+    .to_json()
 }
 
 /// 预算软顶键解析：**正整数**才算已配置（TS 归一 `Number.isInteger(v) && v > 0`
@@ -149,6 +200,7 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
             .map(|s| s.to_string())
     };
     let optional_base = || str_field("baseUrl").filter(|s| !s.is_empty());
+    let models = models_field(value);
     let temperature = value.get("temperature").and_then(Value::as_f64);
     let max_tokens = value.get("maxTokens").and_then(Value::as_f64);
     let api_format = str_field("apiFormat").filter(|v| v == "chat" || v == "responses");
@@ -164,6 +216,7 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
             service: "custom".into(),
             name: Some(name),
             base_url: optional_base(),
+            models,
             temperature,
             max_tokens,
             api_format,
@@ -178,6 +231,7 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
             service: "custom".into(),
             name: str_field("name").filter(|s| !s.is_empty()),
             base_url: optional_base(),
+            models,
             temperature,
             max_tokens,
             api_format,
@@ -191,6 +245,7 @@ fn normalize_service_entry(service_id: &str, value: &Value) -> ServiceConfigEntr
         service: service_id.to_string(),
         name: None,
         base_url: optional_base(),
+        models,
         temperature,
         max_tokens,
         api_format,
