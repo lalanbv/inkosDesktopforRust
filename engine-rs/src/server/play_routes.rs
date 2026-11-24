@@ -33,6 +33,16 @@ fn api_error(status: StatusCode, code: &str, message: impl Into<String>) -> Resp
         .into_response()
 }
 
+/// 1672 号：互动世界 / 运行不存在——与 TS 腿同形 `{ error: { code } }`（不带
+/// message）。
+fn play_not_found(code: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({ "error": { "code": code } })),
+    )
+        .into_response()
+}
+
 /// `normalizeApiBookId(param) ?? "default-{world|run}"`：非法段 400（TS throw）。
 fn normalize_segment(value: &str, field: &str, fallback: &str) -> Result<String, Box<Response>> {
     match normalize_api_book_id(Some(&json!(value)), field) {
@@ -73,9 +83,25 @@ pub async fn get_play_run(
         );
     };
 
+    // 1672 号：世界 / 运行不存在 → 404，与 TS 腿同码同形（上游 2.0 自 7e60e13f
+    // 起）。移植当时（2026-08-16）TS 对不存在的世界回 200 空壳，本端口忠实照搬，
+    // 上游改后没跟。空壳的危害在换腿场景里很具体：数据其实在另一棵树上
+    //（产品引擎 `worlds/` ↔ TS 腿 `works/<id>/source/`），界面却看到一个「全新
+    // 的空世界」，接着往里写就在错误的树上分叉出第二份。
+    let Some(world) = play::load_world(root, &world_id).await else {
+        return play_not_found("PLAY_WORLD_NOT_FOUND");
+    };
+    // TS 腿的判据是运行目录里有图谱库文件；产品引擎新建的运行走文件后端、没有
+    // 那个文件——这里按运行目录判。
+    let run_exists = tokio::fs::metadata(&run_dir)
+        .await
+        .is_ok_and(|meta| meta.is_dir());
+    if !run_exists {
+        return play_not_found("PLAY_RUN_NOT_FOUND");
+    }
+
     let transcript = play::read_transcript(root, &world_id, &run_id).await;
     let current_state = play::load_current_state(root, &world_id, &run_id).await;
-    let world = play::load_world(root, &world_id).await;
     let graph = play::play_graph_snapshot(&run_dir);
 
     // 插图 sidecar 合并：实体 ready 项注入 imageUrl；scene-turn-* 收集 URL 表。
@@ -136,7 +162,7 @@ pub async fn get_play_run(
     let mut payload = json!({
         "worldId": world_id,
         "runId": run_id,
-        "title": world.as_ref().and_then(|w| w.get("title")).cloned().unwrap_or(Value::Null),
+        "title": world.get("title").cloned().unwrap_or(Value::Null),
         "transcript": transcript,
         "currentState": current_state,
         "graph": { "entities": entities_with_images,

@@ -68,6 +68,9 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // 真跑 11 / 豁免 2——地板 11 / 上限 2。余下两个豁免是 cross_write_read 与
 // full_grey：它们要的是「Rust 写 TS 读得到」，两腿各写各的树（books/ ↔
 // works/），不是夹具能补的；存储模型定线后复活并把地板再上调。
+// 1672 号：LLM 未配置对跑（原独立二进制 llm_config_duel 的两个测试——此前
+// 不进台账，握手看不见它）并入对跑二进制；另加互动叙事数据根现状钉。16 个
+// 对跑真跑 14 / 豁免 2——地板 11 → 14，上限不变。
 //
 // 测试总数怎么取：本脚本把 cargo 的 stdout 与 stderr **分开采集后拼接**
 // （stdout 在前、stderr 在后）。`Running <binary>` 走 stderr、`running N tests`
@@ -76,9 +79,12 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // ↔ 第 k 条 `test result:`，并用 `passed + failed + ignored === N` 交叉验证
 // 对应没错位（1666 首版按节取数在真实日志上取到 0——合成夹具没复现拼接
 // 形态，真实日志才暴露；夹具此后按真实拼接形态构造）。
-const DUEL_EXECUTED_FLOOR = 11;
+const DUEL_EXECUTED_FLOOR = 14;
 const DUEL_EXEMPT_CEILING = 2;
 const DUEL_LEDGER_ENV = "INKOS_DUEL_LEDGER";
+// 当前树形态的对跑总数 = 真跑地板 + 豁免上限。自检里「恰在两个水位上」的夹具
+// 由此推导——上调地板或下调上限时自检自动跟走，不用再手抄一遍这些数。
+const DUEL_CURRENT_TOTAL = DUEL_EXECUTED_FLOOR + DUEL_EXEMPT_CEILING;
 
 const RUNNING_LINE_RE = /^running (\d+) tests?$/;
 const RESULT_LINE_RE = /^test result: (\w+)\. (\d+) passed; (\d+) failed; (\d+) ignored;/;
@@ -150,7 +156,7 @@ function duelVerdict(parsed) {
  * 在前）+ "\n" + stderr（Compiling/Finished/Running 行，在后）。
  * duel 是第 3 个被执行的二进制（前有 lib 单测与 golden，后有 work 域）。
  */
-function duelFixture({ tests = 13, started = [], exempt = [], withDuelBinary = true, withDuelStdout = true, extraRunninglessBinary = false, bogusRunningLine = false }) {
+function duelFixture({ tests = DUEL_CURRENT_TOTAL, started = [], exempt = [], withDuelBinary = true, withDuelStdout = true, extraRunninglessBinary = false, bogusRunningLine = false }) {
   // 全绿形态：passed = tests。
   const stdout = [
     "running 2200 tests",
@@ -188,25 +194,28 @@ const names = (prefix, count) => Array.from({ length: count }, (_, i) => `${pref
 
 /** 必红自检（847 号纪律）：喂已知红的输入走同一解析路径，必须判红。 */
 function duelSelfCheck() {
-  const all = names("duel", 13);
+  const all = names("duel", DUEL_CURRENT_TOTAL);
   const first = (count) => all.slice(0, count);
+  // 「豁免突破上限」要多到真跑达标、只输在豁免数上。
+  const overTotal = DUEL_CURRENT_TOTAL + 5;
+  const overExempt = DUEL_EXEMPT_CEILING + 1;
   const cases = [
-    { label: "当前树形态（13 测 / 2 豁免 → 真跑 11，恰在地板与上限上）", wantOk: true,
-      fixture: duelFixture({ started: all, exempt: first(2) }),
-      verify: (p) => p.total === 13 && p.executed === 11 && p.exempted.length === 2 && p.exempted[1] === "duel_2" },
-    { label: "复活后零豁免（13 测 / 0 豁免 → 真跑 13）", wantOk: true,
+    { label: `当前树形态（${DUEL_CURRENT_TOTAL} 测 / ${DUEL_EXEMPT_CEILING} 豁免 → 真跑 ${DUEL_EXECUTED_FLOOR}，恰在地板与上限上）`, wantOk: true,
+      fixture: duelFixture({ started: all, exempt: first(DUEL_EXEMPT_CEILING) }),
+      verify: (p) => p.total === DUEL_CURRENT_TOTAL && p.executed === DUEL_EXECUTED_FLOOR && p.exempted.length === DUEL_EXEMPT_CEILING && p.exempted[DUEL_EXEMPT_CEILING - 1] === `duel_${DUEL_EXEMPT_CEILING}` },
+    { label: `复活后零豁免（${DUEL_CURRENT_TOTAL} 测 / 0 豁免 → 真跑 ${DUEL_CURRENT_TOTAL}）`, wantOk: true,
       fixture: duelFixture({ started: all, exempt: [] }),
-      verify: (p) => p.executed === 13 && p.exempted.length === 0 },
-    { label: "真跑跌破地板（13 测 / 3 豁免 → 真跑 10，差 1）", wantOk: false, needle: "地板",
-      fixture: duelFixture({ started: all, exempt: first(3) }) },
-    { label: "豁免突破上限（20 测 / 3 豁免 → 真跑 17 达标但豁免 3 > 2）", wantOk: false, needle: "上限",
-      fixture: duelFixture({ tests: 20, started: names("duel", 20), exempt: names("duel", 3) }) },
+      verify: (p) => p.executed === DUEL_CURRENT_TOTAL && p.exempted.length === 0 },
+    { label: `真跑跌破地板（${DUEL_CURRENT_TOTAL} 测 / ${overExempt} 豁免 → 真跑 ${DUEL_EXECUTED_FLOOR - 1}，差 1）`, wantOk: false, needle: "地板",
+      fixture: duelFixture({ started: all, exempt: first(overExempt) }) },
+    { label: `豁免突破上限（${overTotal} 测 / ${overExempt} 豁免 → 真跑 ${overTotal - overExempt} 达标但豁免 ${overExempt} > ${DUEL_EXEMPT_CEILING}）`, wantOk: false, needle: "上限",
+      fixture: duelFixture({ tests: overTotal, started: names("duel", overTotal), exempt: names("duel", overExempt) }) },
     { label: "台账为空（通道失效≠零豁免）", wantOk: false, needle: "台账通道失效",
       fixture: { ...duelFixture({ started: all }), ledgerText: "" } },
-    { label: "台账不完整（13 测只握了 12 次 start）", wantOk: false, needle: "台账通道失效",
-      fixture: duelFixture({ started: first(12), exempt: first(6) }) },
+    { label: `台账不完整（${DUEL_CURRENT_TOTAL} 测只握了 ${DUEL_CURRENT_TOTAL - 1} 次 start）`, wantOk: false, needle: "台账通道失效",
+      fixture: duelFixture({ started: first(DUEL_CURRENT_TOTAL - 1), exempt: first(6) }) },
     { label: "台账行格式漂移", wantOk: false, needle: "格式漂移",
-      fixture: { ...duelFixture({ started: all }), ledgerText: `${first(13).map((n) => `start ${n}`).join("\n")}\nexempt-duel_1\n` } },
+      fixture: { ...duelFixture({ started: all }), ledgerText: `${all.map((n) => `start ${n}`).join("\n")}\nexempt-duel_1\n` } },
     { label: "豁免行无对应 start（台账错位）", wantOk: false, needle: "没有对应 start",
       fixture: duelFixture({ started: all, exempt: ["ghost_duel"] }) },
     { label: "缺 duel 二进制", wantOk: false, needle: "二进制",

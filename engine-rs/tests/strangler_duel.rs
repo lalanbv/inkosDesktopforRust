@@ -13,6 +13,11 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+// 支撑模块（真实引擎二进制的启动命令）。crate 根文件的子模块默认在 `tests/`
+// 一级目录下找——那里每个文件都是一个集成测试目标，所以显式指到同名子目录。
+#[path = "strangler_duel/engine_bin.rs"]
+mod engine_bin;
+
 /// 1666 号：duel 台账。`cargo test` 默认捕获测试的 stdout **与 stderr**
 /// （libtest）——688 守卫「响亮记账」的 eprintln 在门禁日志里从未出现过：守卫
 /// 早退不只是被计成 ok，连记账本身都是静默的。门禁经 `INKOS_DUEL_LEDGER`
@@ -69,6 +74,15 @@ fn write_fixture(root: &Path, llm: &str) {
 /// 既有基线仍是 1 章（`write_fixture`）；需要多章的对跑（章节结构操作）在此
 /// 补足。追加章须在迁移到 works 布局**之前**落盘，两棵树才同源。
 fn write_fixture_with_chapters(root: &Path, llm: &str, extra: &[(&str, &str, &str)]) {
+    write_fixture_book(root, extra);
+    write_fixture_llm(root, llm);
+    migrate_fixture_to_works(root);
+}
+
+/// 夹具的书与文种文件（与 LLM 配置无关的部分）——配置可用与缺 key 两种夹具
+/// 共用（1672 号拆出：原独立二进制 `tests/llm_config_duel.rs` 的夹具自带一份
+/// 同款书文件，并入时收编到这里）。
+fn write_fixture_book(root: &Path, extra: &[(&str, &str, &str)]) {
     // 130 号：builtin 技能包根（TS file-relative 恒指向 packages/core/skills；
     // Rust in-process 面经 env 注入同一目录，bin 进程在 spawn 点显式传）。
     // 各 duel 测试并发设置同值——无害。
@@ -124,6 +138,10 @@ fn write_fixture_with_chapters(root: &Path, llm: &str, extra: &[(&str, &str, &st
         "## 分岔点\n开篇之前。",
     )
     .unwrap();
+}
+
+/// 夹具的 LLM 服务项：回环 mock + 对跑 key。
+fn write_fixture_llm(root: &Path, llm: &str) {
     std::fs::write(
         root.join("inkos.json"),
         format!(
@@ -135,6 +153,18 @@ fn write_fixture_with_chapters(root: &Path, llm: &str, extra: &[(&str, &str, &st
     std::fs::write(
         root.join(".inkos").join("secrets.json"),
         r#"{"services":{"custom:Duel":{"apiKey":"duel-key"}}}"#,
+    )
+    .unwrap();
+}
+
+/// 1672 号：**缺 key** 的项目根——服务项指向非回环端点、secrets 缺席（回环端点
+/// 免 key，测不到「缺 key」）。书与 [`write_fixture`] 同一份、同样双根布局，
+/// 两腿都认得这本书，对跑打的才是配置问题而不是「书不存在」。
+fn write_unconfigured_fixture(root: &Path) {
+    write_fixture_book(root, &[]);
+    std::fs::write(
+        root.join("inkos.json"),
+        r#"{"version":"0.1.0","name":"未配置对跑项目","language":"zh","llm":{"services":{"custom:None":{"service":"custom","name":"None","baseUrl":"https://example.invalid/v1","apiFormat":"chat"}},"defaultModel":"none-model"},"notify":[]}"#,
     )
     .unwrap();
     migrate_fixture_to_works(root);
@@ -282,8 +312,20 @@ async fn spawn_backfill_mock_llm() -> String {
     format!("http://{addr}")
 }
 
-/// Rust engine 进程内全量路由（bin 同款装配）。
+/// Rust engine 进程内全量路由（bin 同款装配）：启动路由器按 `llm` 构造（对跑
+/// mock + 对跑 key）。
 async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
+    spawn_rust_engine_with(root, Some(llm), None).await
+}
+
+/// 同 [`spawn_rust_engine`]，启动路由器可由调用方给定：`startup_router =
+/// Some(..)` 时覆盖按 `llm` 构造的对跑路由器——缺 key 对跑要的是 bin 的未配置
+/// 占位（discard 端点 + 空 key），不是 env 配置形态。
+async fn spawn_rust_engine_with(
+    root: &Path,
+    llm: Option<&str>,
+    startup_router: Option<std::sync::Arc<inkos_engine::llm::agent_router::AgentRouter>>,
+) -> String {
     use inkos_engine::llm::agent_router::{AgentRouter, LlmEndpointConfig};
     use inkos_engine::server::books_routes::BooksRuntime;
     use inkos_engine::server::write_next_route::WriteNextRuntime;
@@ -294,7 +336,7 @@ async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
     let router = std::sync::Arc::new(AgentRouter::new(
         LlmEndpointConfig {
             context_window_tokens: 128_000,
-            base_url: llm.into(),
+            base_url: llm.unwrap_or_default().into(),
             api_key: "duel-key".into(),
             model: "duel-model".into(),
             max_tokens: 8192,
@@ -302,6 +344,8 @@ async fn spawn_rust_engine(root: &Path, llm: &str) -> String {
         },
         std::collections::HashMap::new(),
     ));
+    // 调用方给定启动路由器时，覆盖上面按 `llm` 构造的对跑路由器。
+    let router = startup_router.unwrap_or(router);
     let runner: inkos_engine::server::write_next_route::WriteNextRunner = std::sync::Arc::new(
         |_state: std::sync::Arc<inkos_engine::state::manager::StateManager>,
          _book_id: String,
@@ -3083,5 +3127,470 @@ async fn chapter_structure_duel() {
         "章节结构双端契约差异 {} 处：\n{}",
         diffs.len(),
         diffs.join("\n")
+    );
+}
+
+// ── 1672 号：LLM 未配置对跑 ───────────────────────────────────────────────────
+//
+// 1669 / 1670 号原在独立二进制 `tests/llm_config_duel.rs`：门禁的台账握手只认
+// 本二进制，它从不进台账。并入后随握手对账——两个测试都真跑，不设豁免。
+
+/// 与 TS `LLMConfigurationError("MISSING_API_KEY")` 逐字同句（UI 文案表逐字锚）。
+const MISSING_KEY_MESSAGE: &str =
+    "Studio LLM API key not set. Open Studio services and save an API key for the selected service.";
+
+/// 未配置引擎的进程内全量路由：启动路由器 = bin 的 env 缺省占位（桌壳直启的
+/// 产品路径）。
+async fn spawn_unconfigured_rust_engine(root: &Path) -> String {
+    use inkos_engine::llm::agent_router::{
+        AgentRouter, LlmEndpointConfig, LLM_UNCONFIGURED_BASE_URL,
+    };
+    let placeholder = std::sync::Arc::new(AgentRouter::new(
+        LlmEndpointConfig {
+            context_window_tokens: 128_000,
+            base_url: LLM_UNCONFIGURED_BASE_URL.into(),
+            api_key: String::new(),
+            model: "default".into(),
+            max_tokens: 8192,
+            extra_headers: std::collections::HashMap::new(),
+        },
+        std::collections::HashMap::new(),
+    ));
+    spawn_rust_engine_with(root, None, Some(placeholder)).await
+}
+
+/// 真实引擎二进制 + 其 base 地址（守卫即 [`EngineBin`]：Drop 回收，断言失败的
+/// 展开路径同样回收）。
+struct EngineProcess {
+    base: String,
+    child: EngineBin,
+}
+
+/// 起真实 `inkos-engine-server`。`env_llm = None` = 桌壳直启形态：不注入任何
+/// `INKOS_LLM_*`——连同从测试进程继承来的一并摘掉，保证是 bin 的缺省占位；
+/// `Some(baseUrl)` = 开发 / 冒烟脚本的 env 配置形态。
+async fn spawn_engine_bin(root: &Path, label: &str, env_llm: Option<&str>) -> EngineProcess {
+    let port = next_sidecar_port().await;
+    let err_log = format!("/tmp/duel-llm-config-bin-{label}-err.log");
+    let out_log = format!("/tmp/duel-llm-config-bin-{label}-out.log");
+    let mut command = engine_bin::engine_command();
+    command
+        .env("INKOS_PROJECT_ROOT", root)
+        .env("INKOS_PORT", port.to_string())
+        .env(
+            "INKOS_BUILTIN_GENRES_DIR",
+            root.join("assets").join("genres"),
+        )
+        .env(
+            "INKOS_BUILTIN_SKILLS_DIR",
+            repo_root().join("packages").join("core").join("skills"),
+        )
+        .env_remove("INKOS_LLM_BASE_URL")
+        .env_remove("INKOS_LLM_API_KEY")
+        .env_remove("INKOS_LLM_MODEL");
+    if let Some(base_url) = env_llm {
+        // 测试键：env 注入 + 非凭据回退（源码不落可用凭据字面量）。
+        let key = std::env::var("INKOS_TEST_LLM_KEY")
+            .unwrap_or_else(|_| "test-key-placeholder".to_string());
+        command
+            .env("INKOS_LLM_BASE_URL", base_url)
+            .env("INKOS_LLM_API_KEY", key)
+            .env("INKOS_LLM_MODEL", "env-model");
+    }
+    let child = command
+        .stdout(std::process::Stdio::from(
+            std::fs::File::create(&out_log).unwrap(),
+        ))
+        .stderr(std::process::Stdio::from(
+            std::fs::File::create(&err_log).unwrap(),
+        ))
+        .spawn()
+        .map(EngineBin)
+        .expect("inkos-engine-server 起动失败");
+    let mut engine = EngineProcess {
+        base: format!("http://127.0.0.1:{port}"),
+        child,
+    };
+    wait_child_ready(&mut engine.child, &engine.base, &err_log).await;
+    engine
+}
+
+/// 1669 / 1670 号：「模型调用**之前**检出的配置问题」双腿同码同文。同一缺 key
+/// 项目根下，TS sidecar 真实进程 × 未配置引擎的进程内全量路由，八面同请求对跑
+/// ——两腿都必须 400 `LLM_CONFIG_ERROR` 信封，且 `error` 全等。两腿各自先按契约
+/// 断言（防「对齐数据=回声室」），再断言全等。
+#[tokio::test]
+async fn llm_config_error_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    write_unconfigured_fixture(&root);
+
+    let rust = spawn_unconfigured_rust_engine(&root).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+
+    // agent 面的检查在会话查找之后（顺序同改动前）——先建一个真实会话。两腿
+    // 共读同一项目根，一次建立双端可见。
+    let session_id = "1783099000021-d169";
+    let (status, body) = post_json(
+        &rust,
+        "/api/v1/sessions",
+        &json!({ "sessionId": session_id, "sessionKind": "chat" }).to_string(),
+    )
+    .await;
+    assert_eq!(status, 200, "建会话失败：{body}");
+
+    // 载荷取能通过 TS 腿各自入参校验的形态（TS 的配置检查在处理器内部、校验之后）。
+    let agent_body = json!({ "instruction": "你好", "sessionId": session_id }).to_string();
+    let reference_text = "这是一段足够长的参考文本，用来做文风分析。".repeat(6);
+    let faces: Vec<(&str, &str, String)> = vec![
+        (
+            "write-next",
+            "/api/v1/books/b1/write-next",
+            "{}".to_string(),
+        ),
+        ("audit", "/api/v1/books/b1/audit/1", "{}".to_string()),
+        ("agent", "/api/v1/agent", agent_body),
+        // 1670 号第二批守卫里两腿都有的面。
+        (
+            "style analyze",
+            "/api/v1/style/analyze",
+            json!({ "text": reference_text }).to_string(),
+        ),
+        (
+            "imitation init",
+            "/api/v1/imitation/init",
+            json!({
+                "title": "仿写",
+                "referenceText": reference_text,
+                "storyIdea": "一个点子",
+            })
+            .to_string(),
+        ),
+        ("radar scan", "/api/v1/radar/scan", "{}".to_string()),
+        (
+            "radar analyze",
+            "/api/v1/radar/analyze",
+            json!({ "selection": { "platforms": [], "categories": [] } }).to_string(),
+        ),
+        (
+            "director directions",
+            "/api/v1/director/directions",
+            json!({ "inspiration": { "premise": "镜中图书馆" }, "count": 3 }).to_string(),
+        ),
+    ];
+    for (name, path, body) in faces {
+        let (ts_status, ts_body) = post_json(&ts, path, &body).await;
+        let (rust_status, rust_body) = post_json(&rust, path, &body).await;
+        assert_eq!(ts_status, 400, "[{name}] ts: {ts_body}");
+        assert_eq!(rust_status, 400, "[{name}] rust: {rust_body}");
+        assert_eq!(
+            ts_body["error"],
+            json!({ "code": "LLM_CONFIG_ERROR", "message": MISSING_KEY_MESSAGE }),
+            "[{name}] ts"
+        );
+        assert_eq!(
+            rust_body["error"], ts_body["error"],
+            "[{name}] 双腿 error 不等"
+        );
+    }
+
+    eprintln!(
+        "LLM 未配置对跑通过：write-next / audit / agent / 文风分析 / 仿写创建 / 雷达扫描与分析 / 导演方向 八面双腿 400 LLM_CONFIG_ERROR 同码同文"
+    );
+}
+
+/// 真实引擎二进制的产品路径直证：桌壳直启不注入 `INKOS_LLM_*` → bin 的缺省
+/// 端点即未配置占位；未配置项目上 write-next / audit / agent 同步 400，只读面
+/// 照常。对照：同一项目根换成 env 配置形态启动，守卫放行（write-next 照常起
+/// 后台任务）。进程内对跑用的是手工构造的占位路由器——这里补的是 bin 装配层。
+#[tokio::test]
+async fn bin_process_unconfigured_engine_answers_400() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    write_unconfigured_fixture(&root);
+
+    // 产品路径：不注入任何 INKOS_LLM_*。
+    let engine = spawn_engine_bin(&root, "unconfigured", None).await;
+    for (name, path) in [
+        ("write-next", "/api/v1/books/b1/write-next"),
+        ("audit", "/api/v1/books/b1/audit/1"),
+    ] {
+        let (status, body) = post_json(&engine.base, path, "{}").await;
+        assert_eq!(status, 400, "[{name}] {body}");
+        assert_eq!(body["error"]["code"], "LLM_CONFIG_ERROR", "[{name}] {body}");
+        assert_eq!(
+            body["error"]["message"], MISSING_KEY_MESSAGE,
+            "[{name}] {body}"
+        );
+    }
+    let session_id = "1783099000031-d169";
+    let (status, body) = post_json(
+        &engine.base,
+        "/api/v1/sessions",
+        &json!({ "sessionId": session_id, "sessionKind": "chat" }).to_string(),
+    )
+    .await;
+    assert_eq!(status, 200, "建会话：{body}");
+    let (status, body) = post_json(
+        &engine.base,
+        "/api/v1/agent",
+        &json!({ "instruction": "你好", "sessionId": session_id }).to_string(),
+    )
+    .await;
+    assert_eq!(status, 400, "agent: {body}");
+    assert_eq!(
+        body["error"]["message"], MISSING_KEY_MESSAGE,
+        "agent: {body}"
+    );
+    // 只读面不受影响。
+    let (status, body) = get_json(&engine.base, "/api/v1/books").await;
+    assert_eq!(status, 200, "books: {body}");
+    drop(engine);
+
+    // 对照：env 配置形态启动——守卫放行。
+    let env_engine = spawn_engine_bin(&root, "env", Some("http://127.0.0.1:9/v1")).await;
+    let (status, body) = post_json(&env_engine.base, "/api/v1/books/b1/write-next", "{}").await;
+    assert_eq!(status, 200, "env 配置的引擎不应被拦：{body}");
+    assert_eq!(body["status"], "writing", "{body}");
+
+    eprintln!("真实二进制验收通过：未配置引擎三面 400 LLM_CONFIG_ERROR；env 配置引擎放行");
+}
+
+// ── 1672 号：互动叙事换腿的数据根（现状钉）─────────────────────────────────────
+
+/// TS 腿原生写面的播种器（`strangler_duel/seedPlayWorld.mjs`：core 的 PlayStore /
+/// PlayDB——与 TS 腿同一份写入代码，不手搓夹具）。`args` = 脚本的命令与其余
+/// 参数（`["create", "<worldId>"]` / `["append-turn", "<worldId>", "<content>"]`）；
+/// 脚本的参数顺序是「命令 → 项目根 → 其余」。
+fn seed_works_world(root: &Path, args: &[&str]) {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("strangler_duel")
+        .join("seedPlayWorld.mjs");
+    let (command, rest) = args.split_first().expect("seedPlayWorld：缺命令");
+    let output = std::process::Command::new("node")
+        .arg(&script)
+        .arg(command)
+        .arg(root)
+        .args(rest)
+        .output()
+        .expect("node 起动失败（TS 腿原生世界播种）");
+    assert!(
+        output.status.success(),
+        "TS 腿原生世界播种失败：{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// 1672 号：互动叙事（interactive world）换腿的数据根——**现状钉，不是契约**。
+///
+/// 两腿都有互动叙事的读写面，各写各的树，而且有两层互相独立的差异：
+///
+/// 1. **根不同**：产品引擎读写 `worlds/<id>/runs/<run>`（`play::world_dir` /
+///    `run_dir`，没有 works 兜底）；2.0 TS 腿读写 `works/<id>/source/runs/<run>`
+///    （`PlayStore` 经 `workDirectory`，按 works 清单发现世界）。
+/// 2. **图谱后端不同**：TS 腿的 `PlayDB` 只用 sqlite（`node:sqlite` 建
+///    `play.db`），读取面把「`play.db` 不存在」当作「运行不存在」；产品引擎的
+///    工厂是「`play.db` 已存在才走 sqlite，否则文件后端 `play-graph.json`」——
+///    新建的运行永远走文件后端。
+///
+/// 本测试让两腿**各自原生**创建一个世界再互读，逐步钉住现状：①各腿只读得到
+/// 自己创建的；②TS 侧旧数据迁移（`migrateLegacyWorks`，拷贝）之后，TS 腿认出
+/// 产品引擎的世界却仍读不到它的运行（没有 `play.db`）；③迁移之后各写各的树。
+///
+/// 读取面的「不存在 → 404」两腿同码同形（1672 号把产品引擎从 200 空壳对齐过
+/// 来，单测在 `tests/play_run_not_found.rs`）；本测试钉的是剩下的存储层差异。
+///
+/// 不断言修复：存储模型定线（产品引擎迁到 works，或自动双向桥接）后，这里的
+/// 断言要改成「互读可见」——它就是为了在那天变红而存在的。读取面单边兜底不是
+/// 修复：同一个世界 id 会在两棵树上各有一份、状态分叉。
+#[tokio::test]
+async fn interactive_world_storage_roots_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+
+    // 产品引擎原生创建：worlds/w-rust/…（写入面 = play.rs；图谱走文件后端）。
+    inkos_engine::play::create_world(
+        &root,
+        &inkos_engine::play::PlayWorldInput {
+            id: "w-rust",
+            title: "产品引擎世界",
+            premise: "镜中图书馆没有出口。",
+            world_contract: "",
+            visual_contract: "",
+            mode: "open",
+            language: "zh",
+        },
+    )
+    .await
+    .unwrap();
+    let rust_run = inkos_engine::play::ensure_run(&root, "w-rust", "main")
+        .await
+        .unwrap();
+    let mut graph = inkos_engine::play_graph::open_play_graph_db(&rust_run).unwrap();
+    graph.flush().unwrap();
+    drop(graph);
+    inkos_engine::play::append_transcript_turn(&root, "w-rust", "main", "user", "产品引擎第一问")
+        .await
+        .unwrap();
+    inkos_engine::play::save_current_state(
+        &root,
+        "w-rust",
+        "main",
+        &json!({ "turn": 1, "lastSummary": "产品引擎第一问" }),
+    )
+    .await
+    .unwrap();
+
+    // TS 腿原生创建：works/w-ts/source/…
+    seed_works_world(&root, &["create", "w-ts"]);
+
+    // 文件系统面：两棵树、两种图谱后端。
+    assert!(
+        root.join("worlds")
+            .join("w-rust")
+            .join("world.json")
+            .is_file(),
+        "产品引擎写 worlds/<id>/"
+    );
+    assert!(
+        !root.join("works").join("w-rust").exists(),
+        "产品引擎不写 works/"
+    );
+    assert!(
+        rust_run.join("play-graph.json").is_file(),
+        "产品引擎新建的运行走文件后端"
+    );
+    assert!(
+        !rust_run.join("play.db").exists(),
+        "产品引擎新建的运行不建 play.db"
+    );
+    assert!(
+        root.join("works")
+            .join("w-ts")
+            .join("source")
+            .join("runs")
+            .join("main")
+            .join("play.db")
+            .is_file(),
+        "TS 腿新建的运行建 play.db（sqlite）"
+    );
+    assert!(
+        !root.join("worlds").join("w-ts").exists(),
+        "TS 腿不写 worlds/"
+    );
+
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+    let run_path = |id: &str| format!("/api/v1/play/runs/{id}/main");
+    let turns = |body: &Value| body["transcript"].as_array().map(Vec::len).unwrap_or(0);
+
+    // ① 各腿只读得到自己创建的世界。
+    let (status, body) = get_json(&rust, &run_path("w-rust")).await;
+    assert_eq!(
+        (status, body["title"].clone(), turns(&body)),
+        (200, json!("产品引擎世界"), 1),
+        "{body}"
+    );
+    let (status, body) = get_json(&ts, &run_path("w-rust")).await;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (404, json!("PLAY_WORLD_NOT_FOUND")),
+        "{body}"
+    );
+    let (status, body) = get_json(&ts, &run_path("w-ts")).await;
+    assert_eq!(
+        (status, body["title"].clone(), turns(&body)),
+        (200, json!("TS 腿世界"), 1),
+        "{body}"
+    );
+    // 「不存在 → 404」两腿同码同形（1672 号把产品引擎从 200 空壳对齐过来——
+    // 空壳会把「数据在另一棵树上」伪装成「全新的空世界」）。
+    let (status, body) = get_json(&rust, &run_path("w-ts")).await;
+    assert_eq!(
+        (status, body),
+        (404, json!({ "error": { "code": "PLAY_WORLD_NOT_FOUND" } }))
+    );
+    // 世界在、运行不在：两腿都是 PLAY_RUN_NOT_FOUND。
+    let not_found = json!({ "error": { "code": "PLAY_RUN_NOT_FOUND" } });
+    let (status, body) = get_json(&rust, "/api/v1/play/runs/w-rust/ghost").await;
+    assert_eq!((status, body), (404, not_found.clone()));
+    let (status, body) = get_json(&ts, "/api/v1/play/runs/w-ts/ghost").await;
+    assert_eq!((status, body), (404, not_found));
+
+    // ② TS 侧旧数据迁移（拷贝：原目录保留）。
+    migrate_fixture_to_works(&root);
+    assert!(
+        root.join("worlds")
+            .join("w-rust")
+            .join("world.json")
+            .is_file(),
+        "迁移是拷贝，原目录保留"
+    );
+    assert!(
+        root.join("works")
+            .join("w-rust")
+            .join("source")
+            .join("runs")
+            .join("main")
+            .join("play-graph.json")
+            .is_file(),
+        "迁移把产品引擎的运行拷进 works/"
+    );
+    let (status, body) = get_json(&rust, &run_path("w-rust")).await;
+    assert_eq!((status, turns(&body)), (200, 1), "{body}");
+    // TS 腿按 works 清单认出了这个世界，但它的读取面要 play.db——产品引擎的运行
+    // 没有这个文件。
+    let (status, body) = get_json(&ts, &run_path("w-rust")).await;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (404, json!("PLAY_RUN_NOT_FOUND")),
+        "{body}"
+    );
+    // 迁移是单向的（legacy → works）：TS 腿原生的世界产品引擎仍读不到。
+    let (status, body) = get_json(&rust, &run_path("w-ts")).await;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (404, json!("PLAY_WORLD_NOT_FOUND")),
+        "{body}"
+    );
+
+    // ③ 迁移之后再写：各写各的树。
+    inkos_engine::play::append_transcript_turn(
+        &root,
+        "w-rust",
+        "main",
+        "assistant",
+        "产品引擎第二答",
+    )
+    .await
+    .unwrap();
+    let (_, body) = get_json(&rust, &run_path("w-rust")).await;
+    assert_eq!(turns(&body), 2);
+    let (status, _) = get_json(&ts, &run_path("w-rust")).await;
+    assert_eq!(status, 404);
+    seed_works_world(&root, &["append-turn", "w-ts"]);
+    let (_, body) = get_json(&ts, &run_path("w-ts")).await;
+    assert_eq!(turns(&body), 2);
+    let (status, _) = get_json(&rust, &run_path("w-ts")).await;
+    assert_eq!(status, 404);
+
+    eprintln!(
+        "互动叙事数据根现状钉：根（worlds/ ↔ works/<id>/source）与图谱后端（play-graph.json ↔ play.db）两层差异；迁移是拷贝且救不了运行读取；「不存在 → 404」两腿同码"
     );
 }

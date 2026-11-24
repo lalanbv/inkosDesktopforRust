@@ -12461,8 +12461,10 @@ mod play71_e2e {
     async fn get_run_reads_sqlite_backend() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
+        // 1672 号：世界须存在——不存在的世界现在回 404（与 TS 腿同码），
+        // 「有运行、没世界」不再是可读形态。
+        fixture(&root);
         let run_dir = root.join("worlds").join("w1").join("runs").join("r1");
-        std::fs::create_dir_all(&run_dir).unwrap();
         {
             let conn = rusqlite::Connection::open(run_dir.join("play.db")).unwrap();
             conn.execute_batch(
@@ -12476,8 +12478,12 @@ mod play71_e2e {
         }
         let (status, parsed) = call(app71(&root), "GET", "/api/v1/play/runs/w1/r1", None).await;
         assert_eq!(status, StatusCode::OK, "body: {parsed}");
+        // play.db 在即走 sqlite：只有 hero 一个实体——文件后端的 play-graph.json
+        // 里是 hero + npc 两个，取错后端这里就是 2。
+        let entities = parsed["graph"]["entities"].as_array().map(Vec::len);
+        assert_eq!(entities, Some(1), "body: {parsed}");
         assert_eq!(parsed["graph"]["entities"][0]["label"], "林动");
-        assert_eq!(parsed["title"], serde_json::Value::Null);
+        assert_eq!(parsed["title"], "雪夜世界");
     }
 
     #[tokio::test]
