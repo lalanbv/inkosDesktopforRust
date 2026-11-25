@@ -1273,6 +1273,30 @@ mod tests {
             .is_empty());
     }
 
+    /// 1678 号：没有索引的 legacy 书（三种命名形态）——下一章号跟着盘上的章走。
+    /// 此前 durable 进度只认正典 `NNNN_` 形态，这本书算成 0 → 下一章号 1 → write-next
+    /// 重写第 1 章（789 号在 Node 腿修过的同一个坑）。
+    #[tokio::test]
+    async fn next_chapter_number_follows_legacy_named_chapters_without_an_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let chapters = manager.book_dir("legacy").join("chapters");
+        for (name, content) in [
+            ("0001-镜中醒来.md", "一"),
+            ("0002.md", "二"),
+            ("0003_云涌.md", "三"),
+        ] {
+            write_book_file(&chapters.join(name), content);
+        }
+        assert_eq!(manager.get_next_chapter_number("legacy").await.unwrap(), 4);
+        // 有索引、索引里列着这三章：同样。
+        write_book_file(
+            &chapters.join("index.json"),
+            r#"[{"number":1,"title":"镜中醒来","status":"ready-for-review","wordCount":1,"createdAt":"","updatedAt":"","auditIssues":[],"lengthWarnings":[]},{"number":2,"title":"第2章","status":"ready-for-review","wordCount":1,"createdAt":"","updatedAt":"","auditIssues":[],"lengthWarnings":[]},{"number":3,"title":"云涌","status":"ready-for-review","wordCount":1,"createdAt":"","updatedAt":"","auditIssues":[],"lengthWarnings":[]}]"#,
+        );
+        assert_eq!(manager.get_next_chapter_number("legacy").await.unwrap(), 4);
+    }
+
     /// 807 号：已落盘计数与重建同口径（按章号去重，legacy 连字符形态同列）。
     #[tokio::test]
     async fn persisted_chapter_count_includes_legacy_hyphen_files_deduped_by_number() {

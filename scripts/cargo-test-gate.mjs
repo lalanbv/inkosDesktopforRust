@@ -80,6 +80,9 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // 1676 号：破坏性操作护栏（R58）——同一份书在两腿上各驳回、各删一次，回收站条目集
 // 与字节逐项一致，新增真跑对跑一条。19 个对跑真跑 17 / 豁免 2——地板 16 → 17，
 // 上限不变。
+// 1678 号：章文件命名形态与进度——带索引的三形态混排、不带索引的旧命名书，两腿书架
+// 的章数与下一章号一致，新增真跑对跑一条。20 个对跑真跑 18 / 豁免 2——地板 17 → 18，
+// 上限不变。
 //
 // 测试总数怎么取：本脚本把 cargo 的 stdout 与 stderr **分开采集后拼接**
 // （stdout 在前、stderr 在后）。`Running <binary>` 走 stderr、`running N tests`
@@ -88,7 +91,7 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // ↔ 第 k 条 `test result:`，并用 `passed + failed + ignored === N` 交叉验证
 // 对应没错位（1666 首版按节取数在真实日志上取到 0——合成夹具没复现拼接
 // 形态，真实日志才暴露；夹具此后按真实拼接形态构造）。
-const DUEL_EXECUTED_FLOOR = 17;
+const DUEL_EXECUTED_FLOOR = 18;
 const DUEL_EXEMPT_CEILING = 2;
 const DUEL_LEDGER_ENV = "INKOS_DUEL_LEDGER";
 // 当前树形态的对跑总数 = 真跑地板 + 豁免上限。自检里「恰在两个水位上」的夹具

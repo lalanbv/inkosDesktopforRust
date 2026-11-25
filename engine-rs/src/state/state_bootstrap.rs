@@ -244,12 +244,6 @@ pub fn unique_strings(values: &[String]) -> Vec<String> {
     out
 }
 
-fn chapter_filename_re() -> &'static Regex {
-    // TS loadDurableArtifactChapterNumbers: /^(\d+)_/（章节文件名前缀 N_）
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"^(\d+)_").expect("chapter filename regex"))
-}
-
 /// 计算 durable story progress：max(连续章节产物前缀, 显式 fallback)。
 ///
 /// 对齐 TS `resolveDurableStoryProgress`（export）。`fallback` 非正整数视为 0。
@@ -277,7 +271,8 @@ async fn resolve_contiguous_artifact_chapter_progress(
     )))
 }
 
-/// 从 `{book_dir}/chapters/index.json`（数组 number 字段）+ `chapters/` 目录文件名（`N_*`）提取章节数。
+/// 从 `{book_dir}/chapters/index.json`（数组 number 字段）+ `chapters/` 目录的章文件（三种
+/// 命名形态同一集合）提取章节数。
 /// 对齐 TS `loadDurableArtifactChapterNumbers`：两个源任一失败 → 空，最终合并。
 async fn load_durable_artifact_chapter_numbers(
     store: &dyn StateStore,
@@ -297,15 +292,17 @@ async fn load_durable_artifact_chapter_numbers(
         None => Vec::new(),
     };
 
-    // chapters/ 目录：文件名 N_xxx 提取 N。
+    // chapters/ 目录：章文件的前导章号——与索引重建、落盘计数、writer 同号旧文件清理
+    // 同一集合（[`crate::state::manager::leading_number`]：`NNNN_标题.md` / legacy
+    // `NNNN-标题.md` / 裸 `NNNN.md`）。
+    //
+    // 1678 号：此前只认 `N_` 正典形态——没有索引的 legacy 书进度算成 0，下一章号回到 1，
+    // write-next 写「第 1 章」时同号旧文件清理会把原有的第 1 章清掉（TS 腿 789 号修过
+    // 同一个坑，当时也只修了正典命名——1678 号两腿同修）。
     let entries = store.list_dir(&chapters_dir).await?;
     let file_chapters: Vec<i64> = entries
         .iter()
-        .filter_map(|name| {
-            chapter_filename_re()
-                .captures(name)
-                .and_then(|c| c.get(1)?.as_str().parse::<i64>().ok())
-        })
+        .filter_map(|name| crate::state::manager::leading_number(name).map(i64::from))
         .collect();
 
     let mut all = index_chapters;
@@ -1393,6 +1390,31 @@ mod tests {
             ],
         );
         // 1/2/3 连续 → 前缀 3。
+        assert_eq!(
+            resolve_durable_story_progress(&store, "book", None)
+                .await
+                .unwrap(),
+            3
+        );
+    }
+
+    /// 1678 号：durable 进度对章文件形态的认定，与索引重建、落盘计数同一集合
+    /// （`NNNN_标题.md` / legacy `NNNN-标题.md` / 裸 `NNNN.md`）。此前只认正典形态——
+    /// 没有索引的 legacy 书进度算成 0，下一章号回到 1，write-next 会重写第 1 章。
+    #[tokio::test]
+    async fn resolve_durable_progress_counts_legacy_named_chapters() {
+        let store = InMemoryStateStore::new();
+        setup_book_with_chapters(
+            &store,
+            "book",
+            &[
+                ("0001-镜中醒来.md", "x"),
+                ("0002.md", "x"),
+                ("0003_云涌.md", "x"),
+                ("notes.md", "x"),  // 不是章文件
+                ("0004_设定", "x"), // 同号目录不是章文件
+            ],
+        );
         assert_eq!(
             resolve_durable_story_progress(&store, "book", None)
                 .await

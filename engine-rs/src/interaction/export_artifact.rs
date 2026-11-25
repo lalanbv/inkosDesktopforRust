@@ -83,26 +83,31 @@ pub struct ExportArtifact {
     pub payload: Vec<u8>,
 }
 
-/// 章节文件查找表：`^\d{4}` 前缀 → 文件名（首个命中，对齐 TS buildChapterFileLookup）。
+/// 章节文件查找表：章号 → 该章的章文件。认的章文件与索引重建同一集合（三种命名形态）；
+/// 同章双形态取读侧的胜者（[`crate::state::manager::select_chapter_files`]，与
+/// `find_chapter_file_by_number` 对该章的胜者恒等）。
+///
+/// 1678 号：此前是「目录序首个命中」——同章双形态的书（`0001-旧.md` 与 `0001_新.md`
+/// 并存）导出哪一份取决于目录顺序，旧稿会被当成正文导出去。纯函数接收显式的文件名
+/// 列表：择优不依赖目录顺序这件事得能直接测（目录读取顺序本身不可控）。
+fn export_chapter_file_lookup(names: Vec<String>) -> std::collections::HashMap<u32, String> {
+    crate::state::manager::select_chapter_files(names)
+        .into_iter()
+        .filter_map(|name| {
+            crate::state::manager::leading_number(&name).map(|number| (number, name))
+        })
+        .collect()
+}
+
 async fn build_chapter_file_lookup(chapters_dir: &Path) -> std::collections::HashMap<u32, String> {
-    let mut lookup = std::collections::HashMap::new();
     let Ok(mut entries) = tokio::fs::read_dir(chapters_dir).await else {
-        return lookup;
+        return std::collections::HashMap::new();
     };
+    let mut names = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".md") {
-            continue;
-        }
-        let digits: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if digits.len() != 4 {
-            continue;
-        }
-        if let Ok(number) = digits.parse::<u32>() {
-            lookup.entry(number).or_insert(name);
-        }
+        names.push(entry.file_name().to_string_lossy().into_owned());
     }
-    lookup
+    export_chapter_file_lookup(names)
 }
 
 fn escape_html(text: &str) -> String {
@@ -783,6 +788,95 @@ mod tests {
         // 元素间各插一个 "\n"。
         assert!(text.starts_with("风起\n\n\n# 第1章\n\n正文一。"));
         assert!(text.ends_with("正文二。\n\n\n"));
+    }
+
+    /// 1678 号：同章双形态（`0001-旧.md` 与 `0001_新.md` 并存，845 号的读侧裁决是正典
+    /// 优先）——导出取同一个胜者，不随目录顺序变。此前查找表是「目录序首个命中」。
+    #[tokio::test]
+    async fn dual_form_chapter_exports_the_preferred_file_whatever_the_directory_order() {
+        for (first, second) in [("0001-旧.md", "0001_新.md"), ("0001_新.md", "0001-旧.md")] {
+            let dir = tempfile::tempdir().unwrap();
+            let state = fixture(dir.path()).await;
+            let chapters = state.book_dir("b1").join("chapters");
+            tokio::fs::remove_file(chapters.join("0001_风.md"))
+                .await
+                .unwrap();
+            // 内容跟着文件名走：正典 `0001_新.md` 是新稿，`0001-旧.md` 是旧稿；只变创建顺序。
+            for name in [first, second] {
+                let draft = if name == "0001_新.md" {
+                    "新稿。"
+                } else {
+                    "旧稿。"
+                };
+                tokio::fs::write(chapters.join(name), format!("# 第1章\n\n{draft}"))
+                    .await
+                    .unwrap();
+            }
+            let artifact =
+                build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, None)
+                    .await
+                    .unwrap();
+            let text = String::from_utf8(artifact.payload).unwrap();
+            assert!(text.contains("新稿"), "先建 {first:?}：{text}");
+            assert!(!text.contains("旧稿"), "先建 {first:?}：{text}");
+        }
+    }
+
+    /// 1678 号：同章双形态的择优不依赖目录顺序——显式列表正着给、倒着给，胜者都是正典。
+    #[test]
+    fn export_lookup_prefers_the_canonical_file_whatever_the_listing_order() {
+        let mut forward = vec![
+            "0001-旧.md".to_string(),
+            "0001_新.md".to_string(),
+            "0002.md".to_string(),
+            "0003_收束.md".to_string(),
+            "notes.md".to_string(),
+        ];
+        let lookup = export_chapter_file_lookup(forward.clone());
+        forward.reverse();
+        assert_eq!(
+            export_chapter_file_lookup(forward),
+            lookup,
+            "倒序的结果应与正序相同"
+        );
+        assert_eq!(
+            lookup.get(&1).map(String::as_str),
+            Some("0001_新.md"),
+            "同章双形态取正典"
+        );
+        assert_eq!(lookup.get(&2).map(String::as_str), Some("0002.md"));
+        assert_eq!(lookup.get(&3).map(String::as_str), Some("0003_收束.md"));
+        assert_eq!(lookup.len(), 3, "不是章文件的不进表");
+    }
+
+    /// 1678 号：旧命名的章（`NNNN-标题.md` / 裸 `NNNN.md`）照样导得出——查找表认的章文件
+    /// 与索引重建同一集合。
+    #[tokio::test]
+    async fn legacy_named_chapters_are_exported() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = fixture(dir.path()).await;
+        let chapters = state.book_dir("b1").join("chapters");
+        tokio::fs::remove_file(chapters.join("0001_风.md"))
+            .await
+            .unwrap();
+        tokio::fs::remove_file(chapters.join("0002_云.md"))
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0001-风.md"), "# 第1章\n\n正文一。")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0002.md"), "# 第2章\n\n正文二。")
+            .await
+            .unwrap();
+        let artifact = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, None)
+            .await
+            .unwrap();
+        assert_eq!(artifact.chapters_exported, 2);
+        let text = String::from_utf8(artifact.payload).unwrap();
+        assert!(
+            text.contains("正文一。") && text.contains("正文二。"),
+            "{text}"
+        );
     }
 
     #[tokio::test]

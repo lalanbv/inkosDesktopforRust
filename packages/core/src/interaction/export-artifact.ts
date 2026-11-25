@@ -7,6 +7,7 @@ import JSZip from "jszip";
 import {renderChapterDocument} from '../utils/chapter-document.js';
 import {readChapterHeading} from '../utils/chapter-splitter.js';
 import {buildLengthSpec, chapterLengthDelivery, countChapterLength, defaultChapterLength} from '../utils/length-metrics.js';
+import { chapterFileNumber } from "../utils/chapter-files.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface ExportStateLike {
@@ -116,8 +117,11 @@ function buildChapterFileLookup(files: ReadonlyArray<string>, chapters: Readonly
   const unindexedFiles: string[] = [];
   for (const file of [...files].sort()) {
     if (!file.endsWith(".md")) continue;
-    const match = /^(\d+)_.*\.md$/u.exec(file);
-    const chapterNumber = match ? Number(match[1]) : undefined;
+    // 1678 号：章文件的认定与索引重建同一集合（chapterFileNumber——正典 `NNNN_标题.md` /
+    // legacy `NNNN-标题.md` / 裸 `NNNN.md`）。此前只认正典形态：旧命名的章被报成「缺文件 /
+    // 未入索引」，这样的书在 Node 腿上导不出。校验本身不变——真缺文件、未入索引的章、
+    // 同章两个文件，照样拒绝。
+    const chapterNumber = chapterFileNumber(file);
     if (chapterNumber === undefined || !indexed.has(chapterNumber)) {
       unindexedFiles.push(file);
       continue;

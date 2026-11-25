@@ -4064,13 +4064,13 @@ async fn destructive_operations_trash_duel() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
     let llm = spawn_mock_llm().await;
-    // 章文件用正典形态：Node 腿 `resolveDurableStoryProgress` 的一致性守卫只认 `NNNN_`，
-    // 索引里列着裸章号的章时书架接口回 500（既有缺陷，1676 号立案）——这里测的是回收站。
+    // 第 3 章是裸章号文件 `0003.md`：1676 号时这里只能用正典文件名——Node 腿的进度守卫
+    // 当时只认 `NNNN_`，这本书会让书架接口整页 500。1678 号修掉后改回来，夹具本身就是证据。
     write_fixture_book(
         &root,
         &[
             ("0002_云涌", "云涌", "江面起了雾。"),
-            ("0003_收束", "收束", "渡船靠岸。"),
+            ("0003", "收束", "渡船靠岸。"),
         ],
     );
     write_fixture_llm(&root, &llm);
@@ -4118,12 +4118,25 @@ async fn destructive_operations_trash_duel() {
     }
     let rust = spawn_rust_engine(&root, &llm).await;
     let ts = spawn_ts_sidecar_ready(&root).await;
+    // ⓪ 书架：索引里列着裸章号的第 3 章，两腿都列得出、章数都对。
+    for base in [&rust, &ts.base] {
+        let (status, body) = get_json(base, "/api/v1/books").await;
+        assert_eq!(status, 200, "{base}：{body}");
+        assert_eq!(body["books"][0]["id"], "b1", "{base}：{body}");
+        assert_eq!(body["books"][0]["chaptersWritten"], 3, "{base}：{body}");
+    }
     // 两棵树本来就有字节不同的文件（产品引擎那棵是夹具手写的紧凑 JSON，Node 腿那棵经
     // 迁移脚本规范化过：章节索引、book.json）。这些只比路径；其余逐字节。
     let rust_before = tree_files(&rust_tree);
     let ts_before = tree_files(&ts_tree);
     let rust_index_before = rust_before["chapters/index.json"].clone();
     let ts_index_before = ts_before["chapters/index.json"].clone();
+    // 回滚之前两棵树里字节相同的文件——这些才跨腿逐字节比。
+    let comparable_before = |rel: &String| {
+        rust_before
+            .get(rel)
+            .is_some_and(|bytes| Some(bytes) == ts_before.get(rel))
+    };
 
     // ① 驳回第 2 章：两腿同码同体，被废内容各进自己那棵树的回收站批次——同一份。
     let rejected = json!({
@@ -4147,7 +4160,58 @@ async fn destructive_operations_trash_duel() {
         Some(ts_index_before),
         "Node 腿批次里的索引应等于回滚前"
     );
-    assert_eq!(rust_trash, ts_trash, "回滚批次两腿应逐项逐字节一致");
+    let only_rust: Vec<&String> = rust_trash
+        .keys()
+        .filter(|rel| comparable_before(rel) && !ts_trash.contains_key(*rel))
+        .collect();
+    let only_ts: Vec<&String> = ts_trash
+        .keys()
+        .filter(|rel| comparable_before(rel) && !rust_trash.contains_key(*rel))
+        .collect();
+    let differ: Vec<&String> = rust_trash
+        .iter()
+        .filter(|(rel, bytes)| {
+            comparable_before(rel) && ts_trash.get(*rel).is_some_and(|other| other != *bytes)
+        })
+        .map(|(rel, _)| rel)
+        .collect();
+    assert!(
+        only_rust.is_empty() && only_ts.is_empty() && differ.is_empty(),
+        "回滚批次两腿应逐项逐字节一致——只在产品引擎批次：{only_rust:?}；只在 Node 腿批次：{only_ts:?}；字节不同：{differ:?}"
+    );
+    // 批次里的每一项都等于回滚前自己那棵树里的那份——包括两棵树本来就不一样的。
+    for (rel, bytes) in &rust_trash {
+        assert_eq!(
+            rust_before.get(rel),
+            Some(bytes),
+            "产品引擎批次里的 {rel} 应等于回滚前"
+        );
+    }
+    for (rel, bytes) in &ts_trash {
+        assert_eq!(
+            ts_before.get(rel),
+            Some(bytes),
+            "Node 腿批次里的 {rel} 应等于回滚前"
+        );
+    }
+    // 回滚之前两棵树就不一样的，批次里恰好是这四件：产品引擎的书架接口顺带把结构化
+    // 状态物化落盘（`get_next_chapter_number` 里的 bootstrap，788 号的 ensure 语义），
+    // Node 腿的读取面不写——夹具只播种了 `story/state/manifest.json`。
+    let pre_existing: std::collections::BTreeSet<&String> = rust_trash
+        .keys()
+        .chain(ts_trash.keys())
+        .filter(|rel| !comparable_before(rel))
+        .collect();
+    assert_eq!(
+        pre_existing.into_iter().collect::<Vec<_>>(),
+        vec![
+            &"story/state/chapter_summaries.json".to_string(),
+            &"story/state/current_state.json".to_string(),
+            &"story/state/hooks.json".to_string(),
+            &"story/state/manifest.json".to_string(),
+        ],
+        "回滚之前两棵树不同的文件应当恰好是产品引擎物化的结构化状态四件"
+    );
     for (rel, bytes) in &rust_trash {
         assert_ne!(rel.as_str(), "story/memory.db", "派生物不进回收站");
         assert!(!bytes.is_empty(), "{rel}");
@@ -4236,16 +4300,26 @@ async fn destructive_operations_trash_duel() {
     let ts_index = ts_book
         .remove("chapters/index.json")
         .expect("Node 腿回收站里有索引");
-    assert_eq!(rust_book.len(), ts_book.len(), "删书回收站两腿条目数应一致");
     let same_before = |rel: &str| {
         let source = rel
             .strip_prefix("chapters/.trash/rollback-*/")
             .unwrap_or(rel);
         rust_before.get(source) == ts_before.get(source)
     };
+    // 回滚之前只有产品引擎那棵树才有的文件（书架接口顺带物化的结构化状态三件）：回滚把
+    // 整个 `story/state/` 移进了批次，所以它们只以批次拷贝的形式出现在回收站里；除此之外
+    // 两腿条目集相同。
+    let only_rust_tree = |rel: &str| {
+        let source = rel
+            .strip_prefix("chapters/.trash/rollback-*/")
+            .unwrap_or(rel);
+        rust_before.contains_key(source) && !ts_before.contains_key(source)
+    };
+    let mut only_rust = Vec::new();
     let mut divergent_before = Vec::new();
     for (rel, bytes) in &rust_book {
         match ts_book.get(rel) {
+            None if only_rust_tree(rel) => only_rust.push(rel.clone()),
             None => panic!("Node 腿回收站缺 {rel}"),
             Some(other) if other == bytes => {}
             Some(_) if same_before(rel) => panic!("{rel} 两腿回收站字节不一致"),
@@ -4253,9 +4327,28 @@ async fn destructive_operations_trash_duel() {
         }
     }
     assert_eq!(
+        only_rust,
+        [
+            "chapters/.trash/rollback-*/story/state/chapter_summaries.json",
+            "chapters/.trash/rollback-*/story/state/current_state.json",
+            "chapters/.trash/rollback-*/story/state/hooks.json",
+        ]
+        .map(String::from)
+        .to_vec(),
+        "回滚之前只有产品引擎那棵树才有的文件，回收站里应当恰好是它们在批次里的拷贝"
+    );
+    for rel in ts_book.keys() {
+        assert!(rust_book.contains_key(rel), "产品引擎回收站缺 {rel}");
+    }
+    assert_eq!(
         divergent_before,
-        vec!["chapters/.trash/rollback-*/chapters/index.json".to_string()],
-        "回滚之前两棵树里字节不同的，回收站里也只有它（批次里的回滚前索引拷贝）"
+        [
+            "chapters/.trash/rollback-*/chapters/index.json",
+            "chapters/.trash/rollback-*/story/state/manifest.json",
+        ]
+        .map(String::from)
+        .to_vec(),
+        "回滚之前两棵树里字节不同的，回收站里也只有它们（批次里的回滚前索引拷贝 + 被产品引擎 bootstrap 改写过的 manifest）"
     );
     for rel in [
         "book.json",
@@ -4298,5 +4391,124 @@ async fn destructive_operations_trash_duel() {
 
     eprintln!(
         "破坏性操作护栏：驳回与删书两腿都进回收站，条目集与字节逐项一致；Node 腿删书不再留下孤儿清单"
+    );
+}
+
+/// 1678 号：章文件的命名形态不影响进度——两腿对同一批旧命名的书给出同一份书架。
+///
+/// durable 进度此前两腿都只认正典 `NNNN_标题.md`：Node 腿的一致性守卫把索引里列着的
+/// 旧命名章当成「缺文件」抛错（书架接口整页 500）；两腿在没有索引时进度都算成 0，下一章
+/// 号回到 1（产品引擎的 write-next 写「第 1 章」时，同号旧文件清理会清掉原有的第 1 章）。
+///
+/// 夹具：带索引的三形态混排一本、不带索引的旧命名一本，连同正典形态的对照书放进两棵树
+/// （双根）。Node 腿 sidecar 的就绪探测打的就是书架接口——起得来本身就是断言。
+#[tokio::test]
+async fn legacy_chapter_forms_progress_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    // 正典形态的对照书 `b1`（一章、带索引）。
+    write_fixture_book(&root, &[]);
+    let stamp = "2026-08-17T00:00:00.000Z";
+    for (id, chapters, indexed) in [
+        (
+            "legacy-mixed",
+            vec![
+                ("0001-镜中醒来.md", "一"),
+                ("0002.md", "二"),
+                ("0003_云涌.md", "三"),
+            ],
+            true,
+        ),
+        (
+            "legacy-noindex",
+            vec![
+                ("0001-风起.md", "一"),
+                ("0002-云涌.md", "二"),
+                ("0003.md", "三"),
+            ],
+            false,
+        ),
+    ] {
+        let book = root.join("books").join(id);
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            format!(
+                r#"{{"id":"{id}","title":"{id}","platform":"other","genre":"other","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"{stamp}","updatedAt":"{stamp}"}}"#
+            ),
+        )
+        .unwrap();
+        for (name, content) in &chapters {
+            std::fs::write(
+                book.join("chapters").join(name),
+                format!("# {name}\n\n{content}。"),
+            )
+            .unwrap();
+        }
+        if indexed {
+            let mut index = String::from("[");
+            for (offset, _) in chapters.iter().enumerate() {
+                let number = offset + 1;
+                if offset > 0 {
+                    index.push(',');
+                }
+                index.push_str(&format!(
+                    r#"{{"number":{number},"title":"第{number}章","status":"ready-for-review","wordCount":1,"createdAt":"{stamp}","updatedAt":"{stamp}","auditIssues":[],"lengthWarnings":[]}}"#
+                ));
+            }
+            index.push(']');
+            std::fs::write(book.join("chapters").join("index.json"), index).unwrap();
+        }
+    }
+    write_fixture_llm(&root, &llm);
+    migrate_fixture_to_works(&root);
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+
+    let expected = json!({ "b1": 1, "legacy-mixed": 3, "legacy-noindex": 3 });
+    for base in [&rust, &ts.base] {
+        let (status, body) = get_json(base, "/api/v1/books").await;
+        assert_eq!(status, 200, "{base}：{body}");
+        let written: std::collections::BTreeMap<String, u64> = body["books"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|book| {
+                (
+                    book["id"].as_str().unwrap().to_string(),
+                    book["chaptersWritten"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            serde_json::to_value(&written).unwrap(),
+            expected,
+            "{base}：{body}"
+        );
+        // 不带索引的旧命名书：下一章号跟着盘上的章走（此前两腿都是 1）。
+        let (status, body) = get_json(base, "/api/v1/books/legacy-noindex").await;
+        assert_eq!(status, 200, "{base}：{body}");
+        assert_eq!(body["nextChapter"], 4, "{base}：{body}");
+        assert_eq!(
+            body["chapters"].as_array().map(Vec::len),
+            Some(3),
+            "{base}：{body}"
+        );
+    }
+    // 读面不落盘：两棵树里的不带索引的书还是没有索引。
+    for tree in [
+        root.join("books").join("legacy-noindex"),
+        root.join("works").join("legacy-noindex").join("source"),
+    ] {
+        assert!(!tree.join("chapters").join("index.json").exists());
+    }
+
+    eprintln!(
+        "章文件命名形态与进度：带索引的三形态混排、不带索引的旧命名书，两腿书架的章数与下一章号一致；Node 腿书架不再 500"
     );
 }

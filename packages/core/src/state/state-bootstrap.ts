@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { chapterFileNumber, isCanonicalChapterFile } from "../utils/chapter-files.js";
 
 import {
   ChapterSummariesStateSchema,
@@ -57,18 +58,29 @@ export async function resolveDurableStoryProgress(params: {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as string[];
     throw error;
   });
+  // 1678 号：章文件的认定与索引重建、落盘计数同一集合（chapterFileNumber——正典
+  // `NNNN_标题.md` / legacy `NNNN-标题.md` / 裸 `NNNN.md`）。此前这里只认正典形态：索引里
+  // 列着旧命名的章时，守卫把这些章当成「缺文件」抛错，书架接口整页 500。
   const fileNumbers = entries.flatMap((entry) => {
-    const match = /^(\d+)_/u.exec(entry);
-    return match ? [Number.parseInt(match[1]!, 10)] : [];
+    const number = chapterFileNumber(entry);
+    return number === undefined ? [] : [number];
   });
   if (indexNumbers === null) {
-    // index 缺失/损坏：纯文件前缀（真 fresh 书两表皆空 → 0，语义不变）。
+    // index 缺失/损坏：纯文件前缀（真 fresh 书两表皆空 → 0，语义不变）——与索引重建
+    // 会列出的章同一集合。此前旧命名的章不算数，进度为 0，下一章号回到 1。
     return resolveContiguousChapterPrefix(fileNumbers);
   }
   const indexed = new Set(indexNumbers);
   const files = new Set(fileNumbers);
-  const orphaned = [...files].filter((number) => !indexed.has(number));
   const missing = [...indexed].filter((number) => !files.has(number));
+  // 孤儿只看正典形态。正典章是 writer 落盘的形态，索引不认识它 = 索引没写上，fail-closed。
+  // 旧命名的文件不是 2.0 写出来的：807 号之前的回滚删不掉它们，索引之外留着的那种是
+  // 残留（读侧正典优先，它挡不住正典章），不该让整本书打不开。
+  const orphaned = entries.flatMap((entry) => {
+    if (!isCanonicalChapterFile(entry)) return [];
+    const number = chapterFileNumber(entry);
+    return number !== undefined && !indexed.has(number) ? [number] : [];
+  });
   if (orphaned.length > 0 || missing.length > 0) {
     throw new Error(`Chapter index/files disagree (orphaned=${orphaned.join(",") || "none"}; missing=${missing.join(",") || "none"}).`);
   }
@@ -157,9 +169,11 @@ async function resolveDurableArtifactProgressTolerant(bookDir: string): Promise<
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [] as string[];
     throw error;
   });
+  // 1678 号：章文件的认定同 resolveDurableStoryProgress（三种命名形态同一集合）——
+  // 此前只认正典形态，没有索引的 legacy 书在这里进度为 0，派生出的当前章节也是 0。
   const fileNumbers = entries.flatMap((entry) => {
-    const match = /^(\d+)_/u.exec(entry);
-    return match ? [Number.parseInt(match[1]!, 10)] : [];
+    const number = chapterFileNumber(entry);
+    return number === undefined ? [] : [number];
   });
   return resolveContiguousChapterPrefix([...indexNumbers, ...fileNumbers]);
 }
