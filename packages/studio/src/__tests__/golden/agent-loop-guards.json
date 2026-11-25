@@ -1,0 +1,15 @@
+{
+  "_comment": [
+    "交互聊天循环的「未知工具守卫」——两腿共用对照表。",
+    "口径：连续 maxConsecutiveUnknownToolRounds 轮「整轮只调了工具表里没有的工具」就停止回合。",
+    "不存在的工具什么都不会执行，整轮都是它 = 零进展；夹着已知工具的轮次算有进展、连续计数归零。",
+    "背景（修复前实跑，回环上游对带工具的请求恒回一个不存在的工具）：Node 腿的聊天循环没有任何",
+    "轮次上限（pi-agent-core 0.73.1 的循环没有上限，收尾全靠模型自己调 finish_turn），20 秒打了",
+    "690 次上游请求且不自行停止，上下文压缩成功后继续循环；产品引擎每条用户消息最多 12 轮",
+    "（MAX_ROUNDS），打满后以空回复收场。",
+    "Node 腿：packages/core/src/__tests__/unknown-tool-loop.flow.test.ts（到上限 = 回合失败并给出原因）；",
+    "产品引擎：engine-rs/src/interaction/agent_loop.rs 的单测（到上限 = 提前结束，结局与轮次上限相同）。",
+    "两腿测试各读一次本文件：上界、下界与归零都用例钉住，改这个数必须两腿同时改。"
+  ],
+  "maxConsecutiveUnknownToolRounds": 5
+}

@@ -119,7 +119,8 @@ pub trait LoopToolExecutor: Send + Sync {
 }
 
 /// agent 循环：system + 历史回放 + user 起始，工具调用逐轮执行回填，直至
-/// 模型给出无工具的最终文本或达到轮次上限。abort 句柄每轮前轮询。
+/// 模型给出无工具的最终文本、达到轮次上限，或连续若干轮只调不存在的工具
+/// （未知工具守卫，见 `MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS`）。abort 句柄每轮前轮询。
 /// `initial_history`（68 号）：transcript 回放的 summary/对话/boundary 消息，
 /// 插在 system 与本轮 user 之间（pi-agent initialState.messages 的等价位置）。
 /// `tool_exec`（80 号）：工具执行面（文件工具 / play 聊天工具）。
@@ -139,6 +140,12 @@ pub async fn run_agent_loop(
     meter: Option<&crate::utils::token_meter::TokenMeter>,
 ) -> Result<LoopOutcome, String> {
     const MAX_ROUNDS: usize = 12;
+    // 连续「整轮只调了不存在的工具」的轮数：不存在的工具什么都不会执行，连续到
+    // 上限就提前收场，不再打满 MAX_ROUNDS（结局与轮次上限相同：空回复 + 工具
+    // 错误明细）。只认「整轮全是」，夹着已知工具的轮次归零。与 Node 腿同值
+    // （packages/studio/src/__tests__/golden/agent-loop-guards.json）。
+    const MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS: usize = 5;
+    let mut unknown_tool_rounds: usize = 0;
     let is_aborted = || {
         abort
             .and_then(|handle| {
@@ -269,6 +276,8 @@ pub async fn run_agent_loop(
             tool_call_id: None,
         });
 
+        let mut round_calls = 0usize;
+        let mut round_unknown_calls = 0usize;
         for (id, name, arguments_json) in &tool_calls {
             let args: Value = serde_json::from_str(arguments_json).unwrap_or(json!({}));
             events.on_tool_start(id, name, &args);
@@ -276,6 +285,7 @@ pub async fn run_agent_loop(
             let result = tool_exec.execute(name, &args).await;
             let completed = crate::interaction::session::utc_now_ms();
             let observation = tool_exec.last_observation();
+            let unknown_tool = result.text.starts_with("Unknown tool");
             let is_error = result.is_error
                 || (result.details.is_none()
                     && result
@@ -283,7 +293,11 @@ pub async fn run_agent_loop(
                         .starts_with(|c: char| !c.is_ascii_alphanumeric())
                     && result.text.contains("escapes"))
                 || result.text.contains("failed:")
-                || result.text.starts_with("Unknown tool");
+                || unknown_tool;
+            round_calls += 1;
+            if unknown_tool {
+                round_unknown_calls += 1;
+            }
             events.on_tool_end(
                 id,
                 name,
@@ -316,6 +330,14 @@ pub async fn run_agent_loop(
             if let Some(m) = meter {
                 m.append(&result.text.chars().take(8000).collect::<String>());
             }
+        }
+        if round_unknown_calls == round_calls {
+            unknown_tool_rounds += 1;
+            if unknown_tool_rounds >= MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS {
+                break;
+            }
+        } else {
+            unknown_tool_rounds = 0;
         }
     }
 
@@ -556,6 +578,114 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("Unknown tool"));
+    }
+
+    /// 未知工具守卫的上限：两腿共用对照表（Node 腿 unknown-tool-loop.flow.test.ts
+    /// 读同一文件）。改这个数必须两腿一起改——下面的用例都按它排脚本。
+    fn unknown_tool_guard() -> usize {
+        let golden: Value = serde_json::from_str(include_str!(
+            "../../../packages/studio/src/__tests__/golden/agent-loop-guards.json"
+        ))
+        .unwrap();
+        golden["maxConsecutiveUnknownToolRounds"]
+            .as_u64()
+            .expect("golden 须有 maxConsecutiveUnknownToolRounds") as usize
+    }
+
+    fn unknown_tool_round() -> ScriptedRound {
+        (
+            String::new(),
+            vec![("call".into(), "nope".into(), "{}".into())],
+            LoopUsage::default(),
+        )
+    }
+
+    fn call_count(chat: &ScriptedChat) -> usize {
+        chat.calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
+    }
+
+    #[tokio::test]
+    async fn consecutive_unknown_tool_rounds_stop_before_the_round_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let guard = unknown_tool_guard();
+        // 12 = MAX_ROUNDS：守卫必须比轮次上限小，这条守卫才有意义。
+        assert!(guard < 12, "守卫上限须小于轮次上限");
+        let chat = ScriptedChat {
+            // 多给几轮：没有守卫会一直打满轮次上限。
+            rounds: (0..12).map(|_| unknown_tool_round()).collect(),
+            calls: Mutex::new(vec![]),
+        };
+        let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            Vec::new(),
+            "hi",
+            None,
+            None,
+            &NoopEvents,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(call_count(&chat), guard, "连续未知轮到上限即停");
+        assert_eq!(outcome.tool_executions.len(), guard);
+        assert!(outcome
+            .tool_executions
+            .iter()
+            .all(|execution| execution.status == "error"));
+        // 结局与轮次上限相同：空回复、未中止。
+        assert!(outcome.response_text.is_empty());
+        assert!(!outcome.aborted);
+    }
+
+    #[tokio::test]
+    async fn a_round_with_a_real_tool_resets_the_unknown_tool_count() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hello agent").unwrap();
+        let guard = unknown_tool_guard();
+        let mut rounds: Vec<ScriptedRound> = (0..2).map(|_| unknown_tool_round()).collect();
+        // 同一轮里夹着一次真实读取：这轮不算未知轮，计数归零。
+        rounds.push((
+            String::new(),
+            vec![
+                ("call_unknown".into(), "nope".into(), "{}".into()),
+                (
+                    "call_read".into(),
+                    "read".into(),
+                    r#"{"path":"a.md"}"#.into(),
+                ),
+            ],
+            LoopUsage::default(),
+        ));
+        // 归零之后再连续 guard-1 轮未知：差一轮到上限，模型改口后照常收尾。
+        rounds.extend((0..guard - 1).map(|_| unknown_tool_round()));
+        rounds.push(("done".into(), vec![], LoopUsage::default()));
+        let chat = ScriptedChat {
+            rounds,
+            calls: Mutex::new(vec![]),
+        };
+        let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            Vec::new(),
+            "hi",
+            None,
+            None,
+            &NoopEvents,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.response_text, "done");
+        assert_eq!(call_count(&chat), 2 + 1 + (guard - 1) + 1);
+        assert_eq!(outcome.tool_executions.len(), 2 + 2 + (guard - 1));
     }
 
     /// R41/563 号：计量挂线——开局入表（system+历史+指令）、每轮 usage 入锚、

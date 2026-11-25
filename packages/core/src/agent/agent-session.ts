@@ -244,6 +244,15 @@ export interface AgentSessionAttachment {
 
 interface CachedAgent {
   turnCompletion?: TurnCompletion;
+  /**
+   * 连续「整轮只调了工具表里没有的工具」的轮数（见 noteUnknownToolRound）。
+   * 只在回合内有意义，不需要每次请求归零：能被下一个请求复用的缓存项，上一个
+   * 回合必然正常收尾，最后一轮是 finish_turn 或动作回放（已知工具），那一轮已经
+   * 归零；失败的回合会连缓存项一起清掉。
+   */
+  unknownToolRounds: number;
+  /** 最近一个未知轮调过的工具名——错误文案用；只在连续轮数到上限时才会被读到。 */
+  unknownToolNames: string[];
   activeActions: number;
   hasDelivery: boolean;
   deliveryFailed: boolean;
@@ -926,6 +935,66 @@ function completedInteractiveScene(capabilityId: string, result: ActionResult): 
     ? data.sceneText : undefined;
 }
 
+// pi 的循环没有轮次上限，收尾全靠模型自己调 finish_turn。模型卡在一个不存在
+// 的工具上会一直打上游：回环上游实测 20 秒 690 次，上下文压缩成功也拦不住，
+// 客户端走开后还在跑（请求按设计是可持久、可重连的，只有显式中止才停）。
+// 不存在的工具什么都不会执行，连续 N 轮整轮都是它 = 零进展，到此不再给机会。
+// 只认「整轮全是」：夹着已知工具的轮次算有进展、计数归零。产品引擎同值
+// （packages/studio/src/__tests__/golden/agent-loop-guards.json，两腿测试各读一次）。
+// 挂在 transformContext 上：pi 每轮模型调用前走它一次（先于 streamFn），拿到的
+// 消息尾部就是刚执行完的那一轮。Agent 包装类转发配置是白名单，没有
+// shouldStopAfterTurn 这类底层钩子（给了也在运行时被静默丢弃）。
+const MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS = 5;
+
+// 看一眼刚执行完的那一轮：尾部一串工具结果前面的助手消息就是这轮的调用。
+// 整轮只调了工具表（cached.agent.state.tools，pi 查表用的同一张）里没有的工具 →
+// 连续计数 +1 并记下工具名；只要夹着已知工具就归零。尾部不是工具结果收尾
+// （开局）时不计不动。停止条件与错误文案都从连续轮数派生（streamFn /
+// unknownToolStallMessage）。
+function noteUnknownToolRound(cached: CachedAgent | undefined, messages: AgentMessage[]): void {
+  if (!cached) return;
+  let index = messages.length - 1;
+  while (index >= 0 && messages[index].role === "toolResult") index -= 1;
+  const round = messages[index];
+  if (!round || index === messages.length - 1 || round.role !== "assistant") return;
+  const tools = cached.agent.state.tools;
+  let calls = 0;
+  let unknownCalls = 0;
+  const unknownNames: string[] = [];
+  for (const part of round.content) {
+    if (part.type !== "toolCall") continue;
+    calls += 1;
+    if (tools.some((tool) => tool.name === part.name)) continue;
+    unknownCalls += 1;
+    if (!unknownNames.includes(part.name)) unknownNames.push(part.name);
+  }
+  if (calls === 0 || unknownCalls < calls) {
+    cached.unknownToolRounds = 0;
+    return;
+  }
+  cached.unknownToolRounds += 1;
+  cached.unknownToolNames = unknownNames;
+}
+
+// 连续未知轮到了上限 = 回合由守卫停下时的原因；没到上限返回 undefined。
+function unknownToolStallMessage(cached: CachedAgent): string | undefined {
+  if (cached.unknownToolRounds < MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS) return undefined;
+  // 工具名来自模型输出：截短、加引号转义后再进错误文案。
+  const names = cached.unknownToolNames.slice(0, 3).map((name) => JSON.stringify(name.slice(0, 64))).join(", ");
+  return `Agent stopped: the model called unknown tools (${names}) in ${cached.unknownToolRounds} consecutive turns.`;
+}
+
+// 把守卫挂在既有的上下文变换前面。cached 在构造 Agent 之后才赋值，所以用取值函数。
+function withUnknownToolGuard(
+  transform: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>,
+  current: () => CachedAgent | undefined,
+): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
+  return async (messages, signal) => {
+    noteUnknownToolRound(current(), messages);
+    return transform(messages, signal);
+  };
+}
+
 function stopForWorkTransition(model: Model<Api>) {
   const stream = createAssistantMessageEventStream();
   const message: AssistantMessage = { role: "assistant", content: [], api: model.api,
@@ -1229,7 +1298,7 @@ async function runAgentSessionUnlocked(
         })],
         messages: initialAgentMessages,
       },
-      transformContext: createHarnessContextTransform({
+      transformContext: withUnknownToolGuard(createHarnessContextTransform({
         projectRoot,
         work,
         profile,
@@ -1268,7 +1337,7 @@ async function runAgentSessionUnlocked(
           signal: request.signal,
         }),
         onContextCompression,
-      }),
+      }), () => cached),
       convertToLlm: convertAgentMessagesForModel,
       streamFn: (streamModel, context, options) => {
         // Pi snapshots its tool table per run. Resume with the new Work's actual
@@ -1276,6 +1345,7 @@ async function runAgentSessionUnlocked(
         if (cached?.pendingWorkTransition) return stopForWorkTransition(streamModel);
         if (canCompletePlayScene(cached)) return stopForWorkTransition(streamModel);
         if (cached?.turnCompletion) return stopForWorkTransition(streamModel);
+        if ((cached?.unknownToolRounds ?? 0) >= MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS) return stopForWorkTransition(streamModel);
         const streamOptions = {
           ...options,
           maxTokens: agentOutputBudget(streamModel),
@@ -1323,6 +1393,8 @@ async function runAgentSessionUnlocked(
       modelIdentity: requestedModelIdentity,
       apiKey: config.apiKey,
       temperature: config.temperature,
+      unknownToolRounds: 0,
+      unknownToolNames: [],
       allowSystemFileRead,
       backgroundTaskContext: config.backgroundTaskContext,
       suppressProductionTools,
@@ -1639,7 +1711,7 @@ async function runAgentSessionUnlocked(
     errorMessage = assistantErrorMessage(finalAssistant)
       ?? (turnAborted ? "Agent turn aborted." : undefined)
       ?? (!cached.pendingWorkTransition && !canCompletePlayScene(cached) && !completion
-        ? "Agent ended without an explicit completion result." : undefined)
+        ? unknownToolStallMessage(cached) ?? "Agent ended without an explicit completion result." : undefined)
       ?? (!turnHasObservableOutcome(turnMessages) ? "Agent returned no text or tool result." : undefined);
     if (errorMessage) {
       const failedError = errorMessage;
