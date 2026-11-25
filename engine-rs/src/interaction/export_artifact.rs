@@ -8,9 +8,11 @@
 //!   全部条目 stored 即满足）。
 //!
 //! ## 契约要点
-//! - chaptersExported = 过滤后索引长度（含无文件的章，对齐 TS）
+//! - chaptersExported = 过滤后索引长度（对齐 TS；源一致性校验通过后无文件章不存在）
 //! - approvedOnly 过滤 status === "approved"
-//! - 无可导出章 → Err("No chapters to export.")（HTTP 层转 500 Export failed）
+//! - 源一致性校验（1681 号，TS 同口径拒绝）：缺章/同章双形态/索引重复/盘上孤儿
+//!   → `ExportError::SourceMismatch`（HTTP 层 409 + CHAPTER_EXPORT_SOURCE_MISMATCH）
+//! - 无可导出章 → `ExportError::NoChapters`（500，TS 同文案）
 
 use std::path::{Path, PathBuf};
 
@@ -99,15 +101,172 @@ fn export_chapter_file_lookup(names: Vec<String>) -> std::collections::HashMap<u
         .collect()
 }
 
-async fn build_chapter_file_lookup(chapters_dir: &Path) -> std::collections::HashMap<u32, String> {
-    let Ok(mut entries) = tokio::fs::read_dir(chapters_dir).await else {
-        return std::collections::HashMap::new();
+/// 1681 号：导出源一致性——四类细节（对齐 TS `ChapterExportSourceError.details`；
+/// 字段顺序即 [`Self::details_json`] 的键序，与 `JSON.stringify` 构造序逐字对齐）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportSourceMismatch {
+    pub missing_chapter_numbers: Vec<u32>,
+    pub duplicate_chapter_numbers: Vec<u32>,
+    pub duplicate_index_numbers: Vec<u32>,
+    pub unindexed_files: Vec<String>,
+}
+
+impl ExportSourceMismatch {
+    /// 四组细节全空=校验通过（golden 集成测试的通过判据）。
+    pub fn is_empty(&self) -> bool {
+        self.missing_chapter_numbers.is_empty()
+            && self.duplicate_chapter_numbers.is_empty()
+            && self.duplicate_index_numbers.is_empty()
+            && self.unindexed_files.is_empty()
+    }
+
+    /// details 的 JSON 串。手拼而非 `json!`/`Serialize`：serde_json 的 Map 是字母序
+    ///（未开 preserve_order），键序会与 TS 构造序漂移；数组用 `serde_json::to_string`
+    ///（紧凑无空格，同 `JSON.stringify`）。共享 golden 向量逐字锁定。
+    pub fn details_json(&self) -> String {
+        let numbers =
+            |values: &[u32]| serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string());
+        let names =
+            |values: &[String]| serde_json::to_string(values).unwrap_or_else(|_| "[]".to_string());
+        format!(
+            "{{\"missingChapterNumbers\":{},\"duplicateChapterNumbers\":{},\"duplicateIndexNumbers\":{},\"unindexedFiles\":{}}}",
+            numbers(&self.missing_chapter_numbers),
+            numbers(&self.duplicate_chapter_numbers),
+            numbers(&self.duplicate_index_numbers),
+            names(&self.unindexed_files),
+        )
+    }
+
+    /// TS `ChapterExportSourceError.message` 逐字镜像（生产派生：TS 测试自证
+    /// expectedMessage 出自同一模板，Rust 消费同一 golden）。
+    pub fn message(&self) -> String {
+        format!(
+            "Chapter index and source files differ: {}. Inspect these files and reconcile the chapter index through chapter import before exporting.",
+            self.details_json()
+        )
+    }
+
+    /// HTTP 409 响应体的 details 对象（客户端按键取值，serde Map 字母序无语义影响）。
+    pub fn details_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "missingChapterNumbers": self.missing_chapter_numbers,
+            "duplicateChapterNumbers": self.duplicate_chapter_numbers,
+            "duplicateIndexNumbers": self.duplicate_index_numbers,
+            "unindexedFiles": self.unindexed_files,
+        })
+    }
+}
+
+/// 1681 号：导出错误结构化——调用方按变体分流（HTTP 层 409/500；agent 工具面
+/// 直出 `Display`，对齐 TS 异常 message 冒泡）。
+#[derive(Debug)]
+pub enum ExportError {
+    /// 无可导出章（TS 同文案；HTTP 层 500 裸串）。
+    NoChapters,
+    /// 源一致性校验拒绝（HTTP 层 409 + CHAPTER_EXPORT_SOURCE_MISMATCH）。
+    SourceMismatch(ExportSourceMismatch),
+    /// 其余（索引/配置加载失败、章目录缺失等；HTTP 层 500 裸串）。
+    Other(String),
+}
+
+impl std::fmt::Display for ExportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExportError::NoChapters => write!(f, "No chapters to export."),
+            ExportError::SourceMismatch(m) => write!(f, "{}", m.message()),
+            ExportError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// 1681 号：导出源一致性校验（TS `checkChapterExportSource` 同构）。
+///
+/// 1678 号出口的产品定线：两腿统一「拒绝」而非静默部分导出——缺章/错章的导出物
+/// 是数据完整性事故（发布/打印的下游输入），同章双形态的择优是需要用户裁决的状态；
+/// Node 腿（上游 2.0 语义）已是拒绝，本轮 Rust 腿对齐。
+///
+/// 校验面对**全量索引**——部分导出（chapters 勾选）/ approved-only 不豁免未导出章
+/// 的对账（TS 同口径）。
+pub(crate) fn check_export_source(
+    files: &[String],
+    indexed_numbers: &[u32],
+) -> Result<(), ExportSourceMismatch> {
+    let mut indexed: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut duplicate_index_numbers: std::collections::BTreeSet<u32> =
+        std::collections::BTreeSet::new();
+    for &number in indexed_numbers {
+        if !indexed.insert(number) {
+            duplicate_index_numbers.insert(number);
+        }
+    }
+    let mut covered: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut duplicate_chapter_numbers: std::collections::BTreeSet<u32> =
+        std::collections::BTreeSet::new();
+    let mut unindexed_files: Vec<String> = Vec::new();
+    // 排序=码点序（`&str` 字节序，与 TS compareByCodePoint 恒等——JS 裸 sort 的
+    // UTF-16 码元序在增补平面字符上相反，双端错误消息会漂移；854 号同款尺子）。
+    let mut sorted: Vec<&str> = files.iter().map(String::as_str).collect();
+    sorted.sort_unstable();
+    for file in sorted {
+        if !file.ends_with(".md") {
+            continue;
+        }
+        // 章文件的认定与索引重建同一集合（1678 号立的尺子：leading_number——
+        // 正典 `NNNN_标题.md` / legacy `NNNN-标题.md` / 裸 `NNNN.md`；0 号与
+        // 超 u32 同样落「未入索引」）。
+        let Some(number) = crate::state::manager::leading_number(file) else {
+            unindexed_files.push(file.to_string());
+            continue;
+        };
+        if !indexed.contains(&number) {
+            unindexed_files.push(file.to_string());
+            continue;
+        }
+        if !covered.insert(number) {
+            duplicate_chapter_numbers.insert(number);
+        }
+    }
+    let mismatch = ExportSourceMismatch {
+        // BTreeSet 迭代=升序（TS `.sort((a,b) => a-b)` 同序）。
+        missing_chapter_numbers: indexed.difference(&covered).copied().collect(),
+        duplicate_chapter_numbers: duplicate_chapter_numbers.into_iter().collect(),
+        duplicate_index_numbers: duplicate_index_numbers.into_iter().collect(),
+        unindexed_files,
     };
+    if mismatch.is_empty() {
+        Ok(())
+    } else {
+        Err(mismatch)
+    }
+}
+
+/// 1681 号：`#[cfg(test)]` 之外的 pub 包装（集成测试无法触达 `pub(crate)` fn——
+/// `markdown_to_simple_html_for_test` 同一惯例；tests/golden_export_source_diff.rs
+/// 消费共享 golden 向量）。通过时四组细节全空。
+pub fn check_export_source_for_test(
+    files: &[String],
+    indexed_numbers: &[u32],
+) -> ExportSourceMismatch {
+    match check_export_source(files, indexed_numbers) {
+        Ok(()) => ExportSourceMismatch {
+            missing_chapter_numbers: Vec::new(),
+            duplicate_chapter_numbers: Vec::new(),
+            duplicate_index_numbers: Vec::new(),
+            unindexed_files: Vec::new(),
+        },
+        Err(m) => m,
+    }
+}
+
+/// 列出章目录的全部条目名（校验与择优共用同一份目录快照）。目录缺失 →
+/// Err（对齐 TS：readdir ENOENT 异常 → HTTP 500，而非静默当空目录）。
+async fn read_chapter_dir_names(chapters_dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut entries = tokio::fs::read_dir(chapters_dir).await?;
     let mut names = Vec::new();
-    while let Ok(Some(entry)) = entries.next_entry().await {
+    while let Some(entry) = entries.next_entry().await? {
         names.push(entry.file_name().to_string_lossy().into_owned());
     }
-    export_chapter_file_lookup(names)
+    Ok(names)
 }
 
 fn escape_html(text: &str) -> String {
@@ -147,6 +306,9 @@ pub fn markdown_to_simple_html_for_test(markdown: &str) -> (String, String) {
 }
 
 /// 构建导出工件。state 注入 StateManager；output_path 缺省 root/{bookId}_export.{format}。
+///
+/// 1681 号起错误结构化（[`ExportError`]）：源一致性校验拒绝 → 409（HTTP 层映射），
+/// 无可导出章 → TS 同文案 500，其余 → 裸串 500。
 pub async fn build_export_artifact(
     state: &StateManager,
     book_id: &str,
@@ -155,15 +317,15 @@ pub async fn build_export_artifact(
     output_path: Option<&Path>,
     // R50/1645 号：章节勾选子集（Scrivener Compile 语义；None=全部）。
     chapter_filter: Option<&[u32]>,
-) -> Result<ExportArtifact, String> {
+) -> Result<ExportArtifact, ExportError> {
     let index = state
         .load_chapter_index(book_id)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ExportError::Other(e.to_string()))?;
     let book = state
         .load_book_config(book_id)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ExportError::Other(e.to_string()))?;
     let chapters: Vec<&crate::models::chapter::ChapterMeta> = if approved_only {
         index
             .iter()
@@ -176,7 +338,7 @@ pub async fn build_export_artifact(
             .collect()
     };
     if chapters.is_empty() {
-        return Err("No chapters to export.".to_string());
+        return Err(ExportError::NoChapters);
     }
 
     let book_dir = state.book_dir(book_id);
@@ -185,7 +347,14 @@ pub async fn build_export_artifact(
         .project_root()
         .join(format!("{book_id}_export.{}", format.extension()));
     let output_path: PathBuf = output_path.map(Path::to_path_buf).unwrap_or(default_output);
-    let chapter_files = build_chapter_file_lookup(&chapters_dir).await;
+    // 1681 号：源一致性校验（全量索引面；拒绝 → SourceMismatch）。校验与择优
+    // 共用同一份目录快照（读一次）。校验通过 ⇒ 每个索引章号必有唯一文件。
+    let dir_names = read_chapter_dir_names(&chapters_dir)
+        .await
+        .map_err(|e| ExportError::Other(e.to_string()))?;
+    let indexed_numbers: Vec<u32> = index.iter().map(|ch| ch.number).collect();
+    check_export_source(&dir_names, &indexed_numbers).map_err(ExportError::SourceMismatch)?;
+    let chapter_files = export_chapter_file_lookup(dir_names);
     let total_words: u64 = chapters.iter().map(|ch| ch.word_count as u64).sum();
 
     let (file_name, payload) = match format {
@@ -791,9 +960,12 @@ mod tests {
     }
 
     /// 1678 号：同章双形态（`0001-旧.md` 与 `0001_新.md` 并存，845 号的读侧裁决是正典
-    /// 优先）——导出取同一个胜者，不随目录顺序变。此前查找表是「目录序首个命中」。
+    /// 优先）此前导出取正典、不随目录顺序变。1681 号定线改「拒绝」——双形态的择优是
+    /// 需要用户裁决的状态（旧稿 vs 新稿），静默择优会把选择藏起来；两腿同口径（TS 校验
+    /// 双形态即 duplicateChapterNumbers 拒绝）。择优纯函数本身仍由
+    /// `export_lookup_prefers_the_canonical_file_whatever_the_listing_order` 锁定（读侧共用）。
     #[tokio::test]
-    async fn dual_form_chapter_exports_the_preferred_file_whatever_the_directory_order() {
+    async fn dual_form_chapter_is_rejected_whatever_the_directory_order() {
         for (first, second) in [("0001-旧.md", "0001_新.md"), ("0001_新.md", "0001-旧.md")] {
             let dir = tempfile::tempdir().unwrap();
             let state = fixture(dir.path()).await;
@@ -812,14 +984,75 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let artifact =
-                build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, None)
-                    .await
-                    .unwrap();
-            let text = String::from_utf8(artifact.payload).unwrap();
-            assert!(text.contains("新稿"), "先建 {first:?}：{text}");
-            assert!(!text.contains("旧稿"), "先建 {first:?}：{text}");
+            let error = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, None)
+                .await
+                .unwrap_err();
+            let ExportError::SourceMismatch(m) = error else {
+                panic!("expected SourceMismatch for dual-form chapter, got {error:?}");
+            };
+            assert_eq!(m.duplicate_chapter_numbers, vec![1]);
+            assert!(m.missing_chapter_numbers.is_empty());
+            assert!(m.unindexed_files.is_empty());
         }
+    }
+
+    /// 1681 号：源一致性拒绝——索引在、盘上缺（先红基础：1678 前的产品引擎会
+    /// 静默跳过缺文件章导出其余）。
+    #[tokio::test]
+    async fn missing_chapter_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = fixture(dir.path()).await;
+        tokio::fs::remove_file(state.book_dir("b1").join("chapters").join("0002_云.md"))
+            .await
+            .unwrap();
+        let error = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, None)
+            .await
+            .unwrap_err();
+        let ExportError::SourceMismatch(m) = error else {
+            panic!("expected SourceMismatch for missing chapter, got {error:?}");
+        };
+        assert_eq!(m.missing_chapter_numbers, vec![2]);
+        assert!(m.duplicate_chapter_numbers.is_empty());
+        assert!(m.unindexed_files.is_empty());
+    }
+
+    /// 1681 号：盘上孤儿（未入索引的 .md）拒绝；非 .md 文件不进细节。
+    #[tokio::test]
+    async fn orphan_and_non_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = fixture(dir.path()).await;
+        let chapters = state.book_dir("b1").join("chapters");
+        tokio::fs::write(chapters.join("0003_未入索引.md"), "# 第3章\n\n孤儿。")
+            .await
+            .unwrap();
+        tokio::fs::write(chapters.join("0001_notes.txt"), "非章文件")
+            .await
+            .unwrap();
+        let error = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, None)
+            .await
+            .unwrap_err();
+        let ExportError::SourceMismatch(m) = error else {
+            panic!("expected SourceMismatch for orphan file, got {error:?}");
+        };
+        assert_eq!(m.unindexed_files, vec!["0003_未入索引.md"]);
+    }
+
+    /// 1681 号：校验面=全量索引——部分导出（chapters 勾选子集）不豁免未勾选章的
+    /// 对账（TS 同口径：校验在前、过滤在后）。
+    #[tokio::test]
+    async fn partial_export_does_not_waive_reconciliation() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = fixture(dir.path()).await;
+        tokio::fs::remove_file(state.book_dir("b1").join("chapters").join("0002_云.md"))
+            .await
+            .unwrap();
+        let error = build_export_artifact(&state, "b1", ExportFormat::Txt, false, None, Some(&[1]))
+            .await
+            .unwrap_err();
+        let ExportError::SourceMismatch(m) = error else {
+            panic!("expected SourceMismatch even for subset export, got {error:?}");
+        };
+        assert_eq!(m.missing_chapter_numbers, vec![2]);
     }
 
     /// 1678 号：同章双形态的择优不依赖目录顺序——显式列表正着给、倒着给，胜者都是正典。
@@ -910,11 +1143,15 @@ mod tests {
     async fn empty_index_errors() {
         let dir = tempfile::tempdir().unwrap();
         let state = StateManager::new(dir.path());
-        // 缺失书：loadBookConfig 在空章判断之前失败（TS 同序）。
+        // 缺失书：loadBookConfig 在空章判断之前失败（TS 同序）；1681 号起
+        // 结构化为 Other 裸串（HTTP 500 / 工具面 Display 直出）。
         let error = build_export_artifact(&state, "ghost", ExportFormat::Txt, false, None, None)
             .await
             .unwrap_err();
-        assert!(!error.is_empty());
+        let ExportError::Other(message) = error else {
+            panic!("expected Other for missing book, got {error:?}");
+        };
+        assert!(!message.is_empty());
     }
 
     #[tokio::test]

@@ -1,0 +1,143 @@
+{
+  "$comment": "1681 号：导出源一致性校验共享 golden 向量。core __tests__/golden-export.test.ts 与 engine-rs tests/golden_export_source_diff.rs 读同一文件逐例断言：checkChapterExportSource / check_export_source 对同一份「盘上文件名列表 + 索引章号」产出逐字相同的四类细节与错误消息（ChapterExportSourceError.message 逐字镜像，Rust 是消费者——期望值以 TS 实跑为基准，Rust 漂移即红即修）。indexedNumbers 允许重复项（duplicateIndexNumbers 检测需要）。expectedJson = JSON.stringify(expectedDetails)（键序=构造序，Rust details_json() 逐字对齐它）。",
+  "cases": [
+    {
+      "name": "missing-chapter",
+      "files": ["0001_风起.md"],
+      "indexedNumbers": [1, 2],
+      "expectedDetails": {
+        "missingChapterNumbers": [2],
+        "duplicateChapterNumbers": [],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": []
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[2],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[2],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "duplicate-chapter-forms",
+      "files": ["0001-旧稿.md", "0001_新稿.md"],
+      "indexedNumbers": [1],
+      "expectedDetails": {
+        "missingChapterNumbers": [],
+        "duplicateChapterNumbers": [1],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": []
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[1],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[1],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "duplicate-index-numbers",
+      "files": ["0001_风起.md"],
+      "indexedNumbers": [1, 1],
+      "expectedDetails": {
+        "missingChapterNumbers": [],
+        "duplicateChapterNumbers": [],
+        "duplicateIndexNumbers": [1],
+        "unindexedFiles": []
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[1],\"unindexedFiles\":[]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[1],\"unindexedFiles\":[]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "unindexed-orphan",
+      "files": ["0001_风起.md", "0002_云涌.md"],
+      "indexedNumbers": [1],
+      "expectedDetails": {
+        "missingChapterNumbers": [],
+        "duplicateChapterNumbers": [],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": ["0002_云涌.md"]
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"0002_云涌.md\"]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"0002_云涌.md\"]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "zero-number-file-unindexed",
+      "files": ["0001_风起.md", "0000_Prologue.md"],
+      "indexedNumbers": [1],
+      "expectedDetails": {
+        "missingChapterNumbers": [],
+        "duplicateChapterNumbers": [],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": ["0000_Prologue.md"]
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"0000_Prologue.md\"]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"0000_Prologue.md\"]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "non-md-files-ignored",
+      "files": ["0001_风起.md", "0001_notes.txt", "notes.txt", "exports"],
+      "indexedNumbers": [1],
+      "expectedDetails": null,
+      "expectedJson": "",
+      "expectedMessage": ""
+    },
+    {
+      "name": "unnumbered-md-missing-and-unindexed",
+      "files": ["draft.md"],
+      "indexedNumbers": [1],
+      "expectedDetails": {
+        "missingChapterNumbers": [1],
+        "duplicateChapterNumbers": [],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": ["draft.md"]
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[1],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"draft.md\"]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[1],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"draft.md\"]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "u32-overflow-file-unindexed",
+      "files": ["0001_风起.md", "99999999999_爆.md"],
+      "indexedNumbers": [1],
+      "expectedDetails": {
+        "missingChapterNumbers": [],
+        "duplicateChapterNumbers": [],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": ["99999999999_爆.md"]
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"99999999999_爆.md\"]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"99999999999_爆.md\"]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "unicode-codepoint-sort-order",
+      "files": ["0001_风起.md", "0002_开局🔥.md", "0002_开局！.md"],
+      "indexedNumbers": [1],
+      "expectedDetails": {
+        "missingChapterNumbers": [],
+        "duplicateChapterNumbers": [],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": ["0002_开局！.md", "0002_开局🔥.md"]
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"0002_开局！.md\",\"0002_开局🔥.md\"]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[],\"duplicateChapterNumbers\":[],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[\"0002_开局！.md\",\"0002_开局🔥.md\"]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "mixed-all-four",
+      "files": ["0001_x.md", "0001_y.md", "0002_z.md", "draft.md", "0004_w.md"],
+      "indexedNumbers": [1, 2, 2, 3],
+      "expectedDetails": {
+        "missingChapterNumbers": [3],
+        "duplicateChapterNumbers": [1],
+        "duplicateIndexNumbers": [2],
+        "unindexedFiles": ["0004_w.md", "draft.md"]
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[3],\"duplicateChapterNumbers\":[1],\"duplicateIndexNumbers\":[2],\"unindexedFiles\":[\"0004_w.md\",\"draft.md\"]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[3],\"duplicateChapterNumbers\":[1],\"duplicateIndexNumbers\":[2],\"unindexedFiles\":[\"0004_w.md\",\"draft.md\"]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    },
+    {
+      "name": "duplicate-plus-missing",
+      "files": ["0001-旧稿.md", "0001_新稿.md"],
+      "indexedNumbers": [1, 2],
+      "expectedDetails": {
+        "missingChapterNumbers": [2],
+        "duplicateChapterNumbers": [1],
+        "duplicateIndexNumbers": [],
+        "unindexedFiles": []
+      },
+      "expectedJson": "{\"missingChapterNumbers\":[2],\"duplicateChapterNumbers\":[1],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[]}",
+      "expectedMessage": "Chapter index and source files differ: {\"missingChapterNumbers\":[2],\"duplicateChapterNumbers\":[1],\"duplicateIndexNumbers\":[],\"unindexedFiles\":[]}. Inspect these files and reconcile the chapter index through chapter import before exporting."
+    }
+  ]
+}

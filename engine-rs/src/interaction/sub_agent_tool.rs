@@ -570,7 +570,9 @@ async fn exporter(deps: &SubAgentDeps<'_>, args: &Value, instruction: &str) -> T
                 None,
             )
         }
-        Err(_) => error_result("Export failed".to_string()),
+        // 1681 号：错误直出 Display（对齐 TS 工具面异常 message 冒泡——
+        // 源不一致给完整对账指引，不再吞成 "Export failed"）。
+        Err(error) => error_result(error.to_string()),
     }
 }
 
@@ -744,6 +746,98 @@ mod tests {
         assert_eq!(
             no_title.text,
             "Error: title is required for the architect agent."
+        );
+    }
+
+    /// 1681 号：exporter 工具面错误直出 Display（对齐 TS 工具异常 message 冒泡）——
+    /// 源不一致给完整对账指引，不再吞成 "Export failed"。
+    #[test]
+    fn exporter_source_mismatch_surfaces_reconciliation_guidance() {
+        let tokio_rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let book = dir.path().join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            r#"{"id":"b1","title":"t","platform":"other","genre":"other","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"","updatedAt":""}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "# 第1章\n\n正文。",
+        )
+        .unwrap();
+        let hub = Arc::new(crate::server::sse::BroadcastHub::new());
+        let state = Arc::new(crate::state::manager::StateManager::new(
+            dir.path().to_path_buf(),
+        ));
+        let router = Arc::new(crate::llm::agent_router::AgentRouter::new(
+            crate::llm::agent_router::LlmEndpointConfig {
+                context_window_tokens: 128_000,
+                base_url: "http://127.0.0.1:9".into(),
+                api_key: "k".into(),
+                model: "m".into(),
+                max_tokens: 16,
+                extra_headers: std::collections::HashMap::new(),
+            },
+            std::collections::HashMap::new(),
+        ));
+        let books = crate::server::books_routes::BooksRuntime {
+            hub,
+            state,
+            router,
+            builtin_genres_dir: dir.path().join("assets").join("genres"),
+            revision_gate: Default::default(),
+        };
+        let deps = SubAgentDeps {
+            runtime: &books,
+            active_book_id: Some("b1"),
+            language: "zh",
+            abort: None,
+        };
+        // 索引列 [1,2]、盘上只有第 1 章 → SourceMismatch 完整消息直出。
+        let now = "2026-01-01T00:00:00.000Z";
+        let meta = |number: u32| crate::models::chapter::ChapterMeta {
+            number,
+            title: format!("第{number}章"),
+            status: serde_json::from_value::<crate::models::chapter::ChapterStatus>(
+                serde_json::json!("approved"),
+            )
+            .unwrap(),
+            word_count: 10,
+            created_at: now.into(),
+            updated_at: now.into(),
+            audit_issues: Vec::new(),
+            volume_id: None,
+            length_warnings: Vec::new(),
+            review_note: None,
+            detection_score: None,
+            detection_provider: None,
+            detected_at: None,
+            length_telemetry: None,
+            token_usage: None,
+        };
+        tokio_rt
+            .block_on(books.state.save_chapter_index("b1", &[meta(1), meta(2)]))
+            .unwrap();
+        let result = tokio_rt.block_on(tool_sub_agent(
+            &deps,
+            &json!({ "agent": "exporter", "bookId": "b1", "instruction": "导出全书" }),
+        ));
+        assert!(result.is_error);
+        assert!(
+            result
+                .text
+                .starts_with("Chapter index and source files differ:"),
+            "text={}",
+            result.text
+        );
+        assert!(
+            result
+                .text
+                .contains("reconcile the chapter index through chapter import"),
+            "text={}",
+            result.text
         );
     }
 

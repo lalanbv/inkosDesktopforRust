@@ -1271,9 +1271,20 @@ pub async fn export_save(
                 })),
             )
         }
+        // 1681 号：源一致性校验拒绝 → 409（响应体三键与 TS 8907 行同形）。
+        Err(crate::interaction::export_artifact::ExportError::SourceMismatch(m)) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": m.message(),
+                "code": "CHAPTER_EXPORT_SOURCE_MISMATCH",
+                "details": m.details_value(),
+            })),
+        ),
+        // TS save 面：其余错误 message 裸串（1647 号对齐的形态；NoChapters 的
+        // Display 即 "No chapters to export."）。
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error })),
+            Json(json!({ "error": error.to_string() })),
         ),
     }
 }
@@ -2256,6 +2267,12 @@ mod tests {
                 "/api/v1/books/:id/timeline-auto-beats",
                 axum::routing::get(get_timeline_auto_beats).put(put_timeline_auto_beats),
             )
+            // 1681 号：export-save 源一致性 409 测试用（生产装配见主路由表；
+            // 此处测试面单独挂载）。
+            .route(
+                "/api/v1/books/:id/export-save",
+                axum::routing::post(export_save),
+            )
             .with_state(runtime)
     }
 
@@ -2278,6 +2295,57 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// 1681 号：源一致性拒绝——export-save 对「索引列 2 章、盘上缺第 2 章」的书
+    /// 回 409 + CHAPTER_EXPORT_SOURCE_MISMATCH（TS server.ts 8907 行同形；修前
+    /// 落盘残本且 200）。
+    #[tokio::test]
+    async fn export_save_source_mismatch_returns_409_with_code_and_details() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let runtime = runtime_for(dir.path());
+        let now = "2026-01-01T00:00:00.000Z";
+        let meta = |number: u32| crate::models::chapter::ChapterMeta {
+            number,
+            title: format!("第{number}章"),
+            status: serde_json::from_value::<crate::models::chapter::ChapterStatus>(
+                serde_json::json!("approved"),
+            )
+            .unwrap(),
+            word_count: 10,
+            created_at: now.into(),
+            updated_at: now.into(),
+            audit_issues: Vec::new(),
+            volume_id: None,
+            length_warnings: Vec::new(),
+            review_note: None,
+            detection_score: None,
+            detection_provider: None,
+            detected_at: None,
+            length_telemetry: None,
+            token_usage: None,
+        };
+        runtime
+            .state
+            .save_chapter_index("b1", &[meta(1), meta(2)])
+            .await
+            .unwrap();
+        let response = app(runtime)
+            .oneshot(request(
+                "POST",
+                "/api/v1/books/b1/export-save",
+                Some(r#"{"format":"txt"}"#),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let parsed = json_body(response).await;
+        assert_eq!(parsed["code"], "CHAPTER_EXPORT_SOURCE_MISMATCH");
+        assert_eq!(
+            parsed["details"]["missingChapterNumbers"],
+            serde_json::json!([2])
+        );
     }
 
     #[tokio::test]

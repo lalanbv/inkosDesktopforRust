@@ -38,8 +38,11 @@ function leadingChapterNumber(match: RegExpMatchArray): number | undefined {
  *（含全角标点 `！（），：`）的相对次序与码点序**相反**——同章同类双文件
  * `0001_开局！.md` / `0001_开局🔥.md` 旧实现 TS 取 emoji 文件、Rust 取全角叹号文件，
  * 双引擎开不同章。逐码点比较，零中间分配（不展开数组、不转码）。
+ * 1681 号：改为 export——导出源一致性校验的 unindexedFiles 排序共用同一把
+ * 尺子（Rust 侧 `&str` 字节序恒等；裸 `Array#sort` 是 UTF-16 码元序，增补平面
+ * 字符与码点序相反，双端错误消息里数组顺序会漂移）。
  */
-function compareByCodePoint(a: string, b: string): number {
+export function compareByCodePoint(a: string, b: string): number {
   const length = Math.min(a.length, b.length);
   let index = 0;
   while (index < length) {

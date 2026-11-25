@@ -2401,6 +2401,17 @@ pub async fn export(
             }
             response
         }
+        // 1681 号：源一致性校验拒绝 → 409（响应体三键与 TS 8856 行同形：
+        // {error, code, details}——details 为四类细节对象）。
+        Err(crate::interaction::export_artifact::ExportError::SourceMismatch(m)) => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": m.message(),
+                "code": "CHAPTER_EXPORT_SOURCE_MISMATCH",
+                "details": m.details_value(),
+            })),
+        )
+            .into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({ "error": "Export failed" })),
@@ -2906,6 +2917,69 @@ mod tests {
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["error"], "Export failed");
+    }
+
+    /// 1681 号：源一致性拒绝——索引列 2 章、盘上缺第 2 章的书，GET /export 回
+    /// 409 + CHAPTER_EXPORT_SOURCE_MISMATCH + details（TS server.ts 8856 行同形；
+    /// 修前该请求 200 导出仅第 1 章的残本=静默数据丢失）。
+    #[tokio::test]
+    async fn export_source_mismatch_returns_409_with_code_and_details() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let runtime = runtime_for(dir.path());
+        let now = "2026-01-01T00:00:00.000Z";
+        let meta = |number: u32| crate::models::chapter::ChapterMeta {
+            number,
+            title: format!("第{number}章"),
+            status: serde_json::from_value::<crate::models::chapter::ChapterStatus>(
+                serde_json::json!("approved"),
+            )
+            .unwrap(),
+            word_count: 10,
+            created_at: now.into(),
+            updated_at: now.into(),
+            audit_issues: Vec::new(),
+            volume_id: None,
+            length_warnings: Vec::new(),
+            review_note: None,
+            detection_score: None,
+            detection_provider: None,
+            detected_at: None,
+            length_telemetry: None,
+            token_usage: None,
+        };
+        runtime
+            .state
+            .save_chapter_index("b1", &[meta(1), meta(2)])
+            .await
+            .unwrap();
+        let response = app(runtime)
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/books/b1/export?format=txt")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), 8192)
+            .await
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["code"], "CHAPTER_EXPORT_SOURCE_MISMATCH");
+        assert!(
+            parsed["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("Chapter index and source files differ:"),
+            "error={}",
+            parsed["error"]
+        );
+        assert_eq!(
+            parsed["details"]["missingChapterNumbers"],
+            serde_json::json!([2])
+        );
     }
 
     #[tokio::test]

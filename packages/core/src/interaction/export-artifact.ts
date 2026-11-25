@@ -7,7 +7,7 @@ import JSZip from "jszip";
 import {renderChapterDocument} from '../utils/chapter-document.js';
 import {readChapterHeading} from '../utils/chapter-splitter.js';
 import {buildLengthSpec, chapterLengthDelivery, countChapterLength, defaultChapterLength} from '../utils/length-metrics.js';
-import { chapterFileNumber } from "../utils/chapter-files.js";
+import { chapterFileNumber, compareByCodePoint } from "../utils/chapter-files.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
 
 export interface ExportStateLike {
@@ -92,30 +92,43 @@ export async function readBookExportSource(
   return {book, chapters, delivery, sourceDigest, totalWords: chapters.reduce((sum, chapter) => sum + chapter.count, 0)};
 }
 
+export interface ExportSourceMismatchDetails {
+  readonly missingChapterNumbers: number[];
+  readonly duplicateChapterNumbers: number[];
+  readonly duplicateIndexNumbers: number[];
+  readonly unindexedFiles: string[];
+}
+
 export class ChapterExportSourceError extends Error {
   readonly code = "CHAPTER_EXPORT_SOURCE_MISMATCH";
-  constructor(readonly details: {
-    readonly missingChapterNumbers: number[];
-    readonly duplicateChapterNumbers: number[];
-    readonly duplicateIndexNumbers: number[];
-    readonly unindexedFiles: string[];
-  }) {
+  constructor(readonly details: ExportSourceMismatchDetails) {
     super(`Chapter index and source files differ: ${JSON.stringify(details)}. Inspect these files and reconcile the chapter index through chapter import before exporting.`);
     this.name = "ChapterExportSourceError";
   }
 }
 
-function buildChapterFileLookup(files: ReadonlyArray<string>, chapters: ReadonlyArray<{ readonly number: number }>): ReadonlyMap<number, string> {
+/**
+ * 1681 号：源一致性校验抽成纯函数——共享 golden 向量（export-source-mismatch-vectors.json，
+ * engine-rs tests/golden_export_source_diff.rs 读同一文件）需要一个不依赖 StateManager 夹具的
+ * 直接入口。四类细节任一非空即拒（拒绝而非静默部分导出：缺章/错章的导出物是数据完整性事故，
+ * 同章双形态的择优是需要用户裁决的状态——两腿同此口径，Rust 腿本轮起对齐）。
+ */
+export function checkChapterExportSource(
+  files: ReadonlyArray<string>,
+  indexedNumbers: ReadonlyArray<number>,
+): ExportSourceMismatchDetails | undefined {
   const lookup = new Map<number, string>();
   const indexed = new Set<number>();
   const duplicateIndexNumbers = new Set<number>();
-  for (const chapter of chapters) {
-    if (indexed.has(chapter.number)) duplicateIndexNumbers.add(chapter.number);
-    indexed.add(chapter.number);
+  for (const number of indexedNumbers) {
+    if (indexed.has(number)) duplicateIndexNumbers.add(number);
+    indexed.add(number);
   }
   const duplicateChapterNumbers = new Set<number>();
   const unindexedFiles: string[] = [];
-  for (const file of [...files].sort()) {
+  // 1681 号：排序从裸 sort（UTF-16 码元序）改码点序——与 Rust `&str` 字节序恒等
+  //（compareByCodePoint，854 号立的尺子），增补平面字符（emoji 文件名）双端消息逐字同序。
+  for (const file of [...files].sort(compareByCodePoint)) {
     if (!file.endsWith(".md")) continue;
     // 1678 号：章文件的认定与索引重建同一集合（chapterFileNumber——正典 `NNNN_标题.md` /
     // legacy `NNNN-标题.md` / 裸 `NNNN.md`）。此前只认正典形态：旧命名的章被报成「缺文件 /
@@ -135,7 +148,21 @@ function buildChapterFileLookup(files: ReadonlyArray<string>, chapters: Readonly
     duplicateIndexNumbers: [...duplicateIndexNumbers].sort((a,b) => a-b),
     unindexedFiles,
   };
-  if (Object.values(details).some(items => items.length > 0)) throw new ChapterExportSourceError(details);
+  if (Object.values(details).some(items => items.length > 0)) return details;
+  return undefined;
+}
+
+function buildChapterFileLookup(files: ReadonlyArray<string>, chapters: ReadonlyArray<{ readonly number: number }>): ReadonlyMap<number, string> {
+  const details = checkChapterExportSource(files, chapters.map(chapter => chapter.number));
+  if (details) throw new ChapterExportSourceError(details);
+  // 校验通过后重建 lookup：四类细节全空 ⇒ 无缺章、无双形态、无孤儿，逐章必有唯一文件。
+  const lookup = new Map<number, string>();
+  for (const file of [...files].sort(compareByCodePoint)) {
+    if (!file.endsWith(".md")) continue;
+    const chapterNumber = chapterFileNumber(file);
+    if (chapterNumber === undefined) continue;
+    lookup.set(chapterNumber, file);
+  }
   return lookup;
 }
 

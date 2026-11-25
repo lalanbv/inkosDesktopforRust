@@ -4512,3 +4512,94 @@ async fn legacy_chapter_forms_progress_duel() {
         "章文件命名形态与进度：带索引的三形态混排、不带索引的旧命名书，两腿书架的章数与下一章号一致；Node 腿书架不再 500"
     );
 }
+
+/// 1681 号：导出源一致性对跑——两类「书架可读但导出校验拒绝」的书（缺章书在
+/// Node 腿走不到导出：进度守卫对缺文件 fail-closed，书架整页 500——两腿读守卫
+/// 的既有不对称，1678 号备案不动），两腿 GET /export 同回 409 +
+/// CHAPTER_EXPORT_SOURCE_MISMATCH（修前产品引擎 200 静默导出残本/旧稿，Node 腿
+/// 409——同一本书两腿行为分叉）：
+/// - dual-form：索引 [1]、盘上 `0001_新稿.md` + `0001-旧稿.md` → duplicateChapterNumbers=[1]
+///   （择优是需要用户裁决的状态，拒绝而非静默取正典）
+/// - orphan-legacy：索引 [1]、盘上 `0001_风起.md` + 未入索引的旧命名 `0002-残留.md`
+///   → unindexedFiles=["0002-残留.md"]
+#[tokio::test]
+async fn export_source_mismatch_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture_book(&root, &[]);
+    let stamp = "2026-08-17T00:00:00.000Z";
+    let single_index = format!(
+        r#"[{{"number":1,"title":"风起","status":"ready-for-review","wordCount":10,"createdAt":"{stamp}","updatedAt":"{stamp}","auditIssues":[],"lengthWarnings":[]}}]"#
+    );
+    let fixture_books = [
+        (
+            "export-dual-form",
+            vec![
+                ("0001_新稿.md", "# 第1章\n\n新稿。"),
+                ("0001-旧稿.md", "# 第1章\n\n旧稿。"),
+            ],
+        ),
+        (
+            "export-orphan-legacy",
+            vec![
+                ("0001_风起.md", "# 第1章 风起\n\n林动睁开双眼。"),
+                ("0002-残留.md", "# 第2章\n\n残留。"),
+            ],
+        ),
+    ];
+    for (id, chapters) in fixture_books {
+        let book = root.join("books").join(id);
+        std::fs::create_dir_all(book.join("chapters")).unwrap();
+        std::fs::write(
+            book.join("book.json"),
+            format!(
+                r#"{{"id":"{id}","title":"{id}","platform":"other","genre":"other","status":"active","targetChapters":10,"chapterWordCount":3000,"language":"zh","createdAt":"{stamp}","updatedAt":"{stamp}"}}"#
+            ),
+        )
+        .unwrap();
+        for (name, content) in chapters {
+            std::fs::write(book.join("chapters").join(name), content).unwrap();
+        }
+        std::fs::write(book.join("chapters").join("index.json"), &single_index).unwrap();
+    }
+    write_fixture_llm(&root, &llm);
+    migrate_fixture_to_works(&root);
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+
+    let expectations = [
+        ("export-dual-form", json!([1]), json!([])),
+        ("export-orphan-legacy", json!([]), json!(["0002-残留.md"])),
+    ];
+    for base in [&rust, &ts.base] {
+        // 书架先把两类书读进来（守卫应放行——夹具否则就轮不到导出面）。
+        let (status, body) = get_json(base, "/api/v1/books").await;
+        assert_eq!(status, 200, "{base}：{body}");
+        for (id, duplicates, unindexed) in &expectations {
+            let (status, body) =
+                get_json(base, &format!("/api/v1/books/{id}/export?format=txt")).await;
+            assert_eq!(status, 409, "{base}/{id}：{body}");
+            assert_eq!(
+                body["code"], "CHAPTER_EXPORT_SOURCE_MISMATCH",
+                "{base}/{id}：{body}"
+            );
+            assert_eq!(
+                &body["details"]["duplicateChapterNumbers"], duplicates,
+                "{base}/{id}：{body}"
+            );
+            assert_eq!(
+                &body["details"]["unindexedFiles"], unindexed,
+                "{base}/{id}：{body}"
+            );
+        }
+    }
+
+    eprintln!(
+        "导出源一致性：双形态书两腿同回 409 duplicate=[1]、孤儿旧命名书两腿同回 409 unindexed=[0002-残留.md]（拒绝而非静默残本/旧稿）"
+    );
+}

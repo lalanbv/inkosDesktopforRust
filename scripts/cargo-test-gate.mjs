@@ -91,7 +91,7 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // ↔ 第 k 条 `test result:`，并用 `passed + failed + ignored === N` 交叉验证
 // 对应没错位（1666 首版按节取数在真实日志上取到 0——合成夹具没复现拼接
 // 形态，真实日志才暴露；夹具此后按真实拼接形态构造）。
-const DUEL_EXECUTED_FLOOR = 18;
+const DUEL_EXECUTED_FLOOR = 19; // 1681 号：+export_source_mismatch_duel（18→19）
 const DUEL_EXEMPT_CEILING = 2;
 const DUEL_LEDGER_ENV = "INKOS_DUEL_LEDGER";
 // 当前树形态的对跑总数 = 真跑地板 + 豁免上限。自检里「恰在两个水位上」的夹具
