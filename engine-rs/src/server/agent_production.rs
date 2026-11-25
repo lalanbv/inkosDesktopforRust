@@ -275,6 +275,9 @@ pub struct AgentModelOverride {
     pub api_format: crate::llm::providers::TransportApiFormat,
     /// 流式偏好（108 号）：服务项/配置 stream=false 时置 Some(false)（层 1/2）。
     pub stream: Option<bool>,
+    /// 所选服务项配置的「随机性」（界面高级参数）；未配置 = `None`（不发
+    /// temperature，用模型默认）。交互聊天此前恒发 0.7，无视这项设置。
+    pub temperature: Option<f64>,
 }
 
 /// /agent 模型四层解析（TS 4968-5075 逐层）：
@@ -325,6 +328,9 @@ pub async fn resolve_agent_model_override(
         // 显式请求只看 entry 直填）。
         let stream =
             crate::server::service_routes::resolve_configured_service_stream(root, service).await;
+        let temperature =
+            crate::server::service_routes::resolve_configured_service_temperature(root, service)
+                .await;
         let key_optional = crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint(
             "openai",
             Some(&base_url),
@@ -338,6 +344,7 @@ pub async fn resolve_agent_model_override(
                     base_url,
                     api_format,
                     stream,
+                    temperature,
                 }));
             }
             (None, false) => {
@@ -366,6 +373,7 @@ pub async fn resolve_agent_model_override(
                     base_url,
                     api_format,
                     stream,
+                    temperature,
                 }));
             }
         }
@@ -411,6 +419,7 @@ pub async fn resolve_agent_model_override(
                                 base_url,
                                 api_format,
                                 stream: first.stream,
+                                temperature: first.temperature.filter(|value| value.is_finite()),
                             }));
                         }
                     }
@@ -470,6 +479,11 @@ pub async fn resolve_agent_model_override(
                         root, &service,
                     )
                     .await;
+                    let temperature =
+                        crate::server::service_routes::resolve_configured_service_temperature(
+                            root, &service,
+                        )
+                        .await;
                     return Ok(Some(AgentModelOverride {
                         service: service.clone(),
                         model: text_model.id.clone(),
@@ -477,6 +491,7 @@ pub async fn resolve_agent_model_override(
                         base_url,
                         api_format,
                         stream,
+                        temperature,
                     }));
                 }
             }
@@ -4794,6 +4809,63 @@ mod model_resolver_tests {
             .unwrap();
         // 层 3 可能命中 custom:my（bank 无 custom 条目 → listModels 空 → 下落）。
         assert!(resolved.is_none());
+    }
+
+    /// 交互聊天的「随机性」随覆盖解析一起给出：命中的是哪个服务项，就取哪个
+    /// 服务项配置的温度；没配置 → `None`（不发 temperature）。此前交互聊天恒发
+    /// 0.7，与解析结果无关。
+    #[tokio::test]
+    async fn override_carries_the_configured_temperature_per_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join(".inkos")).unwrap();
+        const KEY_NAME: &str = "apiKey";
+        const FIXTURE_KEY: &str = "test-key-x";
+        std::fs::write(
+            root.join(".inkos").join("secrets.json"),
+            format!(r#"{{"services":{{"custom:my":{{"{KEY_NAME}":"{FIXTURE_KEY}"}}}}}}"#),
+        )
+        .unwrap();
+        let write_config = |services: &str, default_model: &str| {
+            std::fs::write(
+                root.join("inkos.json"),
+                format!(r#"{{"llm":{{"services":[{services}]{default_model}}}}}"#),
+            )
+            .unwrap();
+        };
+
+        // 层 1（显式 service+model）：该服务项的温度。
+        write_config(
+            r#"{"service":"custom","name":"my","baseUrl":"http://127.0.0.1:9","apiFormat":"chat","temperature":0.3}"#,
+            "",
+        );
+        let resolved = resolve_agent_model_override(&root, Some("custom:my"), Some("m1"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.temperature, Some(0.3));
+        // 层 1：服务项没配温度 → 不发（不看别的服务 / 顶层镜像）。
+        write_config(
+            r#"{"service":"custom:my","baseUrl":"http://127.0.0.1:9","apiFormat":"chat"}"#,
+            "",
+        );
+        let resolved = resolve_agent_model_override(&root, Some("custom:my"), Some("m1"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.temperature, None);
+
+        // 层 2（defaultModel + services[0]）：首个服务项的温度。
+        write_config(
+            r#"{"service":"custom:my","baseUrl":"http://127.0.0.1:9","apiFormat":"chat","temperature":0.45}"#,
+            r#","defaultModel":"m1""#,
+        );
+        let resolved = resolve_agent_model_override(&root, None, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.model, "m1");
+        assert_eq!(resolved.temperature, Some(0.45));
     }
 }
 

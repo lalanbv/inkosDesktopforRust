@@ -43,12 +43,16 @@ fn bench_sensitive_words(c: &mut Criterion) {
     let content = chapter_content();
     let custom = custom_words();
     group.bench_function("scan_chapter", |b| {
-        b.iter(|| analyze_sensitive_words(&content, Some(&custom), WritingLanguage::Zh))
+        iter_budgeted(b, "sensitive_words/scan_chapter", || {
+            analyze_sensitive_words(&content, Some(&custom), WritingLanguage::Zh)
+        })
     });
 
     // 无自定义词表的最小形态（纯内置三组）。
     group.bench_function("scan_chapter_builtin_only", |b| {
-        b.iter(|| analyze_sensitive_words(&content, None, WritingLanguage::Zh))
+        iter_budgeted(b, "sensitive_words/scan_chapter_builtin_only", || {
+            analyze_sensitive_words(&content, None, WritingLanguage::Zh)
+        })
     });
     group.finish();
 }
@@ -70,8 +74,19 @@ fn bench_sse_broadcast(c: &mut Criterion) {
         "message": "撰写章节草稿",
         "progress": 0.42
     });
+    let dispatch = |hub: &BroadcastHub| hub.broadcast("write:progress", &payload);
 
     for subscribers in [1usize, 8, 32] {
+        // 分配计量在**没有消费任务运行**时做：消费任务在自己的 worker 线程上唤醒
+        // 也会分配，全局探针分不开。订阅者只保留接收端（broadcast 通道不因无人
+        // 接收而阻塞），计量的就是分发本身。
+        {
+            let id = format!("sse_broadcast/dispatch/{subscribers}");
+            let hub = BroadcastHub::new();
+            let _receivers: Vec<_> = (0..subscribers).map(|_| hub.subscribe()).collect();
+            assert_budget(&id, measure_min(|| dispatch(&hub)));
+        }
+
         let hub = Arc::new(BroadcastHub::new());
         let mut drainers = Vec::new();
         for _ in 0..subscribers {
@@ -84,7 +99,7 @@ fn bench_sse_broadcast(c: &mut Criterion) {
             BenchmarkId::new("dispatch", subscribers),
             &subscribers,
             |b, _| {
-                b.iter(|| hub.broadcast("write:progress", &payload));
+                b.iter(|| dispatch(&hub));
             },
         );
         for handle in drainers {
@@ -111,7 +126,7 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
     let mut group = c.benchmark_group("title_dedup");
     group.sample_size(30);
     group.bench_function("resolve_no_duplicate_200", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "title_dedup/resolve_no_duplicate_200", || {
             inkos_engine::agents::post_write_validator::resolve_duplicate_title(
                 "第201章 崭新的标题",
                 &titles,
@@ -121,7 +136,7 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
         })
     });
     group.bench_function("resolve_duplicate_hit_200", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "title_dedup/resolve_duplicate_hit_200", || {
             inkos_engine::agents::post_write_validator::resolve_duplicate_title(
                 "第5章 风起于青萍之末的5种写法",
                 &titles,
@@ -137,7 +152,7 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(content.len() as u64));
     group.sample_size(30);
     group.bench_function("detect_shape_3000zh", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "paragraph_scan/detect_shape_3000zh", || {
             inkos_engine::agents::post_write_validator::detect_paragraph_shape_warnings(
                 &content,
                 WritingLanguage::Zh,
@@ -169,11 +184,15 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(zh_body.len() as u64));
     group.sample_size(30);
     group.bench_function("scan_3000zh", |b| {
-        b.iter(|| inkos_engine::agents::ai_tells::analyze_ai_tells(&zh_body, WritingLanguage::Zh))
+        iter_budgeted(b, "ai_tells/scan_3000zh", || {
+            inkos_engine::agents::ai_tells::analyze_ai_tells(&zh_body, WritingLanguage::Zh)
+        })
     });
     group.throughput(Throughput::Bytes(en_body.len() as u64));
     group.bench_function("scan_en", |b| {
-        b.iter(|| inkos_engine::agents::ai_tells::analyze_ai_tells(&en_body, WritingLanguage::En))
+        iter_budgeted(b, "ai_tells/scan_en", || {
+            inkos_engine::agents::ai_tells::analyze_ai_tells(&en_body, WritingLanguage::En)
+        })
     });
     group.finish();
 
@@ -205,7 +224,7 @@ fn bench_write_next_hot_paths(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(index_json.len() as u64));
     group.sample_size(30);
     group.bench_function("parse_200", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "chapter_index/parse_200", || {
             let metas: Vec<inkos_engine::models::chapter::ChapterMeta> =
                 serde_json::from_str(&index_json).expect("parse index");
             metas
@@ -227,11 +246,19 @@ fn bench_tool_registry(c: &mut Criterion) {
 
     // 全表尾部查找（最坏情形：末位命中）+ 未注册名查找（全表扫空）。
     group.bench_function("lookup_last_hit", |b| {
-        b.iter(|| registry.find("retrieve_material", &ctx))
+        iter_budgeted(b, "tool_registry/lookup_last_hit", || {
+            registry.find("retrieve_material", &ctx)
+        })
     });
-    group.bench_function("lookup_miss", |b| b.iter(|| registry.find("nope", &ctx)));
+    group.bench_function("lookup_miss", |b| {
+        iter_budgeted(b, "tool_registry/lookup_miss", || {
+            registry.find("nope", &ctx)
+        })
+    });
     group.bench_function("schemas_book_session_layer", |b| {
-        b.iter(|| registry.schemas(inkos_engine::interaction::registry::ToolScope::BookSession))
+        iter_budgeted(b, "tool_registry/schemas_book_session_layer", || {
+            registry.schemas(inkos_engine::interaction::registry::ToolScope::BookSession)
+        })
     });
     group.finish();
 }
@@ -274,14 +301,14 @@ fn bench_sse_parse(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(stream.len() as u64));
     group.sample_size(30);
     group.bench_function("parse_full_stream", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "sse_parse/parse_full_stream", || {
             std::hint::black_box(inkos_engine::llm::sse_parser::parse_sse_stream(
                 std::hint::black_box(&stream),
             ))
         })
     });
     group.bench_function("push_chunked_64b", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "sse_parse/push_chunked_64b", || {
             let mut parser = inkos_engine::llm::sse_parser::SseStreamParser::new();
             for chunk in &chunks {
                 std::hint::black_box(parser.push(chunk));
@@ -360,14 +387,14 @@ fn bench_story_markdown_render(c: &mut Criterion) {
     let mut group = c.benchmark_group("story_markdown_render");
     group.sample_size(30);
     group.bench_function("render_hook_snapshot_100", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "story_markdown_render/render_hook_snapshot_100", || {
             inkos_engine::utils::story_markdown::render_hook_snapshot(&hooks, WritingLanguage::Zh)
         })
     });
     // 719 号分段定位：settle 结算链全貌（resolve→normalize→infer 推导与渲染
     // 分离计时——正则预编译改动的收益归因）。
     group.bench_function("resolve_timing_x100", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "story_markdown_render/resolve_timing_x100", || {
             for hook in std::iter::once(&hooks[0]).cycle().take(100) {
                 std::hint::black_box(
                     inkos_engine::utils::hook_lifecycle::resolve_hook_payoff_timing(
@@ -396,7 +423,7 @@ fn bench_story_markdown_render(c: &mut Criterion) {
         })
     });
     group.bench_function("projections_hooks_100", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "story_markdown_render/projections_hooks_100", || {
             inkos_engine::state::projections::render_hooks_projection(
                 &proj_hooks,
                 WritingLanguage::Zh,
@@ -405,7 +432,7 @@ fn bench_story_markdown_render(c: &mut Criterion) {
         })
     });
     group.bench_function("projections_summaries_100", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "story_markdown_render/projections_summaries_100", || {
             inkos_engine::state::projections::render_chapter_summaries_projection(
                 &summaries_state,
                 WritingLanguage::Zh,
@@ -413,12 +440,16 @@ fn bench_story_markdown_render(c: &mut Criterion) {
         })
     });
     group.bench_function("projections_current_state_100", |b| {
-        b.iter(|| {
-            inkos_engine::state::projections::render_current_state_projection(
-                &current_state,
-                WritingLanguage::Zh,
-            )
-        })
+        iter_budgeted(
+            b,
+            "story_markdown_render/projections_current_state_100",
+            || {
+                inkos_engine::state::projections::render_current_state_projection(
+                    &current_state,
+                    WritingLanguage::Zh,
+                )
+            },
+        )
     });
     group.finish();
 }
@@ -466,7 +497,7 @@ fn bench_export_artifact(c: &mut Criterion) {
     let mut group = c.benchmark_group("export_artifact");
     group.sample_size(30);
     group.bench_function("build_epub_12x3000", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "export_artifact/build_epub_12x3000", || {
             rt.block_on(async {
                 std::hint::black_box(
                     inkos_engine::interaction::export_artifact::build_export_artifact(
@@ -535,7 +566,7 @@ fn bench_backup_export(c: &mut Criterion) {
     let mut group = c.benchmark_group("backup_export");
     group.sample_size(30);
     group.bench_function("run_export_12ch", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "backup_export/run_export_12ch", || {
             rt.block_on(async {
                 std::hint::black_box(
                     inkos_engine::server::backup_routes::run_export(&root, false, false)
@@ -707,8 +738,9 @@ fn bench_read_chain(c: &mut Criterion) {
     let mut group = c.benchmark_group("read_chain");
     for (name, path) in scenarios {
         let path = path.to_string();
+        let id = format!("read_chain/{name}");
         group.bench_function(*name, |b| {
-            b.iter(|| {
+            iter_budgeted(b, &id, || {
                 rt.block_on(async {
                     let request = axum::http::Request::builder()
                         .uri(path.as_str())
@@ -729,7 +761,9 @@ fn bench_book_search(c: &mut Criterion) {
     // 全量分词，一次性质、不入阈值面）。
     // - `cold_300ch`：:memory: 全量 replace_scope + search（300 章全分词）
     // - `warm_300ch`：磁盘投影 db 已建，iter = 打开 + replace_scope
-    //   （content_hash 全跳）+ search——生产形态（.inkos/chapter-search.db）
+    //   （content_hash 命中 → 不分词、不落库）+ search——生产形态
+    //   （.inkos/chapter-search.db）。分配预算锁在此：此前「全跳」只跳过落库，
+    //   分词照做（单次 25 万次分配），与冷路径只差一次写库。
     let rt = tokio::runtime::Runtime::new().expect("tokio rt");
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().to_path_buf();
@@ -775,7 +809,7 @@ fn bench_book_search(c: &mut Criterion) {
     let scope = "chapters:b1".to_string();
     let docs = documents;
     group.bench_function("cold_300ch", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "book_search/cold_300ch", || {
             let index = inkos_engine::utils::local_search::LocalSearchIndex::new(":memory:")
                 .expect("memory index");
             index.replace_scope(&scope, &docs).expect("replace");
@@ -803,7 +837,7 @@ fn bench_book_search(c: &mut Criterion) {
     }
     let db_path_for_iter = db_path.clone();
     group.bench_function("warm_300ch", |b| {
-        b.iter(|| {
+        iter_budgeted(b, "book_search/warm_300ch", || {
             let index = inkos_engine::utils::local_search::LocalSearchIndex::new(
                 &db_path_for_iter.to_string_lossy(),
             )
@@ -887,6 +921,98 @@ mod alloc_probe {
 
 #[global_allocator]
 static ALLOCATOR: alloc_probe::Probe = alloc_probe::Probe;
+
+// ── 分配预算锁（全部基准工作负载）────────────────────────────────────
+//
+// 1671 号只给会话读面一条路径上了分配预算锁；其余 32 条基准只有时间基线——那些
+// 路径上的「高性能 / 0GC」此前没有数字。这里给每条基准的工作负载登记「单次调用
+// 的分配次数预算」：`iter_budgeted` 先计量并断言预算，再交给 criterion 计时。
+//
+// - 计量取 5 次里的最小值：全局探针分不开别的线程的分配，I/O 面在 tokio 阻塞池
+//   / 驱动线程上的零星分配用最小值滤掉（纯 CPU 面每次都相同；两遍独立计量 32 条
+//   逐项相同）；
+// - 预算 = 实测值 + 余量（纯 CPU 扫描面 10%，带文件 / 数据库 / 压缩的 I/O 面 25%）；
+//   判「应当零分配」的路径预算就是 0（段落形态扫描、工具表查找 ×2、钩子兑现时机
+//   推导），判「本就该分配」的路径锁的是回退不是清零；
+// - 量化一上来就抓到一处：`book_search/warm_300ch`（磁盘投影已建的热路径）单次
+//   25 万次分配 / 32MB，与冷路径只差一次落库——`replace_scope` 先对全部文档分词
+//   再比内容哈希，而哈希并不依赖分词结果。改成「先比哈希、只对变化文档分词」后
+//   1,679 次 / 213KB（Node 腿同形，两腿同改）；
+// - 新增基准必须同时登记时间基线与这里的分配预算（没登记即 panic）。
+
+/// 各基准工作负载的单次分配预算（次）。每行注释 = 实测值（两次独立计量逐项相同）
+/// 与判定：零分配 / 纯 CPU（+10%）/ I/O（+25%）。
+const ALLOC_BUDGETS: &[(&str, usize)] = &[
+    ("sensitive_words/scan_chapter", 35), //                     32  纯 CPU：命中结果
+    ("sensitive_words/scan_chapter_builtin_only", 19), //        18  纯 CPU
+    ("sse_broadcast/dispatch/1", 2), //                             2  纯 CPU：载荷序列化 + 入队
+    ("sse_broadcast/dispatch/8", 2), //                             2
+    ("sse_broadcast/dispatch/32", 2), //                            2
+    ("title_dedup/resolve_no_duplicate_200", 640), //             582  纯 CPU
+    ("title_dedup/resolve_duplicate_hit_200", 1_388), //        1_262  纯 CPU
+    ("paragraph_scan/detect_shape_3000zh", 0), //                   0  **应当零分配**
+    ("ai_tells/scan_3000zh", 68),    //                               62  纯 CPU
+    ("ai_tells/scan_en", 400),       //                                 364  纯 CPU：逐词小写
+    ("chapter_index/parse_200", 667), //                          607  纯 CPU：反序列化
+    ("tool_registry/lookup_last_hit", 0), //                        0  **应当零分配**
+    ("tool_registry/lookup_miss", 0), //                            0  **应当零分配**
+    ("tool_registry/schemas_book_session_layer", 158), //         144  纯 CPU：schema 投影
+    ("sse_parse/parse_full_stream", 408), //                      371  纯 CPU：事件构造
+    ("sse_parse/push_chunked_64b", 536), //                       488  纯 CPU：跨块缓冲
+    ("story_markdown_render/render_hook_snapshot_100", 392), //   357  纯 CPU：渲染
+    ("story_markdown_render/resolve_timing_x100", 0), //           0  **应当零分配**
+    ("story_markdown_render/projections_hooks_100", 4_584), //  4_168  纯 CPU：投影渲染
+    ("story_markdown_render/projections_summaries_100", 2_321), // 2_110
+    ("story_markdown_render/projections_current_state_100", 1_412), // 1_284
+    ("export_artifact/build_epub_12x3000", 5_088), //           4_071  I/O：zip + 文件
+    ("backup_export/run_export_12ch", 1_162), //                   930  I/O：tar + gzip
+    ("read_chain/list_books", 812),  //                             650  I/O：全量路由读链
+    ("read_chain/book_detail", 1_311), //                        1_049
+    ("read_chain/read_chapter", 188), //                          151
+    ("read_chain/chapter_workspace", 472), //                     378
+    ("read_chain/truth_list", 197),  //                            158
+    ("read_chain/list_genres", 1_091), //                         873
+    ("read_chain/analytics", 477),   //                             382
+    // 冷路径：整本书分词建投影，本就该分配。
+    ("book_search/cold_300ch", 316_708), //                  253_367  I/O + 分词
+    // 热路径：内容未变 → 不再分词（此前 254_279 次 / 32MB，与冷路径只差一次落库；
+    // 「先比哈希、只对变化文档分词」之后 1_679 次 / 213KB）。
+    ("book_search/warm_300ch", 2_098), //                       1_679  I/O：哈希 + 检索
+];
+
+/// 工作负载跑 5 次取最小分配（次数，字节数）。
+fn measure_min<R>(mut body: impl FnMut() -> R) -> (usize, usize) {
+    let mut best = (usize::MAX, usize::MAX);
+    for _ in 0..5 {
+        let (_, allocs, bytes) = alloc_probe::measure(&mut body);
+        if allocs < best.0 || (allocs == best.0 && bytes < best.1) {
+            best = (allocs, bytes);
+        }
+    }
+    best
+}
+
+fn assert_budget(id: &str, (allocs, bytes): (usize, usize)) {
+    let (_, budget) = ALLOC_BUDGETS
+        .iter()
+        .find(|(name, _)| *name == id)
+        .unwrap_or_else(|| {
+            panic!(
+                "基准 {id} 没有登记分配预算（ALLOC_BUDGETS）——新增基准须同时登记时间基线与分配预算"
+            )
+        });
+    println!("ALLOC-BUDGET {id} allocs={allocs} bytes={bytes} budget={budget}");
+    assert!(
+        allocs <= *budget,
+        "分配越预算：{id} 单次 {allocs} 次 > 预算 {budget}"
+    );
+}
+
+/// `b.iter` 的带预算形态：先单次计量工作负载的分配并断言预算，再交给 criterion 计时。
+fn iter_budgeted<R>(b: &mut criterion::Bencher, id: &str, mut body: impl FnMut() -> R) {
+    assert_budget(id, measure_min(&mut body));
+    b.iter(body);
+}
 
 /// transcript 行构建器：seq 递增、`parentSeq` 恒为上一个事件（分支后由调用方
 /// 改指分支目标），与真实追加助手的戳记一致。

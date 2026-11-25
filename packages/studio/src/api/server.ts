@@ -166,6 +166,7 @@ import {
   addTrustedSource,
   readTrustedSources,
   removeTrustedSource,
+  clampTemperatureForModel,
 } from "@actalk/inkos-core";
 import { isConfirmedProductionAction } from "../shared/confirmed-production.js";
 import { summarizeToolResult } from "../shared/tool-result.js";
@@ -6031,7 +6032,10 @@ function yamlScalar(value: unknown): string {
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
     try {
       const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
+        // 这条路由报的是书：inkos.json 缺失 / 损坏按「项目未设置」降级（projectMode
+        // = auto），404 只留给书本身不存在。此前配置读不出来也回 `Book not found`
+        // ——118 号跨端对跑时照 TS 的怪癖镜像，误导（两腿同改）。
+        loadRawConfigForRead(root),
         loadRawBookConfig(bookId),
       ]);
       const projectMode = readProjectChapterReviewMode(projectConfig);
@@ -6052,7 +6056,10 @@ function yamlScalar(value: unknown): string {
     const { mode } = await c.req.json<{ mode?: string }>();
     try {
       const [projectConfig, rawBook] = await Promise.all([
-        loadRawConfig(root),
+        // 这条路由报的是书：inkos.json 缺失 / 损坏按「项目未设置」降级（projectMode
+        // = auto），404 只留给书本身不存在。此前配置读不出来也回 `Book not found`
+        // ——118 号跨端对跑时照 TS 的怪癖镜像，误导（两腿同改）。
+        loadRawConfigForRead(root),
         loadRawBookConfig(bookId),
       ]);
       const projectMode = readProjectChapterReviewMode(projectConfig);
@@ -7965,6 +7972,9 @@ function yamlScalar(value: unknown): string {
       // Resolve model — multi-service resolution
       let resolvedModel: ResolvedModel["model"] | undefined;
       let resolvedApiKey: string | undefined;
+      // 所选服务与它配置的「随机性」：交互聊天按它发 temperature（没配置就不发）。
+      let resolvedService: string | undefined;
+      let resolvedTemperature: number | undefined;
 
       if (reqService && reqModel) {
         // 1. Frontend explicitly selected a service+model — fail loudly if no key
@@ -7979,6 +7989,8 @@ function yamlScalar(value: unknown): string {
           );
           resolvedModel = resolved.model;
           resolvedApiKey = resolved.apiKey;
+          resolvedService = reqService;
+          resolvedTemperature = typeof configuredEntry?.temperature === "number" ? configuredEntry.temperature : undefined;
         } catch (e: unknown) {
           if (e instanceof ServiceApiKeyNotFoundError) {
             return c.json({
@@ -8011,6 +8023,8 @@ function yamlScalar(value: unknown): string {
             );
             resolvedModel = resolved.model;
             resolvedApiKey = resolved.apiKey;
+            resolvedService = serviceConfigKey(firstService);
+            resolvedTemperature = typeof firstService.temperature === "number" ? firstService.temperature : undefined;
           } catch { /* fall through */ }
         }
       }
@@ -8034,6 +8048,8 @@ function yamlScalar(value: unknown): string {
                 );
                 resolvedModel = resolved.model;
                 resolvedApiKey = resolved.apiKey;
+                resolvedService = svcName;
+                resolvedTemperature = typeof configuredEntry?.temperature === "number" ? configuredEntry.temperature : undefined;
                 break;
               }
             } catch { /* try next */ }
@@ -8047,9 +8063,15 @@ function yamlScalar(value: unknown): string {
           ? client._piModel
           : { provider: config.llm.provider ?? "anthropic", modelId: config.llm.model } as any;
         resolvedApiKey = client._apiKey;
+        resolvedService = client.service;
+        resolvedTemperature = config.llm.temperature;
       }
 
       const model = resolvedModel!;
+      // 交互聊天的「随机性」：所选服务项配置了就发，没配置就不发（模型默认）；
+      // 模型卡标了固定温度的（kimi-k2.5 系列只接受 1）按卡钳制。此前交互聊天
+      // 从不带 temperature——界面上的这项设置对聊天不生效。
+      const chatTemperature = clampTemperatureForModel(resolvedService, model.id, resolvedTemperature);
       const agentApiKey = resolvedApiKey;
       const configuredEntry = reqService ? await resolveConfiguredServiceEntry(root, reqService) : undefined;
 
@@ -8213,6 +8235,7 @@ function yamlScalar(value: unknown): string {
             signal: taskController.signal,
             model,
             apiKey: agentApiKey,
+            temperature: chatTemperature,
             stream: pipelineClient.stream,
             proxyUrl: pipelineClient.proxyUrl,
             pipeline,
@@ -8411,6 +8434,7 @@ function yamlScalar(value: unknown): string {
           onWorkTransition: publishExecutionTarget,
           model,
           apiKey: agentApiKey,
+          temperature: chatTemperature,
           stream: pipelineClient.stream,
           proxyUrl: pipelineClient.proxyUrl,
           pipeline,

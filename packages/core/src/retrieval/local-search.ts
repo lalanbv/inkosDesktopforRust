@@ -42,8 +42,12 @@ export class LocalSearchIndex {
   }
 
   replaceScope(scope: string, documents: ReadonlyArray<SearchDocument>): void {
-    const normalized = documents.map((document) => normalizeDocument(document, scope));
-    const keepIds = new Set(normalized.map((document) => document.id));
+    // 内容哈希不含分词结果（分词是 title/body 的确定性函数，二者已在哈希里）——
+    // 先比哈希，只对变化的文档分词。此前先对全部文档分词再比哈希：未变化文档的
+    // 分词结果被整个丢掉，热路径（磁盘投影已建、内容未变）单次检索仍要把整本书
+    // 重新分词。Rust 腿同形，两腿一起改。
+    const fingerprints = documents.map((document) => documentContentHash(document));
+    const keepIds = new Set(documents.map((document) => document.id));
     const existing = this.db.prepare(
       "SELECT document_id AS id, content_hash AS contentHash FROM retrieval_documents WHERE scope = ?",
     ).all(scope) as unknown as ReadonlyArray<{ readonly id: string; readonly contentHash: string }>;
@@ -70,19 +74,20 @@ export class LocalSearchIndex {
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const document of normalized) {
-        if (existingHashes.get(document.id) === document.contentHash) continue;
+      for (const [index, document] of documents.entries()) {
+        if (existingHashes.get(document.id) === fingerprints[index]) continue;
+        const normalized = normalizeDocument(document, scope);
         upsert.run(
-          document.id,
-          document.scope,
-          document.kind,
-          document.source,
-          document.title,
-          document.body,
-          document.titleTokens,
-          document.bodyTokens,
-          document.metadataJson,
-          document.contentHash,
+          normalized.id,
+          normalized.scope,
+          normalized.kind,
+          normalized.source,
+          normalized.title,
+          normalized.body,
+          normalized.titleTokens,
+          normalized.bodyTokens,
+          normalized.metadataJson,
+          normalized.contentHash,
         );
       }
       for (const row of existing) {
@@ -199,20 +204,38 @@ export class LocalSearchIndex {
   }
 }
 
+// 内容哈希不含分词结果，所以可以在分词之前算——`replaceScope` 据此只对变化的
+// 文档分词。输入与摘要和拆分前逐字相同。
+function documentContentHash(document: SearchDocument): string {
+  const metadataJson = JSON.stringify(document.metadata ?? {});
+  return createHash("sha256")
+    .update([document.kind, document.source, document.title, document.body, metadataJson].join("\0"))
+    .digest("hex");
+}
+
+// 测试用：真正分词（`normalizeDocument`）的累计次数——证明未变化的文档不再被分词。
+let normalizedDocumentCount = 0;
+
+/** 仅测试用：读取并清零 `normalizeDocument` 的累计次数。 */
+export function __takeNormalizedDocumentCount(): number {
+  const count = normalizedDocumentCount;
+  normalizedDocumentCount = 0;
+  return count;
+}
+
+/** 仅对内容变了（哈希不同）的文档调用：分词 + 落库字段。 */
 function normalizeDocument(document: SearchDocument, scope: string) {
+  normalizedDocumentCount += 1;
   const normalized = { ...document, scope };
   const metadataJson = JSON.stringify(document.metadata ?? {});
   const titleTokens = tokenizeSearchText(document.title).join(" ");
   const bodyTokens = tokenizeSearchText(document.body).join(" ");
-  const contentHash = createHash("sha256")
-    .update([normalized.kind, normalized.source, normalized.title, normalized.body, metadataJson].join("\0"))
-    .digest("hex");
   return {
     ...normalized,
     metadataJson,
     titleTokens,
     bodyTokens,
-    contentHash,
+    contentHash: documentContentHash(document),
   };
 }
 

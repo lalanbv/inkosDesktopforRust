@@ -26,6 +26,9 @@
         }
       }
     },
+    "bookReviewModeDegrade": { "status": 200, "response": { "mode": "auto", "bookMode": null, "projectMode": "auto" } },
+    "bookReviewModePutOnBadConfig": { "status": 200, "response": { "ok": true, "mode": "manual", "bookMode": "manual", "projectMode": "auto" } },
+    "bookNotFound": { "status": 404, "response": { "error": "Book \"ghost\" not found" } },
     "internal": {
       "status": 500,
       "response": { "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } }
@@ -189,6 +192,51 @@
       "path": "/api/v1/services/config",
       "body": "{",
       "shape": "flatInvalidJson"
+    },
+    {
+      "name": "书级审稿模式：inkos.json 缺失、书在 → 降级 auto（此前 404 Book not found）",
+      "seedBook": true,
+      "config": null,
+      "method": "GET",
+      "path": "/api/v1/books/b1/chapter-review-mode",
+      "body": null,
+      "shape": "bookReviewModeDegrade"
+    },
+    {
+      "name": "书级审稿模式：inkos.json 损坏、书在 → 降级 auto",
+      "seedBook": true,
+      "config": "{ not json",
+      "method": "GET",
+      "path": "/api/v1/books/b1/chapter-review-mode",
+      "body": null,
+      "shape": "bookReviewModeDegrade"
+    },
+    {
+      "name": "书级审稿模式：inkos.json 根不是对象、书在 → 降级 auto",
+      "seedBook": true,
+      "config": "[1]\n",
+      "method": "GET",
+      "path": "/api/v1/books/b1/chapter-review-mode",
+      "body": null,
+      "shape": "bookReviewModeDegrade"
+    },
+    {
+      "name": "书级审稿模式：inkos.json 损坏时改书级设置照常（写的是书文件，inkos.json 不动）",
+      "seedBook": true,
+      "config": "{ not json",
+      "method": "PUT",
+      "path": "/api/v1/books/b1/chapter-review-mode",
+      "body": "{\"mode\":\"manual\"}",
+      "shape": "bookReviewModePutOnBadConfig"
+    },
+    {
+      "name": "书级审稿模式：书不存在才 404",
+      "seedBook": true,
+      "config": "{\"name\":\"x\"}",
+      "method": "GET",
+      "path": "/api/v1/books/ghost/chapter-review-mode",
+      "body": null,
+      "shape": "bookNotFound"
     }
   ],
   "bodyCases": {

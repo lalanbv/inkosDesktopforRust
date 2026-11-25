@@ -506,7 +506,12 @@ function stripReservedKeys(extra: Record<string, unknown>): Record<string, unkno
 
 const warnedFixedTemperatureModels = new Set<string>();
 
-function clampTemperatureForModel(
+/**
+ * 模型卡固定温度钳制。`chatCompletion` 在客户端边界调用；交互聊天的 agent
+ * 传输（pi-agent）不经过 `chatCompletion`，由调用方在把配置的「随机性」交给
+ * 会话前调用（两腿同一规则：配置了就发并按卡钳制，没配置就不发）。
+ */
+export function clampTemperatureForModel(
   service: string | undefined,
   model: string,
   requested: number | undefined,

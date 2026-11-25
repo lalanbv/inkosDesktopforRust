@@ -1176,6 +1176,10 @@ pub async fn post_agent(
         thinking_text: std::sync::Arc<std::sync::Mutex<String>>,
         /// R55/1661 号：chat 流水用量账本写点（usage 精确值；project root）。
         usage_root: std::path::PathBuf,
+        /// 所选服务项配置的「随机性」；`None` = 不发 temperature（用模型默认）。
+        /// 此前恒发 0.7：界面「随机性（可选）/ 模型默认」的设置对聊天不生效，
+        /// 卡上标了固定温度的模型（kimi-k2.5 系列只接受 1）还会被上游 400。
+        temperature: Option<f64>,
     }
 
     /// thinking 事件桥：hub + 会话标记。
@@ -1220,7 +1224,7 @@ pub async fn post_agent(
                 .stream_chat(&crate::llm::streaming_client::ChatCompletionParams {
                     model: &endpoint.model,
                     messages,
-                    temperature: 0.7,
+                    temperature: self.temperature,
                     max_tokens: endpoint.max_tokens,
                     stream: self.router.stream_preference().unwrap_or(true),
                     api_format: self.router.api_format(),
@@ -1426,6 +1430,7 @@ pub async fn post_agent(
         }),
         thinking_text: thinking_text.clone(),
         usage_root: runtime.state.project_root().to_path_buf(),
+        temperature: model_override.as_ref().and_then(|ov| ov.temperature),
     };
     // R41/563 号：计量器（每请求新建 = 当前请求面折叠表；窗口 = 路由缺省窗）。
     let meter = crate::utils::token_meter::TokenMeter::new(runtime.router.default_context_window());

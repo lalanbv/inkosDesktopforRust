@@ -25,7 +25,11 @@ use std::collections::HashMap;
 pub struct ChatCompletionParams<'a> {
     pub model: &'a str,
     pub messages: &'a [LLMMessage],
-    pub temperature: f64,
+    /// `None` = 不指定：请求体不带 `temperature` 键，用模型默认（TS pi 传输
+    /// `payload.temperature` 仅在 `options.temperature !== undefined` 时置入）。
+    /// 此前是必填 f64——交互聊天只能恒发 0.7，界面「随机性（可选）/ 模型默认」
+    /// 的设置无从表达。
+    pub temperature: Option<f64>,
     pub max_tokens: u32,
     pub stream: bool,
     /// 传输协议（106 号）：Chat → POST /chat/completions；Responses →
@@ -334,10 +338,15 @@ pub fn build_chat_completion_request(params: &ChatCompletionParams) -> serde_jso
     let mut body = serde_json::json!({
         "model": params.model,
         "messages": messages,
-        "temperature": params.temperature,
         "max_tokens": params.max_tokens,
         "stream": params.stream,
     });
+    // 未指定温度 → 不带该键（用模型默认）；extra 里的同名键仍属保留字段。
+    if let Some(temperature) = params.temperature {
+        if let Some(target) = body.as_object_mut() {
+            target.insert("temperature".to_string(), serde_json::json!(temperature));
+        }
+    }
     if let Some(tools) = params.tools {
         body.as_object_mut()
             .expect("body 是对象")
@@ -543,6 +552,24 @@ impl StreamingChatClient {
         &self,
         params: &ChatCompletionParams<'_>,
     ) -> Result<StreamedCompletion, StreamError> {
+        // 模型卡标了服务端固定温度的按卡钳制（kimi-k2.5 系列只接受 1，其它值
+        // 上游直接 400）；不需要钳制时零分配、原样借用。
+        let temperature = crate::llm::lookup::clamp_temperature_for_model(
+            crate::llm::providers_bank::get_all_endpoints(),
+            "",
+            params.model,
+            params.temperature,
+        );
+        let clamped;
+        let params = if temperature == params.temperature {
+            params
+        } else {
+            clamped = ChatCompletionParams {
+                temperature,
+                ..params.clone()
+            };
+            &clamped
+        };
         match params.api_format {
             TransportApiFormat::Responses => self.responses_completion(params).await,
             TransportApiFormat::Chat => self.chat_completion(params).await,
@@ -1166,8 +1193,13 @@ fn build_responses_request(params: &ChatCompletionParams<'_>) -> Value {
         "stream": params.stream,
         "store": false,
         "max_output_tokens": params.max_tokens,
-        "temperature": params.temperature,
     });
+    // 未指定温度 → 不带该键（用模型默认）；extra 里的同名键仍属保留字段。
+    if let Some(temperature) = params.temperature {
+        if let Some(target) = body.as_object_mut() {
+            target.insert("temperature".to_string(), serde_json::json!(temperature));
+        }
+    }
     if let Some(extra) = params.extra {
         if let Some(target) = body.as_object_mut() {
             for (key, value) in extra {
@@ -1260,7 +1292,7 @@ mod tests {
             messages: &[],
             model: "mock-model",
             stream: false,
-            temperature: 0.7,
+            temperature: Some(0.7),
             max_tokens: 1024,
             api_format: TransportApiFormat::Chat,
             extra: None,
@@ -1295,7 +1327,7 @@ mod tests {
         let params = ChatCompletionParams {
             model: "gpt-4o",
             messages: &msgs,
-            temperature: 0.7,
+            temperature: Some(0.7),
             max_tokens: 1000,
             stream: true,
             api_format: TransportApiFormat::Chat,
@@ -1314,6 +1346,52 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][0]["content"], "你是助手");
         assert_eq!(body["messages"][1]["role"], "user");
+    }
+
+    /// 未指定温度：chat / responses 两种请求体都不带 `temperature` 键（用模型
+    /// 默认，TS pi 传输同形）；chat 形态里 `extra` 的同名键仍属保留字段，不会把
+    /// 温度带回去（responses 形态 extra 覆盖基础键，既有语义）。
+    #[test]
+    fn unspecified_temperature_is_omitted_from_both_request_shapes() {
+        let msgs = vec![LLMMessage {
+            role: LLMRole::User,
+            content: "你好".into(),
+            tool_calls: None,
+            tool_call_id: None,
+        }];
+        let params = ChatCompletionParams {
+            model: "gpt-4o",
+            messages: &msgs,
+            temperature: None,
+            max_tokens: 1000,
+            stream: false,
+            api_format: TransportApiFormat::Chat,
+            extra: None,
+            tools: None,
+            images: None,
+            progress: None,
+            deadline: StreamDeadlineSpec::PIPELINE,
+            trajectory: None,
+        };
+        assert!(build_chat_completion_request(&params)
+            .get("temperature")
+            .is_none());
+        assert!(build_responses_request(&params)
+            .get("temperature")
+            .is_none());
+        let mut extra = HashMap::new();
+        extra.insert("temperature".to_string(), serde_json::json!(0.2));
+        let params = ChatCompletionParams {
+            extra: Some(&extra),
+            ..params
+        };
+        // chat 形态：temperature 属保留字段，extra 不得借「未指定」把它带回来。
+        assert!(build_chat_completion_request(&params)
+            .get("temperature")
+            .is_none());
+        // responses 形态：extra 覆盖基础键（TS buildResponsesRequest 的 `...extra`
+        // 展开序，既有语义，不因本次改动而变）。
+        assert_eq!(build_responses_request(&params)["temperature"], 0.2);
     }
 
     #[test]
@@ -1357,7 +1435,7 @@ mod tests {
         let params = ChatCompletionParams {
             model: "gpt-4o",
             messages: &msgs,
-            temperature: 0.7,
+            temperature: Some(0.7),
             max_tokens: 100,
             stream: true,
             api_format: TransportApiFormat::Chat,
@@ -1391,7 +1469,7 @@ mod tests {
         let params = ChatCompletionParams {
             model: "gpt-4o",
             messages: &msgs,
-            temperature: 0.7,
+            temperature: Some(0.7),
             max_tokens: 100,
             stream: true,
             api_format: TransportApiFormat::Chat,
@@ -1420,7 +1498,7 @@ mod tests {
         let params = ChatCompletionParams {
             model: "gpt-4o",
             messages: &msgs,
-            temperature: 0.7,
+            temperature: Some(0.7),
             max_tokens: 100,
             stream: true,
             api_format: TransportApiFormat::Chat,
@@ -1458,7 +1536,7 @@ mod tests {
         let params = ChatCompletionParams {
             model: "gpt-5",
             messages: &msgs,
-            temperature: 0.5,
+            temperature: Some(0.5),
             max_tokens: 128,
             stream: true,
             api_format: TransportApiFormat::Responses,
@@ -1492,7 +1570,7 @@ mod tests {
         let params = ChatCompletionParams {
             model: "m",
             messages: &msgs,
-            temperature: 0.7,
+            temperature: Some(0.7),
             max_tokens: 16,
             stream: false,
             api_format: TransportApiFormat::Responses,
@@ -1824,7 +1902,7 @@ mod tests {
         ChatCompletionParams {
             model: "test-model",
             messages: std::slice::from_ref(message),
-            temperature: 0.7,
+            temperature: Some(0.7),
             max_tokens: 32,
             stream: true,
             api_format: TransportApiFormat::Chat,
@@ -2152,6 +2230,63 @@ mod tests {
             inkos_headers.is_empty(),
             "非 kkaiapi 端点必须零观测头：{inkos_headers:?}"
         );
+    }
+
+    // ── 模型卡固定温度钳制（传输层漏斗；真 HTTP mock 记录请求体） ─────────
+
+    /// 记录请求体的流式 mock：返回 (base, 请求体快照句柄)。
+    async fn spawn_body_recording_llm() -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) {
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>;
+        async fn record(
+            axum::extract::State(seen): axum::extract::State<Seen>,
+            axum::Json(body): axum::Json<serde_json::Value>,
+        ) -> impl axum::response::IntoResponse {
+            seen.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(body);
+            (
+                [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                [content_chunk("正文"), DONE.to_string()].join(""),
+            )
+        }
+        let seen: Seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let app = axum::Router::new()
+            .route("/chat/completions", axum::routing::post(record))
+            .with_state(seen.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// 模型卡标了固定温度的（kimi-k2.5 只接受 1）：指定的其它值按卡钳制；未指定
+    /// 仍不带该键；卡上没有固定温度的模型原值透传。
+    #[tokio::test]
+    async fn stream_chat_clamps_to_the_fixed_temperature_on_the_model_card() {
+        let (base, seen) = spawn_body_recording_llm().await;
+        let client = StreamingChatClient::new(base, "key".to_string(), HashMap::new());
+        for (model, requested, expected) in [
+            ("kimi-k2.5", Some(0.3), Some(1.0)),
+            ("kimi-k2.5", None, None),
+            ("test-model", Some(0.3), Some(0.3)),
+        ] {
+            let mut params = deadline_params(StreamDeadlineSpec::INTERACTIVE);
+            params.model = model;
+            params.temperature = requested;
+            client.stream_chat(&params).await.unwrap();
+            let bodies = seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let body = bodies.last().unwrap();
+            assert_eq!(
+                body.get("temperature").and_then(serde_json::Value::as_f64),
+                expected,
+                "{model} / {requested:?}: {body}"
+            );
+        }
     }
 
     #[tokio::test]

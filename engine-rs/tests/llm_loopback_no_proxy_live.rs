@@ -92,7 +92,7 @@ async fn loopback_llm_endpoint_bypasses_dead_proxy_and_streams() {
     let params = ChatCompletionParams {
         model: "test-model",
         messages: std::slice::from_ref(message),
-        temperature: 0.7,
+        temperature: Some(0.7),
         max_tokens: 32,
         stream: true,
         api_format: TransportApiFormat::Chat,

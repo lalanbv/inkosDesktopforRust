@@ -1,0 +1,66 @@
+{
+  "_comment": [
+    "交互聊天（POST /api/v1/agent）发给上游的 temperature——两腿共用对照表。",
+    "契约（界面「随机性（可选）/ 模型默认」的承诺）：所选服务项配置了就发，没配置就不发；",
+    "模型卡标了服务端固定温度的（kimi-k2.5 系列只接受 1）按卡钳制。",
+    "修复前实跑：Node 腿从不带 temperature（设置对聊天不生效）；产品引擎恒发 0.7",
+    "（同样无视设置，且固定温度模型会被上游 400）。",
+    "Node 腿：packages/studio/src/__tests__/chat-temperature.flow.test.ts；",
+    "产品引擎：engine-rs/tests/chat_temperature.rs。读同一文件，{BASE_URL} 由各腿换成",
+    "本地采集服务的地址。expect = 本轮每一个上游请求的 temperature；null = 不带该键。",
+    "显式选了服务时只看该服务项自己的配置：顶层 llm.temperature 是「所选服务」的镜像，",
+    "不能套到别的服务上（第 7 行）。"
+  ],
+  "cases": [
+    {
+      "name": "未配置温度 · 显式选服务",
+      "services": [{ "service": "custom", "name": "fixture", "baseUrl": "{BASE_URL}", "apiFormat": "chat", "stream": false, "models": ["fixture-model"] }],
+      "defaultModel": "fixture-model",
+      "request": { "model": "fixture-model", "service": "custom:fixture" },
+      "expect": null
+    },
+    {
+      "name": "服务项温度 0.3 · 显式选服务",
+      "services": [{ "service": "custom", "name": "fixture", "baseUrl": "{BASE_URL}", "apiFormat": "chat", "stream": false, "models": ["fixture-model"], "temperature": 0.3 }],
+      "defaultModel": "fixture-model",
+      "request": { "model": "fixture-model", "service": "custom:fixture" },
+      "expect": 0.3
+    },
+    {
+      "name": "服务项温度 0.45 · 请求不带 service/model（默认模型层）",
+      "services": [{ "service": "custom", "name": "fixture", "baseUrl": "{BASE_URL}", "apiFormat": "chat", "stream": false, "models": ["fixture-model"], "temperature": 0.45 }],
+      "defaultModel": "fixture-model",
+      "request": {},
+      "expect": 0.45
+    },
+    {
+      "name": "固定温度模型（卡上 = 1）· 配置 0.3 → 钳到 1",
+      "services": [{ "service": "custom", "name": "fixture", "baseUrl": "{BASE_URL}", "apiFormat": "chat", "stream": false, "models": ["kimi-k2.5"], "temperature": 0.3 }],
+      "defaultModel": "kimi-k2.5",
+      "request": { "model": "kimi-k2.5", "service": "custom:fixture" },
+      "expect": 1
+    },
+    {
+      "name": "固定温度模型（卡上 = 1）· 未配置 → 不发",
+      "services": [{ "service": "custom", "name": "fixture", "baseUrl": "{BASE_URL}", "apiFormat": "chat", "stream": false, "models": ["kimi-k2.5"] }],
+      "defaultModel": "kimi-k2.5",
+      "request": { "model": "kimi-k2.5", "service": "custom:fixture" },
+      "expect": null
+    },
+    {
+      "name": "固定温度模型（卡上 = 1）· 配置 0.6 · 请求不带 service → 钳到 1",
+      "services": [{ "service": "custom", "name": "fixture", "baseUrl": "{BASE_URL}", "apiFormat": "chat", "stream": false, "models": ["kimi-k2.5"], "temperature": 0.6 }],
+      "defaultModel": "kimi-k2.5",
+      "request": {},
+      "expect": 1
+    },
+    {
+      "name": "显式选的服务没配温度 · 顶层 llm.temperature=1.4 是别的服务的镜像 → 不发",
+      "services": [{ "service": "custom", "name": "fixture", "baseUrl": "{BASE_URL}", "apiFormat": "chat", "stream": false, "models": ["fixture-model"] }],
+      "defaultModel": "fixture-model",
+      "topLevelTemperature": 1.4,
+      "request": { "model": "fixture-model", "service": "custom:fixture" },
+      "expect": null
+    }
+  ]
+}

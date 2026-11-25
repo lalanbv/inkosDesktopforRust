@@ -3,6 +3,7 @@ import {
   LocalSearchIndex,
   splitMarkdownForSearch,
   tokenizeSearchText,
+  __takeNormalizedDocumentCount,
 } from "../retrieval/local-search.js";
 
 describe("LocalSearchIndex", () => {
@@ -99,5 +100,40 @@ describe("LocalSearchIndex", () => {
     ]);
     expect(markdown.slice(segments[1]!.charStart, segments[1]!.charEnd)).toBe("司机拒绝签字。");
     expect(tokenizeSearchText("师债 mentor-debt")).toEqual(expect.arrayContaining(["师债", "mentor-debt"]));
+  });
+
+  // 未变化的文档不再被分词：内容哈希在分词之前算，只有哈希变了的文档才走
+  // normalizeDocument。此前每次 replaceScope 都把全部文档重新分词——热路径
+  // （磁盘投影已建）单次检索 = 整本书重分词。产品引擎同形，两腿同改。
+  it("tokenizes only changed documents when a scope is replaced", () => {
+    const index = new LocalSearchIndex(":memory:");
+    const doc = (id: string, body: string) => ({
+      id, scope: "story", kind: "hook", source: `${id}.md`, title: id, body,
+    });
+    try {
+      const docs = [doc("d1", "开篇要建立核心冲突。"), doc("d2", "对白要短，避免书面语。"), doc("d3", "伏笔要兑现。")];
+      __takeNormalizedDocumentCount();
+      index.replaceScope("story", docs);
+      expect(__takeNormalizedDocumentCount()).toBe(3);
+
+      // 同一批文档原样再来一次（热路径）：零分词。
+      index.replaceScope("story", docs);
+      expect(__takeNormalizedDocumentCount()).toBe(0);
+
+      // 只改一篇 + 新增一篇、顺序打乱：只分词这两篇。
+      const changed = [doc("d3", "伏笔要兑现。"), doc("d2", "对白要再短一点。"), doc("d1", "开篇要建立核心冲突。"), doc("d4", "节奏张弛有度。")];
+      index.replaceScope("story", changed);
+      expect(__takeNormalizedDocumentCount()).toBe(2);
+
+      // 元数据变了也算变（哈希覆盖 metadata）。
+      index.replaceScope("story", changed.map((entry, position) => (position === 0 ? { ...entry, metadata: { note: "x" } } : entry)));
+      expect(__takeNormalizedDocumentCount()).toBe(1);
+
+      // 检索面不受影响：改过的正文可检索到，旧正文检索不到。
+      expect(index.search("再短一点", { scope: "story" }).map((hit) => hit.id)).toEqual(["d2"]);
+      expect(index.search("避免书面语", { scope: "story" })).toEqual([]);
+    } finally {
+      index.close();
+    }
   });
 });

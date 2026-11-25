@@ -436,7 +436,7 @@ impl AgentRouter {
             .stream_chat(&ChatCompletionParams {
                 model,
                 messages: &messages,
-                temperature,
+                temperature: Some(temperature),
                 max_tokens: max_tokens.unwrap_or(endpoint.max_tokens),
                 stream: self.stream.unwrap_or(true),
                 api_format: self.api_format,

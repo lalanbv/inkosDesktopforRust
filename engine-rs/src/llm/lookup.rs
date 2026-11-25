@@ -64,6 +64,42 @@ pub fn lookup_model<'a>(
     Some(matches.first().unwrap().0)
 }
 
+/// 模型卡标了服务端固定温度的（如 Moonshot kimi-k2.5 / kimi-k2-thinking 系列
+/// API 硬要求 `temperature === 1`，其它值直接 400）统一钳到卡上的值——TS
+/// `clampTemperatureForModel` 的对应物（TS 挂在 `client.chat` 边界；这里是
+/// 传输层 `stream_chat` 漏斗，产品引擎全部模型调用都经过）。
+///
+/// - 未指定（`None`）仍不指定：用模型默认，不替调用方 invent 一个值；
+/// - 卡上没有固定温度：原值返回；
+/// - 查找次序与 [`lookup_model`] 相同（已知服务精确查 → 按 provider 优先级
+///   全局扫），但**不分配**——每次模型调用都会走到这里。
+pub fn clamp_temperature_for_model(
+    registry: &[InkosEndpoint],
+    service_id: &str,
+    model_id: &str,
+    requested: Option<f64>,
+) -> Option<f64> {
+    let requested = requested?;
+    fn find<'e>(endpoint: &'e InkosEndpoint, model_id: &str) -> Option<&'e InkosModel> {
+        endpoint
+            .models
+            .iter()
+            .find(|model| model.id.eq_ignore_ascii_case(model_id))
+    }
+    let card = get_endpoint(registry, service_id)
+        .and_then(|endpoint| find(endpoint, model_id))
+        .or_else(|| {
+            registry
+                .iter()
+                .filter_map(|endpoint| {
+                    find(endpoint, model_id).map(|model| (model, endpoint.id.as_str()))
+                })
+                .min_by_key(|(_, provider)| priority_of(provider))
+                .map(|(model, _)| model)
+        });
+    card.and_then(|model| model.temperature).or(Some(requested))
+}
+
 /// 按 serviceId 查 endpoint。
 pub fn get_endpoint<'a>(
     registry: &'a [InkosEndpoint],
@@ -314,5 +350,57 @@ mod tests {
                 reasoning: None
             })
         )));
+    }
+
+    /// 模型卡固定温度钳制：指定了才钳；未指定仍不指定；卡上无固定温度原值透传。
+    #[test]
+    fn clamp_temperature_for_model_follows_the_card() {
+        let bank = crate::llm::providers_bank::get_all_endpoints();
+        assert_eq!(
+            clamp_temperature_for_model(bank, "", "kimi-k2.5", Some(0.3)),
+            Some(1.0),
+            "卡上标了固定温度的模型：其它值一律钳到卡上的值"
+        );
+        assert_eq!(
+            clamp_temperature_for_model(bank, "bailian", "kimi-k2.5", Some(0.3)),
+            Some(1.0),
+            "已知服务精确查"
+        );
+        assert_eq!(
+            clamp_temperature_for_model(bank, "", "kimi-k2.5", None),
+            None,
+            "未指定温度不替调用方 invent 一个值"
+        );
+        assert_eq!(
+            clamp_temperature_for_model(bank, "", "KIMI-K2.5", Some(1.0)),
+            Some(1.0)
+        );
+        assert_eq!(
+            clamp_temperature_for_model(bank, "", "no-such-model", Some(0.3)),
+            Some(0.3),
+            "没有卡：原值"
+        );
+    }
+
+    /// 钳制用的查找与 `lookup_model` 同序（不分配的实现 vs 原实现）：对全量
+    /// 模型卡逐个核对，两条路径命中同一张卡。
+    #[test]
+    fn clamp_lookup_agrees_with_lookup_model_across_the_bank() {
+        let bank = crate::llm::providers_bank::get_all_endpoints();
+        let mut checked = 0usize;
+        for endpoint in bank {
+            for model in &endpoint.models {
+                let Some(locked) = model.temperature else {
+                    continue;
+                };
+                let via_lookup =
+                    lookup_model(bank, "", &model.id).and_then(|card| card.temperature);
+                let via_clamp = clamp_temperature_for_model(bank, "", &model.id, Some(0.123));
+                assert_eq!(via_lookup, Some(locked), "{}", model.id);
+                assert_eq!(via_clamp, Some(locked), "{}", model.id);
+                checked += 1;
+            }
+        }
+        assert!(checked >= 10, "全量模型卡上固定温度的条目数不对：{checked}");
     }
 }

@@ -1869,29 +1869,21 @@ fn review_mode_str(mode: ChapterReviewModeVal) -> &'static str {
 }
 
 /// inkos.json writing.reviewMode（normalize：manual → manual，其余 auto）。
-/// 项目级 reviewMode 三态（118 号）：Loaded（键存在，normalize）/ Missing
-/// （键缺——回退 auto）/ ConfigUnavailable（inkos.json 缺失或不可解析——404 面）。
-enum ProjectReviewMode {
-    Loaded(ChapterReviewModeVal),
-    Missing,
-    ConfigUnavailable,
-}
-
-async fn project_review_mode(root: &std::path::Path) -> ProjectReviewMode {
-    let Ok(raw) = tokio::fs::read_to_string(root.join("inkos.json")).await else {
-        return ProjectReviewMode::ConfigUnavailable;
+///
+/// 配置文件状态契约（读面降级）：inkos.json 缺失 / 损坏 / 根不是对象 → 与「键缺失」
+/// 同样回退 auto。此前这三种情形回 404 `Book not found`——118 号跨端对跑时照
+/// TS 的怪癖镜像；但这条路由报的是**书**的资源，书在而配置坏时说「书不存在」是
+/// 误导（坏配置由 `/doctor` 的 `inkosJson` 报）。两腿同改。
+async fn project_review_mode(root: &std::path::Path) -> ChapterReviewModeVal {
+    let Some(config) = crate::server::project_config_routes::load_raw_config(root).await else {
+        return ChapterReviewModeVal::Auto;
     };
-    let Ok(parsed) = serde_json::from_str::<Value>(&raw) else {
-        return ProjectReviewMode::ConfigUnavailable;
-    };
-    match parsed
+    config
         .get("writing")
         .and_then(|writing| writing.get("reviewMode"))
         .and_then(Value::as_str)
-    {
-        Some(mode) => ProjectReviewMode::Loaded(normalize_review_mode(mode)),
-        None => ProjectReviewMode::Missing,
-    }
+        .map(normalize_review_mode)
+        .unwrap_or(ChapterReviewModeVal::Auto)
 }
 
 /// book.json writing.reviewMode（仅精确 manual/auto 值，其余 None）。
@@ -1932,22 +1924,10 @@ pub async fn get_review_mode(
         );
     }
     let root = runtime.state.project_root();
-    // TS 语义（118 号对跑勘误）：404 仅当 inkos.json/book.json **文件**缺失或
-    // 不可解析（loadRawConfig/loadRawBookConfig 抛错）；writing.reviewMode 键
-    // 缺失回退项目默认 auto（readProjectChapterReviewMode → normalize 默认）。
-    let (project_mode, Ok(raw_book)) = (
-        match project_review_mode(root).await {
-            ProjectReviewMode::Loaded(mode) => mode,
-            ProjectReviewMode::Missing => ChapterReviewModeVal::Auto,
-            ProjectReviewMode::ConfigUnavailable => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
-                )
-            }
-        },
-        load_raw_book_config(root, &book_id).await,
-    ) else {
+    // 404 仅当 book.json **文件**缺失或不可解析（loadRawBookConfig 抛错）；
+    // writing.reviewMode 键缺失、inkos.json 不可读都回退项目默认 auto。
+    let project_mode = project_review_mode(root).await;
+    let Ok(raw_book) = load_raw_book_config(root, &book_id).await else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
@@ -1983,20 +1963,9 @@ pub async fn put_review_mode(
         );
     }
     let root = runtime.state.project_root();
-    let (project_mode, Ok(mut raw_book)) = (
-        match project_review_mode(root).await {
-            ProjectReviewMode::Loaded(mode) => mode,
-            // 键缺 → 项目默认 auto（118 号对跑勘误，GET/PUT 同语义）。
-            ProjectReviewMode::Missing => ChapterReviewModeVal::Auto,
-            ProjectReviewMode::ConfigUnavailable => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(json!({ "error": format!("Book \"{book_id}\" not found") })),
-                )
-            }
-        },
-        load_raw_book_config(root, &book_id).await,
-    ) else {
+    // GET 同语义：404 仅限 book.json；键缺 / inkos.json 不可读 → 项目默认 auto。
+    let project_mode = project_review_mode(root).await;
+    let Ok(mut raw_book) = load_raw_book_config(root, &book_id).await else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({ "error": format!("Book \"{book_id}\" not found") })),

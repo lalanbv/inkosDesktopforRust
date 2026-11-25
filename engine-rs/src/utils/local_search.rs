@@ -134,12 +134,29 @@ impl LocalSearchIndex {
     }
 
     /// scope 内全量替换（hash 去重增改 + 消失 id 删除，事务）。
+    ///
+    /// 先比内容哈希、**只对变化的文档分词**：哈希只覆盖 kind/source/title/body/
+    /// metadata，不含分词结果（分词是 title/body 的确定性函数）。此前先对全部
+    /// 文档分词再比哈希——未变化文档的分词结果被整个丢掉。热路径（磁盘投影已
+    /// 建、内容未变）单次检索仍要把整本书重新分词：实测 300 章 25 万次分配 /
+    /// 32MB、约 20ms，与冷路径只差一次落库。Node 腿同形（2.0 基底同款），两腿
+    /// 一起改。
     pub fn replace_scope(&self, scope: &str, documents: &[SearchDocument]) -> rusqlite::Result<()> {
-        let normalized: Vec<NormalizedDocument> = documents
+        // `None` = 无元数据（落库为 `{}`）：不为它分配。
+        let fingerprints: Vec<(String, Option<String>)> = documents
             .iter()
-            .map(|document| normalize_document(document, scope))
+            .map(|document| {
+                let metadata_json = document
+                    .metadata
+                    .as_ref()
+                    .map(|meta| serde_json::to_string(meta).unwrap_or_else(|_| "{}".to_string()));
+                (
+                    document_hash(document, metadata_json.as_deref()),
+                    metadata_json,
+                )
+            })
             .collect();
-        let keep_ids: std::collections::HashSet<&str> = normalized
+        let keep_ids: std::collections::HashSet<&str> = documents
             .iter()
             .map(|document| document.id.as_str())
             .collect();
@@ -182,12 +199,14 @@ impl LocalSearchIndex {
                 .conn
                 .prepare("DELETE FROM retrieval_documents WHERE scope = ? AND document_id = ?")?;
 
-            for document in &normalized {
+            for (document, (content_hash, metadata_json)) in documents.iter().zip(&fingerprints) {
                 if existing_hashes.get(&document.id).map(String::as_str)
-                    == Some(document.content_hash.as_str())
+                    == Some(content_hash.as_str())
                 {
                     continue;
                 }
+                let document =
+                    normalize_document(document, metadata_json.clone(), content_hash.clone());
                 upsert.execute(params![
                     document.id,
                     scope,
@@ -303,29 +322,34 @@ struct NormalizedDocument {
     content_hash: String,
 }
 
-fn normalize_document(document: &SearchDocument, _scope: &str) -> NormalizedDocument {
+/// 内容哈希（kind/source/title/body/metadata_json，`\0` 分隔——与 TS `normalizeDocument`
+/// 的 `createHash("sha256")` 同输入同摘要）。不含分词结果，所以可以在分词之前算。
+fn document_hash(document: &SearchDocument, metadata_json: Option<&str>) -> String {
     use sha2::{Digest, Sha256};
-    let metadata_json = document
-        .metadata
-        .as_ref()
-        .map(|meta| serde_json::to_string(meta).unwrap_or_else(|_| "{}".to_string()))
-        .unwrap_or_else(|| "{}".to_string());
+    let mut hasher = Sha256::new();
+    for part in [
+        document.kind.as_str(),
+        document.source.as_str(),
+        document.title.as_str(),
+        document.body.as_str(),
+        metadata_json.unwrap_or("{}"),
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// 仅对**内容变了**的文档调用（分词 + 落库字段的副本）。
+fn normalize_document(
+    document: &SearchDocument,
+    metadata_json: Option<String>,
+    content_hash: String,
+) -> NormalizedDocument {
+    #[cfg(test)]
+    NORMALIZED_DOCUMENTS.with(|count| count.set(count.get() + 1));
     let title_tokens = tokenize_search_text(&document.title).join(" ");
     let body_tokens = tokenize_search_text(&document.body).join(" ");
-    let content_hash = {
-        let mut hasher = Sha256::new();
-        for part in [
-            &document.kind,
-            &document.source,
-            &document.title,
-            &document.body,
-            &metadata_json,
-        ] {
-            hasher.update(part.as_bytes());
-            hasher.update([0u8]);
-        }
-        format!("{:x}", hasher.finalize())
-    };
     NormalizedDocument {
         id: document.id.clone(),
         kind: document.kind.clone(),
@@ -334,9 +358,17 @@ fn normalize_document(document: &SearchDocument, _scope: &str) -> NormalizedDocu
         body: document.body.clone(),
         title_tokens,
         body_tokens,
-        metadata_json,
+        metadata_json: metadata_json.unwrap_or_else(|| "{}".to_string()),
         content_hash,
     }
+}
+
+// 测试用：`normalize_document`（= 真正分词）的累计次数——证明未变化的文档不再
+// 被分词。按线程计（`replace_scope` 在调用线程上同步执行；同模块的其它测试并行
+// 跑时互不干扰）。
+#[cfg(test)]
+thread_local! {
+    static NORMALIZED_DOCUMENTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `tokenizeSearchText`：NFKC + lower → word 分段（word-like 过滤 +
@@ -559,6 +591,57 @@ mod tests {
                 }
             )
             .is_empty());
+    }
+
+    /// 未变化的文档不再被分词：内容哈希在分词之前算，只有哈希变了的文档才走
+    /// `normalize_document`。此前每次 `replace_scope` 都把全部文档重新分词——
+    /// 热路径（磁盘投影已建）单次检索 = 整本书重分词。
+    #[test]
+    fn replace_scope_tokenizes_only_changed_documents() {
+        let tokenized = || NORMALIZED_DOCUMENTS.with(std::cell::Cell::get);
+        let index = LocalSearchIndex::new(":memory:").unwrap();
+        let docs = vec![
+            doc("d1", "布局", "开篇要建立核心冲突与人物压力。"),
+            doc("d2", "对白", "对白要短，避免书面语。"),
+            doc("d3", "伏笔", "伏笔要在后文兑现。"),
+        ];
+        let start = tokenized();
+        index.replace_scope("skill:combat", &docs).unwrap();
+        assert_eq!(tokenized() - start, 3, "首次建索引：每篇分词一次");
+
+        // 同一批文档原样再来一次（热路径）：零分词。
+        index.replace_scope("skill:combat", &docs).unwrap();
+        assert_eq!(tokenized() - start, 3, "未变化的文档不得重新分词");
+
+        // 只改一篇 + 新增一篇、顺序打乱：只分词这两篇。
+        let mut changed = docs.clone();
+        changed[1].body = "对白要再短一点。".to_string();
+        changed.swap(0, 2);
+        changed.push(doc("d4", "节奏", "张弛要有度。"));
+        index.replace_scope("skill:combat", &changed).unwrap();
+        assert_eq!(tokenized() - start, 5, "只分词变化的与新增的");
+
+        // 元数据变了也算变（哈希覆盖 metadata）。
+        let mut with_metadata = changed.clone();
+        with_metadata[0].metadata = Some(serde_json::json!({ "note": "x" }));
+        index.replace_scope("skill:combat", &with_metadata).unwrap();
+        assert_eq!(tokenized() - start, 6, "元数据变化要被哈希覆盖");
+
+        // 检索面不受影响：改过的正文可检索到，旧正文检索不到。
+        let hits = |query: &str| {
+            let found = index.search(
+                query,
+                &SearchOptions {
+                    scope: "skill:combat",
+                    kinds: &[],
+                    limit: 10,
+                },
+            );
+            found.into_iter().map(|hit| hit.id).collect::<Vec<_>>()
+        };
+        assert_eq!(hits("再短一点"), vec!["d2"]);
+        assert!(hits("避免书面语").is_empty(), "旧正文应已被替换");
+        assert!(hits("兑现").iter().all(|id| id == "d3"));
     }
 
     #[test]

@@ -568,7 +568,7 @@ pub fn router_chat_turn_fn(
             let params = crate::llm::streaming_client::ChatCompletionParams {
                 model: &model,
                 messages: &llm_messages,
-                temperature,
+                temperature: Some(temperature),
                 max_tokens,
                 stream: false,
                 api_format: router.api_format(),

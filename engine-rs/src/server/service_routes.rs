@@ -488,6 +488,22 @@ pub(crate) async fn resolve_configured_service_stream(
         .and_then(|entry| entry.stream)
 }
 
+/// 服务项配置的「随机性」（界面高级参数：可选；留空 = 模型默认）。非有限值
+/// 视为未配置。交互聊天按它发 temperature；未配置就不发。
+pub(crate) async fn resolve_configured_service_temperature(
+    root: &Path,
+    service_id: &str,
+) -> Option<f64> {
+    let config = load_raw_config(root).await?;
+    let llm = config.get("llm")?;
+    let services = normalize_service_config(llm.get("services"));
+    services
+        .iter()
+        .find(|entry| service_config_key(entry) == service_id)
+        .and_then(|entry| entry.temperature)
+        .filter(|temperature| temperature.is_finite())
+}
+
 pub(crate) async fn resolve_configured_service_base_url(
     root: &Path,
     service_id: &str,
@@ -1445,7 +1461,7 @@ pub(crate) async fn minimal_chat_probe(
     let params = ChatCompletionParams {
         model,
         messages: std::slice::from_ref(&message),
-        temperature: 0.7,
+        temperature: Some(0.7),
         max_tokens: 16,
         stream,
         api_format,

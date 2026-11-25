@@ -45,7 +45,7 @@ const table = JSON.parse(
   shapes: Record<string, Shape>;
   states: Record<string, string | null>;
   matrix: Row[];
-  cases: Array<{ name: string; config: string } & Omit<Row, "expect"> & { shape: string }>;
+  cases: Array<{ name: string; config: string | null; seedBook?: boolean } & Omit<Row, "expect"> & { shape: string }>;
   bodyCases: {
     config: string;
     secrets: boolean;
@@ -151,10 +151,15 @@ describe("config file state contract (inkos.json missing / corrupt)", () => {
     expect(checked).toBe(87);
   });
 
-  it("对照表·专项：llm 段形态与请求体不是 JSON", async () => {
+  it("对照表·专项：llm 段形态、请求体不是 JSON、书级审稿模式在坏配置上的读面", async () => {
     expect(table.cases.length).toBeGreaterThanOrEqual(7);
     for (const row of table.cases) {
-      const root = await freshRoot(row.config);
+      const root = await freshRoot(row.config ?? undefined);
+      // 书级路由的夹具：一本 2.0 规范布局的书（works/<id>/source/book.json）。
+      if (row.seedBook) {
+        await mkdir(join(root, "works", "b1", "source"), { recursive: true });
+        await writeFile(join(root, "works", "b1", "source", "book.json"), JSON.stringify({ id: "b1", title: "镜花缘" }));
+      }
       const app = createStudioServer({} as never, root);
       const before = await readConfig(root);
 

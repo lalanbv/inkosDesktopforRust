@@ -184,6 +184,12 @@ export interface AgentSessionConfig {
    * Changing this value evicts the cached Agent so the tool table stays current.
    */
   suppressProductionTools?: boolean;
+  /**
+   * Interactive chat temperature for the selected service (the UI's optional
+   * "Temperature"): sent when configured, omitted — provider default — when
+   * undefined. The host clamps it against fixed-temperature model cards first.
+   */
+  temperature?: number;
   /** Resume Pi after a host-confirmed capability completed outside the loop. */
   resumeAction?: {
     /** The original action is already in the transcript; this pair is model context only. */
@@ -267,6 +273,9 @@ interface CachedAgent {
   language: string;
   modelIdentity: string;
   apiKey: string | undefined;
+  /** 每次请求刷新（不触发缓存重建）：缓存里的 Agent 跨请求复用，闭包里 captured
+   *  的 config.temperature 会是第一次请求的值。 */
+  temperature: number | undefined;
   allowSystemFileRead: boolean;
   backgroundTaskContext: string | undefined;
   suppressProductionTools: boolean;
@@ -1271,6 +1280,9 @@ async function runAgentSessionUnlocked(
           ...options,
           maxTokens: agentOutputBudget(streamModel),
           toolChoice: "required" as const,
+          // 读缓存项而不是闭包里的 config：Agent 跨请求复用，配置的「随机性」
+          // 可能随请求变；未配置就不带该键（模型默认）。
+          ...(cached?.temperature !== undefined ? { temperature: cached.temperature } : {}),
         };
         return config.stream === false
           ? guardedPiNonStreaming(streamModel, context, streamOptions, config.proxyUrl)
@@ -1310,6 +1322,7 @@ async function runAgentSessionUnlocked(
       language,
       modelIdentity: requestedModelIdentity,
       apiKey: config.apiKey,
+      temperature: config.temperature,
       allowSystemFileRead,
       backgroundTaskContext: config.backgroundTaskContext,
       suppressProductionTools,
@@ -1324,6 +1337,7 @@ async function runAgentSessionUnlocked(
   }
 
   cached.lastActive = Date.now();
+  cached.temperature = config.temperature;
   cached.currentAttachmentPaths = (config.attachments ?? [])
     .map((attachment) => attachment.storedPath?.trim())
     .filter((path): path is string => Boolean(path));

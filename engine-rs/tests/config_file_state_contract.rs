@@ -262,6 +262,16 @@ async fn parity_special_cases_match_the_shared_table() {
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let project = Project::new(case["config"].as_str());
+        // 书级路由的夹具：一本书（产品引擎布局 books/<id>/book.json）。
+        if case["seedBook"].as_bool() == Some(true) {
+            let book_dir = project.path().join("books").join("b1");
+            std::fs::create_dir_all(&book_dir).unwrap();
+            std::fs::write(
+                book_dir.join("book.json"),
+                r#"{ "id": "b1", "title": "镜花缘" }"#,
+            )
+            .unwrap();
+        }
         assert_cell(
             name,
             &project,
