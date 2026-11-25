@@ -53,13 +53,15 @@ describe("services config family", () => {
     });
   });
 
-  it("inkos.json 损坏：不按空配置处理（读 500，写不落盘覆盖坏文件）", async () => {
+  it("inkos.json 损坏：读面降级为空配置，写入被拒且不覆盖坏文件（全表见 config-file-state.test.ts）", async () => {
     const root = await freshRoot();
     const broken = "{ not json";
     await writeFile(join(root, "inkos.json"), broken);
     const app = createStudioServer({} as never, root);
 
-    expect((await app.request("/api/v1/services/config")).status).toBe(500);
+    const degraded = await app.request("/api/v1/services/config");
+    expect(degraded.status).toBe(200);
+    expect(await degraded.json()).toMatchObject({ services: [], service: null, defaultModel: null });
     expect((await app.request("/api/v1/services/config", json("PUT", { defaultModel: "m1" }))).status).toBe(500);
     expect((await app.request("/api/v1/cover/config", json("PUT", { service: "kkaiapi" }))).status).toBe(500);
     expect(await readFile(join(root, "inkos.json"), "utf-8")).toBe(broken);

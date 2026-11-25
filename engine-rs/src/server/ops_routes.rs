@@ -2162,7 +2162,10 @@ pub async fn get_doctor(State(runtime): State<BooksRuntime>) -> impl IntoRespons
         .unwrap_or_default();
 
     let mut checks = json!({
-        "inkosJson": root.join("inkos.json").is_file(),
+        // 配置文件状态契约：判据 = 存在且可解析为 JSON 对象——读面对损坏的
+        // 配置降级为「未配置」，诊断面若只看「文件存在」，损坏的 inkos.json 仍
+        // 显示为通过。
+        "inkosJson": crate::server::project_config_routes::inkos_json_healthy(root),
         "projectEnv": root.join(".env").is_file(),
         "globalEnv": global_env.is_file(),
         "booksDir": root.join("books").is_dir(),

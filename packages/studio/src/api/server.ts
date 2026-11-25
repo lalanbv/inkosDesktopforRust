@@ -1956,25 +1956,145 @@ async function loadRawConfig(root: string): Promise<Record<string, unknown>> {
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
-/**
- * 读 inkos.json，**文件缺失**按空配置处理——LLM 服务配置族专用（services 的读
- * 与写、env 导入、cover 的读与写）。Rust 同族处理器一律
- * `load_raw_config(…).unwrap_or(json!({}))`；Node 腿此前直接 `readFile`，项目
- * 没有 inkos.json 时这五个面全 500——而「保存配置」恰是能建出该文件的操作
- * （1666 号观察项）。只容忍 ENOENT：损坏的 JSON 仍上抛（不拿空配置去覆盖一个
- * 也许还能手工修复的文件）。
- */
-async function loadRawConfigOrEmpty(root: string): Promise<Record<string, unknown>> {
+/** inkos.json 已存在却不可用（读不出 / 无法解析 / 根不是对象）——写入点据此拒绝。 */
+class RawConfigUnusable extends Error {
+  constructor(readonly reason: "unreadable" | "not-json" | "not-object") {
+    super(reason);
+    this.name = "RawConfigUnusable";
+  }
+}
+
+const RAW_CONFIG_REASONS = {
+  unreadable: "it could not be read",
+  "not-json": "it is not valid JSON",
+  "not-object": "its root is not a JSON object",
+} as const;
+
+/** 配置不可用于写入 → 500 `PROJECT_CONFIG_INVALID`（与产品引擎 `config_refused` 同文）。 */
+function configRefusal(reason: string): ApiError {
+  return new ApiError(
+    500,
+    "PROJECT_CONFIG_INVALID",
+    `Refusing to overwrite inkos.json: ${reason}. Fix or remove the file, then retry.`,
+  );
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** 读 inkos.json：文件缺失 → `{}`；已存在却不可用 → 抛 `RawConfigUnusable`。 */
+async function loadRawConfigObject(root: string): Promise<Record<string, unknown>> {
+  let raw: string;
   try {
-    return await loadRawConfig(root);
+    raw = await readFile(join(root, "inkos.json"), "utf-8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return {};
+    throw new RawConfigUnusable("unreadable");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new RawConfigUnusable("not-json");
+  }
+  // 数组 / 标量等合法 JSON 同样算「不可用」：往数组上挂键再序列化等于原样写回。
+  if (!isJsonObject(parsed)) {
+    throw new RawConfigUnusable("not-object");
+  }
+  return parsed;
+}
+
+/**
+ * 配置文件状态契约（两个引擎同码同文；产品引擎侧 =
+ * `engine-rs/tests/config_file_state_contract.rs`）：
+ * - **文件缺失**：读面降级为「未配置」；写入即新建。
+ * - **文件损坏**：读面同样降级；**写入一律拒绝**——500
+ *   `PROJECT_CONFIG_INVALID`，文件逐字节不动。
+ *
+ * 读面用：缺失 / 损坏一律按空配置（产品引擎读面一直是这个口径；此前 Node 腿
+ * 这几个读面在损坏时 500，两腿不一致）。诊断面由 `/doctor` 的 `inkosJson`
+ * 报告文件不健康。
+ */
+async function loadRawConfigForRead(root: string): Promise<Record<string, unknown>> {
+  return loadRawConfigObject(root).catch(() => ({}));
+}
+
+/**
+ * 写入点用：文件缺失 → `{}`（写入即新建）；已存在却不可用 → 抛
+ * `ApiError`，调用方经全局 onError 回 500 `PROJECT_CONFIG_INVALID`。
+ *
+ * 此前 Node 腿写入点直接 `readFile`：缺失时 500（而「保存配置」恰是能建出该
+ * 文件的操作），损坏时裸 500。产品引擎那侧则更糟——把损坏文件当成空配置，
+ * 随后整文件被覆盖（取证：损坏文件 + `PUT /services/config` → 200 + 43 字节
+ * 新文件）。两腿统一为「读不出来就不写」。
+ */
+async function loadRawConfigForUpdate(root: string): Promise<Record<string, unknown>> {
+  try {
+    return await loadRawConfigObject(root);
+  } catch (error) {
+    if (error instanceof RawConfigUnusable) throw configRefusal(RAW_CONFIG_REASONS[error.reason]);
     throw error;
   }
 }
 
+/**
+ * `/project` 族写入点用（错误经全局 onError 回）：合并目标必须是 JSON 对象。
+ * 文件缺失 / 损坏仍是既有形态；根不是对象（数组、标量、`null`）按契约拒绝——
+ * 数组根上挂键不会被 `JSON.stringify` 序列化，此前照常回 200 `{ok:true}` 却
+ * 什么都没存（产品引擎同一请求 500）。
+ */
+async function loadRawConfigForObjectWrite(root: string): Promise<Record<string, unknown>> {
+  const raw: unknown = await loadRawConfig(root);
+  if (!isJsonObject(raw)) throw configRefusal(RAW_CONFIG_REASONS["not-object"]);
+  return raw;
+}
+
+/**
+ * 服务配置写入点落盘失败（读不出来就不写由 `loadRawConfigForUpdate` 负责，这里
+ * 管写不进去）：500 平铺文案，与产品引擎同文。不包住的话是全局 onError 的
+ * `INTERNAL_ERROR` 信封，两腿不同文。
+ */
+async function saveServiceConfig(c: Context, root: string, config: Record<string, unknown>): Promise<Response | null> {
+  try {
+    await saveRawConfig(root, config);
+    return null;
+  } catch {
+    return c.json({ error: INKOS_JSON_SAVE_FAILED }, 500);
+  }
+}
+
+/**
+ * `/project` 族里两个自带 catch 的平铺错误端点（`PUT /project`、
+ * `POST /project/language`）的稳定文案——与产品引擎同文。此前读失败走
+ * `String(e)`：绝对路径（ENOENT）与 V8 解析器原文（SyntaxError）被原样回显，
+ * 合并目标形态异常时回显 V8 的 TypeError 原话，两腿同一请求不同文。
+ */
+const INKOS_JSON_READ_FAILED = "inkos.json read failed";
+const INKOS_JSON_SAVE_FAILED = "failed to save inkos.json";
+const INKOS_LLM_NOT_OBJECT = "inkos.json llm section is not an object";
+
+/**
+ * 诊断面：inkos.json 存在且可解析为对象（与产品引擎 `inkos_json_healthy`
+ * 同判据）。此前只看文件是否存在——损坏的配置在诊断页上显示为健康，而读面
+ * 已降级、写入面全部拒绝。
+ */
+async function inkosJsonHealthy(root: string): Promise<boolean> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(root, "inkos.json"), "utf-8"));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 落盘 inkos.json：原子替换写（临时文件落盘后 rename 就位，镜像产品引擎
+ * `save_raw_config`）。此前是裸 `writeFile`——写到一半崩溃留下截断的文件，而
+ * 损坏的配置会让之后的写入全部被拒（见上），只能手工修文件。
+ */
 async function saveRawConfig(root: string, config: Record<string, unknown>): Promise<void> {
-  await writeFile(join(root, "inkos.json"), JSON.stringify(config, null, 2), "utf-8");
+  await writeTextAtomic(join(root, "inkos.json"), JSON.stringify(config, null, 2));
 }
 
 function unquoteEnvValue(value: string): string {
@@ -3875,7 +3995,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.get("/api/v1/services/config", async (c) => {
-    const config = await loadRawConfigOrEmpty(root);
+    const config = await loadRawConfigForRead(root);
     const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
     const services = normalizeServiceConfig(llm.services);
     const envConfig = await readEnvConfigStatus(root);
@@ -3901,7 +4021,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }, 400);
     }
 
-    const config = await loadRawConfigOrEmpty(root);
+    const config = await loadRawConfigForUpdate(root);
     config.llm = config.llm ?? {};
     const llm = config.llm as Record<string, unknown>;
     const existingServices = normalizeServiceConfig(llm.services);
@@ -3927,7 +4047,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     const secrets = await loadSecrets(root);
     secrets.services[serviceKey] = { apiKey: env.values.apiKey };
     await saveSecrets(root, secrets);
-    await saveRawConfig(root, config);
+    const failed = await saveServiceConfig(c, root, config);
+    if (failed) return failed;
 
     return c.json({
       ok: true,
@@ -3938,8 +4059,14 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
   });
 
   app.put("/api/v1/services/config", async (c) => {
-    const body = await c.req.json<{ services?: unknown; defaultModel?: string; configSource?: LLMConfigSource; service?: string }>();
-    const config = await loadRawConfigOrEmpty(root);
+    let body: { services?: unknown; defaultModel?: string; configSource?: LLMConfigSource; service?: string };
+    try {
+      body = await c.req.json<typeof body>();
+    } catch {
+      // 请求体不是 JSON → 400（与产品引擎同码同文；框架默认是 500 INTERNAL_ERROR）。
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const config = await loadRawConfigForUpdate(root);
     config.llm = config.llm ?? {};
     const llm = config.llm as Record<string, unknown>;
     if (body.services !== undefined) {
@@ -3976,12 +4103,13 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       llm.service = body.service;
     }
     syncTopLevelLlmMirror(llm);
-    await saveRawConfig(root, config);
+    const failed = await saveServiceConfig(c, root, config);
+    if (failed) return failed;
     return c.json({ ok: true });
   });
 
   app.get("/api/v1/cover/config", async (c) => {
-    const config = await loadRawConfigOrEmpty(root);
+    const config = await loadRawConfigForRead(root);
     const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
     const cover = normalizeCoverConfig(llm.cover);
     const secrets = await loadSecrets(root);
@@ -4032,7 +4160,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       }, 400);
     }
 
-    const config = await loadRawConfigOrEmpty(root);
+    const config = await loadRawConfigForUpdate(root);
     config.llm = config.llm ?? {};
     const llm = config.llm as Record<string, unknown>;
     llm.cover = {
@@ -4040,7 +4168,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       model,
       ...(baseUrl ? { baseUrl } : {}),
     };
-    await saveRawConfig(root, config);
+    const failed = await saveServiceConfig(c, root, config);
+    if (failed) return failed;
     return c.json({ ok: true, service: preset.service, model, baseUrl: baseUrl ?? null });
   });
 
@@ -4083,7 +4212,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
 
   app.delete("/api/v1/services/:service", async (c) => {
     const service = c.req.param("service");
-    const config = await loadRawConfig(root);
+    const config = await loadRawConfigForUpdate(root);
     const llm = (config.llm as Record<string, unknown> | undefined) ?? {};
     const existingServices = normalizeServiceConfig(llm.services);
     const nextServices = existingServices.filter((entry) => serviceConfigKey(entry) !== service);
@@ -4095,7 +4224,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       delete nextLlm.service;
       delete nextLlm.defaultModel;
     }
-    await saveRawConfig(root, config);
+    // 配置落盘失败就停在这里：不回 200，也不继续动 secrets.json。
+    const failed = await saveServiceConfig(c, root, config);
+    if (failed) return failed;
 
     const secrets = await loadSecrets(root);
     delete secrets.services[service];
@@ -4743,7 +4874,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       const budgetStatus = core.budgetStatus;
       const serviceHostOf = core.serviceHostOf;
 
-      const raw = await loadRawConfig(root);
+      // 读面：配置缺失 / 损坏一律按未配置（产品引擎同口径；此前缺失时 500 并把
+      // 绝对路径原样回显）。
+      const raw = await loadRawConfigForRead(root);
       const llm = (raw.llm ?? {}) as Record<string, unknown>;
       const rows = await loadUsageLedger(root);
       const todayKey = new Date().toISOString().slice(0, 10);
@@ -4762,8 +4895,7 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         if (!entry || (entry.dailyTokenBudget === undefined && entry.monthlyTokenBudget === undefined)) return [];
         const key = serviceConfigKey(entry);
         // 匹配键：条目 key 精确 → **原始条目** baseUrl 的 host（chat 写点
-        // serviceKey 同函数）。取原始值而非归一化条目：TS 归一的内置服务分支
-        // 不带 baseUrl（上游既有行为），按归一化条目取会漏掉内置服务的匹配。
+        // serviceKey 同函数）。直接取原始值，不依赖归一化条目的键集。
         const baseUrl = typeof value.baseUrl === "string" && value.baseUrl.length > 0 ? value.baseUrl : undefined;
         const usage = projection.get(key)
           ?? (baseUrl ? projection.get(serviceHostOf(baseUrl)) : undefined)
@@ -5866,7 +5998,7 @@ function yamlScalar(value: unknown): string {
   app.put("/api/v1/project/chapter-review-mode", async (c) => {
     const { mode } = await c.req.json<{ mode?: string }>();
     const next = normalizeChapterReviewMode(mode);
-    const raw = await loadRawConfig(root);
+    const raw = await loadRawConfigForObjectWrite(root);
     raw.writing = { ...((raw.writing as Record<string, unknown> | undefined) ?? {}), reviewMode: next };
     await saveRawConfig(root, raw);
     return c.json({ ok: true, mode: next });
@@ -5888,7 +6020,7 @@ function yamlScalar(value: unknown): string {
     if (!Number.isInteger(goal) || goal <= 0) {
       return c.json({ error: "dailyGoalWords must be a positive integer" }, 500);
     }
-    const raw = await loadRawConfig(root);
+    const raw = await loadRawConfigForObjectWrite(root);
     raw.writing = { ...((raw.writing as Record<string, unknown> | undefined) ?? {}), dailyGoalWords: goal };
     await saveRawConfig(root, raw);
     return c.json({ ok: true, dailyGoalWords: goal });
@@ -6680,26 +6812,40 @@ function yamlScalar(value: unknown): string {
 
   app.put("/api/v1/project", async (c) => {
     const updates = await c.req.json<Record<string, unknown>>();
-    const configPath = join(root, "inkos.json");
+    let existing: Record<string, unknown>;
     try {
-      const raw = await readFile(configPath, "utf-8");
-      const existing = JSON.parse(raw);
-      // Merge LLM settings
+      existing = await loadRawConfig(root);
+    } catch {
+      return c.json({ error: INKOS_JSON_READ_FAILED }, 500);
+    }
+    // 合并目标必须是 JSON 对象：数组根上挂键不会被序列化——此前照常回 200 却
+    // 什么都没存。
+    if (!isJsonObject(existing)) {
+      return c.json({ error: INKOS_JSON_READ_FAILED }, 500);
+    }
+    // Merge LLM settings
+    if (updates.temperature !== undefined || updates.stream !== undefined) {
+      const llm = existing.llm;
+      // 此前回显 V8 的 TypeError 原话；`llm` 是数组时同样是「回 200 却没存」。
+      if (!isJsonObject(llm)) {
+        return c.json({ error: INKOS_LLM_NOT_OBJECT }, 500);
+      }
       if (updates.temperature !== undefined) {
-        existing.llm.temperature = updates.temperature;
+        llm.temperature = updates.temperature;
       }
       if (updates.stream !== undefined) {
-        existing.llm.stream = updates.stream;
+        llm.stream = updates.stream;
       }
-      if (updates.language === "zh" || updates.language === "en") {
-        existing.language = updates.language;
-      }
-      const { writeFile: writeFileFs } = await import("node:fs/promises");
-      await writeFileFs(configPath, JSON.stringify(existing, null, 2), "utf-8");
-      return c.json({ ok: true });
-    } catch (e) {
-      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
+    if (updates.language === "zh" || updates.language === "en") {
+      existing.language = updates.language;
+    }
+    try {
+      await saveRawConfig(root, existing);
+    } catch {
+      return c.json({ error: INKOS_JSON_SAVE_FAILED }, 500);
+    }
+    return c.json({ ok: true });
   });
 
   app.get("/api/v1/project/detection", async (c) => {
@@ -6709,8 +6855,7 @@ function yamlScalar(value: unknown): string {
 
   app.put("/api/v1/project/detection", async (c) => {
     const { detection } = await c.req.json<{ detection?: unknown }>();
-    const configPath = join(root, "inkos.json");
-    const raw = JSON.parse(await readFile(configPath, "utf-8"));
+    const raw = await loadRawConfigForObjectWrite(root);
     if (detection === null) {
       delete raw.detection;
     } else {
@@ -6720,8 +6865,7 @@ function yamlScalar(value: unknown): string {
       }
       raw.detection = parsed.data;
     }
-    const { writeFile: writeFileFs } = await import("node:fs/promises");
-    await writeFileFs(configPath, JSON.stringify(raw, null, 2), "utf-8");
+    await saveRawConfig(root, raw);
     return c.json({ ok: true, detection: raw.detection ?? null });
   });
 
@@ -8554,17 +8698,24 @@ function yamlScalar(value: unknown): string {
 
   app.post("/api/v1/project/language", async (c) => {
     const { language } = await c.req.json<{ language: "zh" | "en" }>();
-    const configPath = join(root, "inkos.json");
+    let existing: Record<string, unknown>;
     try {
-      const raw = await readFile(configPath, "utf-8");
-      const existing = JSON.parse(raw);
-      existing.language = language;
-      const { writeFile: writeFileFs } = await import("node:fs/promises");
-      await writeFileFs(configPath, JSON.stringify(existing, null, 2), "utf-8");
-      return c.json({ ok: true, language });
-    } catch (e) {
-      return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
+      existing = await loadRawConfig(root);
+    } catch {
+      return c.json({ error: INKOS_JSON_READ_FAILED }, 500);
     }
+    // 根不是对象：数组上挂键不会被序列化（此前回 200 却没存），标量 / `null` 上
+    // 抛 TypeError（此前回显 V8 原话）。
+    if (!isJsonObject(existing)) {
+      return c.json({ error: INKOS_JSON_READ_FAILED }, 500);
+    }
+    existing.language = language;
+    try {
+      await saveRawConfig(root, existing);
+    } catch {
+      return c.json({ error: INKOS_JSON_SAVE_FAILED }, 500);
+    }
+    return c.json({ ok: true, language });
   });
 
   // --- Audit ---
@@ -8724,11 +8875,9 @@ function yamlScalar(value: unknown): string {
 
   app.put("/api/v1/project/model-overrides", async (c) => {
     const { overrides } = await c.req.json<{ overrides: Record<string, unknown> }>();
-    const configPath = join(root, "inkos.json");
-    const raw = JSON.parse(await readFile(configPath, "utf-8"));
+    const raw = await loadRawConfigForObjectWrite(root);
     raw.modelOverrides = overrides;
-    const { writeFile: writeFileFs } = await import("node:fs/promises");
-    await writeFileFs(configPath, JSON.stringify(raw, null, 2), "utf-8");
+    await saveRawConfig(root, raw);
     return c.json({ ok: true });
   });
 
@@ -8753,7 +8902,7 @@ function yamlScalar(value: unknown): string {
     const body = await c.req.json<{ defaultModel?: string; service?: string }>();
     const defaultModel = typeof body.defaultModel === "string" ? body.defaultModel.trim() : "";
     if (!defaultModel) return c.json({ error: "defaultModel is required" }, 400);
-    const raw = await loadRawConfig(root);
+    const raw = await loadRawConfigForObjectWrite(root);
     raw.llm = raw.llm && typeof raw.llm === "object" && !Array.isArray(raw.llm) ? raw.llm : {};
     const llm = raw.llm as Record<string, unknown>;
     llm.defaultModel = defaultModel;
@@ -8784,7 +8933,7 @@ function yamlScalar(value: unknown): string {
   app.put("/api/v1/project/research-search", async (c) => {
     const body = await c.req.json<{ researchSearch?: unknown }>();
     const researchSearch = ResearchSearchConfigSchema.parse(body.researchSearch ?? {});
-    const raw = await loadRawConfig(root);
+    const raw = await loadRawConfigForObjectWrite(root);
     raw.researchSearch = researchSearch;
     await saveRawConfig(root, raw);
     return c.json({ ok: true, researchSearch });
@@ -8799,11 +8948,9 @@ function yamlScalar(value: unknown): string {
 
   app.put("/api/v1/project/notify", async (c) => {
     const { channels } = await c.req.json<{ channels: unknown[] }>();
-    const configPath = join(root, "inkos.json");
-    const raw = JSON.parse(await readFile(configPath, "utf-8"));
+    const raw = await loadRawConfigForObjectWrite(root);
     raw.notify = channels;
-    const { writeFile: writeFileFs } = await import("node:fs/promises");
-    await writeFileFs(configPath, JSON.stringify(raw, null, 2), "utf-8");
+    await saveRawConfig(root, raw);
     return c.json({ ok: true });
   });
 
@@ -9402,7 +9549,7 @@ function yamlScalar(value: unknown): string {
     const { GLOBAL_ENV_PATH } = await import("@actalk/inkos-core");
 
     const checks = {
-      inkosJson: existsSync(join(root, "inkos.json")),
+      inkosJson: await inkosJsonHealthy(root),
       projectEnv: existsSync(join(root, ".env")),
       globalEnv: existsSync(GLOBAL_ENV_PATH),
       booksDir: existsSync(join(root, "works")),

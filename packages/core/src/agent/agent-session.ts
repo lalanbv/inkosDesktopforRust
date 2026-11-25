@@ -1356,62 +1356,110 @@ async function runAgentSessionUnlocked(
     workId: cached.workId,
     input: promptMessage,
   }));
-  if (config.resumeAction) {
-    if (promptMessage.trim()) {
-      const uuid = randomUUID();
-      const message = { role: "user" as const, content: promptMessage, timestamp: Date.now() };
-      agent.state.messages = [...agent.state.messages, message];
-      await appendAgentTranscriptEvent(projectRoot, sessionId, seq => ({
-        type: "message", version: 1, sessionId, requestId, uuid, parentUuid: null,
-        seq, role: "user", visibility: "model", timestamp: message.timestamp, piTurnIndex: 0, message,
-      }));
-      parentUuid = uuid;
-    }
-    const [actionAssistant, actionResult] = resumedActionMessages(model, config.resumeAction);
-    const actionAssistantUuid = randomUUID();
-    const actionResultUuid = randomUUID();
-    agent.state.messages = [...agent.state.messages, actionAssistant, actionResult];
+  // 请求自此在转录里开档。回合的 try 之外还有会抛错的步骤（送达账本核对修订、
+  // 转录落盘、开 episode）。此前它们排在改动内存之后：续投路径已推进 Agent
+  // 记忆的用户 / 动作消息、已开的 episode 会留在缓存里，下一次请求再叠一层
+  // 事件订阅（同一事件落盘两遍、用量记两遍）；而 currentEpisode 非 null 的缓存项
+  // removeCachedAgent 拒收、TTL 清理也只清 currentEpisode 为 null 的——整个会话
+  // 的 Agent 缓存直到进程重启都带着这份残留。现在：会抛错的步骤一律排在改动
+  // 内存之前，任何一步失败都与回合 catch 同一收尾（请求关档 + 丢弃缓存项）。
+  const failRequest = async (error: unknown): Promise<void> => {
     await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
-      type: "message",
+      type: "request_failed",
       version: 1,
       sessionId,
       requestId,
-      uuid: actionAssistantUuid,
-      parentUuid,
       seq,
-      role: "assistant",
-      ...(config.resumeAction?.replayOnly ? { visibility: "model" as const } : {}),
-      timestamp: actionAssistant.timestamp,
-      piTurnIndex: 0,
-      toolCallId: config.resumeAction!.toolCallId,
-      message: actionAssistant,
+      timestamp: Date.now(),
+      error: error instanceof Error ? error.message : String(error),
     }));
-    await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
-      type: "message",
-      version: 1,
-      sessionId,
-      requestId,
-      uuid: actionResultUuid,
-      parentUuid: actionAssistantUuid,
-      seq,
-      role: "toolResult",
-      ...(config.resumeAction?.replayOnly ? { visibility: "model" as const } : {}),
-      timestamp: actionResult.timestamp,
-      piTurnIndex: 0,
-      toolCallId: config.resumeAction!.toolCallId,
-      sourceToolAssistantUuid: actionAssistantUuid,
-      message: actionResult,
-    }));
-    parentUuid = actionResultUuid;
-    lastAssistantUuid = actionAssistantUuid;
+  };
+  const abortPreparation = async (error: unknown): Promise<never> => {
+    await failRequest(error).catch(() => undefined);
+    removeCachedAgent(cacheKey);
+    throw error;
+  };
+  // 续投的动作交换先只写转录；Agent 记忆等所有落盘都成功后再推进去。
+  const resumeAction = config.resumeAction;
+  const resumed = resumeAction
+    ? await (async () => {
+        await requestDelivery.record(projectRoot, resumeAction.result.operationReceipts ?? []);
+        let user: { role: "user"; content: string; timestamp: number } | undefined;
+        if (promptMessage.trim()) {
+          const uuid = randomUUID();
+          const message = { role: "user" as const, content: promptMessage, timestamp: Date.now() };
+          await appendAgentTranscriptEvent(projectRoot, sessionId, seq => ({
+            type: "message", version: 1, sessionId, requestId, uuid, parentUuid: null,
+            seq, role: "user", visibility: "model", timestamp: message.timestamp, piTurnIndex: 0, message,
+          }));
+          parentUuid = uuid;
+          user = message;
+        }
+        const [actionAssistant, actionResult] = resumedActionMessages(model, resumeAction);
+        const actionAssistantUuid = randomUUID();
+        const actionResultUuid = randomUUID();
+        await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+          type: "message",
+          version: 1,
+          sessionId,
+          requestId,
+          uuid: actionAssistantUuid,
+          parentUuid,
+          seq,
+          role: "assistant",
+          ...(resumeAction.replayOnly ? { visibility: "model" as const } : {}),
+          timestamp: actionAssistant.timestamp,
+          piTurnIndex: 0,
+          toolCallId: resumeAction.toolCallId,
+          message: actionAssistant,
+        }));
+        await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
+          type: "message",
+          version: 1,
+          sessionId,
+          requestId,
+          uuid: actionResultUuid,
+          parentUuid: actionAssistantUuid,
+          seq,
+          role: "toolResult",
+          ...(resumeAction.replayOnly ? { visibility: "model" as const } : {}),
+          timestamp: actionResult.timestamp,
+          piTurnIndex: 0,
+          toolCallId: resumeAction.toolCallId,
+          sourceToolAssistantUuid: actionAssistantUuid,
+          message: actionResult,
+        }));
+        parentUuid = actionResultUuid;
+        lastAssistantUuid = actionAssistantUuid;
+        return { user, actionAssistant, actionResult };
+      })().catch(abortPreparation)
+    : undefined;
+  const persistDelivery = async () => {
+    const state = requestDelivery.snapshot();
+    await appendAgentTranscriptEvent(projectRoot, sessionId, seq => ({ type: "request_delivery", version: 1, sessionId, requestId, seq, timestamp: Date.now(), state }));
+    await config.onDeliveryStateChange?.(state);
+  };
+  await persistDelivery().catch(abortPreparation);
+  if (resumed) {
+    agent.state.messages = [
+      ...agent.state.messages,
+      ...(resumed.user ? [resumed.user] : []),
+      resumed.actionAssistant,
+      resumed.actionResult,
+    ];
   }
-  const episodeHandle = cached.harnessRuntime.startEpisode({
-    profileId: cached.profileId,
-    work,
-    authorRequest: userMessage,
-    baselineWork: config.baselineWork,
-    episodeId: `episode-${requestId}`,
-  });
+  let episodeHandle: HarnessEpisodeHandle;
+  try {
+    episodeHandle = cached.harnessRuntime.startEpisode({
+      profileId: cached.profileId,
+      work,
+      authorRequest: userMessage,
+      baselineWork: config.baselineWork,
+      episodeId: `episode-${requestId}`,
+    });
+  } catch (error) {
+    return abortPreparation(error);
+  }
   cached.currentEpisode = episodeHandle;
   cached.completedPlayScene = undefined;
   cached.turnCompletion = undefined;
@@ -1419,28 +1467,23 @@ async function runAgentSessionUnlocked(
   cached.deliveryFailed = false;
   cached.artifactDeliveries = artifactDeliveries;
   cached.requestDelivery = requestDelivery;
-  cached.persistDelivery = async()=>{
-    const state=requestDelivery.snapshot();
-    await appendAgentTranscriptEvent(projectRoot,sessionId,seq=>({type:'request_delivery',version:1,sessionId,requestId,seq,timestamp:Date.now(),state}));
-    await config.onDeliveryStateChange?.(state);
-  };
-  let interpretation:Promise<void>|undefined;
-  cached.ensureDelivery=async(signal)=>{
-    if(requestDelivery.interpretationComplete)return;
-    interpretation??=(async()=>{
-      const client={provider:model.api==='anthropic-messages'?'anthropic' as const:'openai' as const,
-        apiFormat:model.api==='anthropic-messages'?'anthropic' as const:model.api==='openai-responses'?'responses' as const:'chat' as const,
-        stream:config.stream??true,proxyUrl:config.proxyUrl,_piModel:model,_apiKey:config.apiKey??getEnvApiKey(model.provider),
-        defaults:{maxTokens:model.maxTokens,thinkingBudget:0,extra:{}},
+  cached.persistDelivery = persistDelivery;
+  let interpretation: Promise<void> | undefined;
+  cached.ensureDelivery = async (signal) => {
+    if (requestDelivery.interpretationComplete) return;
+    interpretation ??= (async () => {
+      const client = {
+        provider: model.api === "anthropic-messages" ? "anthropic" as const : "openai" as const,
+        apiFormat: model.api === "anthropic-messages" ? "anthropic" as const : model.api === "openai-responses" ? "responses" as const : "chat" as const,
+        stream: config.stream ?? true, proxyUrl: config.proxyUrl, _piModel: model, _apiKey: config.apiKey ?? getEnvApiKey(model.provider),
+        defaults: { maxTokens: model.maxTokens, thinkingBudget: 0, extra: {} },
       };
-      requestDelivery.initialize(await interpretDeliveryRequirements(client,requestDelivery.snapshot().authorRequest,signal));
+      requestDelivery.initialize(await interpretDeliveryRequirements(client, requestDelivery.snapshot().authorRequest, signal));
       await cached!.persistDelivery();
-    })().finally(()=>{interpretation=undefined;});
+    })().finally(() => { interpretation = undefined; });
     await interpretation;
   };
   if (config.resumeAction) cached.artifactDeliveries.observe(config.resumeAction.result, config.resumeAction.parameters);
-  if (config.resumeAction) await requestDelivery.record(projectRoot,config.resumeAction.result.operationReceipts??[]);
-  await cached.persistDelivery();
   let episodeFinished = false;
   const finishEpisode = (status: "completed" | "failed" | "cancelled") => {
     if (episodeFinished) return;
@@ -1610,15 +1653,7 @@ async function runAgentSessionUnlocked(
       finishEpisode(completion?.status === "blocked" ? "failed" : "completed");
     }
   } catch (error) {
-    await appendAgentTranscriptEvent(projectRoot, sessionId, (seq) => ({
-      type: "request_failed",
-      version: 1,
-      sessionId,
-      requestId,
-      seq,
-      timestamp: Date.now(),
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    await failRequest(error);
     finishEpisode(isAbortLike(error) ? "cancelled" : "failed");
     removeCachedAgent(cacheKey);
     throw error;

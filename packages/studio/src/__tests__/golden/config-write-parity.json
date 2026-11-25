@@ -1,0 +1,211 @@
+{
+  "_comment": [
+    "配置写入面两腿对照表（inkos.json 缺失 / 损坏 / 根不是对象）。唯一事实源——",
+    "Node 腿：packages/studio/src/__tests__/config-file-state.test.ts；",
+    "产品引擎：engine-rs/tests/config_file_state_contract.rs。",
+    "两腿读同一文件，逐格断言「状态码 + 响应体逐字 + inkos.json 逐字节不动」。",
+    "shapes = 命中时的响应形态；matrix = 写入点 × 文件状态 → 形态名；",
+    "null = 该格不在本表断言（成功路径由各腿自己的用例覆盖）。"
+  ],
+  "shapes": {
+    "contractNotJson": {
+      "status": 500,
+      "response": {
+        "error": {
+          "code": "PROJECT_CONFIG_INVALID",
+          "message": "Refusing to overwrite inkos.json: it is not valid JSON. Fix or remove the file, then retry."
+        }
+      }
+    },
+    "contractNotObject": {
+      "status": 500,
+      "response": {
+        "error": {
+          "code": "PROJECT_CONFIG_INVALID",
+          "message": "Refusing to overwrite inkos.json: its root is not a JSON object. Fix or remove the file, then retry."
+        }
+      }
+    },
+    "internal": {
+      "status": 500,
+      "response": { "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." } }
+    },
+    "flatReadFailed": { "status": 500, "response": { "error": "inkos.json read failed" } },
+    "flatLlmNotObject": { "status": 500, "response": { "error": "inkos.json llm section is not an object" } },
+    "flatSaveFailed": { "status": 500, "response": { "error": "failed to save inkos.json" } },
+    "flatInvalidJson": { "status": 400, "response": { "error": "invalid JSON body" } }
+  },
+  "states": {
+    "missing": null,
+    "corrupt": "{ not json",
+    "array": "[1]",
+    "number": "42",
+    "string": "\"s\"",
+    "bool": "true",
+    "null": "null"
+  },
+  "matrix": [
+    {
+      "method": "PUT",
+      "path": "/api/v1/services/config",
+      "body": "{\"defaultModel\":\"m1\"}",
+      "expect": { "missing": null, "corrupt": "contractNotJson", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/services/custom:X",
+      "body": null,
+      "expect": { "missing": null, "corrupt": "contractNotJson", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/services/config/import-env",
+      "body": null,
+      "env": true,
+      "expect": { "missing": null, "corrupt": "contractNotJson", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/cover/config",
+      "body": "{\"service\":\"kkaiapi\"}",
+      "expect": { "missing": null, "corrupt": "contractNotJson", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project",
+      "body": "{\"language\":\"zh\"}",
+      "expect": { "missing": "flatReadFailed", "corrupt": "flatReadFailed", "array": "flatReadFailed", "number": "flatReadFailed", "string": "flatReadFailed", "bool": "flatReadFailed", "null": "flatReadFailed" }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/project/language",
+      "body": "{\"language\":\"zh\"}",
+      "expect": { "missing": "flatReadFailed", "corrupt": "flatReadFailed", "array": "flatReadFailed", "number": "flatReadFailed", "string": "flatReadFailed", "bool": "flatReadFailed", "null": "flatReadFailed" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/chapter-review-mode",
+      "body": "{\"mode\":\"manual\"}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/writing-goal",
+      "body": "{\"dailyGoalWords\":500}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/default-model",
+      "body": "{\"defaultModel\":\"m1\"}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/research-search",
+      "body": "{\"researchSearch\":{}}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/detection",
+      "body": "{\"detection\":null}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/model-overrides",
+      "body": "{\"overrides\":{}}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/notify",
+      "body": "{\"channels\":[]}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    }
+  ],
+  "cases": [
+    {
+      "name": "PUT /project：改 temperature 而 llm 段缺失",
+      "config": "{\"name\":\"x\"}",
+      "method": "PUT",
+      "path": "/api/v1/project",
+      "body": "{\"temperature\":0.7}",
+      "shape": "flatLlmNotObject"
+    },
+    {
+      "name": "PUT /project：改 stream 而 llm 段缺失",
+      "config": "{\"name\":\"x\"}",
+      "method": "PUT",
+      "path": "/api/v1/project",
+      "body": "{\"stream\":true}",
+      "shape": "flatLlmNotObject"
+    },
+    {
+      "name": "PUT /project：llm 段为 null",
+      "config": "{\"name\":\"x\",\"llm\":null}",
+      "method": "PUT",
+      "path": "/api/v1/project",
+      "body": "{\"temperature\":0.7}",
+      "shape": "flatLlmNotObject"
+    },
+    {
+      "name": "PUT /project：llm 段为数组（此前 Node 回 200 却没存）",
+      "config": "{\"name\":\"x\",\"llm\":[]}",
+      "method": "PUT",
+      "path": "/api/v1/project",
+      "body": "{\"temperature\":0.7,\"language\":\"en\"}",
+      "shape": "flatLlmNotObject"
+    },
+    {
+      "name": "PUT /project：llm 段为字符串",
+      "config": "{\"name\":\"x\",\"llm\":\"s\"}",
+      "method": "PUT",
+      "path": "/api/v1/project",
+      "body": "{\"stream\":false}",
+      "shape": "flatLlmNotObject"
+    },
+    {
+      "name": "PUT /project：请求体不是 JSON",
+      "config": "{\"name\":\"x\",\"llm\":{}}",
+      "method": "PUT",
+      "path": "/api/v1/project",
+      "body": "{",
+      "shape": "internal"
+    },
+    {
+      "name": "POST /project/language：请求体不是 JSON",
+      "config": "{\"name\":\"x\",\"llm\":{}}",
+      "method": "POST",
+      "path": "/api/v1/project/language",
+      "body": "{",
+      "shape": "internal"
+    },
+    {
+      "name": "PUT /services/config：请求体不是 JSON（400，两腿同文）",
+      "config": "{\"name\":\"x\",\"llm\":{}}",
+      "method": "PUT",
+      "path": "/api/v1/services/config",
+      "body": "{",
+      "shape": "flatInvalidJson"
+    }
+  ],
+  "bodyCases": {
+    "_comment": [
+      "请求体不是 JSON × 需要模型的面（已配置项目：secrets = 夹具另写 .inkos/secrets.json，不带 .env）。",
+      "产品引擎这些处理器此前手写平铺 \"Unexpected token\"（猜的 V8 原文）；Node 腿 c.req.json() 在 try 之外，一直是 onError 信封。"
+    ],
+    "config": "{\"version\":\"0.1.0\",\"name\":\"x\",\"language\":\"zh\",\"llm\":{\"services\":{\"custom:Mock\":{\"service\":\"custom\",\"name\":\"Mock\",\"baseUrl\":\"http://127.0.0.1:9/v1\",\"apiFormat\":\"chat\",\"stream\":false}},\"defaultModel\":\"mock-model\"},\"notify\":[]}",
+    "secrets": true,
+    "shape": "internal",
+    "requests": [
+      { "method": "POST", "path": "/api/v1/books/create", "body": "{" },
+      { "method": "POST", "path": "/api/v1/books/b1/import/chapters", "body": "{" },
+      { "method": "POST", "path": "/api/v1/fanfic/init", "body": "{" },
+      { "method": "POST", "path": "/api/v1/books/b1/fanfic/refresh", "body": "{" },
+      { "method": "POST", "path": "/api/v1/spinoff/init", "body": "{" },
+      { "method": "POST", "path": "/api/v1/imitation/init", "body": "{" }
+    ]
+  }
+}

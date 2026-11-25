@@ -56,6 +56,18 @@ fn flat_internal(message: impl std::fmt::Display) -> ApiError {
     )
 }
 
+/// 请求体不是 JSON：Node 腿的 `c.req.json()` 在 try 之外，走全局 onError 的
+/// 500 信封。此前这里手写平铺 `"Unexpected token"`——猜的 V8 报错原文，与 Node
+/// 实际回的形态不同（配置文件状态契约轮取证）。
+fn internal_error() -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." }
+        })),
+    )
+}
+
 // ── bookCreateStatus 内存状态机（TS server 内存 Map 的进程级等价物） ──
 
 #[derive(Debug, Clone)]
@@ -495,7 +507,7 @@ pub(crate) async fn write_director_inspiration_card(
 
 pub async fn create_book(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token");
+        return internal_error();
     };
     let title = parsed.get("title").and_then(Value::as_str).unwrap_or("");
     let genre = parsed.get("genre").and_then(Value::as_str).unwrap_or("");
@@ -1034,7 +1046,7 @@ pub async fn import_chapters_endpoint(
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token");
+        return internal_error();
     };
     let Some(text) = parsed
         .get("text")

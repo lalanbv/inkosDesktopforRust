@@ -30,7 +30,9 @@ use crate::llm::service_presets::{
     ProviderFamily,
 };
 use crate::server::books_routes::BooksRuntime;
-use crate::server::project_config_routes::{load_raw_config, save_raw_config};
+use crate::server::project_config_routes::{
+    config_refused, load_raw_config, load_raw_config_for_update, save_raw_config,
+};
 use crate::utils::llm_endpoint_auth::is_api_key_optional_for_endpoint;
 use crate::utils::llm_env::{global_env_path, read_env_config_values};
 
@@ -838,7 +840,13 @@ pub async fn import_env_config(State(runtime): State<BooksRuntime>) -> impl Into
         }
     };
 
-    let mut config = load_raw_config(root).await.unwrap_or(json!({}));
+    // 配置文件状态契约：读不出来就不写——文件缺失按空配置新建；已存在却读不出
+    // 或无法解析则拒绝（此前 `unwrap_or(json!({}))` 把损坏的 inkos.json 当空配置，
+    // 随后整文件被覆盖）。
+    let mut config = match load_raw_config_for_update(root).await {
+        Ok(config) => config,
+        Err(reason) => return config_refused(reason),
+    };
     let mut existing = Vec::new();
     if let Some(llm) = config.get("llm") {
         existing = normalize_service_config(llm.get("services"));
@@ -919,7 +927,13 @@ pub async fn put_services_config(
             )
         }
     };
-    let mut config = load_raw_config(root).await.unwrap_or(json!({}));
+    // 配置文件状态契约：读不出来就不写——文件缺失按空配置新建；已存在却读不出
+    // 或无法解析则拒绝（此前 `unwrap_or(json!({}))` 把损坏的 inkos.json 当空配置，
+    // 随后整文件被覆盖）。
+    let mut config = match load_raw_config_for_update(root).await {
+        Ok(config) => config,
+        Err(reason) => return config_refused(reason),
+    };
     let language = project_language(root).await;
 
     let llm = llm_map_mut(&mut config);
@@ -984,7 +998,13 @@ pub async fn delete_service(
     AxumPath(service): AxumPath<String>,
 ) -> impl IntoResponse {
     let root = runtime.state.project_root();
-    let mut config = load_raw_config(root).await.unwrap_or(json!({}));
+    // 配置文件状态契约：读不出来就不写——文件缺失按空配置新建；已存在却读不出
+    // 或无法解析则拒绝（此前 `unwrap_or(json!({}))` 把损坏的 inkos.json 当空配置，
+    // 随后整文件被覆盖）。
+    let mut config = match load_raw_config_for_update(root).await {
+        Ok(config) => config,
+        Err(reason) => return config_refused(reason),
+    };
     let llm = llm_map_mut(&mut config);
     let existing = normalize_service_config(llm.get("services"));
     let next: Vec<ServiceConfigEntry> = existing
@@ -999,7 +1019,15 @@ pub async fn delete_service(
         llm.remove("service");
         llm.remove("defaultModel");
     }
-    let _ = save_raw_config(root, &config).await;
+    // 落盘失败必须报错并停在这里：此前 `let _ =` 吞掉写失败照样回 200，还接着
+    // 把该服务的密钥从 secrets.json 删掉——配置里服务还在、密钥没了（同文件其余
+    // 写入点都检查结果，只此一处漏了；Node 腿写失败即 500、密钥不动）。
+    if !save_raw_config(root, &config).await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "failed to save inkos.json" })),
+        );
+    }
 
     let mut secrets = load_secrets(root).unwrap_or_default();
     secrets.services.remove(&service);
@@ -1953,7 +1981,13 @@ pub async fn put_cover_config(
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": message })));
     }
 
-    let mut config = load_raw_config(root).await.unwrap_or(json!({}));
+    // 配置文件状态契约：读不出来就不写——文件缺失按空配置新建；已存在却读不出
+    // 或无法解析则拒绝（此前 `unwrap_or(json!({}))` 把损坏的 inkos.json 当空配置，
+    // 随后整文件被覆盖）。
+    let mut config = match load_raw_config_for_update(root).await {
+        Ok(config) => config,
+        Err(reason) => return config_refused(reason),
+    };
     let mut cover = Map::new();
     cover.insert("service".into(), json!(preset.service));
     cover.insert("model".into(), json!(model));

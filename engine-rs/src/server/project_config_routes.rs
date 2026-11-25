@@ -57,6 +57,62 @@ pub(crate) async fn load_raw_config(root: &std::path::Path) -> Option<Value> {
     serde_json::from_str(&raw).ok()
 }
 
+/// 配置不可用于写入的三种原因（写入被拒时的文案片段；Node 腿同文）。
+pub(crate) const CONFIG_UNREADABLE: &str = "it could not be read";
+pub(crate) const CONFIG_NOT_JSON: &str = "it is not valid JSON";
+pub(crate) const CONFIG_NOT_OBJECT: &str = "its root is not a JSON object";
+
+/// 写入点专用的读前检查（配置文件状态契约）：**读不出来就不写**。
+///
+/// - 文件不存在 → `Ok({})`：写入即新建（与 Node 腿、与既有行为一致）。
+/// - 文件存在但读不出 / 无法解析 / 根不是对象 → `Err(原因)`，调用方须经
+///   [`config_refused`] 拒绝本次写入。此前四个配置写入点用
+///   `load_raw_config(…).unwrap_or(json!({}))`——损坏的 inkos.json 被当成空
+///   配置，随后整文件被一份只含 `llm` 段的新配置覆盖，项目其余配置全部丢失
+///   （实跑：损坏文件 + `PUT /services/config` → 200 + 43 字节新文件；Node
+///   腿同一请求 500 且文件原样保留）。`load_raw_config` 把「缺失」与「读不出」
+///   折成同一个 `None`，区分不了这两种情形，所以另起一个入口而不是改它——
+///   读面继续按空配置降级。
+pub(crate) async fn load_raw_config_for_update(
+    root: &std::path::Path,
+) -> Result<Value, &'static str> {
+    let raw = match tokio::fs::read_to_string(root.join("inkos.json")).await {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
+        Err(_) => return Err(CONFIG_UNREADABLE),
+    };
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(value) if value.is_object() => Ok(value),
+        Ok(_) => Err(CONFIG_NOT_OBJECT),
+        Err(_) => Err(CONFIG_NOT_JSON),
+    }
+}
+
+/// 写入被拒的统一响应：与 `/project` 族同一信封（500 `PROJECT_CONFIG_INVALID`）。
+/// 两个引擎同码同文。
+pub(crate) fn config_refused(reason: &str) -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": {
+                "code": "PROJECT_CONFIG_INVALID",
+                "message": format!(
+                    "Refusing to overwrite inkos.json: {reason}. Fix or remove the file, then retry."
+                ),
+            }
+        })),
+    )
+}
+
+/// `inkos.json` 是否存在且可解析为 JSON 对象——诊断面 `inkosJson` 的判据。
+/// 只看「文件存在」时，损坏的配置在诊断页仍显示为通过。
+pub(crate) fn inkos_json_healthy(root: &std::path::Path) -> bool {
+    std::fs::read_to_string(root.join("inkos.json"))
+        .ok()
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .is_some_and(|value| value.is_object())
+}
+
 /// 写 inkos.json（2 空格缩进无尾换行，对齐 `JSON.stringify(raw, null, 2)`）。
 /// 221 号引入原子替换写；760 号收敛到共享 [`write_file_atomic`]（同语义
 /// 手搓双轨清偿，757 号教训）并随其获得持久性升级（sync_all + 父目录
@@ -202,50 +258,61 @@ pub async fn get_project(State(runtime): State<BooksRuntime>) -> impl IntoRespon
     (StatusCode::OK, Json(Value::Object(body)))
 }
 
-/// PUT /project：合并更新（server.ts L4324）。temperature/stream 走
-/// `existing.llm.x = v` 直写——llm 缺失且给出任一字段 → TypeError → 500
-/// 平铺（TS 怪癖）；language 仅 zh/en 精确命中；值透传不校验。
+/// `/project` 族里两个自带 catch 的端点（`PUT /project`、`POST /project/language`）
+/// 的平铺 500：`{ "error": "<文案>" }`。文案与 Node 腿同名处理器逐字相同。
+fn flat_internal(message: &str) -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": message })),
+    )
+}
+
+/// 平铺端点的三种稳定文案（Node 腿同名常量）。读失败含「根不是对象」：合并目标
+/// 必须是 JSON 对象，数组根上挂键序列化即丢。
+const CONFIG_READ_FAILED: &str = "inkos.json read failed";
+const CONFIG_SAVE_FAILED: &str = "failed to save inkos.json";
+const CONFIG_LLM_NOT_OBJECT: &str = "inkos.json llm section is not an object";
+
+/// PUT /project：合并更新（Node 腿同名处理器）。配置文件状态契约下两腿同表：
+/// - 请求体不是 JSON → onError 500 信封（Node 的 `c.req.json()` 在 try 之外；
+///   此前此处手写平铺 `"Unexpected token"`，与 Node 不同形）；
+/// - 读不出 / 解析失败 / 根不是对象 → 平铺 `inkos.json read failed`。根是数组时
+///   Node 往数组上挂键、序列化即丢，此前回 200 却什么都没存（这里是手写的 V8
+///   TypeError 文案，同样与 Node 对不上）——两腿现一并拒绝；
+/// - 改 temperature / stream 而 `llm` 段不是对象（含缺失）→ 平铺
+///   `inkos.json llm section is not an object`（Node 此前回显 V8 TypeError 原话）；
+/// - language 仅 zh/en 精确命中；值透传不校验；
+/// - 落盘失败 → 平铺 `failed to save inkos.json`。
 pub async fn put_project(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
-    let flat_internal = |message: String| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": message })),
-        )
-    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token".to_string());
+        return internal_error();
     };
     let root = runtime.state.project_root();
     let Some(mut raw) = load_raw_config(root).await else {
-        return flat_internal("inkos.json read failed".to_string());
+        return flat_internal(CONFIG_READ_FAILED);
+    };
+    let Value::Object(obj) = &mut raw else {
+        return flat_internal(CONFIG_READ_FAILED);
     };
     let has_temperature = parsed.get("temperature").is_some();
     let has_stream = parsed.get("stream").is_some();
     if has_temperature || has_stream {
-        // TS existing.llm.temperature = ...：llm 缺失即解引用失败。
-        let Some(llm) = raw.get_mut("llm").and_then(Value::as_object_mut) else {
-            return flat_internal(
-                "Cannot read properties of undefined (reading 'temperature')".to_string(),
-            );
+        let Some(llm) = obj.get_mut("llm").and_then(Value::as_object_mut) else {
+            return flat_internal(CONFIG_LLM_NOT_OBJECT);
         };
         if has_temperature {
-            llm.insert("temperature".to_string(), parsed["temperature"].clone());
+            llm.insert("temperature".into(), parsed["temperature"].clone());
         }
         if has_stream {
-            llm.insert("stream".to_string(), parsed["stream"].clone());
+            llm.insert("stream".into(), parsed["stream"].clone());
         }
     }
     if parsed.get("language") == Some(&json!("zh")) || parsed.get("language") == Some(&json!("en"))
     {
-        // 非对象根（合法 JSON 如 `42`/`[...]`）：Node strict-mode 对原始值赋属性
-        // 抛 TypeError → 500；不得 panic（会打断连接任务）。
-        let Some(obj) = raw.as_object_mut() else {
-            return flat_internal("Cannot create property 'language' on a primitive".to_string());
-        };
-        obj.insert("language".to_string(), parsed["language"].clone());
+        obj.insert("language".into(), parsed["language"].clone());
     }
     if !save_raw_config(root, &raw).await {
-        return flat_internal("inkos.json write failed".to_string());
+        return flat_internal(CONFIG_SAVE_FAILED);
     }
     ok_json(json!({ "ok": true }))
 }
@@ -371,6 +438,11 @@ pub async fn put_detection(State(runtime): State<BooksRuntime>, body: Bytes) -> 
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
+    // 根不是对象 → 按配置文件状态契约拒绝（Node 腿 `loadRawConfigForObjectWrite`
+    // 同位）。数组根上挂键序列化即丢：Node 此前回 200 却什么都没存。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
+    };
     let detection = match parsed.get("detection") {
         Some(Value::Null) | None => {
             // TS detection === null → 删键（undefined 经 zod 校验失败 400）。
@@ -380,17 +452,11 @@ pub async fn put_detection(State(runtime): State<BooksRuntime>, body: Bytes) -> 
                     Json(json!({ "error": "Invalid input: expected object, received missing" })),
                 );
             }
-            let Some(obj) = raw.as_object_mut() else {
-                return internal_error();
-            };
             obj.remove("detection");
             Value::Null
         }
         Some(value) => match parse_detection_config(value) {
             Ok(normalized) => {
-                let Some(obj) = raw.as_object_mut() else {
-                    return internal_error();
-                };
                 obj.insert("detection".to_string(), normalized.clone());
                 normalized
             }
@@ -430,9 +496,9 @@ pub async fn put_model_overrides(
         return internal_error();
     };
     // TS raw.modelOverrides = overrides：undefined 赋值在 stringify 时删键。
-    // 非对象根 → Node strict-mode TypeError → 500（同 handler 既有错误形状）。
-    let Some(obj) = raw.as_object_mut() else {
-        return internal_error();
+    // 非对象根 → 配置文件状态契约拒绝（Node 腿同位）。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
     };
     match parsed.get("overrides") {
         Some(overrides) => {
@@ -495,9 +561,9 @@ pub async fn put_default_model(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    // 非对象根 → 500（Node strict-mode TypeError 语义）；llm 非对象（或缺失）→ 重建 {}。
-    let Some(obj) = raw.as_object_mut() else {
-        return internal_error();
+    // 非对象根 → 配置文件状态契约拒绝（Node 腿同位）；llm 非对象（或缺失）→ 重建 {}。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
     };
     if !obj.get("llm").is_some_and(|v| v.is_object()) {
         obj.insert("llm".to_string(), json!({}));
@@ -613,8 +679,9 @@ pub async fn put_research_search(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    let Some(obj) = raw.as_object_mut() else {
-        return internal_error();
+    // 根不是对象 → 配置文件状态契约拒绝（Node 腿同位）。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
     };
     obj.insert("researchSearch".to_string(), research_search.clone());
     if !save_raw_config(root, &raw).await {
@@ -654,15 +721,16 @@ pub async fn put_chapter_review_mode(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    let mut writing = raw
+    // 根不是对象 → 配置文件状态契约拒绝（Node 腿同位）。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
+    };
+    let mut writing = obj
         .get("writing")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
     writing.insert("reviewMode".to_string(), json!(next));
-    let Some(obj) = raw.as_object_mut() else {
-        return internal_error();
-    };
     obj.insert("writing".to_string(), Value::Object(writing));
     if !save_raw_config(root, &raw).await {
         return internal_error();
@@ -706,15 +774,16 @@ pub async fn put_writing_goal(
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    let mut writing = raw
+    // 根不是对象 → 配置文件状态契约拒绝（Node 腿同位）。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
+    };
+    let mut writing = obj
         .get("writing")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
     writing.insert("dailyGoalWords".to_string(), json!(goal));
-    let Some(obj) = raw.as_object_mut() else {
-        return internal_error();
-    };
     obj.insert("writing".to_string(), Value::Object(writing));
     if !save_raw_config(root, &raw).await {
         return internal_error();
@@ -740,8 +809,9 @@ pub async fn put_notify(State(runtime): State<BooksRuntime>, body: Bytes) -> imp
     let Some(mut raw) = load_raw_config(root).await else {
         return internal_error();
     };
-    let Some(obj) = raw.as_object_mut() else {
-        return internal_error();
+    // 根不是对象 → 配置文件状态契约拒绝（Node 腿同位）。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
     };
     match parsed.get("channels") {
         Some(channels) => {
@@ -759,44 +829,34 @@ pub async fn put_notify(State(runtime): State<BooksRuntime>, body: Bytes) -> imp
 
 // ── POST /api/v1/project/language ────────────────────────────────
 
+/// POST /project/language（Node 腿同名处理器）——两腿同表：请求体不是 JSON →
+/// onError 500 信封；读不出 / 解析失败 / 根不是对象 → 平铺
+/// `inkos.json read failed`；落盘失败 → 平铺 `failed to save inkos.json`。
+/// Node 不校验 language 值：任意 JSON 值透传；缺失 → 删键。
 pub async fn post_language(State(runtime): State<BooksRuntime>, body: Bytes) -> impl IntoResponse {
-    // TS 自带 catch → 500 平铺 error（区别于 onError 形状）。
-    let flat_internal = |message: String| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": message })),
-        )
-    };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token".to_string());
+        return internal_error();
     };
-    // TS 不校验 language 值：任意 JSON 值透传；undefined 赋值 → stringify 删键。
     let language = parsed.get("language").cloned();
     let root = runtime.state.project_root();
     let Some(mut raw) = load_raw_config(root).await else {
-        return flat_internal("inkos.json read failed".to_string());
+        return flat_internal(CONFIG_READ_FAILED);
+    };
+    let Value::Object(obj) = &mut raw else {
+        return flat_internal(CONFIG_READ_FAILED);
     };
     let mut response = json!({ "ok": true });
     match language {
         Some(value) => {
-            // 非对象根 → Node strict-mode TypeError → 端点自带 catch → 平铺 500。
-            let Some(obj) = raw.as_object_mut() else {
-                return flat_internal(
-                    "Cannot create property 'language' on a primitive".to_string(),
-                );
-            };
-            obj.insert("language".to_string(), value.clone());
+            obj.insert("language".into(), value.clone());
             response["language"] = value;
         }
         None => {
-            let Some(obj) = raw.as_object_mut() else {
-                return flat_internal("Cannot delete property on a primitive".to_string());
-            };
             obj.remove("language");
         }
     }
     if !save_raw_config(root, &raw).await {
-        return flat_internal("inkos.json write failed".to_string());
+        return flat_internal(CONFIG_SAVE_FAILED);
     }
     ok_json(response)
 }
@@ -808,8 +868,9 @@ mod project_routes_tests {
     //! 后端后的启动阻断），Node 同形状走 `?? {}` + noop 填充返回 200。
     //!
     //! 韧性回归：合法 JSON 非对象根（如 `42`/`[...]`，用户可手改出的形状）
-    //! 走各 PUT/POST 不得 panic——对齐 Node strict-mode 对原始值赋属性的
-    //! TypeError → 500 语义（panic 会打断 hyper 连接任务，比 500 更糟）。
+    //! 走各 PUT/POST 不得 panic（panic 会打断 hyper 连接任务，比 500 更糟）。
+    //! 现按配置文件状态契约拒绝；逐格的「状态码 + 响应体」两腿对照表在
+    //! `tests/config_file_state_contract.rs`（读两腿共用的 golden JSON）。
 
     use super::*;
     use crate::llm::agent_router::{AgentRouter, LlmEndpointConfig};
@@ -1031,12 +1092,15 @@ mod project_routes_tests {
                     "{uri}: {resp}"
                 );
             } else {
-                assert_eq!(resp["error"]["code"], "INTERNAL_ERROR", "{uri}: {resp}");
+                assert_eq!(
+                    resp["error"]["code"], "PROJECT_CONFIG_INVALID",
+                    "{uri}: {resp}"
+                );
             }
         }
     }
 
-    /// 韧性回归：非对象根走 POST /language（端点自带 catch → 平铺 500）。
+    /// 韧性回归：非对象根走 POST /language（平铺 500，不得 panic）。
     #[tokio::test]
     async fn non_object_root_post_language_returns_500_not_panic() {
         let dir = tempfile::tempdir().unwrap();

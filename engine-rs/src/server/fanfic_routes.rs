@@ -53,6 +53,18 @@ fn flat_internal(message: impl std::fmt::Display) -> ApiError {
     )
 }
 
+/// 请求体不是 JSON：Node 腿的 `c.req.json()` 在 try 之外，走全局 onError 的
+/// 500 信封。此前这里手写平铺 `"Unexpected token"`——猜的 V8 报错原文，与 Node
+/// 实际回的形态不同（配置文件状态契约轮取证）。
+fn internal_error() -> ApiError {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": { "code": "INTERNAL_ERROR", "message": "Unexpected server error." }
+        })),
+    )
+}
+
 /// fanficMode 解析（"canon"|"au"|"ooc"|"cp"，缺省/未知回 canon——TS 端点强转）。
 pub(crate) fn parse_fanfic_mode(value: Option<&str>) -> FanficMode {
     match value {
@@ -367,7 +379,7 @@ pub async fn fanfic_init(
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token");
+        return internal_error();
     };
     let title = parsed.get("title").and_then(Value::as_str).unwrap_or("");
     let source_text = parsed
@@ -469,7 +481,7 @@ pub async fn fanfic_refresh(
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token");
+        return internal_error();
     };
     let Some(source_text) = parsed
         .get("sourceText")
@@ -544,7 +556,7 @@ pub async fn spinoff_init(
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token");
+        return internal_error();
     };
     let title = parsed
         .get("title")
@@ -686,7 +698,7 @@ pub async fn imitation_init(
         Err(status) => return (status, Json(json!({ "error": "request body too large" }))),
     };
     let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
-        return flat_internal("Unexpected token");
+        return internal_error();
     };
     let title = parsed
         .get("title")
