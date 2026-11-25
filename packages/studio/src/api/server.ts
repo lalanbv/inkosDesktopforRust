@@ -7312,16 +7312,26 @@ function yamlScalar(value: unknown): string {
 
   // A world is a Work shared by any number of conversations. Reads never
   // create a new run from a chat session ID.
+  // 运行在不在看图谱：图谱库在，或产品引擎给新运行写的文件图谱在（1675 号——它在
+  // sqlite 图谱第一次打开时导入成库，所以不再只认 play.db）。
+  const playRunHasGraph = async (store: PlayStore, worldId: string, runId: string): Promise<boolean> => {
+    for (const name of ["play.db", "play-graph.json"]) {
+      const present = await access(join(store.runDir(worldId, runId), name)).then(() => true, (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+        throw error;
+      });
+      if (present) return true;
+    }
+    return false;
+  };
   app.get("/api/v1/play/runs/:worldId/:runId", async (c) => {
     const worldId = normalizeApiBookId(c.req.param("worldId"), "worldId") ?? "default-world";
     const runId = normalizeApiBookId(c.req.param("runId"), "runId") ?? "default-run";
     const store = new PlayStore(root);
     const world = await store.loadWorld(worldId);
     if (!world) return c.json({ error: { code: "PLAY_WORLD_NOT_FOUND" } }, 404);
-    try { await access(join(store.runDir(worldId, runId), "play.db")); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return c.json({ error: { code: "PLAY_RUN_NOT_FOUND" } }, 404);
-      throw error;
+    if (!(await playRunHasGraph(store, worldId, runId))) {
+      return c.json({ error: { code: "PLAY_RUN_NOT_FOUND" } }, 404);
     }
     const db = createPlayDB(store.runDir(worldId, runId));
     const [transcript, currentState] = await Promise.all([
@@ -7390,7 +7400,11 @@ function yamlScalar(value: unknown): string {
       moments: Boolean(body.moments),
       inventory: Boolean(body.inventory),
     };
-    const runDir = new PlayStore(root).runDir(worldId, runId);
+    // 先把产品引擎建的世界带进 works 再取路径：对一个只在 legacy 根的世界直接往
+    // works/<id>/source 下写，会留下一份没有清单的孤儿目录，之后迁移判 conflict。
+    const store = new PlayStore(root);
+    await store.ensureWorldStorage(worldId).catch(() => null);
+    const runDir = store.runDir(worldId, runId);
     await writePlayImageSettings(runDir, settings);
     return c.json({ ok: true, imageSettings: settings });
   });
@@ -7429,8 +7443,7 @@ function yamlScalar(value: unknown): string {
         const worldExists = await store
           .loadWorld(worldId)
           .then((world) => world !== null, (error: unknown) => { if (isMissing(error)) return false; throw error; });
-        const graphExists = await access(join(store.runDir(worldId, runId), "play.db"))
-          .then(() => true, (error: unknown) => { if (isMissing(error)) return false; throw error; });
+        const graphExists = await playRunHasGraph(store, worldId, runId);
         // Rust 对缺 work/run 取空图 → 实体不存在；同码同文。
         if (!worldExists || !graphExists) return c.json({ error: `entity not found: ${entityId}` }, 404);
       }
@@ -7466,7 +7479,10 @@ function yamlScalar(value: unknown): string {
     if (!file || file.includes("/") || file.includes("..") || file.includes("\0")) {
       return c.json({ error: "Invalid image file" }, 400);
     }
-    const runDir = new PlayStore(root).runDir(worldId, runId);
+    // 产品引擎建的世界先带进 works（1675 号），不然它生成的插图在 Node 腿上取不到。
+    const store = new PlayStore(root);
+    await store.ensureWorldStorage(worldId).catch(() => null);
+    const runDir = store.runDir(worldId, runId);
     try {
       const { readFile: readFileFs } = await import("node:fs/promises");
       const content = await readFileFs(join(runDir, "images", file));

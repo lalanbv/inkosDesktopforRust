@@ -73,6 +73,10 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // 对跑真跑 14 / 豁免 2——地板 11 → 14，上限不变。
 // 1673 号：互动叙事存储模型第一批（Node 腿创建的世界产品引擎读写同一棵树），
 // 新增真跑对跑一条。17 个对跑真跑 15 / 豁免 2——地板 14 → 15，上限不变。
+// 1675 号：互动叙事存储模型第二批（产品引擎创建的世界 Node 腿读得到、按需迁移 +
+// 文件图谱导入，此后两腿写同一棵树）新增真跑对跑一条；原现状钉改写为「两棵树
+// 都在」的对账规则钉（真跑不变）。18 个对跑真跑 16 / 豁免 2——地板 15 → 16，
+// 上限不变。
 //
 // 测试总数怎么取：本脚本把 cargo 的 stdout 与 stderr **分开采集后拼接**
 // （stdout 在前、stderr 在后）。`Running <binary>` 走 stderr、`running N tests`
@@ -81,7 +85,7 @@ const selfCheckOnly = process.argv.includes("--self-check-only");
 // ↔ 第 k 条 `test result:`，并用 `passed + failed + ignored === N` 交叉验证
 // 对应没错位（1666 首版按节取数在真实日志上取到 0——合成夹具没复现拼接
 // 形态，真实日志才暴露；夹具此后按真实拼接形态构造）。
-const DUEL_EXECUTED_FLOOR = 15;
+const DUEL_EXECUTED_FLOOR = 16;
 const DUEL_EXEMPT_CEILING = 2;
 const DUEL_LEDGER_ENV = "INKOS_DUEL_LEDGER";
 // 当前树形态的对跑总数 = 真跑地板 + 豁免上限。自检里「恰在两个水位上」的夹具

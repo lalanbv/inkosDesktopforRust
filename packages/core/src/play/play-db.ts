@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import {
@@ -15,6 +15,7 @@ import {
   type PlayStateSlot,
   type PlayStateSlotInput,
 } from "../models/play.js";
+import { z } from "zod";
 
 export interface PlayGraphSnapshot {
   readonly entities: PlayEntity[];
@@ -71,11 +72,25 @@ export class PlayDB {
   private readonly db: any;
 
   constructor(runDir: string) {
+    const databasePath = join(runDir, "play.db");
+    // 只有全新的库才导入文件图谱：之后再开不重跑，免得抹掉导入之后写进去的东西。
+    // 先读图谱再开库——图谱读不出来就抛，不留下一个空库冒充它。
+    const fileGraph = existsSync(databasePath) ? null : readFileGraph(join(runDir, "play-graph.json"));
     mkdirSync(runDir, { recursive: true });
     const { DatabaseSync } = require("node:sqlite");
-    this.db = new DatabaseSync(join(runDir, "play.db"));
+    this.db = new DatabaseSync(databasePath);
     this.db.exec("PRAGMA journal_mode = WAL");
     this.initializeSchema();
+    if (fileGraph) this.importFileGraph(fileGraph);
+  }
+
+  private importFileGraph(graph: FileGraph): void {
+    this.transaction(() => {
+      for (const event of graph.events) this.recordEvent(event);
+      for (const entity of graph.entities) this.upsertEntity(entity);
+      for (const edge of graph.edges) this.upsertEdge(edge);
+      for (const slot of graph.stateSlots) this.upsertStateSlot(slot);
+    });
   }
 
   private initializeSchema(): void {
@@ -298,6 +313,96 @@ export class PlayDB {
   close(): void {
     this.db.close();
   }
+}
+
+/** 文件图谱的四张记录表（产品引擎给新运行写的那份，形态同 Rust `persist_file`）。 */
+interface FileGraph {
+  readonly entities: readonly PlayEntity[];
+  readonly edges: readonly PlayEdge[];
+  readonly stateSlots: readonly PlayStateSlot[];
+  readonly events: readonly PlayEvent[];
+}
+
+const ENTITY_COLUMNS = ["id", "type", "label", "summary", "status", "createdEventId", "updatedEventId"] as const;
+const EDGE_COLUMNS = [
+  "id", "fromId", "type", "toId", "value", "validFromEventId", "validUntilEventId",
+  "sourceEventId", "visibility", "strength",
+] as const;
+const STATE_SLOT_COLUMNS = ["id", "ownerEntityId", "kind", "label", "value", "updatedEventId"] as const;
+const EVENT_COLUMNS = ["id", "turn", "actionKind", "rawInput", "outcomeSummary", "createdAt"] as const;
+
+/**
+ * 读产品引擎的文件后端图谱（`play-graph.json`）；没有这个文件返回 null。
+ *
+ * 记录是产品引擎存下的模型输出原样对象：别名键（`from`/`to`/`relation`…）和模型多给
+ * 的键都还在，所以先按列投影再过 schema——产品引擎自己写 sqlite 时也只取这几列，
+ * `null` 的可选键当作缺省。投影之后仍不合 schema 的记录直接抛：宁可在开库之前失败，
+ * 也不留下一个缺记录的库。库一旦建出来产品引擎就改读它，文件里那份会被丢在后面。
+ */
+function readFileGraph(path: string): FileGraph | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  // 函数声明而不是箭头函数：类型收窄只认显式标注类型的声明。
+  function invalid(detail: string): never {
+    throw Object.assign(new Error(`File play graph cannot be imported: ${detail}`), {
+      code: "PLAY_GRAPH_INVALID",
+    });
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    invalid("not valid JSON");
+  }
+  const table = (name: string, columns: readonly string[]): Record<string, unknown>[] => {
+    const records = (parsed as Record<string, unknown> | null)?.[name];
+    if (records === undefined) return [];
+    if (records === null || typeof records !== "object" || Array.isArray(records)) {
+      invalid(`${name} is not a record table`);
+    }
+    return Object.values(records as Record<string, unknown>).map((record, index) => {
+      if (record === null || typeof record !== "object" || Array.isArray(record)) {
+        invalid(`${name}[${index}] is not a record`);
+      }
+      return pickColumns(record as Record<string, unknown>, columns);
+    });
+  };
+  const check = <T>(
+    kind: string,
+    records: Record<string, unknown>[],
+    schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: z.ZodError } },
+  ): T[] =>
+    records.map((record) => {
+      const result = schema.safeParse(record);
+      if (!result.success) {
+        const issue = result.error.issues[0];
+        invalid(`${kind} ${JSON.stringify(record.id ?? "?")}: ${issue?.path.map(String).join(".") ?? ""} ${issue?.message ?? ""}`);
+      }
+      return result.data;
+    });
+  return {
+    entities: check("entity", table("entities", ENTITY_COLUMNS), PlayEntitySchema),
+    edges: check("edge", table("edges", EDGE_COLUMNS), PlayEdgeSchema),
+    stateSlots: check("state slot", table("stateSlots", STATE_SLOT_COLUMNS), PlayStateSlotSchema),
+    events: check("event", table("events", EVENT_COLUMNS), PlayEventSchema),
+  };
+}
+
+/** 只取 `columns` 里在场的键；值为 `null` 的键当作缺省（产品引擎写 sqlite 时即存 NULL）。 */
+function pickColumns(
+  record: Record<string, unknown>,
+  columns: readonly string[],
+): Record<string, unknown> {
+  return Object.fromEntries(
+    columns
+      .filter((column) => record[column] !== null && record[column] !== undefined)
+      .map((column) => [column, record[column]]),
+  );
 }
 
 interface EntityRow {

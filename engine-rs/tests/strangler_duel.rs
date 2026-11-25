@@ -3373,6 +3373,20 @@ async fn bin_process_unconfigured_engine_answers_400() {
 /// `["live-checksum", "<worldId>"]`）；脚本的参数顺序是「命令 → 项目根 → 其余」。
 /// 返回脚本的 stdout。
 fn seed_works_world(root: &Path, args: &[&str]) -> String {
+    let output = seed_works_world_output(root, args);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(
+        output.status.success(),
+        "TS 腿原生世界播种失败：{}\n{}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    stdout
+}
+
+/// 同 [`seed_works_world`]，但不断言成功——对跑要断言「Node 腿拒了这次写入」时用
+/// （脚本被 PlayStore 拒绝时以 4 退出，stderr 形如 `[seed-play-world] refused <code>`）。
+fn seed_works_world_output(root: &Path, args: &[&str]) -> std::process::Output {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("strangler_duel")
@@ -3385,33 +3399,74 @@ fn seed_works_world(root: &Path, args: &[&str]) -> String {
         .args(rest)
         .output()
         .expect("node 起动失败（TS 腿原生世界播种）");
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(
-        output.status.success(),
-        "TS 腿原生世界播种失败：{}\n{}",
-        stdout,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    stdout
+    output
 }
 
-/// 1672 号起：互动叙事（interactive world）换腿的数据根——**现状钉，不是契约**。
+fn non_empty_lines(path: &Path) -> usize {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
+/// 往转录里直接追加一轮，并把文件的修改时间钉在 `at`——模拟「这一份后来又往前
+/// 玩了」：进度钟只看这几个文件的修改时间。
+fn append_transcript_line_at(path: &Path, role: &str, content: &str, at: std::time::SystemTime) {
+    let line = format!(
+        "{}\n",
+        json!({ "role": role, "content": content, "timestamp": 1 })
+    );
+    let mut text = std::fs::read_to_string(path).unwrap();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&line);
+    std::fs::write(path, text).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(at)
+        .unwrap();
+}
+
+/// 把一份世界的四类进度文件的修改时间钉到同一时刻（不在的文件跳过）。
+fn pin_progress_clock(world_dir: &Path, at: std::time::SystemTime) {
+    for file in [
+        "world.json",
+        "runs/main/transcript.jsonl",
+        "runs/main/state/current.json",
+        "runs/main/play-graph.json",
+    ] {
+        let path = world_dir.join(file);
+        if !path.is_file() {
+            continue;
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+}
+
+/// 1672 号起：互动叙事（interactive world）换腿的数据根。存储模型定线为「自动双向
+/// 桥接」（1673 号，分三批）——1675 号第二批之后两个方向都已桥接：
 ///
-/// 存储模型定线为「自动双向桥接」（1673 号，分三批）。本测试钉的是**还没桥接的
-/// 那个方向**和一条解析规则：
+/// - 「产品引擎创建 → Node 腿读写」见
+///   [`interactive_world_engine_created_world_is_shared_duel`]（Node 腿首次触达按需
+///   迁移 + 文件图谱导入）。
+/// - 「Node 腿创建 → 产品引擎读写」见
+///   [`interactive_world_node_created_world_is_shared_duel`]（第一批）。
 ///
-/// - 「产品引擎创建 → Node 腿读」仍未桥接（第二批）：产品引擎新建的运行走文件
-///   后端 `play-graph.json`，Node 腿的读取面只认 `play.db`，且按 works 清单发现
-///   世界——迁移前 404 `PLAY_WORLD_NOT_FOUND`，迁移（拷贝）后 404
-///   `PLAY_RUN_NOT_FOUND`。
-/// - 「Node 腿创建 → 产品引擎读写」已桥接（第一批，见
-///   [`interactive_world_node_created_world_is_shared_duel`]）。
-/// - 解析规则「`worlds/<id>` 在就用它」：显式迁移会留下 `works/<id>/source` 一份
-///   拷贝，两棵树都在时产品引擎仍用 `worlds/<id>`——既有产品用户的连续性不变，
-///   但与那份拷贝分叉（第三批处理：迁移不再拷贝 worlds；两棵树都在时做一次对账）。
-///
-/// 不断言修复：第二批、第三批落地时，对应断言要翻成「互读可见」「不再分叉」——
-/// 它就是为了在那天变红而存在的。
+/// 本测试钉的是「两棵树都在」的对账规则：**进度较新的那份为准，打平取 works**。
+/// 1673 号之前这里钉的是「产品引擎一律用 `worlds/<id>`、Node 腿 404」。规则翻过来
+/// 之后要守住的是 legacy 根较新的那头：显式迁移之后用户接着在产品引擎上玩过的世界，
+/// 较新的进度不被旧拷贝顶掉——产品引擎仍用 legacy 根，Node 腿读得到落后副本（与
+/// 此前一样）但**拒绝续写**（works 一写就成了较新的那份，产品引擎会换到这份落后
+/// 副本上）。两份的对账（旧份归档）留到第三批，这里钉「拒了、且没写」。
 #[tokio::test]
 async fn interactive_world_storage_roots_duel() {
     if !duel_enabled() {
@@ -3499,17 +3554,11 @@ async fn interactive_world_storage_roots_duel() {
     let run_path = |id: &str| format!("/api/v1/play/runs/{id}/main");
     let turns = |body: &Value| body["transcript"].as_array().map(Vec::len).unwrap_or(0);
 
-    // ① 产品引擎创建的世界：自己读得到；Node 腿读不到（未桥接的方向）。
+    // ① 产品引擎创建的世界：自己读得到。
     let (status, body) = get_json(&rust, &run_path("w-rust")).await;
     assert_eq!(
         (status, body["title"].clone(), turns(&body)),
         (200, json!("产品引擎世界"), 1),
-        "{body}"
-    );
-    let (status, body) = get_json(&ts, &run_path("w-rust")).await;
-    assert_eq!(
-        (status, body["error"]["code"].clone()),
-        (404, json!("PLAY_WORLD_NOT_FOUND")),
         "{body}"
     );
     // 对照：Node 腿创建的世界两腿都读得到（第一批）。
@@ -3532,8 +3581,9 @@ async fn interactive_world_storage_roots_duel() {
     let (status, body) = get_json(&ts, "/api/v1/play/runs/w-ts/ghost").await;
     assert_eq!((status, body), (404, not_found));
 
-    // ② TS 侧旧数据迁移（拷贝：原目录保留）。
-    migrate_fixture_to_works(&root);
+    // ② Node 腿触达：按需迁移（拷贝，原目录保留）。两棵树都在，拷贝较新。
+    let (status, body) = get_json(&ts, &run_path("w-rust")).await;
+    assert_eq!((status, turns(&body)), (200, 1), "{body}");
     assert!(
         root.join("worlds")
             .join("w-rust")
@@ -3541,67 +3591,56 @@ async fn interactive_world_storage_roots_duel() {
             .is_file(),
         "迁移是拷贝，原目录保留"
     );
-    assert!(
-        root.join("works")
-            .join("w-rust")
-            .join("source")
-            .join("runs")
-            .join("main")
-            .join("play-graph.json")
-            .is_file(),
-        "迁移把产品引擎的运行拷进 works/"
-    );
-    // 两棵树都在：产品引擎仍用 worlds/ 那份（既有行为不变）。
-    let (status, body) = get_json(&rust, &run_path("w-rust")).await;
-    assert_eq!((status, turns(&body)), (200, 1), "{body}");
-    // Node 腿按 works 清单认出了这个世界，但它的读取面要 play.db——产品引擎的运行
-    // 没有这个文件。
-    let (status, body) = get_json(&ts, &run_path("w-rust")).await;
-    assert_eq!(
-        (status, body["error"]["code"].clone()),
-        (404, json!("PLAY_RUN_NOT_FOUND")),
-        "{body}"
-    );
-
-    // ③ 迁移之后再写：产品引擎写进 worlds/ 那份——与 works/ 的拷贝分叉（第三批处理）。
-    inkos_engine::play::append_transcript_turn(
-        &root,
-        "w-rust",
-        "main",
-        "assistant",
-        "产品引擎第二答",
-    )
-    .await
-    .unwrap();
-    let (_, body) = get_json(&rust, &run_path("w-rust")).await;
-    assert_eq!(turns(&body), 2);
-    let lines = |path: &Path| {
-        std::fs::read_to_string(path)
-            .unwrap()
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count()
-    };
     let copied_run = root
         .join("works")
         .join("w-rust")
         .join("source")
         .join("runs")
         .join("main");
-    assert_eq!(
-        (
-            lines(&rust_run.join("transcript.jsonl")),
-            lines(&copied_run.join("transcript.jsonl")),
-        ),
-        (2, 1),
-        "两棵树都在：产品引擎写 worlds/ 那份，works/ 的拷贝停在迁移时刻"
+    assert!(
+        copied_run.join("play-graph.json").is_file(),
+        "迁移把产品引擎的运行拷进 works/"
     );
-    assert!(!copied_run.join("play.db").exists());
-    let (status, _) = get_json(&ts, &run_path("w-rust")).await;
-    assert_eq!(status, 404);
+    let transcripts = || {
+        (
+            non_empty_lines(&rust_run.join("transcript.jsonl")),
+            non_empty_lines(&copied_run.join("transcript.jsonl")),
+        )
+    };
+
+    // ③ legacy 根较新：1675 号之前产品引擎对「两棵树都在」一律写 legacy 根——显式
+    //    迁移过的世界就是这样被落下的。照那个形态给 legacy 根补一轮。
+    append_transcript_line_at(
+        &rust_run.join("transcript.jsonl"),
+        "assistant",
+        "产品引擎在 legacy 根接上的一轮",
+        std::time::SystemTime::now() + Duration::from_secs(60),
+    );
+    // 产品引擎仍用 legacy 根：较新的进度不被旧拷贝顶掉。
+    let (status, body) = get_json(&rust, &run_path("w-rust")).await;
+    assert_eq!((status, turns(&body)), (200, 2), "产品引擎：{body}");
+    // Node 腿读得到落后副本（与此前一样，照常读）。
+    let (status, body) = get_json(&ts, &run_path("w-rust")).await;
+    assert_eq!((status, turns(&body)), (200, 1), "Node 腿：{body}");
+    // 续写被拒：拒了，且两棵树都没变。
+    let refused = seed_works_world_output(&root, &["append-turn", "w-rust", "不该写进去"]);
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(4), "{stderr}");
+    assert!(
+        stderr.contains("[seed-play-world] refused PLAY_WORLD_DIVERGED"),
+        "{stderr}"
+    );
+    assert_eq!(transcripts(), (2, 1), "拒绝之后两棵树都不该变");
+
+    // ④ 打平取 works：两边进度文件的时刻相同 → 产品引擎读 works 那份。
+    let tied = std::time::SystemTime::now() + Duration::from_secs(120);
+    pin_progress_clock(&root.join("worlds").join("w-rust"), tied);
+    pin_progress_clock(&root.join("works").join("w-rust").join("source"), tied);
+    let (status, body) = get_json(&rust, &run_path("w-rust")).await;
+    assert_eq!((status, turns(&body)), (200, 1), "打平应取 works：{body}");
 
     eprintln!(
-        "互动叙事数据根现状钉：产品引擎创建 → Node 腿读仍未桥接（文件后端 + works 清单）；两棵树都在时产品引擎用 worlds/ 那份、与拷贝分叉"
+        "互动叙事数据根对账规则：两棵树都在时进度较新的那份为准——legacy 较新时产品引擎仍用 legacy 根、Node 腿读得到落后副本但拒绝续写；打平取 works"
     );
 }
 
@@ -3746,5 +3785,215 @@ async fn interactive_world_node_created_world_is_shared_duel() {
 
     eprintln!(
         "互动叙事第一批：Node 腿创建的世界产品引擎读得到、原地续写不分叉，图谱双向可见（含 edges.confidence 补列）"
+    );
+}
+
+/// 1675 号（存储模型第二批）：产品引擎创建的世界，Node 回退腿读得到、接得上，而且
+/// 此后**不分叉**——Node 腿首次触达把世界拷进 `works/<id>/source`（原目录保留），
+/// 产品引擎按「进度较新的那份为准」跟着换到 works，两腿的后续回合都落在同一棵树上。
+///
+/// 图谱层：产品引擎新建的运行走文件后端 `play-graph.json`，Node 腿只认 sqlite——Node
+/// 腿第一次开库时把文件图谱导入。样本走产品引擎的真实写入面
+/// （`normalize_play_mutation` → `apply_play_mutation` → 文件后端落盘），不手搓记录：
+/// 模型给的别名键、模型多给的键、产品引擎给事件加的 `timeAdvance` 都原样在里面，
+/// 导入按列投影才过得去。世界 id 用会话 id 的形态（`PlayHud` 的请求形态）。
+#[tokio::test]
+async fn interactive_world_engine_created_world_is_shared_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture(&root, &llm);
+    let id = "1783099000075-engine";
+    let path = format!("/api/v1/play/runs/{id}/main");
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+    // (转录轮数, 实体, 关系, 状态槽, 事件)
+    let shape = |body: &Value| {
+        let count = |key: &str| body["graph"][key].as_array().map(Vec::len).unwrap_or(0);
+        (
+            body["transcript"].as_array().map(Vec::len).unwrap_or(0),
+            count("entities"),
+            count("edges"),
+            count("stateSlots"),
+            count("events"),
+        )
+    };
+
+    // 产品引擎原生创建 + 第一轮：模型给的一轮变更经真实写入面落到文件后端。
+    inkos_engine::play::create_world(
+        &root,
+        &inkos_engine::play::PlayWorldInput {
+            id,
+            title: "产品引擎世界",
+            premise: "镜中图书馆没有出口。",
+            world_contract: "",
+            visual_contract: "",
+            mode: "open",
+            language: "zh",
+        },
+    )
+    .await
+    .unwrap();
+    let engine_run = inkos_engine::play::ensure_run(&root, id, "main")
+        .await
+        .unwrap();
+    let mutation = inkos_engine::play_parser::normalize_play_mutation(&json!({
+        "eventId": "e1", "turn": 1, "actionKind": "look", "summary": "玩家推门",
+        "entities": { "upsert": [
+            { "id": "engine-hero", "type": "actor", "label": "引擎来客", "summary": "",
+              "status": "", "note": "模型多给的键" },
+            { "id": "engine-gate", "type": "location", "label": "镜门", "summary": "", "status": "" },
+        ] },
+        "edges": { "upsert": [
+            { "id": "rel-gate", "from": "引擎来客", "relation": "guards", "to": "镜门" },
+        ] },
+        "stateSlots": { "upsert": [
+            { "id": "slot-mood", "ownerEntityId": "engine-hero", "kind": "flag", "label": "心情",
+              "value": "警惕", "updatedEventId": "e1" },
+        ] },
+    }));
+    let mut graph = inkos_engine::play_graph::open_play_graph_db(&engine_run).unwrap();
+    inkos_engine::play_graph::apply_play_mutation(&mut graph, &mutation, "产品引擎第一问").unwrap();
+    graph.flush().unwrap();
+    drop(graph);
+    inkos_engine::play::append_transcript_turn(&root, id, "main", "user", "产品引擎第一问")
+        .await
+        .unwrap();
+    inkos_engine::play::save_current_state(
+        &root,
+        id,
+        "main",
+        &json!({ "turn": 1, "lastSummary": "产品引擎第一问" }),
+    )
+    .await
+    .unwrap();
+    // 样本确实是「脏」的：三个键都没有对应的列。
+    let file_graph = std::fs::read_to_string(engine_run.join("play-graph.json")).unwrap();
+    for (key, why) in [
+        ("\"note\"", "模型多给的键"),
+        ("\"relation\"", "别名键"),
+        ("\"timeAdvance\"", "产品引擎给事件加的键"),
+    ] {
+        assert!(file_graph.contains(key), "样本应带着{why}：{file_graph}");
+    }
+
+    // ① Node 腿读得到：首次触达按需迁移，文件图谱导入成 sqlite 图谱。
+    let (status, body) = get_json(&ts, &path).await;
+    assert_eq!(status, 200, "Node 腿读不到产品引擎创建的世界：{body}");
+    assert_eq!(body["title"], "产品引擎世界", "{body}");
+    assert_eq!(
+        shape(&body),
+        (1, 2, 1, 1, 1),
+        "文件图谱没有导入成 sqlite 图谱：{body}"
+    );
+    let hero = body["graph"]["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entity| entity["id"] == json!("engine-hero"))
+        .cloned()
+        .expect("导入的实体里有 engine-hero");
+    assert!(
+        hero.get("note").is_none(),
+        "没有对应列的键不该跟进来：{hero}"
+    );
+    assert_eq!(
+        body["graph"]["edges"][0]["fromId"],
+        json!("engine-hero"),
+        "按 label 解析的端点应原样导入：{}",
+        body["graph"]["edges"][0]
+    );
+    let node_run = root
+        .join("works")
+        .join(id)
+        .join("source")
+        .join("runs")
+        .join("main");
+    assert!(
+        node_run.join("play.db").is_file(),
+        "Node 腿第一次开库应导入并建库"
+    );
+    assert!(
+        root.join("worlds").join(id).join("world.json").is_file(),
+        "迁移是拷贝，原目录保留"
+    );
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("works").join(id).join("work.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            manifest["profileId"].clone(),
+            manifest["metadata"]["legacySource"].clone()
+        ),
+        (json!("interactive-world"), json!(format!("worlds/{id}")))
+    );
+
+    // ② 产品引擎跟着换到 works：续写落在 works，legacy 根那份停在迁移时刻。
+    inkos_engine::play::append_transcript_turn(
+        &root,
+        id,
+        "main",
+        "assistant",
+        "产品引擎接上的一轮",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            non_empty_lines(&node_run.join("transcript.jsonl")),
+            non_empty_lines(&engine_run.join("transcript.jsonl")),
+        ),
+        (2, 1),
+        "拷贝较新：产品引擎该写 works 那份，legacy 根那份不动"
+    );
+    assert!(
+        !engine_run.join("play.db").exists(),
+        "legacy 根那份不该被动"
+    );
+
+    // ③ Node 腿续写一轮、图谱补一个实体：产品引擎读得到。回合收尾的同步此刻有了
+    //    清单可落（迁移之前第一步 loadWorkManifest 直接 ENOENT）。
+    seed_works_world(&root, &["append-turn", id, "Node 腿接上的一轮"]);
+    seed_works_world(&root, &["add-entity", id, "node-hero", "雾港来客"]);
+    seed_works_world(&root, &["turn-sync", id]);
+    let (status, body) = get_json(&rust, &path).await;
+    assert_eq!(
+        (status, shape(&body)),
+        (200, (3, 3, 1, 1, 1)),
+        "产品引擎读不到 Node 腿的续写：{body}"
+    );
+
+    // ④ 产品引擎再往图谱补一个实体（此刻解析到 works、库已在 → sqlite 后端）：Node
+    //    腿读得到。两腿最终看到同一份。
+    let mut graph = inkos_engine::play_graph::open_play_graph_db(
+        &inkos_engine::play::run_dir(&root, id, "main").unwrap(),
+    )
+    .unwrap();
+    graph
+        .upsert_entity(&json!({
+            "id": "late-hero", "type": "actor", "label": "后来的客人", "summary": "",
+        }))
+        .unwrap();
+    drop(graph);
+    let (status, body) = get_json(&ts, &path).await;
+    assert_eq!(
+        (status, shape(&body)),
+        (200, (3, 4, 1, 1, 1)),
+        "Node 腿：{body}"
+    );
+    let (status, body) = get_json(&rust, &path).await;
+    assert_eq!(
+        (status, shape(&body)),
+        (200, (3, 4, 1, 1, 1)),
+        "产品引擎：{body}"
+    );
+
+    eprintln!(
+        "互动叙事第二批：产品引擎创建的世界 Node 腿读得到（按需迁移 + 文件图谱导入），此后两腿写同一棵树，图谱双向可见"
     );
 }

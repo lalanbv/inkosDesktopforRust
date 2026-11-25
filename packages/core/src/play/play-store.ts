@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, readdir, stat } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { PlayPresentationSchema, legacyPresentation, type PlayPresentation } from "./play-presentation.js";
 import { legacyReceiptChoices } from "./play-presentation-legacy.js";
@@ -15,6 +15,7 @@ import type { PlayGraphSnapshot } from "./play-db.js";
 import type { PlayGraphDB } from "./play-db-factory.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
+import { migrateLegacyWorks } from "../harness/legacy-migration.js";
 import { createWorkManifest,loadWorkManifest } from "../harness/work-store.js";
 import {createBuiltInWorkProfileRegistry} from '../harness/builtin-profiles.js';
 import { listWorkManifests, workDirectory } from "../harness/work-store.js";
@@ -101,6 +102,11 @@ export class PlayStore {
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? now,
     });
+    // legacy 根有同 id 的世界、却没能带进 works（迁移判 invalid 或 conflict）：不新建。
+    // 新建的这份会变成较新的那份，产品引擎跟着换过来，legacy 根里那份就被撂下。
+    if (await fileExists(join(this.projectRoot, "worlds", world.id, "world.json"))) {
+      throw behindLegacyError(world.id);
+    }
     const worldWrite = {
       relativePath: join("works", world.id, "source", "world.json"),
       content: `${JSON.stringify(world, null, 2)}\n`,
@@ -137,6 +143,7 @@ export class PlayStore {
     if (!current) {
       throw new Error(`Play world not found: ${worldId}`);
     }
+    await this.assertNotBehindLegacy(worldId);
     const world = PlayWorldSchema.parse({
       ...current,
       ...patch,
@@ -165,15 +172,70 @@ export class PlayStore {
 
   async loadWorld(worldId: string): Promise<PlayWorld | null> {
     try {
-      const raw = await readFile(join(this.worldDir(worldId), "world.json"), "utf-8");
-      return PlayWorldSchema.parse(JSON.parse(raw));
+      return await this.readWorld(worldId);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    // works 里没有这个世界：legacy 根（产品引擎写的 `worlds/<id>/`）有的话按需迁移，
+    // 再读一次。
+    if (!(await this.ensureWorldStorage(worldId))) return null;
+    try {
+      return await this.readWorld(worldId);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw error;
     }
   }
 
+  private async readWorld(worldId: string): Promise<PlayWorld> {
+    const raw = await readFile(join(this.worldDir(worldId), "world.json"), "utf-8");
+    return PlayWorldSchema.parse(JSON.parse(raw));
+  }
+
+  /**
+   * 让世界在 works 布局里可见。产品引擎把世界写在 legacy 根 `worlds/<id>/`，TS 只认
+   * `works/<id>/source/`。works 里还没有这个世界、而 legacy 根有时，按需迁移——复用
+   * `migrateLegacyWorks`（拷贝全部文件并建作品清单，原目录保留）。有了清单，回合收尾
+   * 的 `syncWorkSourceArtifacts` 才有地方落。
+   *
+   * 返回 `"migrated"`（这次迁的）或 `"already-migrated"`（works 里本来就有）；不需要
+   * 处理时返回 null——legacy 根没有这个世界，或同 id 的 works 是别的作品（迁移判
+   * conflict）。
+   */
+  async ensureWorldStorage(worldId: string): Promise<"migrated" | "already-migrated" | null> {
+    const id = assertSafeSegment(worldId);
+    if (await fileExists(join(this.worldDir(id), "world.json"))) return "already-migrated";
+    const source = `worlds/${id}`;
+    if (!(await fileExists(join(this.projectRoot, source, "world.json")))) return null;
+    const [result] = await migrateLegacyWorks(this.projectRoot, { apply: true, source });
+    if (!result || result.status === "invalid" || result.status === "conflict") return null;
+    return result.status === "already-migrated" ? "already-migrated" : "migrated";
+  }
+
+  /**
+   * 续写守卫——「两棵树都在」的对账规则在 Node 腿这一侧的落点。所有运行级写入都先经
+   * `ensureRun`，世界定义的写入经 `updateWorld`，所以守卫只在这两处。
+   *
+   * legacy 根那份比 works 这份新，说明手头这份是落后副本（显式迁移之后用户又在产品
+   * 引擎上玩过——1673 号之前产品引擎对「两棵树都在」一律用 legacy 根）。这时不往
+   * works 写：产品引擎按「进度较新的那份为准」选根，works 一写就变成较新的那份，产品
+   * 引擎会换到这份落后副本上，legacy 根里较新的进度就被撂下了。读照常（读不改进度
+   * 钟），写一律拒绝并说明原因，等两份对账（第三批）。
+   */
+  async assertNotBehindLegacy(worldId: string): Promise<void> {
+    const id = assertSafeSegment(worldId);
+    const legacy = join(this.projectRoot, "worlds", id);
+    if (!(await fileExists(join(legacy, "world.json")))) return;
+    const legacyClock = await progressClock(legacy);
+    const worksClock = await progressClock(this.worldDir(id));
+    if (legacyClock > worksClock) throw behindLegacyError(id);
+  }
+
   async listWorlds(): Promise<PlayWorld[]> {
+    // legacy 根下还没进 works 的世界先按需迁移——列世界也是一次触达。
+    for (const id of await legacyWorldIds(this.projectRoot)) {
+      await this.ensureWorldStorage(id).catch(() => null);
+    }
     const worlds: PlayWorld[] = [];
     for (const work of await listWorkManifests(this.projectRoot, "interactive-world")) {
       const world = await this.loadWorld(work.id);
@@ -184,6 +246,7 @@ export class PlayStore {
   }
 
   async ensureRun(worldId: string, runId: string): Promise<void> {
+    await this.assertNotBehindLegacy(worldId);
     const dir = this.runDir(worldId, runId);
     await Promise.all([
       mkdir(dir, { recursive: true }),
@@ -523,4 +586,71 @@ function isSafeSegment(value: string): boolean {
     !value.includes("\0") &&
     value !== "." &&
     value !== "..";
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  return access(path).then(() => true, () => false);
+}
+
+/** legacy 根（产品引擎写的 `worlds/`）下的目录名；目录不存在时为空。 */
+async function legacyWorldIds(projectRoot: string): Promise<string[]> {
+  try {
+    const entries = await readdir(join(projectRoot, "worlds"), { withFileTypes: true });
+    return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+const PROGRESS_FILES = ["transcript.jsonl", join("state", "current.json"), "play-graph.json"] as const;
+
+/**
+ * 进度钟：世界这一份「玩到哪儿了」的时刻——`world.json` 与各运行下 `transcript.jsonl`、
+ * `state/current.json`、`play-graph.json` 修改时间（整毫秒）的最大值；文件不在、时刻
+ * 读不出或早于 1970 年都按 0。两腿同一条规则，与产品引擎 `play::world_dir` 的判定
+ * 逐项对应，改一头必须改另一头（对跑 `interactive_world_storage_roots_duel` 用同一份
+ * 落盘样本钉两端结论）。
+ *
+ * 不含 sqlite 文件：库里有未检查点的帧时（写连接异常退出，或迁移把 WAL 一并拷了
+ * 过来），读连接开、关一次就会做恢复与检查点——库文件的修改时间在「读」的时候变，
+ * 这样的文件当不了进度钟。回合每轮都写转录与状态，钟照样往前走。
+ */
+async function progressClock(worldDir: string): Promise<number> {
+  let latest = await mtimeMillis(join(worldDir, "world.json"));
+  let runs: string[];
+  try {
+    runs = await readdir(join(worldDir, "runs"));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return latest;
+    throw error;
+  }
+  for (const run of runs) {
+    for (const file of PROGRESS_FILES) {
+      latest = Math.max(latest, await mtimeMillis(join(worldDir, "runs", run, file)));
+    }
+  }
+  return latest;
+}
+
+async function mtimeMillis(path: string): Promise<number> {
+  return stat(path).then(
+    (info) => Math.max(0, Math.floor(info.mtimeMs)),
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT" || error.code === "ENOTDIR") return 0;
+      throw error;
+    },
+  );
+}
+
+function behindLegacyError(worldId: string): Error {
+  return Object.assign(
+    new Error(
+      `Interactive world ${worldId} has a newer copy under worlds/${worldId} than under works; ` +
+        "continuing here would split the story in two. Continue on the product engine, " +
+        "or reconcile the two copies first.",
+    ),
+    { code: "PLAY_WORLD_DIVERGED" },
+  );
 }

@@ -6,6 +6,7 @@
 //
 //   node seedPlayWorld.mjs create        <projectRoot> <worldId>
 //   node seedPlayWorld.mjs append-turn   <projectRoot> <worldId> [content]
+//   node seedPlayWorld.mjs add-entity    <projectRoot> <worldId> <entityId> <label>
 //   node seedPlayWorld.mjs turn-sync     <projectRoot> <worldId>
 //   node seedPlayWorld.mjs live-checksum <projectRoot> <worldId>
 //
@@ -15,6 +16,8 @@
 // 产品引擎直接写盘不登记——2.0 的版本面要等回到 Node 腿、下一次这样的同步才并
 // 进去（1673 号追记取证）。
 // `live-checksum` = 打印盘上 transcript.jsonl 的 sha256（与清单里的版本校验和对照）。
+// 写入被 PlayStore 拒绝（1675 号：legacy 根那份较新时拒绝续写，`PLAY_WORLD_DIVERGED`）
+// 时打印 `[seed-play-world] refused <code>` 并以 4 退出——对跑据此断言「拒了、且没写」。
 // 直接导入 core 构建产物（与 scripts/migrate-legacy-works.mjs 同法）；缺失时给出
 // 可行动指引并非零退出。
 import { createHash } from "node:crypto";
@@ -24,10 +27,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptDir, "..", "..", "..");
-const [command, root, worldId, content] = process.argv.slice(2);
+const [command, root, worldId, content, label] = process.argv.slice(2);
 
 if (!command || !root || !worldId) {
-  console.error("用法：node seedPlayWorld.mjs <create|append-turn|turn-sync|live-checksum> <projectRoot> <worldId> [content]");
+  console.error("用法：node seedPlayWorld.mjs <create|append-turn|add-entity|turn-sync|live-checksum> <projectRoot> <worldId> [content|entityId] [label]");
   process.exit(2);
 }
 
@@ -57,44 +60,55 @@ async function turnSync() {
   await syncWorkSourceArtifacts({ projectRoot: root, workId: worldId, accept: true, acceptPaths: TURN_PATHS });
 }
 
-if (command === "create") {
-  const world = await store.createWorld({
-    id: worldId,
-    title: "TS 腿世界",
-    premise: "雾港的渡轮只在午夜靠岸。",
-    worldContract: "",
-    visualContract: "",
-    mode: "open",
-    language: "zh",
-  });
-  await store.ensureRun(world.id, "main");
-  const db = core.createPlayDB(store.runDir(world.id, "main"));
-  // 图谱里放一个实体：产品引擎要能从 Node 腿建的 play.db 里读出它。
-  db.upsertEntity({ id: "ts-hero", type: "actor", label: "雾港来客", summary: "" });
-  db.close?.();
-  await store.appendTranscriptTurn(world.id, "main", {
-    role: "user",
-    content: "TS 腿第一问",
-    timestamp: Date.now(),
-  });
-  await store.saveCurrentState(world.id, "main", { turn: 1, lastSummary: "TS 腿第一问" });
-  // 真实的回合收尾会同步；这里照做，运行文件才会进作品清单的版本索引。
-  await turnSync();
-  console.log(`[seed-play-world] created works/${world.id}/source runs/main`);
-} else if (command === "append-turn") {
-  await store.appendTranscriptTurn(worldId, "main", {
-    role: "assistant",
-    content: content ?? "TS 腿第二答",
-    timestamp: Date.now(),
-  });
-  console.log(`[seed-play-world] appended turn to works/${worldId}/source/runs/main`);
-} else if (command === "turn-sync") {
-  await turnSync();
-  console.log("[seed-play-world] turn-sync ok");
-} else if (command === "live-checksum") {
-  const digest = createHash("sha256").update(await readFile(transcriptPath)).digest("hex");
-  console.log(`[seed-play-world] live ${digest}`);
-} else {
-  console.error(`未知命令：${command}`);
-  process.exit(2);
+try {
+  if (command === "create") {
+    const world = await store.createWorld({
+      id: worldId,
+      title: "TS 腿世界",
+      premise: "雾港的渡轮只在午夜靠岸。",
+      worldContract: "",
+      visualContract: "",
+      mode: "open",
+      language: "zh",
+    });
+    await store.ensureRun(world.id, "main");
+    const db = core.createPlayDB(store.runDir(world.id, "main"));
+    // 图谱里放一个实体：产品引擎要能从 Node 腿建的 play.db 里读出它。
+    db.upsertEntity({ id: "ts-hero", type: "actor", label: "雾港来客", summary: "" });
+    db.close?.();
+    await store.appendTranscriptTurn(world.id, "main", {
+      role: "user",
+      content: "TS 腿第一问",
+      timestamp: Date.now(),
+    });
+    await store.saveCurrentState(world.id, "main", { turn: 1, lastSummary: "TS 腿第一问" });
+    // 真实的回合收尾会同步；这里照做，运行文件才会进作品清单的版本索引。
+    await turnSync();
+    console.log(`[seed-play-world] created works/${world.id}/source runs/main`);
+  } else if (command === "append-turn") {
+    await store.appendTranscriptTurn(worldId, "main", {
+      role: "assistant",
+      content: content ?? "TS 腿第二答",
+      timestamp: Date.now(),
+    });
+    console.log(`[seed-play-world] appended turn to works/${worldId}/source/runs/main`);
+  } else if (command === "add-entity") {
+    const db = core.createPlayDB(store.runDir(worldId, "main"));
+    db.upsertEntity({ id: content, type: "actor", label: label ?? content, summary: "" });
+    db.close?.();
+    console.log(`[seed-play-world] added entity ${content} to works/${worldId}/source/runs/main/play.db`);
+  } else if (command === "turn-sync") {
+    await turnSync();
+    console.log("[seed-play-world] turn-sync ok");
+  } else if (command === "live-checksum") {
+    const digest = createHash("sha256").update(await readFile(transcriptPath)).digest("hex");
+    console.log(`[seed-play-world] live ${digest}`);
+  } else {
+    console.error(`未知命令：${command}`);
+    process.exit(2);
+  }
+} catch (error) {
+  const code = typeof error?.code === "string" ? error.code : "";
+  console.error(`[seed-play-world] refused ${code || "UNKNOWN"} ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(4);
 }

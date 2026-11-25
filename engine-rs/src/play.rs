@@ -31,28 +31,69 @@ fn is_safe_segment(value: &str) -> bool {
 /// `worlds/<id>`、Node 回退腿 `works/<id>/source`——同一个世界换腿后互不可见。
 /// 这里让产品引擎认得 Node 腿创建的世界，**读写都按同一个解析结果走**：
 ///
-/// 1. `worlds/<id>` 是目录 → 用它。产品引擎既有世界的行为不变；两棵树都在时也
-///    用它（显式迁移 `migrateLegacyWorks` 会留下一份拷贝，两边各认各的仍是既有
-///    的分叉，不在本批处理）。
-/// 2. 否则 `works/<id>/source/world.json` 在 → 用 `works/<id>/source`。这是 Node
-///    回退腿创建的世界。只回退读面的话，产品引擎接下来的回合会写进 `worlds/<id>`
-///    ——同一个世界立刻分叉成两份，所以写面一并跟过去。
-/// 3. 否则 → `worlds/<id>`（新建世界的默认根，产品引擎既有的落盘位置）。
+/// 1. `works/<id>/source/world.json` 不在 → `worlds/<id>`。产品引擎既有世界的行为
+///    不变；新建世界也落在这里。
+/// 2. 否则 `worlds/<id>` 不是目录 → `works/<id>/source`。这是 Node 回退腿创建的世界。
+///    只回退读面的话，产品引擎接下来的回合会写进 `worlds/<id>`——同一个世界立刻
+///    分叉成两份，所以写面一并跟过去。
+/// 3. 两棵树都在 → **进度较新的那份为准，打平取 `works/<id>/source`**（1675 号，
+///    存储模型第二批；第一批这里一律取 `worlds/<id>`）。Node 腿首次触达产品引擎
+///    建的世界时会把它拷进 works——拷贝较新，产品引擎跟着换到 works，此后两腿
+///    写同一棵树，不再分叉。反过来 legacy 根较新的（显式迁移之后用户接着在产品
+///    引擎上玩过的世界）仍用 legacy 根，较新的进度不会被旧拷贝顶掉；Node 腿对
+///    这种世界拒绝续写（`PlayStore.assertNotBehindLegacy`），两份的对账留到第三批。
 ///
 /// 两种布局下 run 与世界级文件的相对路径相同，所有读写面都经 [`world_dir`] /
-/// [`run_dir`] 取路径——改这一处即全量生效。判定只做两次 stat。
+/// [`run_dir`] 取路径——改这一处即全量生效。只有两棵树都在时才多读几次 stat。
 pub fn world_dir(project_root: &Path, world_id: &str) -> Result<PathBuf, String> {
     if !is_safe_segment(world_id) {
         return Err(format!("Unsafe play path segment: {world_id}"));
     }
     let legacy = project_root.join("worlds").join(world_id);
+    let node_leg = project_root.join("works").join(world_id).join("source");
+    if !node_leg.join("world.json").is_file() {
+        return Ok(legacy);
+    }
     if !legacy.is_dir() {
-        let node_leg = project_root.join("works").join(world_id).join("source");
-        if node_leg.join("world.json").is_file() {
-            return Ok(node_leg);
+        return Ok(node_leg);
+    }
+    Ok(if progress_clock(&legacy) > progress_clock(&node_leg) {
+        legacy
+    } else {
+        node_leg
+    })
+}
+
+const PROGRESS_FILES: [&str; 3] = ["transcript.jsonl", "state/current.json", "play-graph.json"];
+
+/// 进度钟：世界这一份「玩到哪儿了」的时刻。与 Node 腿 `PlayStore` 的 `progressClock`
+/// 是同一条规则，改一头必须改另一头（对跑 `interactive_world_storage_roots_duel` 用
+/// 同一份落盘样本钉两端结论）：`world.json` 与各运行下三个进度文件修改时间（整
+/// 毫秒）的最大值；文件不在、时刻读不出或早于 1970 年都按 0。
+///
+/// 不含 sqlite 文件：库里有未检查点的帧时（写连接异常退出，或迁移把 WAL 一并拷了
+/// 过来），读连接开、关一次就会做恢复与检查点——库文件的修改时间在「读」的时候变，
+/// 这样的文件当不了进度钟。回合每轮都写转录与状态，钟照样往前走。
+fn progress_clock(world_dir: &Path) -> i64 {
+    let mtime = |path: &Path| {
+        std::fs::metadata(path)
+            .ok()
+            .and_then(|meta| meta.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|since_epoch| i64::try_from(since_epoch.as_millis()).ok())
+            .unwrap_or(0)
+    };
+    let mut latest = mtime(&world_dir.join("world.json"));
+    let Ok(runs) = std::fs::read_dir(world_dir.join("runs")) else {
+        return latest;
+    };
+    for entry in runs.flatten() {
+        let run = entry.path();
+        for file in PROGRESS_FILES {
+            latest = latest.max(mtime(&run.join(file)));
         }
     }
-    Ok(legacy)
+    latest
 }
 
 pub fn run_dir(project_root: &Path, world_id: &str, run_id: &str) -> Result<PathBuf, String> {
@@ -1142,8 +1183,8 @@ mod tests {
         assert_eq!(snapshot["events"][0]["actionKind"], "user_input");
     }
 
-    /// 1673 号：根解析——`worlds/<id>` 在就用它；否则 Node 腿那棵树
-    /// （`works/<id>/source`，须有 `world.json`）在就用它；否则默认 `worlds/<id>`。
+    /// 1673 号：根解析——`works/<id>/source/world.json` 不在就用 `worlds/<id>`（新
+    /// 建世界的默认根）；在而 `worlds/<id>` 不是目录就用 Node 腿那棵树。
     #[test]
     fn world_dir_prefers_legacy_then_node_leg_then_default() {
         let dir = tempfile::tempdir().unwrap();
@@ -1164,10 +1205,6 @@ mod tests {
             node_leg("w2").join("runs").join("main")
         );
 
-        // 两棵树都在：用 worlds/（既有产品用户的连续性）。
-        std::fs::create_dir_all(legacy("w2")).unwrap();
-        assert_eq!(world_dir(root, "w2").unwrap(), legacy("w2"));
-
         // 同名作品不是世界：works/<id>/source 下没有 world.json 就不认。
         std::fs::create_dir_all(node_leg("b1")).unwrap();
         std::fs::write(node_leg("b1").join("book.json"), "{}").unwrap();
@@ -1175,6 +1212,77 @@ mod tests {
 
         assert!(world_dir(root, "..").is_err());
         assert!(world_dir(root, "a/b").is_err());
+    }
+
+    /// 写一个文件并把修改时间钉在给定的毫秒时刻上。
+    fn write_at(path: &Path, millis: i64) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "{}").unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(millis as u64),
+        )
+        .unwrap();
+    }
+
+    /// 1675 号：两棵树都在时进度较新的那份为准，打平取 `works/<id>/source`。
+    #[test]
+    fn world_dir_follows_the_newer_copy_when_both_trees_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let legacy = |id: &str| root.join("worlds").join(id);
+        let node_leg = |id: &str| root.join("works").join(id).join("source");
+        const T: i64 = 1_700_000_000_000;
+        let both = |id: &str, legacy_at: i64, works_at: i64| {
+            write_at(&legacy(id).join("world.json"), legacy_at);
+            write_at(&node_leg(id).join("world.json"), works_at);
+        };
+        let transcript = |base: &Path| base.join("runs").join("main").join("transcript.jsonl");
+
+        // Node 腿按需迁移刚完成：拷贝较新 → works，写面跟着落到 works。
+        both("w-copy", T, T + 60_000);
+        assert_eq!(world_dir(root, "w-copy").unwrap(), node_leg("w-copy"));
+        assert_eq!(
+            run_dir(root, "w-copy", "main").unwrap(),
+            node_leg("w-copy").join("runs").join("main")
+        );
+
+        // 打平（时刻相同）也取 works。
+        both("w-tie", T, T);
+        assert_eq!(world_dir(root, "w-tie").unwrap(), node_leg("w-tie"));
+
+        // legacy 根较新（显式迁移之后用户接着在产品引擎上玩过）：仍用 legacy 根。
+        both("w-ahead", T + 60_000, T);
+        assert_eq!(world_dir(root, "w-ahead").unwrap(), legacy("w-ahead"));
+
+        // 钟取的是四类进度文件里最大的那个：world.json 与转录两边时刻相同，只有 legacy
+        // 的状态文件更新 → legacy。
+        both("w-state", T, T);
+        write_at(&transcript(&legacy("w-state")), T + 1_000);
+        write_at(&transcript(&node_leg("w-state")), T + 1_000);
+        assert_eq!(world_dir(root, "w-state").unwrap(), node_leg("w-state"));
+        write_at(
+            &legacy("w-state")
+                .join("runs")
+                .join("main")
+                .join("state")
+                .join("current.json"),
+            T + 2_000,
+        );
+        assert_eq!(world_dir(root, "w-state").unwrap(), legacy("w-state"));
+
+        // sqlite 文件不进钟（有待检查点的帧时，读连接开关一次就会改它的时刻）：works 的
+        // play.db 更新得多，但 legacy 的转录更新 → legacy。
+        both("w-sqlite", T, T);
+        write_at(&transcript(&legacy("w-sqlite")), T + 1_000);
+        write_at(
+            &node_leg("w-sqlite")
+                .join("runs")
+                .join("main")
+                .join("play.db"),
+            T + 999_000,
+        );
+        assert_eq!(world_dir(root, "w-sqlite").unwrap(), legacy("w-sqlite"));
     }
 
     /// 1673 号：Node 回退腿异常退出会留下未检查点的 WAL。只读连接打不开需要恢复
