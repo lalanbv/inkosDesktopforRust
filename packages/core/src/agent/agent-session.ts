@@ -245,14 +245,24 @@ export interface AgentSessionAttachment {
 interface CachedAgent {
   turnCompletion?: TurnCompletion;
   /**
-   * 连续「整轮只调了工具表里没有的工具」的轮数（见 noteUnknownToolRound）。
-   * 只在回合内有意义，不需要每次请求归零：能被下一个请求复用的缓存项，上一个
-   * 回合必然正常收尾，最后一轮是 finish_turn 或动作回放（已知工具），那一轮已经
-   * 归零；失败的回合会连缓存项一起清掉。
+   * 回合级守卫状态（见 noteModelRound）。连续未知轮 / 连续失败轮两个计数只在
+   * 回合内有意义，不需要每次请求归零：能被下一个请求复用的缓存项，上一个回合
+   * 必然正常收尾，最后一轮是 finish_turn 或动作回放（已知工具且成功），那一轮
+   * 已经把它们归零；失败的回合会连缓存项一起清掉。
    */
   unknownToolRounds: number;
-  /** 最近一个未知轮调过的工具名——错误文案用；只在连续轮数到上限时才会被读到。 */
   unknownToolNames: string[];
+  failedToolRounds: number;
+  failedToolNames: string[];
+  /**
+   * 本回合的重复检测：最近几轮的指纹与「连续重复轮」计数。每个请求开头清空
+   * 窗口——上一个请求的轮次不该让这个请求里「照原样再做一遍」的合法流程被判成
+   * 原地重复；窗口一空，计数在第一轮自然归零。
+   */
+  recentRounds: string[];
+  repeatedRounds: number;
+  /** 本回合已发起的模型调用数（含即将发起的这一轮）；每个请求开头归零。 */
+  modelRounds: number;
   activeActions: number;
   hasDelivery: boolean;
   deliveryFailed: boolean;
@@ -935,24 +945,68 @@ function completedInteractiveScene(capabilityId: string, result: ActionResult): 
     ? data.sceneText : undefined;
 }
 
-// pi 的循环没有轮次上限，收尾全靠模型自己调 finish_turn。模型卡在一个不存在
-// 的工具上会一直打上游：回环上游实测 20 秒 690 次，上下文压缩成功也拦不住，
-// 客户端走开后还在跑（请求按设计是可持久、可重连的，只有显式中止才停）。
-// 不存在的工具什么都不会执行，连续 N 轮整轮都是它 = 零进展，到此不再给机会。
-// 只认「整轮全是」：夹着已知工具的轮次算有进展、计数归零。产品引擎同值
-// （packages/studio/src/__tests__/golden/agent-loop-guards.json，两腿测试各读一次）。
+// pi 的循环没有轮次上限，收尾全靠模型自己调 finish_turn；请求按设计是可持久、
+// 可重连的（只有显式中止才停）。模型卡住时会一直打上游：回环上游实测未知工具
+// 20 秒 690 次、卡在已知工具上的三种形态 15 秒 298–516 次，上下文压缩成功也
+// 拦不住。这里给回合加界：三层快停加一层硬上限，停止条件与错误文案都由
+// turnStallReason 从计数派生。
+//
+// 快停只认「定义上没有进展」的轮次，正常流程只要每轮有新动作就碰不到：
+//   ① 整轮只调了工具表（cached.agent.state.tools，pi 查表用的同一张）里没有的
+//      工具——什么都不会执行；
+//   ② 整轮的工具结果全是错误（isError）——一次都没成；
+//   ③ 本轮与本回合最近 REPEAT_LOOKBACK_ROUNDS 轮里的某一轮完全相同（调用与
+//      结果都一样）——同样的动作拿到同样的结果，再来一次也不会不同。
+// 阈值登记在 packages/studio/src/__tests__/golden/agent-loop-guards.json，两腿
+// 测试各读一次：① ③ 与产品引擎同值；② 只在 Node 腿——产品引擎的文件工具没有
+// 精确的失败标记（只有文本启发式），不用启发式做停止判定。领域层的失败结果是
+// 当正常文本返回的（isError 为 false），不计入 ②——宁可不收，不误伤确认流程里
+// 被拦截的轮次。
+//
+// 硬上限 = 每回合的模型调用次数（DEFAULT_MAX_MODEL_ROUNDS_PER_TURN，环境变量
+// INKOS_AGENT_MAX_ROUNDS_PER_TURN 可调）。前三层靠形态识别，兜不住「每轮都有
+// 新动作却永远不收尾」的模型；上限保证任何形态都有界。默认值远高于产品引擎
+// 自己的 12 轮上限，正常交互碰不到。
+//
 // 挂在 transformContext 上：pi 每轮模型调用前走它一次（先于 streamFn），拿到的
 // 消息尾部就是刚执行完的那一轮。Agent 包装类转发配置是白名单，没有
 // shouldStopAfterTurn 这类底层钩子（给了也在运行时被静默丢弃）。
 const MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS = 5;
+const MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS = 8;
+const MAX_REPEATED_ROUNDS = 6;
+const REPEAT_LOOKBACK_ROUNDS = 8;
+const DEFAULT_MAX_MODEL_ROUNDS_PER_TURN = 100;
 
-// 看一眼刚执行完的那一轮：尾部一串工具结果前面的助手消息就是这轮的调用。
-// 整轮只调了工具表（cached.agent.state.tools，pi 查表用的同一张）里没有的工具 →
-// 连续计数 +1 并记下工具名；只要夹着已知工具就归零。尾部不是工具结果收尾
-// （开局）时不计不动。停止条件与错误文案都从连续轮数派生（streamFn /
-// unknownToolStallMessage）。
-function noteUnknownToolRound(cached: CachedAgent | undefined, messages: AgentMessage[]): void {
+// 环境变量只认正整数；缺失或乱填一律用默认值。
+function maxModelRoundsPerTurn(): number {
+  const requested = Number(process.env.INKOS_AGENT_MAX_ROUNDS_PER_TURN);
+  return Number.isSafeInteger(requested) && requested > 0 ? requested : DEFAULT_MAX_MODEL_ROUNDS_PER_TURN;
+}
+
+// 一轮的指纹：调用（工具名 + 参数）与结果（文本、图片数据）都参与——「同样的
+// 调用、同样的结果」才算重复；参数变了或结果变了都是新的一轮。
+function agentRoundFingerprint(
+  calls: ReadonlyArray<{ readonly name: string; readonly arguments: unknown }>,
+  results: ReadonlyArray<ToolResultMessage>,
+): string {
+  const hash = createHash("sha256");
+  for (const call of calls) hash.update(`${call.name}\u0000${JSON.stringify(call.arguments)}\u0000`);
+  hash.update("\u0001");
+  for (const result of results) {
+    hash.update(`${result.toolName}\u0000`);
+    for (const part of result.content) {
+      hash.update(part.type === "text" ? `text\u0000${part.text}\u0000` : `image\u0000${part.mimeType}\u0000${part.data}\u0000`);
+    }
+  }
+  return hash.digest("hex");
+}
+
+// 每次模型调用前记一笔：本回合的调用数 +1；刚执行完的那一轮（尾部一串工具结果
+// 前面的助手消息）按上面三层更新计数。尾部不是工具结果收尾（开局）时没有可判
+// 定的轮，各计数不动。
+function noteModelRound(cached: CachedAgent | undefined, messages: AgentMessage[]): void {
   if (!cached) return;
+  cached.modelRounds += 1;
   let index = messages.length - 1;
   while (index >= 0 && messages[index].role === "toolResult") index -= 1;
   const round = messages[index];
@@ -961,36 +1015,76 @@ function noteUnknownToolRound(cached: CachedAgent | undefined, messages: AgentMe
   let calls = 0;
   let unknownCalls = 0;
   const unknownNames: string[] = [];
+  const callFingerprints: Array<{ name: string; arguments: unknown }> = [];
   for (const part of round.content) {
     if (part.type !== "toolCall") continue;
     calls += 1;
+    callFingerprints.push({ name: part.name, arguments: part.arguments });
     if (tools.some((tool) => tool.name === part.name)) continue;
     unknownCalls += 1;
     if (!unknownNames.includes(part.name)) unknownNames.push(part.name);
   }
-  if (calls === 0 || unknownCalls < calls) {
-    cached.unknownToolRounds = 0;
-    return;
+  if (calls === 0) return;
+  const results: ToolResultMessage[] = [];
+  const failedNames: string[] = [];
+  let errorResults = 0;
+  for (let position = index + 1; position < messages.length; position += 1) {
+    const message = messages[position];
+    if (message.role !== "toolResult") continue;
+    results.push(message);
+    if (!message.isError) continue;
+    errorResults += 1;
+    if (!failedNames.includes(message.toolName)) failedNames.push(message.toolName);
   }
-  cached.unknownToolRounds += 1;
-  cached.unknownToolNames = unknownNames;
+  if (unknownCalls === calls) {
+    cached.unknownToolRounds += 1;
+    cached.unknownToolNames = unknownNames;
+  } else {
+    cached.unknownToolRounds = 0;
+  }
+  if (errorResults > 0 && errorResults === results.length) {
+    cached.failedToolRounds += 1;
+    cached.failedToolNames = failedNames;
+  } else {
+    cached.failedToolRounds = 0;
+  }
+  const digest = agentRoundFingerprint(callFingerprints, results);
+  cached.repeatedRounds = cached.recentRounds.includes(digest) ? cached.repeatedRounds + 1 : 0;
+  cached.recentRounds.push(digest);
+  if (cached.recentRounds.length > REPEAT_LOOKBACK_ROUNDS) cached.recentRounds.shift();
 }
 
-// 连续未知轮到了上限 = 回合由守卫停下时的原因；没到上限返回 undefined。
-function unknownToolStallMessage(cached: CachedAgent): string | undefined {
-  if (cached.unknownToolRounds < MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS) return undefined;
-  // 工具名来自模型输出：截短、加引号转义后再进错误文案。
-  const names = cached.unknownToolNames.slice(0, 3).map((name) => JSON.stringify(name.slice(0, 64))).join(", ");
-  return `Agent stopped: the model called unknown tools (${names}) in ${cached.unknownToolRounds} consecutive turns.`;
+// 工具名来自模型输出：截短、加引号转义后才进错误文案。
+function quoteToolNames(names: readonly string[]): string {
+  return names.slice(0, 3).map((name) => JSON.stringify(name.slice(0, 64))).join(", ");
+}
+
+// 回合由守卫停下时的原因：任一层到阈值就有值，否则 undefined。只在命中时才拼文案，
+// streamFn 每轮调用它做判定，正常路径不分配。
+function turnStallReason(cached: CachedAgent): string | undefined {
+  if (cached.unknownToolRounds >= MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS) {
+    return `Agent stopped: the model called unknown tools (${quoteToolNames(cached.unknownToolNames)}) in ${cached.unknownToolRounds} consecutive turns.`;
+  }
+  if (cached.failedToolRounds >= MAX_CONSECUTIVE_FAILED_TOOL_ROUNDS) {
+    return `Agent stopped: every tool call failed in ${cached.failedToolRounds} consecutive turns (last failures: ${quoteToolNames(cached.failedToolNames)}).`;
+  }
+  if (cached.repeatedRounds >= MAX_REPEATED_ROUNDS) {
+    return `Agent stopped: the model repeated an earlier step of this request ${cached.repeatedRounds} times in a row with identical calls and results.`;
+  }
+  const ceiling = maxModelRoundsPerTurn();
+  if (cached.modelRounds > ceiling) {
+    return `Agent stopped: the turn exceeded ${ceiling} model calls (INKOS_AGENT_MAX_ROUNDS_PER_TURN).`;
+  }
+  return undefined;
 }
 
 // 把守卫挂在既有的上下文变换前面。cached 在构造 Agent 之后才赋值，所以用取值函数。
-function withUnknownToolGuard(
+function withTurnGuard(
   transform: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>,
   current: () => CachedAgent | undefined,
 ): (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]> {
   return async (messages, signal) => {
-    noteUnknownToolRound(current(), messages);
+    noteModelRound(current(), messages);
     return transform(messages, signal);
   };
 }
@@ -1298,7 +1392,7 @@ async function runAgentSessionUnlocked(
         })],
         messages: initialAgentMessages,
       },
-      transformContext: withUnknownToolGuard(createHarnessContextTransform({
+      transformContext: withTurnGuard(createHarnessContextTransform({
         projectRoot,
         work,
         profile,
@@ -1345,7 +1439,7 @@ async function runAgentSessionUnlocked(
         if (cached?.pendingWorkTransition) return stopForWorkTransition(streamModel);
         if (canCompletePlayScene(cached)) return stopForWorkTransition(streamModel);
         if (cached?.turnCompletion) return stopForWorkTransition(streamModel);
-        if ((cached?.unknownToolRounds ?? 0) >= MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS) return stopForWorkTransition(streamModel);
+        if (cached && turnStallReason(cached)) return stopForWorkTransition(streamModel);
         const streamOptions = {
           ...options,
           maxTokens: agentOutputBudget(streamModel),
@@ -1395,6 +1489,11 @@ async function runAgentSessionUnlocked(
       temperature: config.temperature,
       unknownToolRounds: 0,
       unknownToolNames: [],
+      failedToolRounds: 0,
+      failedToolNames: [],
+      recentRounds: [],
+      repeatedRounds: 0,
+      modelRounds: 0,
       allowSystemFileRead,
       backgroundTaskContext: config.backgroundTaskContext,
       suppressProductionTools,
@@ -1549,6 +1648,9 @@ async function runAgentSessionUnlocked(
   cached.currentEpisode = episodeHandle;
   cached.completedPlayScene = undefined;
   cached.turnCompletion = undefined;
+  // 回合级守卫里「每回合从零起算」的两项：模型调用数、重复检测窗口。
+  cached.modelRounds = 0;
+  cached.recentRounds = [];
   cached.hasDelivery = config.resumeAction?.result.status === "success";
   cached.deliveryFailed = false;
   cached.artifactDeliveries = artifactDeliveries;
@@ -1711,7 +1813,7 @@ async function runAgentSessionUnlocked(
     errorMessage = assistantErrorMessage(finalAssistant)
       ?? (turnAborted ? "Agent turn aborted." : undefined)
       ?? (!cached.pendingWorkTransition && !canCompletePlayScene(cached) && !completion
-        ? unknownToolStallMessage(cached) ?? "Agent ended without an explicit completion result." : undefined)
+        ? turnStallReason(cached) ?? "Agent ended without an explicit completion result." : undefined)
       ?? (!turnHasObservableOutcome(turnMessages) ? "Agent returned no text or tool result." : undefined);
     if (errorMessage) {
       const failedError = errorMessage;

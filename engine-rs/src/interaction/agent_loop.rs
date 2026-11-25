@@ -1,10 +1,12 @@
 //! agent 多轮 tool-use 循环（pi-agent loop 核心子集）。
 //!
 //! 移植自 `packages/core/src/interaction/runtime.ts` 的 loop 骨架：
-//! LLM ↔ 工具调用多轮循环（上限 12 轮）、SSE 增量事件回调（draft:delta /
+//! LLM ↔ 工具调用多轮循环（上限 12 轮 + 回合守卫）、SSE 增量事件回调（draft:delta /
 //! tool:start|end）、abort 中途截断、工具执行卡收集。历史回放与完整事件面
 //! 的其余部分随 67 号（restore.ts 后半 + 生产工具）。
 
+use std::collections::{hash_map::DefaultHasher, VecDeque};
+use std::hash::Hasher;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -119,8 +121,8 @@ pub trait LoopToolExecutor: Send + Sync {
 }
 
 /// agent 循环：system + 历史回放 + user 起始，工具调用逐轮执行回填，直至
-/// 模型给出无工具的最终文本、达到轮次上限，或连续若干轮只调不存在的工具
-/// （未知工具守卫，见 `MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS`）。abort 句柄每轮前轮询。
+/// 模型给出无工具的最终文本、达到轮次上限，或触发回合守卫（连续若干轮只调不存在
+/// 的工具 / 连续若干轮原地重复，见 `run_agent_loop` 内的常量）。abort 句柄每轮前轮询。
 /// `initial_history`（68 号）：transcript 回放的 summary/对话/boundary 消息，
 /// 插在 system 与本轮 user 之间（pi-agent initialState.messages 的等价位置）。
 /// `tool_exec`（80 号）：工具执行面（文件工具 / play 聊天工具）。
@@ -140,12 +142,23 @@ pub async fn run_agent_loop(
     meter: Option<&crate::utils::token_meter::TokenMeter>,
 ) -> Result<LoopOutcome, String> {
     const MAX_ROUNDS: usize = 12;
-    // 连续「整轮只调了不存在的工具」的轮数：不存在的工具什么都不会执行，连续到
-    // 上限就提前收场，不再打满 MAX_ROUNDS（结局与轮次上限相同：空回复 + 工具
-    // 错误明细）。只认「整轮全是」，夹着已知工具的轮次归零。与 Node 腿同值
-    // （packages/studio/src/__tests__/golden/agent-loop-guards.json）。
+    // 回合守卫：到阈值就提前收场，不再打满 MAX_ROUNDS（结局与轮次上限相同：空回复
+    // + 工具错误明细）。与 Node 腿同值（packages/studio/src/__tests__/golden/
+    // agent-loop-guards.json）。两层：
+    //   ① 连续若干轮整轮只调了不存在的工具——什么都不会执行。只认「整轮全是」，
+    //      夹着已知工具的轮次归零。
+    //   ② 连续若干轮与本回合最近 REPEAT_LOOKBACK_ROUNDS 轮里的某一轮完全相同
+    //      （工具名、参数、结果文本都一样）——同样的动作拿到同样的结果，再来一次
+    //      也不会不同。参数变了或结果变了都是新的一轮。
+    // 窗口每回合从空开始（本函数每次调用只管一个回合）。
+    // Node 腿还有「整轮的工具结果全是错误」一层，这里不做：文件工具没有精确的
+    // 失败标记（只有文本启发式），不用启发式做停止判定；轮次上限已经兜底。
     const MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS: usize = 5;
+    const MAX_REPEATED_ROUNDS: usize = 6;
+    const REPEAT_LOOKBACK_ROUNDS: usize = 8;
     let mut unknown_tool_rounds: usize = 0;
+    let mut repeated_rounds: usize = 0;
+    let mut recent_rounds: VecDeque<u64> = VecDeque::with_capacity(REPEAT_LOOKBACK_ROUNDS);
     let is_aborted = || {
         abort
             .and_then(|handle| {
@@ -278,6 +291,8 @@ pub async fn run_agent_loop(
 
         let mut round_calls = 0usize;
         let mut round_unknown_calls = 0usize;
+        // 本轮指纹：工具名、参数、结果文本逐段喂给哈希器，不拼大字符串。
+        let mut round_hasher = DefaultHasher::new();
         for (id, name, arguments_json) in &tool_calls {
             let args: Value = serde_json::from_str(arguments_json).unwrap_or(json!({}));
             events.on_tool_start(id, name, &args);
@@ -298,6 +313,12 @@ pub async fn run_agent_loop(
             if unknown_tool {
                 round_unknown_calls += 1;
             }
+            round_hasher.write(name.as_bytes());
+            round_hasher.write_u8(0);
+            round_hasher.write(arguments_json.as_bytes());
+            round_hasher.write_u8(1);
+            round_hasher.write(result.text.as_bytes());
+            round_hasher.write_u8(2);
             events.on_tool_end(
                 id,
                 name,
@@ -333,11 +354,23 @@ pub async fn run_agent_loop(
         }
         if round_unknown_calls == round_calls {
             unknown_tool_rounds += 1;
-            if unknown_tool_rounds >= MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS {
-                break;
-            }
         } else {
             unknown_tool_rounds = 0;
+        }
+        let digest = round_hasher.finish();
+        repeated_rounds = if recent_rounds.contains(&digest) {
+            repeated_rounds + 1
+        } else {
+            0
+        };
+        recent_rounds.push_back(digest);
+        if recent_rounds.len() > REPEAT_LOOKBACK_ROUNDS {
+            recent_rounds.pop_front();
+        }
+        if unknown_tool_rounds >= MAX_CONSECUTIVE_UNKNOWN_TOOL_ROUNDS
+            || repeated_rounds >= MAX_REPEATED_ROUNDS
+        {
+            break;
         }
     }
 
@@ -580,16 +613,33 @@ mod tests {
             .contains("Unknown tool"));
     }
 
-    /// 未知工具守卫的上限：两腿共用对照表（Node 腿 unknown-tool-loop.flow.test.ts
-    /// 读同一文件）。改这个数必须两腿一起改——下面的用例都按它排脚本。
-    fn unknown_tool_guard() -> usize {
+    /// 回合守卫的阈值：两腿共用对照表（Node 腿 agent-turn-guard.flow.test.ts 读同一
+    /// 文件）。改这些数必须两腿一起改——下面的用例都按它们排脚本。
+    fn loop_guard(key: &str) -> usize {
         let golden: Value = serde_json::from_str(include_str!(
             "../../../packages/studio/src/__tests__/golden/agent-loop-guards.json"
         ))
         .unwrap();
-        golden["maxConsecutiveUnknownToolRounds"]
+        golden[key]
             .as_u64()
-            .expect("golden 须有 maxConsecutiveUnknownToolRounds") as usize
+            .unwrap_or_else(|| panic!("golden 须有 {key}")) as usize
+    }
+
+    fn unknown_tool_guard() -> usize {
+        loop_guard("maxConsecutiveUnknownToolRounds")
+    }
+
+    /// 一轮只读一个文件（真实工具、成功；同路径同内容 = 同一轮）。
+    fn read_round(path: &str) -> ScriptedRound {
+        (
+            String::new(),
+            vec![(
+                "call_read".into(),
+                "read".into(),
+                format!(r#"{{"path":"{path}"}}"#),
+            )],
+            LoopUsage::default(),
+        )
     }
 
     fn unknown_tool_round() -> ScriptedRound {
@@ -605,6 +655,31 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .len()
+    }
+
+    async fn run_rounds(
+        root: &std::path::Path,
+        rounds: Vec<ScriptedRound>,
+    ) -> (LoopOutcome, usize) {
+        let chat = ScriptedChat {
+            rounds,
+            calls: Mutex::new(vec![]),
+        };
+        let executor = crate::interaction::project_tools::ProjectToolExecutor { root };
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            Vec::new(),
+            "hi",
+            None,
+            None,
+            &NoopEvents,
+            None,
+        )
+        .await
+        .unwrap();
+        (outcome, call_count(&chat))
     }
 
     #[tokio::test]
@@ -686,6 +761,137 @@ mod tests {
         assert_eq!(outcome.response_text, "done");
         assert_eq!(call_count(&chat), 2 + 1 + (guard - 1) + 1);
         assert_eq!(outcome.tool_executions.len(), 2 + 2 + (guard - 1));
+    }
+
+    /// 每次被调用前先改写目标文件：同一个读取调用、每轮结果都不同。
+    struct RewritingChat {
+        root: std::path::PathBuf,
+        calls: Mutex<usize>,
+    }
+
+    #[async_trait::async_trait]
+    impl LoopChat for RewritingChat {
+        async fn chat(
+            &self,
+            _messages: &[LLMMessage],
+            _tools: Option<&Value>,
+        ) -> Result<(String, Vec<(String, String, String)>, LoopUsage), String> {
+            let index = {
+                let mut calls = self
+                    .calls
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                *calls += 1;
+                *calls
+            };
+            if index > 12 {
+                return Err("no more rounds".to_string());
+            }
+            std::fs::write(self.root.join("a.md"), format!("revision {index}")).unwrap();
+            Ok((
+                String::new(),
+                vec![("call".into(), "read".into(), r#"{"path":"a.md"}"#.into())],
+                LoopUsage::default(),
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_identical_rounds_stop_before_the_round_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hello agent").unwrap();
+        let repeat = loop_guard("maxRepeatedRounds");
+        assert!(repeat < 12, "重复阈值加原样那一轮须不超过轮次上限");
+        let (outcome, calls) =
+            run_rounds(dir.path(), (0..12).map(|_| read_round("a.md")).collect()).await;
+        // 第 1 轮是原样，之后连续 repeat 轮都是重复即停。
+        assert_eq!(calls, repeat + 1, "原样重复到阈值即停");
+        assert_eq!(outcome.tool_executions.len(), repeat + 1);
+        assert!(outcome
+            .tool_executions
+            .iter()
+            .all(|execution| execution.status == "completed"));
+        // 结局与轮次上限相同：空回复、未中止。
+        assert!(outcome.response_text.is_empty());
+        assert!(!outcome.aborted);
+    }
+
+    #[tokio::test]
+    async fn a_two_step_loop_of_two_different_reads_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hello agent").unwrap();
+        std::fs::write(dir.path().join("b.md"), "goodbye agent").unwrap();
+        let repeat = loop_guard("maxRepeatedRounds");
+        let rounds = (0..12)
+            .map(|index| read_round(if index % 2 == 0 { "a.md" } else { "b.md" }))
+            .collect();
+        let (_outcome, calls) = run_rounds(dir.path(), rounds).await;
+        // A、B 两轮是原样，从第 3 轮起每一轮都是重复。
+        assert_eq!(calls, repeat + 2, "周期 2 的循环：两轮原样后重复到阈值即停");
+    }
+
+    #[tokio::test]
+    async fn different_arguments_are_a_different_round_even_when_the_result_is_the_same() {
+        let dir = tempfile::tempdir().unwrap();
+        // 两个文件内容相同：调用参数不同、结果文本相同。按两步循环处理；
+        // 若参数不进指纹，两轮会被当成同一轮，提前一轮停。
+        std::fs::write(dir.path().join("a.md"), "same text").unwrap();
+        std::fs::write(dir.path().join("b.md"), "same text").unwrap();
+        let repeat = loop_guard("maxRepeatedRounds");
+        let rounds = (0..12)
+            .map(|index| read_round(if index % 2 == 0 { "a.md" } else { "b.md" }))
+            .collect();
+        let (_outcome, calls) = run_rounds(dir.path(), rounds).await;
+        assert_eq!(calls, repeat + 2);
+    }
+
+    #[tokio::test]
+    async fn identical_calls_with_changing_results_are_not_repeats() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "revision 0").unwrap();
+        let chat = RewritingChat {
+            root: dir.path().to_path_buf(),
+            calls: Mutex::new(0),
+        };
+        let executor = crate::interaction::project_tools::ProjectToolExecutor { root: dir.path() };
+        let outcome = run_agent_loop(
+            &chat,
+            &executor,
+            "sys",
+            Vec::new(),
+            "hi",
+            None,
+            None,
+            &NoopEvents,
+            None,
+        )
+        .await
+        .unwrap();
+        // 每轮都拿到新内容，不是原地重复：守卫不触发，一直打到轮次上限（12）。
+        // 若结果不进指纹，会在第 repeat+1 轮被当成重复而提前停。
+        let calls = *chat
+            .calls
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(calls, 12);
+        assert!(outcome.response_text.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_round_that_has_not_happened_before_resets_the_repeat_count() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.md"), "hello agent").unwrap();
+        std::fs::write(dir.path().join("b.md"), "goodbye agent").unwrap();
+        let repeat = loop_guard("maxRepeatedRounds");
+        // 12 = MAX_ROUNDS：A ×(repeat-1)、B、A ×(repeat-1)，第 12 轮收尾。
+        assert_eq!(2 * repeat, 12, "脚本须恰好排在轮次上限内收尾");
+        let mut rounds: Vec<ScriptedRound> = (0..repeat - 1).map(|_| read_round("a.md")).collect();
+        rounds.push(read_round("b.md"));
+        rounds.extend((0..repeat - 1).map(|_| read_round("a.md")));
+        rounds.push(("done".into(), vec![], LoopUsage::default()));
+        let (outcome, calls) = run_rounds(dir.path(), rounds).await;
+        assert_eq!(outcome.response_text, "done");
+        assert_eq!(calls, 12);
     }
 
     /// R41/563 号：计量挂线——开局入表（system+历史+指令）、每轮 usage 入锚、

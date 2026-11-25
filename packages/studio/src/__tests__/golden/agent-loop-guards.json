@@ -1,15 +1,30 @@
 {
   "_comment": [
-    "交互聊天循环的「未知工具守卫」——两腿共用对照表。",
-    "口径：连续 maxConsecutiveUnknownToolRounds 轮「整轮只调了工具表里没有的工具」就停止回合。",
-    "不存在的工具什么都不会执行，整轮都是它 = 零进展；夹着已知工具的轮次算有进展、连续计数归零。",
-    "背景（修复前实跑，回环上游对带工具的请求恒回一个不存在的工具）：Node 腿的聊天循环没有任何",
-    "轮次上限（pi-agent-core 0.73.1 的循环没有上限，收尾全靠模型自己调 finish_turn），20 秒打了",
-    "690 次上游请求且不自行停止，上下文压缩成功后继续循环；产品引擎每条用户消息最多 12 轮",
+    "交互聊天循环的回合守卫——两腿共用对照表。",
+    "背景（修复前实跑，回环上游）：Node 腿的聊天循环没有任何轮次上限（pi-agent-core 0.73.1",
+    "的循环没有上限，收尾全靠模型自己调 finish_turn）。模型卡住时 15–20 秒打了 298–690 次",
+    "上游请求且不自行停止，上下文压缩成功后继续循环；产品引擎每条用户消息最多 12 轮",
     "（MAX_ROUNDS），打满后以空回复收场。",
-    "Node 腿：packages/core/src/__tests__/unknown-tool-loop.flow.test.ts（到上限 = 回合失败并给出原因）；",
-    "产品引擎：engine-rs/src/interaction/agent_loop.rs 的单测（到上限 = 提前结束，结局与轮次上限相同）。",
-    "两腿测试各读一次本文件：上界、下界与归零都用例钉住，改这个数必须两腿同时改。"
+    "三层快停，只认「定义上没有进展」的轮次；正常流程只要每轮有新动作就碰不到：",
+    "  maxConsecutiveUnknownToolRounds：连续 N 轮「整轮只调了工具表里没有的工具」——什么都不会执行。",
+    "  maxConsecutiveFailedToolRounds：连续 N 轮「整轮的工具结果全是错误」——一次都没成。",
+    "    仅 Node 腿：领域层的失败结果是当正常文本返回的，不计入；产品引擎的文件工具没有",
+    "    精确的失败标记（只有文本启发式），不用启发式做停止判定。",
+    "  maxRepeatedRounds + repeatLookbackRounds：本轮与本回合最近 repeatLookbackRounds 轮里的某一轮",
+    "    完全相同（调用与结果都一样），连续 maxRepeatedRounds 轮如此——同样的动作拿到同样的结果。",
+    "    参数变了或结果变了都算新的一轮；窗口每个请求开头清空。",
+    "硬上限（仅 Node 腿）：maxModelRoundsPerTurn = 每回合的模型调用次数，环境变量",
+    "  INKOS_AGENT_MAX_ROUNDS_PER_TURN 可调（只认正整数）。前三层兜不住「每轮都有新动作却",
+    "  永远不收尾」的模型，上限保证任何形态都有界。产品引擎自己的 12 轮上限更紧，不读这一项。",
+    "阈值是按流程形态定的经验值，没有真实会话样本可校准（本机只有测试残留）。",
+    "Node 腿：packages/core/src/__tests__/agent-turn-guard.flow.test.ts（到阈值 = 回合失败并给出原因）；",
+    "产品引擎：engine-rs/src/interaction/agent_loop.rs 的单测（到阈值 = 提前结束，结局与轮次上限相同）。",
+    "两腿测试各读一次本文件：上界、下界与归零都用例钉住。未知工具与原地重复两项两腿同时改；",
+    "全部失败与硬上限只有 Node 腿读。"
   ],
-  "maxConsecutiveUnknownToolRounds": 5
+  "maxConsecutiveUnknownToolRounds": 5,
+  "maxConsecutiveFailedToolRounds": 8,
+  "maxRepeatedRounds": 6,
+  "repeatLookbackRounds": 8,
+  "maxModelRoundsPerTurn": 100
 }
