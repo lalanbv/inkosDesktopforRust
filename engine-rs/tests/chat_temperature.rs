@@ -214,3 +214,98 @@ async fn chat_temperature_matches_the_shared_table() {
         assert_eq!(seen, vec![expected; seen.len()], "{name}");
     }
 }
+
+/// 按界面的保存形态走一遍（Node 腿 `chat-temperature.flow.test.ts` 同一用例）：
+/// 服务详情页保存的是数组形态的服务项（`PUT /services/config`），temperature 为
+/// 数值；「使用默认」保存 null。填 0.3 → 聊天带 0.3；使用默认 → 不带。
+#[tokio::test]
+async fn ui_shaped_save_drives_chat_temperature() {
+    let (base_url, captured) = spawn_capture_llm().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("inkos.json"),
+        json!({
+            "version": "0.1.0",
+            "name": "temperature",
+            "language": "en",
+            "llm": { "defaultModel": "fixture-model", "services": [] },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    inkos_engine::llm::secrets::save_secrets(
+        root,
+        &inkos_engine::llm::secrets::SecretsFile {
+            services: [(
+                "custom:fixture".to_string(),
+                inkos_engine::llm::secrets::ServiceSecret {
+                    api_key: test_key(),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        },
+    )
+    .unwrap();
+
+    let app = app(root);
+    let (status, body) = call(
+        app.clone(),
+        Method::POST,
+        "/api/v1/sessions",
+        Some(json!({ "sessionKind": "chat" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let session_id = body["session"]["sessionId"].as_str().unwrap();
+    let save_body = |temperature: Value| {
+        json!({
+            "service": "custom:fixture",
+            "defaultModel": "fixture-model",
+            "services": [{
+                "service": "custom",
+                "temperature": temperature,
+                "apiFormat": "chat",
+                "stream": false,
+                "models": ["fixture-model"],
+                "name": "fixture",
+                "baseUrl": base_url,
+            }],
+        })
+    };
+    let chat_body = || {
+        json!({
+            "instruction": "Explain a scene.",
+            "sessionId": session_id,
+            "model": "fixture-model",
+            "service": "custom:fixture",
+        })
+    };
+
+    for (step, temperature, expected) in [
+        ("还没设置过", Value::Null, None),
+        ("界面填 0.3 并保存", json!(0.3), Some(0.3)),
+        ("点「使用默认」保存", Value::Null, None),
+    ] {
+        captured.lock().unwrap().clear();
+        let (status, body) = call(
+            app.clone(),
+            Method::PUT,
+            "/api/v1/services/config",
+            Some(save_body(temperature)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{step}: {body}");
+        let (status, body) = call(
+            app.clone(),
+            Method::POST,
+            "/api/v1/agent",
+            Some(chat_body()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{step}: {body}");
+        let seen = captured.lock().unwrap().clone();
+        assert_eq!(seen, vec![expected; seen.len()], "{step}");
+    }
+}

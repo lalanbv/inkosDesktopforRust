@@ -141,4 +141,45 @@ describe("interactive chat temperature (shared parity table)", () => {
       await server.close();
     }
   }, 30000);
+
+  // `saveServiceConfig`（pages/service-detail-state.ts）保存服务项时发给
+  // `PUT /services/config` 的请求体，逐字段同形（数组形态；temperature 为数值，
+  // 「使用默认」为 null）。captureBaseUrl 是本用例的回环采集服务地址。
+  const uiSaveBody = (captureBaseUrl: string, temperature: number | null) => ({
+    service: "custom:fixture",
+    defaultModel: "fixture-model",
+    services: [{ service: "custom", temperature, apiFormat: "chat", stream: false, models: ["fixture-model"], name: "fixture", baseUrl: captureBaseUrl }],
+  });
+
+  it("按界面的保存形态走一遍：服务详情页填随机性 → 聊天带上；点「使用默认」→ 聊天不带", async () => {
+    const server = await upstream();
+    try {
+      const root = await project(server.baseUrl, [], "fixture-model");
+      const app = createStudioServer({} as never, root);
+      const saveAsUiDoes = async (temperature: number | null) => {
+        const saved = await app.request("/api/v1/services/config", { ...post(uiSaveBody(server.baseUrl, temperature)), method: "PUT" });
+        expect(saved.status, await saved.clone().text()).toBe(200);
+      };
+      const created = await (await app.request("/api/v1/sessions", post({ sessionKind: "chat" }))).json() as { session: { sessionId: string } };
+      sessions.push(created.session.sessionId);
+      const send = async () => {
+        const before = server.captured.length;
+        const response = await app.request("/api/v1/agent", post({ sessionId: created.session.sessionId, instruction: "Explain a scene.", model: "fixture-model", service: "custom:fixture" }));
+        expect(response.status).toBe(200);
+        return server.captured.slice(before).map((body) => ("temperature" in body ? (body.temperature as number | null) : null));
+      };
+
+      // 还没设置过：不带。
+      await saveAsUiDoes(null);
+      expect(await send()).toEqual([null]);
+      // 界面填 0.3 并保存。
+      await saveAsUiDoes(0.3);
+      expect(await send()).toEqual([0.3]);
+      // 点「使用默认」保存 → 不再带。
+      await saveAsUiDoes(null);
+      expect(await send()).toEqual([null]);
+    } finally {
+      await server.close();
+    }
+  }, 30000);
 });
