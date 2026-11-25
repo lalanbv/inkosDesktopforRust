@@ -213,7 +213,7 @@ import {
 } from "@actalk/inkos-core";
 import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
-import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, sessionTreeProjection, syncWorkSourceArtifacts, loadWritingLog, promptOverridePath, writePromptOverride, removePromptOverride, appendPromptVersion, listPromptVersions, readPromptVersion } from "@actalk/inkos-core";
+import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, sessionTreeProjection, syncWorkSourceArtifacts, loadWritingLog, promptOverridePath, writePromptOverride, removePromptOverride, appendPromptVersion, listPromptVersions, readPromptVersion, trashBook } from "@actalk/inkos-core";
 import { BUILTIN_PROMPT_PACKS, BUILTIN_PROMPTS } from "@actalk/inkos-core/prompts/builtin-prompts-data";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { buildTarArchive, listArchiveFiles } from "../lib/tar-write.js";
@@ -6648,6 +6648,11 @@ function yamlScalar(value: unknown): string {
     "radar",
     "worlds",
   ] as const;
+  // R58/1676 号：回收站（`.trash`）不进备份——章级 `chapters/.trash/`（删最新章、结构合并、
+  // 回滚批次都在这里）留在盘上、不拷进 staging。备份保的是在用的数据；回收站带进包里只会
+  // 让包变大、还原时把已废内容一并带回来。项目根顶层的书级回收站 .trash/ 不在白名单里，
+  // 本就不进包。Rust `copy_recursive` 同一条规则。
+  const withoutTrash = (source: string) => !source.split(/[\\/]/u).includes(".trash");
 
   app.get("/api/v1/backup/export", async (c) => {
     const includeSecrets = c.req.query("includeSecrets") === "1";
@@ -6676,21 +6681,21 @@ function yamlScalar(value: unknown): string {
       const source = join(root, entry);
       if (!(await stat(source).then(() => true).catch(() => false))) continue;
       if (entry !== ".inkos") {
-        await cp(source, join(staging, entry), { recursive: true });
+        await cp(source, join(staging, entry), { recursive: true, filter: withoutTrash });
         continue;
       }
       const inkosDir = join(staging, ".inkos");
       await mkdir(inkosDir, { recursive: true });
       for (const child of await readdir(source)) {
         if (child === "secrets.json" && !includeSecrets) continue;
-        await cp(join(source, child), join(inkosDir, child), { recursive: true });
+        await cp(join(source, child), join(inkosDir, child), { recursive: true, filter: withoutTrash });
       }
     }
     // 940 号：includeSessions=1 真正打包 sessions/（原形态参数仅进
     // manifest scope、打包范围静默忽略=参数骗人；sessions/ 为会话 JSONL
     // 用户创作上下文）。默认仍排除。
     if (includeSessions && (await access(join(root, "sessions")).then(() => true).catch(() => false))) {
-      await cp(join(root, "sessions"), join(staging, "sessions"), { recursive: true });
+      await cp(join(root, "sessions"), join(staging, "sessions"), { recursive: true, filter: withoutTrash });
     }
     let fileCount = 0;
     let totalBytes = 0;
@@ -9027,13 +9032,17 @@ function yamlScalar(value: unknown): string {
 
   app.delete("/api/v1/books/:id", async (c) => {
     const id = c.req.param("id");
-    const bookDir = state.bookDir(id);
     try {
-      const { rm } = await import("node:fs/promises");
-      await rm(bookDir, { recursive: true, force: true });
+      // R58/1676 号：删书不硬删——整个作品目录（清单 + source/ + 导出产物）移进项目级回收站
+      // `{root}/.trash/books/{id}--{ts}/`。此前只 rm 掉 source/、清单留在 works 里：书删了
+      // 却还挂在「未完成初始化的作品」下。rename 失败直接报错，不降级为硬删。
+      await trashBook(root, id);
       broadcast("book:deleted", { bookId: id });
       return c.json({ ok: true, bookId: id });
     } catch (e) {
+      if ((e as { code?: unknown } | null)?.code === "NOT_A_BOOK") {
+        return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+      }
       return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
     }
   });

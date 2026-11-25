@@ -19,5 +19,6 @@ pub mod reducer;
 pub mod runtime_state_store;
 pub mod state_bootstrap;
 pub mod store;
+pub mod trash;
 pub mod validator;
 pub mod volumes;

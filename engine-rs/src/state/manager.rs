@@ -47,6 +47,15 @@ pub enum StateManagerError {
     Io(#[from] std::io::Error),
 }
 
+/// [`StateManager::trash_book`] 的结果（R58/1676 号）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TrashBook {
+    /// 书目录已移进回收站；值是它在回收站里的路径。
+    Trashed(PathBuf),
+    /// 没有这本书。
+    Missing,
+}
+
 impl StateManager {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
         StateManager {
@@ -64,6 +73,43 @@ impl StateManager {
 
     pub fn book_dir(&self, book_id: &str) -> PathBuf {
         self.books_dir().join(book_id)
+    }
+
+    /// 项目级回收站（R58/1676 号）：`{projectRoot}/.trash/books/`——与 books 根同级。
+    pub fn book_trash_dir(&self) -> PathBuf {
+        self.project_root.join(".trash").join("books")
+    }
+
+    /// 删书：整个书目录移进项目级回收站，不硬删。
+    ///
+    /// 返回 [`TrashBook::Trashed`]（移走了，带回收站里的路径）或 [`TrashBook::Missing`]
+    /// （没有这本书——与之前的删除一样不报错）。rename 失败直接返回错误，不降级为硬删。
+    /// 回收站在 books 根之外，所以 `book_id` 必须是安全的路径段（否则 `books/<id>`
+    /// 拼出来的就不是书目录）。
+    pub async fn trash_book(&self, book_id: &str, now_millis: u64) -> Result<TrashBook, String> {
+        if !crate::utils::is_safe_book_id(book_id) {
+            return Err("Invalid book id".to_string());
+        }
+        let book_dir = self.book_dir(book_id);
+        if !tokio::fs::try_exists(&book_dir).await.unwrap_or(false) {
+            return Ok(TrashBook::Missing);
+        }
+        let trash_dir = self.book_trash_dir();
+        let entry = crate::state::trash::reserve_dir(
+            &trash_dir,
+            &crate::state::trash::trashed_book_name(book_id, now_millis),
+        )
+        .await
+        .map_err(|error| format!("Cannot create the book trash: {error}"))?;
+        let trashed = trash_dir.join(&entry);
+        tokio::fs::rename(&book_dir, &trashed)
+            .await
+            .map_err(|error| {
+                // 目标目录是这个函数刚建出来的空目录；移不进去就不留它。
+                let _ = std::fs::remove_dir(&trashed);
+                format!("Cannot move book \"{book_id}\" to the trash: {error}")
+            })?;
+        Ok(TrashBook::Trashed(trashed))
     }
 
     pub fn state_dir(&self, book_id: &str) -> PathBuf {
@@ -466,21 +512,20 @@ impl StateManager {
         true
     }
 
-    /// 回滚到指定章快照：删除其后所有章节产物（md/快照/runtime/drafts/
-    /// sqlite 加速索引），索引收敛到 kept。返回被废弃的章号列表
-    /// （48 号；对齐 TS rollbackToChapter）。
+    /// 回滚到指定章快照：目标章之后的章节产物（md/快照/runtime/drafts）不再硬删，
+    /// 整批移进 `chapters/.trash/rollback-{ts}-{target}/`；索引收敛到 kept。返回被
+    /// 废弃的章号列表。
+    ///
+    /// R58/1676 号（对齐 TS `rollbackToChapter`）。顺序：先把所有要废、要被覆盖的
+    /// 条目移进回收站批次（整批移完才动别的），再恢复快照、删 sqlite 加速索引
+    /// （可重建的派生物，不进回收站）、写索引。移的过程中或之后任何一步失败，已移项
+    /// 按逆序 rename 回原路径——盘面与操作前一致，不再 `let _ =` 吞错。
     pub async fn rollback_to_chapter(
         &self,
         book_id: &str,
         target_chapter: u32,
     ) -> Result<Vec<u32>, String> {
-        if !self.restore_state(book_id, target_chapter).await {
-            return Err(format!(
-                "Cannot restore snapshot for chapter {target_chapter} in \"{book_id}\""
-            ));
-        }
         let book_dir = self.book_dir(book_id);
-        let chapters_dir = book_dir.join("chapters");
         let index = self
             .load_chapter_index(book_id)
             .await
@@ -499,58 +544,108 @@ impl StateManager {
 
         // 章节正文与草稿（`NNNN_title.md` / legacy `NNNN-title.md` 前缀数字 > target；
         // 807 号：与索引重建同口径，旧章不得逃过删除）。
-        for dir in [chapters_dir, book_dir.join("story").join("drafts")] {
-            if let Ok(mut entries) = tokio::fs::read_dir(&dir).await {
-                while let Ok(Some(entry)) = entries.next_entry().await {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    let Some(num) = leading_number(&name) else {
-                        continue;
-                    };
-                    if num > target_chapter {
-                        let _ = tokio::fs::remove_file(entry.path()).await;
-                    }
-                }
-            }
+        let mut relatives = Vec::new();
+        for dir in ["chapters", "story/drafts"] {
+            relatives.extend(
+                discarded_by_number(&book_dir.join(dir), dir, target_chapter, leading_number).await,
+            );
         }
         // 快照目录（目录名数字 > target）。
-        let snapshots_dir = book_dir.join("story").join("snapshots");
-        if let Ok(mut entries) = tokio::fs::read_dir(&snapshots_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if let Ok(num) = name.parse::<u32>() {
-                    if num > target_chapter {
-                        let _ = tokio::fs::remove_dir_all(entry.path()).await;
-                    }
+        relatives.extend(
+            discarded_by_number(
+                &book_dir.join("story").join("snapshots"),
+                "story/snapshots",
+                target_chapter,
+                |name| name.parse::<u32>().ok(),
+            )
+            .await,
+        );
+        // runtime 工件（`chapter-NN.` 前缀 > target）。
+        relatives.extend(
+            discarded_by_number(
+                &book_dir.join("story").join("runtime"),
+                "story/runtime",
+                target_chapter,
+                |name| {
+                    name.strip_prefix("chapter-").and_then(|rest| {
+                        rest.chars()
+                            .take_while(|c| c.is_ascii_digit())
+                            .collect::<String>()
+                            .parse::<u32>()
+                            .ok()
+                    })
+                },
+            )
+            .await,
+        );
+        // 恢复快照会覆盖或删掉真相文件、结构化状态；索引会被改写。原样一并入批——
+        // 批次因此是「回滚前」的完整切片（除可重建的派生物）。
+        for file in crate::state::trash::ROLLBACK_TRUTH_FILES {
+            relatives.push(format!("story/{file}"));
+        }
+        relatives.extend(
+            crate::state::trash::ROLLBACK_TRUTH_PATHS
+                .iter()
+                .map(|path| (*path).to_string()),
+        );
+
+        let trash_parent = book_dir.join("chapters").join(".trash");
+        let batch_name = crate::state::trash::reserve_dir(
+            &trash_parent,
+            &crate::state::trash::trash_batch_name(
+                crate::state::trash::now_millis(),
+                target_chapter,
+            ),
+        )
+        .await
+        .map_err(|error| format!("Rollback failed: cannot create the trash batch: {error}"))?;
+        let batch = format!("chapters/.trash/{batch_name}");
+        let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for relative in &relatives {
+            if let Err(error) =
+                crate::state::trash::move_into_batch(&book_dir, &batch, relative, &mut moved).await
+            {
+                let stranded = crate::state::trash::undo_moves(&moved).await;
+                if stranded.is_empty() {
+                    let _ = tokio::fs::remove_dir_all(book_dir.join(&batch)).await;
                 }
+                return Err(format!(
+                    "Rollback failed while moving {relative} to the trash batch: {error}{}",
+                    crate::state::trash::stranded_note(&stranded)
+                ));
             }
         }
-        // runtime 工件（`chapter-NN.` 前缀 > target）。
-        let runtime_dir = book_dir.join("story").join("runtime");
-        if let Ok(mut entries) = tokio::fs::read_dir(&runtime_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let Some(num) = name.strip_prefix("chapter-").and_then(|rest| {
-                    rest.chars()
-                        .take_while(|c| c.is_ascii_digit())
-                        .collect::<String>()
-                        .parse::<u32>()
-                        .ok()
-                }) else {
-                    continue;
-                };
-                if num > target_chapter {
-                    let _ = tokio::fs::remove_file(entry.path()).await;
-                }
+        if moved.is_empty() {
+            // 没有可废的内容：不留一个空批次目录。
+            let _ = tokio::fs::remove_dir(book_dir.join(&batch)).await;
+        }
+
+        if !self.restore_state(book_id, target_chapter).await {
+            let stranded = crate::state::trash::undo_moves(&moved).await;
+            if stranded.is_empty() {
+                let _ = tokio::fs::remove_dir_all(book_dir.join(&batch)).await;
             }
+            return Err(format!(
+                "Cannot restore snapshot for chapter {target_chapter} in \"{book_id}\"{}",
+                crate::state::trash::stranded_note(&stranded)
+            ));
         }
         // sqlite 加速索引（防废弃章回流检索）。
         for db_file in ["memory.db", "memory.db-shm", "memory.db-wal"] {
             let _ = tokio::fs::remove_file(book_dir.join("story").join(db_file)).await;
         }
 
-        self.save_chapter_index(book_id, &kept)
-            .await
-            .map_err(|e| e.to_string())?;
+        if let Err(error) = self.save_chapter_index(book_id, &kept).await {
+            let stranded = crate::state::trash::undo_moves(&moved).await;
+            if stranded.is_empty() {
+                let _ = tokio::fs::remove_dir_all(book_dir.join(&batch)).await;
+            }
+            return Err(format!(
+                "Rollback failed while saving the chapter index: {}{}",
+                error,
+                crate::state::trash::stranded_note(&stranded)
+            ));
+        }
         Ok(discarded)
     }
 
@@ -655,6 +750,28 @@ pub(crate) fn leading_number(name: &str) -> Option<u32> {
         .captures(name)
         .and_then(|caps| caps.get(1))
         .and_then(|m| m.as_str().parse().ok())
+}
+
+/// 回滚要废的条目：`dir` 下名字经 `parse` 得到的章号大于 `target` 的那些，列成
+/// `{relative_dir}/<name>`（排序——批次内的移动顺序稳定）。目录不存在 → 空。
+async fn discarded_by_number(
+    dir: &Path,
+    relative_dir: &str,
+    target: u32,
+    parse: impl Fn(&str) -> Option<u32>,
+) -> Vec<String> {
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return Vec::new();
+    };
+    let mut relatives = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if parse(&name).is_some_and(|number| number > target) {
+            relatives.push(format!("{relative_dir}/{name}"));
+        }
+    }
+    relatives.sort();
+    relatives
 }
 
 /// 正典章节文件名（`NNNN_标题.md`，writer 落盘形态）。
@@ -804,6 +921,310 @@ mod tests {
             manager.resolve_control_document_language("zh-book").await,
             WritingLanguage::En
         );
+    }
+
+    fn write_book_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// 目录下的全部文件：相对路径（POSIX 分隔）→ 字节。
+    fn tree(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        fn walk(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(root, &path, out);
+                } else {
+                    out.insert(
+                        path.strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                        std::fs::read(&path).unwrap(),
+                    );
+                }
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        walk(root, root, &mut out);
+        out
+    }
+
+    /// R58 夹具：三章（三种命名形态）、草稿、快照 0–3、runtime 工件、真相文件、结构化
+    /// 状态、sqlite 加速索引；章节索引落盘。返回书目录。
+    async fn rollback_fixture(manager: &StateManager) -> PathBuf {
+        let book = manager.book_dir("rb");
+        for (name, content) in [
+            ("0001_风起.md", "c1"),
+            ("0002-云涌.md", "c2"),
+            ("0003.md", "c3"),
+        ] {
+            write_book_file(&book.join("chapters").join(name), content);
+        }
+        write_book_file(
+            &book.join("story").join("drafts").join("0002_云涌.md"),
+            "d2",
+        );
+        write_book_file(&book.join("story").join("drafts").join("0003.md"), "d3");
+        for n in 0..=3 {
+            let snapshot = book.join("story").join("snapshots").join(n.to_string());
+            write_book_file(&snapshot.join("current_state.md"), &format!("state-{n}"));
+            write_book_file(&snapshot.join("pending_hooks.md"), &format!("hooks-{n}"));
+            write_book_file(
+                &snapshot.join("chapter_summaries.md"),
+                &format!("summaries-{n}"),
+            );
+            write_book_file(
+                &snapshot.join("state").join("manifest.json"),
+                &format!("manifest-{n}"),
+            );
+        }
+        for name in [
+            "chapter-01.trace.json",
+            "chapter-02.trace.json",
+            "chapter-03.context.json",
+        ] {
+            write_book_file(&book.join("story").join("runtime").join(name), name);
+        }
+        for (name, content) in [
+            ("current_state.md", "state-3"),
+            ("pending_hooks.md", "hooks-3"),
+            ("chapter_summaries.md", "summaries-3"),
+            ("particle_ledger.md", "ledger-3"),
+        ] {
+            write_book_file(&book.join("story").join(name), content);
+        }
+        write_book_file(
+            &book.join("story").join("state").join("manifest.json"),
+            "manifest-3",
+        );
+        write_book_file(
+            &book.join("story").join("state").join("extra.json"),
+            "extra-3",
+        );
+        write_book_file(&book.join("story").join("memory.db"), "db");
+        write_book_file(&book.join("story").join("memory.db-wal"), "wal");
+        let index = manager.load_chapter_index("rb").await.unwrap();
+        assert_eq!(index.len(), 3, "{index:?}");
+        manager.save_chapter_index("rb", &index).await.unwrap();
+        book
+    }
+
+    /// 回滚到第 1 章之后仍在原位的文件（目标章及之前的产物、快照 0 与 1）；夹具里其余
+    /// 文件都该进回收站批次。
+    const STILL_LIVE_AFTER_ROLLBACK_TO_1: [&str; 10] = [
+        "chapters/0001_风起.md",
+        "story/runtime/chapter-01.trace.json",
+        "story/snapshots/0/chapter_summaries.md",
+        "story/snapshots/0/current_state.md",
+        "story/snapshots/0/pending_hooks.md",
+        "story/snapshots/0/state/manifest.json",
+        "story/snapshots/1/chapter_summaries.md",
+        "story/snapshots/1/current_state.md",
+        "story/snapshots/1/pending_hooks.md",
+        "story/snapshots/1/state/manifest.json",
+    ];
+
+    fn assert_no_trash_batch(book: &Path) {
+        let leftover = std::fs::read_dir(book.join("chapters").join(".trash"))
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(leftover, 0, "不该留下回收站批次");
+    }
+
+    /// R58/1676 号：回滚不硬删——被废的章、草稿、快照、runtime 工件，连同会被覆盖或
+    /// 删除的真相文件、结构化状态、章节索引，整批进
+    /// `chapters/.trash/rollback-{ts}-{target}/`，书内相对路径原样、逐字节等于回滚前。
+    /// sqlite 加速索引是可重建的派生物，照旧直接删。
+    #[tokio::test]
+    async fn rollback_moves_discarded_content_into_a_trash_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let book = rollback_fixture(&manager).await;
+        let before = tree(&book);
+
+        let mut discarded = manager.rollback_to_chapter("rb", 1).await.unwrap();
+        discarded.sort_unstable();
+        assert_eq!(discarded, vec![2, 3]);
+
+        let trash = book.join("chapters").join(".trash");
+        let batches: Vec<String> = std::fs::read_dir(&trash)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(batches.len(), 1, "{batches:?}");
+        assert!(
+            batches[0].starts_with("rollback-") && batches[0].ends_with("-1"),
+            "{}",
+            batches[0]
+        );
+        let batch = trash.join(&batches[0]);
+
+        let after = tree(&book);
+        let trashed = tree(&batch);
+        for kept in STILL_LIVE_AFTER_ROLLBACK_TO_1 {
+            assert_eq!(after.get(kept), before.get(kept), "{kept} 不该动");
+        }
+        let mut expected: Vec<&str> = before
+            .keys()
+            .map(String::as_str)
+            .filter(|rel| !STILL_LIVE_AFTER_ROLLBACK_TO_1.contains(rel))
+            .collect();
+        // 派生物不进回收站。
+        expected.retain(|rel| !rel.starts_with("story/memory.db"));
+        let missing: Vec<&str> = expected
+            .iter()
+            .copied()
+            .filter(|rel| !trashed.contains_key(*rel))
+            .collect();
+        let extra: Vec<&str> = trashed
+            .keys()
+            .map(String::as_str)
+            .filter(|rel| !expected.contains(rel))
+            .collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "批次缺：{missing:?}；批次多：{extra:?}"
+        );
+        for rel in expected {
+            assert_eq!(
+                trashed.get(rel),
+                before.get(rel),
+                "{rel} 应逐字节等于回滚前"
+            );
+        }
+        // 状态恢复到快照 1；快照 1 没有的可选文件与多余的结构化状态文件不在了。
+        assert_eq!(after["story/current_state.md"], b"state-1");
+        assert_eq!(after["story/pending_hooks.md"], b"hooks-1");
+        assert_eq!(after["story/chapter_summaries.md"], b"summaries-1");
+        assert_eq!(after["story/state/manifest.json"], b"manifest-1");
+        assert!(!after.contains_key("story/particle_ledger.md"));
+        assert!(!after.contains_key("story/state/extra.json"));
+        assert!(!after.contains_key("story/memory.db"));
+        assert!(!after.contains_key("story/memory.db-wal"));
+        let numbers: Vec<u32> = manager
+            .load_chapter_index("rb")
+            .await
+            .unwrap()
+            .iter()
+            .map(|meta| meta.number)
+            .collect();
+        assert_eq!(numbers, vec![1]);
+    }
+
+    /// R58/1676 号负路径：移的过程中 rename 失败（让 `story/runtime` 不可写）→ 已移项
+    /// 全部回位，盘面与操作前逐字节一致，不留批次目录。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rollback_failure_moves_everything_back() {
+        if std::env::var("USER")
+            .map(|user| user == "root")
+            .unwrap_or(false)
+        {
+            eprintln!("root 无视目录权限——跳过");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let book = rollback_fixture(&manager).await;
+        let before = tree(&book);
+        let runtime = book.join("story").join("runtime");
+        std::fs::set_permissions(
+            &runtime,
+            std::os::unix::fs::PermissionsExt::from_mode(0o555),
+        )
+        .unwrap();
+        let error = manager.rollback_to_chapter("rb", 1).await.unwrap_err();
+        std::fs::set_permissions(
+            &runtime,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        assert!(
+            error.contains("story/runtime") && error.contains("trash batch"),
+            "{error}"
+        );
+        assert_eq!(tree(&book), before, "回位之后盘面应与操作前逐字节一致");
+        assert_no_trash_batch(&book);
+    }
+
+    /// R58/1676 号负路径：目标章没有快照 → 回滚报错，什么都不动。
+    #[tokio::test]
+    async fn rollback_without_the_target_snapshot_leaves_the_book_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let book = rollback_fixture(&manager).await;
+        std::fs::remove_dir_all(book.join("story").join("snapshots").join("1")).unwrap();
+        let before = tree(&book);
+        let error = manager.rollback_to_chapter("rb", 1).await.unwrap_err();
+        assert!(
+            error.starts_with("Cannot restore snapshot for chapter 1"),
+            "{error}"
+        );
+        assert_eq!(tree(&book), before);
+        assert_no_trash_batch(&book);
+    }
+
+    /// R58/1676 号：删书不硬删——整个书目录进项目级回收站
+    /// `{root}/.trash/books/{id}--{ts}/`，回收站里的相对路径与原书目录一致（含
+    /// `.versions`、章级 `.trash`、导出产物）。书不存在 → Missing；同名已在 → 追加后缀。
+    #[tokio::test]
+    async fn trash_book_moves_the_whole_book_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let book = manager.book_dir("b1");
+        write_book_file(&book.join("book.json"), "{}");
+        write_book_file(&book.join("chapters").join("0001_风起.md"), "c1");
+        write_book_file(
+            &book.join("chapters").join(".trash").join("0009_old.md"),
+            "old",
+        );
+        write_book_file(&book.join(".versions").join("0001").join("v.md"), "v");
+        write_book_file(&book.join("exports").join("b1.epub"), "epub");
+        let before = tree(&book);
+        let trash = manager.book_trash_dir();
+        assert_eq!(trash, dir.path().join(".trash").join("books"));
+
+        assert_eq!(
+            manager.trash_book("missing", 1).await.unwrap(),
+            TrashBook::Missing
+        );
+        assert!(!trash.exists(), "没有书可删时不建回收站");
+
+        let trashed = manager.trash_book("b1", 1_795_599_007_123).await.unwrap();
+        assert_eq!(
+            trashed,
+            TrashBook::Trashed(trash.join("b1--20261125093007"))
+        );
+        assert!(!book.exists());
+        assert_eq!(
+            tree(&trash.join("b1--20261125093007")),
+            before,
+            "回收站里的书应与删之前逐字节一致"
+        );
+        assert!(manager.list_books().await.is_empty());
+
+        // 同一秒内再删一本同 id 的书：追加后缀，不盖上一份。
+        write_book_file(&book.join("book.json"), "{}");
+        let again = manager.trash_book("b1", 1_795_599_007_123).await.unwrap();
+        assert_eq!(
+            again,
+            TrashBook::Trashed(trash.join("b1--20261125093007-2"))
+        );
+        assert_eq!(tree(&trash.join("b1--20261125093007")), before);
+
+        // 不是安全路径段的 id 一律拒绝。
+        for bad in ["../victim", "..", "a/b"] {
+            assert!(manager.trash_book(bad, 1).await.is_err(), "{bad}");
+        }
+        assert!(!dir.path().join("victim").exists());
     }
 
     /// 807 号：rollback 删章与索引重建同口径——legacy 连字符旧章（`NNNN-标题.md`）

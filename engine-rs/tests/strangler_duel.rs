@@ -3997,3 +3997,306 @@ async fn interactive_world_engine_created_world_is_shared_duel() {
         "互动叙事第二批：产品引擎创建的世界 Node 腿读得到（按需迁移 + 文件图谱导入），此后两腿写同一棵树，图谱双向可见"
     );
 }
+
+// ── 1676 号：破坏性操作护栏（R58）─────────────────────────────────────────────
+
+/// 目录下的全部文件：相对路径（POSIX 分隔）→ 字节。
+fn tree_files(root: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+    fn walk(root: &Path, dir: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.insert(
+                    path.strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    std::fs::read(&path).unwrap(),
+                );
+            }
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    walk(root, root, &mut out);
+    out
+}
+
+/// `chapters/.trash/` 里唯一的回滚批次目录。
+fn only_trash_batch(book_tree: &Path) -> PathBuf {
+    let trash = book_tree.join("chapters").join(".trash");
+    let batches: Vec<std::ffi::OsString> = std::fs::read_dir(&trash)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name())
+        .collect();
+    assert_eq!(batches.len(), 1, "{batches:?}");
+    let name = batches[0].to_string_lossy().into_owned();
+    assert!(
+        name.starts_with("rollback-") && name.ends_with("-1"),
+        "{name}"
+    );
+    trash.join(&batches[0])
+}
+
+/// 把两腿各自带时间戳的批次目录名归一成同一个占位——条目集才比得了。
+fn normalize_batch(rel: &str, batch_name: &str) -> String {
+    rel.replace(batch_name, "rollback-*")
+}
+
+/// R58/1676 号：破坏性操作护栏的双端面——同一份书在两腿上各驳回一次、各删一次，
+/// 回收站里的条目集与字节逐项一致。
+///
+/// 两腿写各的树（`books/b1` 与 `works/b1/source`），所以不是共享存储的对跑；比的是
+/// 「同样的书、同样的操作，留下的回收站是不是同一份」。夹具只放两腿恢复逻辑都认的
+/// 文件——旧版可选真相文件（`particle_ledger.md` 等）只有产品引擎会在回滚时清掉，
+/// 是既有的两腿差异，不在这里比。
+#[tokio::test]
+async fn destructive_operations_trash_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    // 章文件用正典形态：Node 腿 `resolveDurableStoryProgress` 的一致性守卫只认 `NNNN_`，
+    // 索引里列着裸章号的章时书架接口回 500（既有缺陷，1676 号立案）——这里测的是回收站。
+    write_fixture_book(
+        &root,
+        &[
+            ("0002_云涌", "云涌", "江面起了雾。"),
+            ("0003_收束", "收束", "渡船靠岸。"),
+        ],
+    );
+    write_fixture_llm(&root, &llm);
+    migrate_fixture_to_works(&root);
+    let rust_tree = root.join("books").join("b1");
+    let ts_tree = root.join("works").join("b1").join("source");
+    let seed = |tree: &Path, rel: &str, content: &str| {
+        let path = tree.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    };
+    for tree in [&rust_tree, &ts_tree] {
+        for n in 0..=3 {
+            for (file, kind) in [
+                ("current_state.md", "state"),
+                ("pending_hooks.md", "hooks"),
+                ("chapter_summaries.md", "summaries"),
+            ] {
+                seed(
+                    tree,
+                    &format!("story/snapshots/{n}/{file}"),
+                    &format!("{kind}-{n}"),
+                );
+            }
+            seed(
+                tree,
+                &format!("story/snapshots/{n}/state/manifest.json"),
+                &format!("manifest-{n}"),
+            );
+        }
+        seed(tree, "story/drafts/0002_云涌.md", "draft-2");
+        seed(tree, "story/drafts/0003.md", "draft-3");
+        for chapter in ["01", "02", "03"] {
+            seed(
+                tree,
+                &format!("story/runtime/chapter-{chapter}.trace.json"),
+                &format!("trace-{chapter}"),
+            );
+        }
+        seed(tree, "story/current_state.md", "state-3");
+        seed(tree, "story/pending_hooks.md", "hooks-3");
+        seed(tree, "story/chapter_summaries.md", "summaries-3");
+        seed(tree, "story/state/manifest.json", "manifest-3");
+        seed(tree, "story/memory.db", "derived");
+    }
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+    // 两棵树本来就有字节不同的文件（产品引擎那棵是夹具手写的紧凑 JSON，Node 腿那棵经
+    // 迁移脚本规范化过：章节索引、book.json）。这些只比路径；其余逐字节。
+    let rust_before = tree_files(&rust_tree);
+    let ts_before = tree_files(&ts_tree);
+    let rust_index_before = rust_before["chapters/index.json"].clone();
+    let ts_index_before = ts_before["chapters/index.json"].clone();
+
+    // ① 驳回第 2 章：两腿同码同体，被废内容各进自己那棵树的回收站批次——同一份。
+    let rejected = json!({
+        "ok": true, "chapterNumber": 2, "status": "rejected", "rolledBackTo": 1, "discarded": [2, 3],
+    });
+    let (status, body) = post_json(&rust, "/api/v1/books/b1/chapters/2/reject", "").await;
+    assert_eq!((status, body), (200, rejected.clone()), "产品引擎");
+    let (status, body) = post_json(&ts, "/api/v1/books/b1/chapters/2/reject", "").await;
+    assert_eq!((status, body), (200, rejected.clone()), "Node 腿");
+    let rust_batch = only_trash_batch(&rust_tree);
+    let ts_batch = only_trash_batch(&ts_tree);
+    let mut rust_trash = tree_files(&rust_batch);
+    let mut ts_trash = tree_files(&ts_batch);
+    assert_eq!(
+        rust_trash.remove("chapters/index.json"),
+        Some(rust_index_before),
+        "产品引擎批次里的索引应等于回滚前"
+    );
+    assert_eq!(
+        ts_trash.remove("chapters/index.json"),
+        Some(ts_index_before),
+        "Node 腿批次里的索引应等于回滚前"
+    );
+    assert_eq!(rust_trash, ts_trash, "回滚批次两腿应逐项逐字节一致");
+    for (rel, bytes) in &rust_trash {
+        assert_ne!(rel.as_str(), "story/memory.db", "派生物不进回收站");
+        assert!(!bytes.is_empty(), "{rel}");
+    }
+    assert!(rust_trash.contains_key("chapters/0002_云涌.md"));
+    assert!(rust_trash.contains_key("story/snapshots/3/current_state.md"));
+    // 原位：章正文只剩第 1 章，状态回到快照 1，派生物直接删。
+    for tree in [&rust_tree, &ts_tree] {
+        assert!(tree.join("chapters").join("0001_风起.md").is_file());
+        assert!(!tree.join("chapters").join("0002_云涌.md").exists());
+        assert!(!tree.join("story").join("snapshots").join("3").exists());
+        assert_eq!(
+            std::fs::read_to_string(tree.join("story").join("current_state.md")).unwrap(),
+            "state-1"
+        );
+        assert!(!tree.join("story").join("memory.db").exists());
+    }
+
+    // ② 删书：两腿同码同体，整个书目录进项目级回收站；书从两腿的书架上消失。
+    let client = loopback_client();
+    let deleted = json!({ "ok": true, "bookId": "b1" });
+    let (status, body) = send_json(
+        &client,
+        &rust,
+        reqwest::Method::DELETE,
+        "/api/v1/books/b1",
+        None,
+    )
+    .await;
+    assert_eq!((status, body), (200, deleted.clone()), "产品引擎");
+    let (status, body) = send_json(
+        &client,
+        &ts,
+        reqwest::Method::DELETE,
+        "/api/v1/books/b1",
+        None,
+    )
+    .await;
+    assert_eq!((status, body), (200, deleted.clone()), "Node 腿");
+    assert!(!rust_tree.exists());
+    assert!(!root.join("works").join("b1").exists());
+    let trash = root.join(".trash").join("books");
+    let entries: Vec<std::path::PathBuf> = std::fs::read_dir(&trash)
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    // Node 腿删的是整个作品目录（带清单）；产品引擎删的是书目录。认领：有 work.json 的是 Node 腿的。
+    let (ts_entry, rust_entry) = {
+        let mut ts = None;
+        let mut rust = None;
+        for entry in &entries {
+            if entry.join("work.json").is_file() {
+                ts = Some(entry.clone());
+            } else {
+                rust = Some(entry.clone());
+            }
+        }
+        (ts.unwrap(), rust.unwrap())
+    };
+    let rust_book = tree_files(&rust_entry);
+    let rust_batch_name = rust_batch
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let ts_batch_name = ts_batch.file_name().unwrap().to_string_lossy().into_owned();
+    let mut ts_book = std::collections::BTreeMap::new();
+    for (rel, bytes) in tree_files(&ts_entry) {
+        let Some(stripped) = rel.strip_prefix("source/") else {
+            assert_eq!(rel, "work.json", "Node 腿的回收站条目里只该多出清单：{rel}");
+            continue;
+        };
+        ts_book.insert(normalize_batch(stripped, &ts_batch_name), bytes);
+    }
+    let mut rust_book: std::collections::BTreeMap<String, Vec<u8>> = rust_book
+        .into_iter()
+        .map(|(rel, bytes)| (normalize_batch(&rel, &rust_batch_name), bytes))
+        .collect();
+    // 回滚后两腿各自写过的章节索引字节形态不同，只比路径；其余逐字节——除非回滚之前
+    // 两棵树里这个文件就不一样（迁移脚本规范化过）。
+    let rust_index = rust_book
+        .remove("chapters/index.json")
+        .expect("产品引擎回收站里有索引");
+    let ts_index = ts_book
+        .remove("chapters/index.json")
+        .expect("Node 腿回收站里有索引");
+    assert_eq!(rust_book.len(), ts_book.len(), "删书回收站两腿条目数应一致");
+    let same_before = |rel: &str| {
+        let source = rel
+            .strip_prefix("chapters/.trash/rollback-*/")
+            .unwrap_or(rel);
+        rust_before.get(source) == ts_before.get(source)
+    };
+    let mut divergent_before = Vec::new();
+    for (rel, bytes) in &rust_book {
+        match ts_book.get(rel) {
+            None => panic!("Node 腿回收站缺 {rel}"),
+            Some(other) if other == bytes => {}
+            Some(_) if same_before(rel) => panic!("{rel} 两腿回收站字节不一致"),
+            Some(_) => divergent_before.push(rel.clone()),
+        }
+    }
+    assert_eq!(
+        divergent_before,
+        vec!["chapters/.trash/rollback-*/chapters/index.json".to_string()],
+        "回滚之前两棵树里字节不同的，回收站里也只有它（批次里的回滚前索引拷贝）"
+    );
+    for rel in [
+        "book.json",
+        "chapters/0001_风起.md",
+        "chapters/.trash/rollback-*/chapters/0002_云涌.md",
+        "chapters/.trash/rollback-*/story/snapshots/3/current_state.md",
+        "story/story_bible.md",
+    ] {
+        assert!(rust_book.contains_key(rel), "回收站里缺 {rel}");
+    }
+    for (index, leg) in [(rust_index, "产品引擎"), (ts_index, "Node 腿")] {
+        let parsed: Value = serde_json::from_slice(&index).unwrap();
+        let numbers: Vec<u64> = parsed
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|meta| meta["number"].as_u64().unwrap())
+            .collect();
+        assert_eq!(numbers, vec![1], "{leg} 回滚后的索引只该剩第 1 章");
+    }
+
+    let (_, body) = get_json(&rust, "/api/v1/books").await;
+    assert_eq!(
+        body["books"].as_array().map(Vec::len),
+        Some(0),
+        "产品引擎：{body}"
+    );
+    let (status, body) = get_json(&ts, "/api/v1/books").await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["books"].as_array().map(Vec::len),
+        Some(0),
+        "Node 腿：{body}"
+    );
+    assert_eq!(
+        body["incompleteWorkIds"],
+        json!([]),
+        "此前 Node 腿删书只删 source/，清单留下——书挂在「未完成初始化的作品」下"
+    );
+
+    eprintln!(
+        "破坏性操作护栏：驳回与删书两腿都进回收站，条目集与字节逐项一致；Node 腿删书不再留下孤儿清单"
+    );
+}

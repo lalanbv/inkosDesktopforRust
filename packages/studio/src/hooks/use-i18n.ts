@@ -245,7 +245,9 @@ const strings = {
 
   // Book Detail extras
   "book.deleteBook": { zh: "删除书籍", en: "Delete Book" },
-  "book.confirmDelete": { zh: "确认删除此书及所有章节？", en: "Delete this book and all chapters?" },
+  "book.confirmDelete": { zh: "删除此书及所有章节？全书会移入项目回收站，不会立即彻底删除。", en: "Delete this book and all chapters? The whole book moves to the project trash instead of being erased." },
+  // R58/1676 号：驳回钮的两步确认——点名回滚目标与去向。
+  "book.confirmReject": { zh: "驳回后回滚到第 {n} 章的快照，这一章及其后的章节与状态移入回收站。", en: "Rejecting rolls back to the chapter {n} snapshot. This chapter and everything after it move to the trash." },
   "book.settings": { zh: "书籍设置", en: "Book Settings" },
   "book.status": { zh: "状态", en: "Status" },
   "book.drafting": { zh: "草稿中...", en: "Drafting..." },

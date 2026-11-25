@@ -70,6 +70,41 @@ interface ChapterMeta {
   readonly wordCount: number;
 }
 
+/**
+ * R58/1676 号：驳回钮带两步确认（jsdom 可直测）。驳回是回滚的入口——点了就回滚到上一章
+ * 的快照；被废内容进回收站（服务端 `rollback_to_chapter` / `rollbackToChapter`），但
+ * 误触的代价仍是一整段进度的回退，所以先确认、取消零请求。
+ */
+export function RejectChapterButton({ chapterNumber, onReject, t }: {
+  chapterNumber: number;
+  /** 确认之后才调用。 */
+  onReject: () => Promise<void>;
+  t: TFunction;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setConfirming(true)}
+        className="p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-all shadow-sm"
+        title={t("book.reject")}
+      >
+        <X size={14} />
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title={t("book.reject")}
+        message={t("book.confirmReject").replace("{n}", String(chapterNumber - 1))}
+        confirmLabel={t("book.reject")}
+        cancelLabel={t("common.cancel")}
+        variant="danger"
+        onConfirm={() => { setConfirming(false); void onReject(); }}
+        onCancel={() => setConfirming(false)}
+      />
+    </>
+  );
+}
+
 /** 644 号：写作状态提示条（纯移动自 BookDetail 内联 JSX——jsdom 可直测三态）。 */
 export function WriteStatusBanner({ writing, drafting, lastError, t }: {
   writing: boolean;
@@ -1232,16 +1267,14 @@ export function BookDetail({
                           >
                             <Check size={14} />
                           </button>
-                          <button
-                            onClick={async () => {
+                          <RejectChapterButton
+                            chapterNumber={ch.number}
+                            onReject={async () => {
                               try { await postApi(`/books/${bookId}/chapters/${ch.number}/reject`); refetch(); }
                               catch (e) { notifyError("Reject failed")(e); }
                             }}
-                            className="p-2 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive hover:text-white transition-all shadow-sm"
-                            title={t("book.reject")}
-                          >
-                            <X size={14} />
-                          </button>
+                            t={t}
+                          />
                         </>
                       )}
                       <button

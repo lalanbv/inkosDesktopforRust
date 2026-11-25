@@ -537,6 +537,8 @@ export { ScriptCreationAgent, StoryboardCreationAgent, InteractiveFilmCreationAg
 export { BookWriteLockError, StateManager } from "./state/manager.js";
 export { syncChapterWordCounts, type ChapterWordCountChange, type ChapterWordSyncDeps, type ChapterWordSyncResult } from "./state/chapter-word-sync.js";
 export { deleteLatestChapter, type ChapterDeleteDeps, type DeleteLatestChapterOptions, type DeleteLatestChapterResult } from "./state/chapter-delete.js";
+// R58/1676 号：回滚与删书的回收站（名称规则与产品引擎 state/trash.rs 同一条）。
+export { ROLLBACK_TRUTH_FILES, reserveRollbackBatch, trashBatchName, trashBatchWrites, trashBook, trashedBookName } from "./state/trash.js";
 // ── R48a/1641 号：章节结构操作事务（engine-rs chapter_structure.rs 镜像）──
 export {
   chapterSetRevision,

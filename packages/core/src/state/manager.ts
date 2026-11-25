@@ -14,6 +14,7 @@ import {
 } from "../harness/work-store.js";
 import { syncWorkSourceArtifacts } from "../harness/source-sync.js";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { ROLLBACK_TRUTH_FILES, reserveRollbackBatch, trashBatchWrites } from "./trash.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
 import { chapterFileNumber, parseChapterFileName, selectChapterFiles } from "../utils/chapter-files.js";
 
@@ -676,8 +677,10 @@ export class StateManager {
   }
 
   /**
-   * Roll back state to the snapshot at `targetChapter`, removing all chapters
-   * after it and their associated files (chapter markdown, snapshots, runtime).
+   * Roll back state to the snapshot at `targetChapter`. Chapters after it and their
+   * associated files (chapter markdown, snapshots, runtime) leave the book — into the
+   * trash batch `chapters/.trash/rollback-{ts}-{target}/` since R58/1676, never hard
+   * deleted — and the index converges to the kept chapters.
    * Returns the list of chapter numbers that were discarded.
    */
   async rollbackToChapter(
@@ -702,6 +705,8 @@ export class StateManager {
     }
 
     const deletes = new Set(restore.deletes);
+    // R58/1676 号：被废的条目单独留一份——它们要整批拷进回收站，不只是删。
+    const discardedPaths: string[] = [];
     const collectNumberedDeletes = async (
       relativeDir: string,
       numberOf: (name: string) => number | undefined,
@@ -709,7 +714,11 @@ export class StateManager {
       try {
         for (const name of await readdir(join(bookDir, relativeDir))) {
           const number = numberOf(name);
-          if (number !== undefined && number > targetChapter) deletes.add(join(relativeDir, name));
+          if (number !== undefined && number > targetChapter) {
+            const discardedPath = join(relativeDir, name);
+            deletes.add(discardedPath);
+            discardedPaths.push(discardedPath);
+          }
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -732,9 +741,22 @@ export class StateManager {
     for (const file of ["memory.db", "memory.db-shm", "memory.db-wal"]) {
       deletes.add(join("story", file));
     }
+    // R58/1676 号：被废内容不硬删——整批拷进 `chapters/.trash/rollback-{ts}-{target}/`，书内
+    // 相对路径原样保留。连同会被覆盖或删掉的真相文件、结构化状态与章节索引一起：批次因此
+    // 是「回滚前」的完整切片。拷贝与原路径的删除、状态恢复、索引改写在同一个原子文件集里
+    // 提交——要么全部发生，要么盘面与操作前一致。sqlite 加速索引是可重建的派生物，不进
+    // 回收站，照旧直接删。（rust 对偶是 rename 批次 + 回位：engine-rs state/manager.rs）
+    const batch = await reserveRollbackBatch(bookDir, Date.now(), targetChapter);
+    const trashWrites = await trashBatchWrites(bookDir, batch, [
+      ...discardedPaths,
+      ...ROLLBACK_TRUTH_FILES.map((file) => join("story", file)),
+      join("story", "state"),
+      join("chapters", "index.json"),
+    ]);
     await commitAtomicFileSet({
       rootDir: bookDir,
       writes: [
+        ...trashWrites,
         ...restore.writes,
         { relativePath: join("chapters", "index.json"), content: `${JSON.stringify(kept, null, 2)}\n` },
       ],

@@ -75,12 +75,21 @@ fn is_manifest_entry(name: &str) -> bool {
 }
 
 /// 递归复制（.inkos 拆层用）；符号链接按其目标文件/目录复制。
+///
+/// R58/1676 号：回收站目录（`.trash`）不进备份——章级 `chapters/.trash/`（删最新章、
+/// 结构合并、回滚批次都在这里）与 works 下同名的目录留在盘上、不拷进 staging。备份
+/// 保的是在用的数据；回收站是待清理的东西（R60 保留期），带进包里只会让包变大、
+/// 还原时把已废内容一并带回来。项目根顶层的书级回收站 `.trash/` 不在白名单里，
+/// 本就不进包。TS 腿 `cp` 的 filter 同一条规则。
 fn copy_recursive(source: &Path, target: &Path) -> std::io::Result<()> {
     let meta = std::fs::metadata(source)?;
     if meta.is_dir() {
         std::fs::create_dir_all(target)?;
         for child in std::fs::read_dir(source)? {
             let child = child?;
+            if child.file_name() == std::ffi::OsStr::new(".trash") {
+                continue;
+            }
             copy_recursive(&child.path(), &target.join(child.file_name()))?;
         }
         Ok(())
@@ -1166,6 +1175,47 @@ mod tests {
         let gz = run_export(&root, true, false).unwrap();
         let entries = parse_archive(&gz).unwrap().0;
         assert!(entries.iter().any(|e| e.name.contains("secrets.json")));
+    }
+
+    /// R58/1676 号：回收站不进备份——章级（`chapters/.trash/`，含回滚批次）与书级
+    /// （项目根下的 `.trash/books/`）都留在盘上、不进包；在用的数据照常在包里。
+    #[test]
+    fn export_leaves_trash_directories_out() {
+        let (_dir, root) = temp_root();
+        let batch = root
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join(".trash")
+            .join("rollback-20261125093007-1")
+            .join("chapters");
+        std::fs::create_dir_all(&batch).unwrap();
+        std::fs::write(batch.join("0002_x.md"), "discarded").unwrap();
+        let work_trash = root
+            .join("works")
+            .join("w1")
+            .join("source")
+            .join("chapters")
+            .join(".trash");
+        std::fs::create_dir_all(&work_trash).unwrap();
+        std::fs::write(work_trash.join("0002_y.md"), "discarded").unwrap();
+        let book_trash = root.join(".trash").join("books").join("b0--20261125093007");
+        std::fs::create_dir_all(&book_trash).unwrap();
+        std::fs::write(book_trash.join("book.json"), "{}").unwrap();
+
+        let gz = run_export(&root, false, false).unwrap();
+        let entries = parse_archive(&gz).unwrap().0;
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert!(
+            !names.iter().any(|n| n.contains("/.trash")),
+            "回收站不该进备份：{names:?}"
+        );
+        assert!(names.contains(&"inkos-backup/books/b1/book.json"));
+        assert!(names.contains(&"inkos-backup/works/w1/work.json"));
+        // 盘上的回收站原样还在。
+        assert!(batch.join("0002_x.md").is_file());
+        assert!(work_trash.join("0002_y.md").is_file());
+        assert!(book_trash.join("book.json").is_file());
     }
 
     #[test]

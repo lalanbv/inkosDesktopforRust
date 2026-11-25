@@ -53,6 +53,31 @@ impl ChapterVersionSource {
     }
 }
 
+/// 全部版本来源（与 TS `ChapterVersionSource` 联合类型逐项对齐）。
+///
+/// R58/1676 号：`Structure` 是 R48a 章节结构操作的拆前存档来源——枚举里早有它，
+/// 版本 id 的正则却漏了，结构操作前的存档在本腿上列表看不见、恢复报非法 id。
+pub const ALL_VERSION_SOURCES: [ChapterVersionSource; 6] = [
+    ChapterVersionSource::Manual,
+    ChapterVersionSource::Agent,
+    ChapterVersionSource::Revision,
+    ChapterVersionSource::Regeneration,
+    ChapterVersionSource::Restore,
+    ChapterVersionSource::Structure,
+];
+
+const _: () = {
+    // 编译期确认来源枚举六变体齐全（新增变体而漏登记时这里先红）。
+    match ChapterVersionSource::Manual {
+        ChapterVersionSource::Manual
+        | ChapterVersionSource::Agent
+        | ChapterVersionSource::Revision
+        | ChapterVersionSource::Regeneration
+        | ChapterVersionSource::Restore
+        | ChapterVersionSource::Structure => {}
+    }
+};
+
 /// 章节版本元信息。对齐 TS `ChapterVersion`。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChapterVersion {
@@ -63,24 +88,14 @@ pub struct ChapterVersion {
     pub character_count: usize,
 }
 
-const _: () = {
-    // 编译期确认 source 枚举五变体齐全（与 TS 联合类型对齐）。
-    let sources = [
-        ChapterVersionSource::Manual,
-        ChapterVersionSource::Agent,
-        ChapterVersionSource::Revision,
-        ChapterVersionSource::Regeneration,
-        ChapterVersionSource::Restore,
-    ];
-    let _ = sources;
-};
-
 fn version_id_re() -> &'static Regex {
-    // TS: /^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$/
+    // TS: /^(\d{13})_(manual|agent|revision|regeneration|restore|structure)_([0-9a-f-]{36})$/
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"^(\d{13})_(manual|agent|revision|regeneration|restore)_([0-9a-f-]{36})$")
-            .expect("version id regex")
+        Regex::new(
+            r"^(\d{13})_(manual|agent|revision|regeneration|restore|structure)_([0-9a-f-]{36})$",
+        )
+        .expect("version id regex")
     })
 }
 
@@ -347,6 +362,44 @@ mod tests {
                 .is_none()
         );
         assert!(parse_version_id("1700000000000_manual_short").is_none());
+    }
+
+    /// R58/1676 号：每种来源存下的版本都要列得出、读得回。此前 `structure` 漏在正则
+    /// 之外——结构操作（拆分/合并/重排）前的存档在本腿上列表看不见、恢复报非法 id。
+    #[tokio::test]
+    async fn every_version_source_is_listed_and_readable() {
+        let store = InMemoryStateStore::new();
+        for (index, source) in ALL_VERSION_SOURCES.iter().enumerate() {
+            archive_chapter_version(
+                &store,
+                "book",
+                1,
+                &format!("v{index}"),
+                *source,
+                1_700_000_000_000 + index as i64,
+                "",
+            )
+            .await
+            .unwrap();
+        }
+        let versions = list_chapter_versions(&store, "book", 1).await.unwrap();
+        assert_eq!(versions.len(), ALL_VERSION_SOURCES.len(), "{versions:?}");
+        for source in ALL_VERSION_SOURCES {
+            let version = versions
+                .iter()
+                .find(|version| version.source == source)
+                .unwrap_or_else(|| panic!("{source:?} 的版本没被列出：{versions:?}"));
+            let index = ALL_VERSION_SOURCES
+                .iter()
+                .position(|candidate| *candidate == source)
+                .unwrap();
+            assert_eq!(
+                read_chapter_version(&store, "book", 1, &version.id)
+                    .await
+                    .unwrap(),
+                format!("v{index}")
+            );
+        }
     }
 
     #[test]

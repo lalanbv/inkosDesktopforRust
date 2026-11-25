@@ -312,34 +312,43 @@ pub async fn update_book(
 
 // ── DELETE /api/v1/books/:id ─────────────────────────────────────
 
+/// R58/1676 号：删书不再硬删——整个书目录移进项目级回收站
+/// `{projectRoot}/.trash/books/{bookId}--{ts}/`。rename 失败返回明确错误，不降级为
+/// 硬删。书不存在时照旧回 ok（TS `rm({ force: true })` 吞 ENOENT 的语义）。
+///
+/// 书 id 在这里再校验一次（纵深）：201 号的路径段守卫是路由层的单点，本处理器是
+/// 全仓唯一一处整目录搬走书目录的入口，内部装配的路由器不一定挂着那层守卫。
 pub async fn delete_book(
     State(runtime): State<BooksRuntime>,
     Path(book_id): Path<String>,
 ) -> impl IntoResponse {
-    let book_dir = runtime.state.book_dir(&book_id);
-    match tokio::fs::remove_dir_all(&book_dir).await {
-        Ok(()) => {
-            runtime
-                .hub
-                .broadcast("book:deleted", &json!({ "bookId": book_id }));
-            (
-                StatusCode::OK,
-                Json(json!({ "ok": true, "bookId": book_id })),
-            )
-        }
-        // TS rm { force: true }：目标不存在时不报错（ENOENT 被吞）→ ok。
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            runtime
-                .hub
-                .broadcast("book:deleted", &json!({ "bookId": book_id }));
-            (
-                StatusCode::OK,
-                Json(json!({ "ok": true, "bookId": book_id })),
-            )
-        }
+    if !crate::utils::is_safe_book_id(&book_id) {
+        let escaped = serde_json::to_string(&book_id).unwrap_or_else(|_| "\"?\"".to_string());
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": { "code": "INVALID_BOOK_ID", "message": format!("Invalid book ID: {escaped}") }
+            })),
+        );
+    }
+    let deleted = || {
+        runtime
+            .hub
+            .broadcast("book:deleted", &json!({ "bookId": book_id }));
+        (
+            StatusCode::OK,
+            Json(json!({ "ok": true, "bookId": book_id })),
+        )
+    };
+    match runtime
+        .state
+        .trash_book(&book_id, crate::state::trash::now_millis())
+        .await
+    {
+        Ok(_) => deleted(),
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
+            Json(json!({ "error": error })),
         ),
     }
 }
@@ -2210,6 +2219,14 @@ mod tests {
                 "/api/v1/books/:id/chapters/:num/reject",
                 axum::routing::post(reject_chapter),
             )
+            .route(
+                "/api/v1/books/:id/chapters/:num/versions/:versionId",
+                axum::routing::get(get_chapter_version),
+            )
+            .route(
+                "/api/v1/books/:id/chapters/:num/versions/:versionId/restore",
+                axum::routing::post(restore_chapter_version),
+            )
             .route("/api/v1/books/:id/truth", axum::routing::get(truth_list))
             .route(
                 "/api/v1/books/:id/timeline",
@@ -2277,6 +2294,142 @@ mod tests {
         assert_eq!(books.len(), 1);
         assert_eq!(books[0]["id"], "b1");
         assert_eq!(books[0]["chaptersWritten"], 1);
+    }
+
+    /// R58/1676 号：删书不得越过 books 根。`:id` 里的 `%2F` 解码后是路径分隔符——
+    /// `books/<id>` 拼上 `../victim` 就是 books 根之外的同级目录。
+    #[tokio::test]
+    async fn delete_book_refuses_ids_that_escape_the_books_root() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        std::fs::create_dir_all(dir.path().join("victim")).unwrap();
+        std::fs::write(dir.path().join("victim").join("keep.txt"), "keep").unwrap();
+        for id in ["..%2Fvictim", "..", "%2Fetc"] {
+            let response = app(runtime_for(dir.path()))
+                .oneshot(request("DELETE", &format!("/api/v1/books/{id}"), None))
+                .await
+                .unwrap();
+            let body = json_body(response).await;
+            eprintln!("[probe] DELETE /api/v1/books/{id} -> {}", body);
+            assert!(
+                dir.path().join("victim").join("keep.txt").is_file(),
+                "id={id}：books 根之外的目录被动了"
+            );
+            assert!(dir
+                .path()
+                .join("books")
+                .join("b1")
+                .join("book.json")
+                .is_file());
+        }
+    }
+
+    /// R58/1676 号：删书不硬删——整个书目录（含章级回收站里的东西）进项目级回收站
+    /// `{root}/.trash/books/{id}--{ts}/`。书已不在时照旧回 ok，不多出回收站条目。
+    #[tokio::test]
+    async fn delete_book_moves_the_book_into_the_project_trash() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let chapter = "# 第1章 风起\n\n林动睁开双眼。";
+        let chapter_trash = dir
+            .path()
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join(".trash");
+        std::fs::create_dir_all(&chapter_trash).unwrap();
+        std::fs::write(chapter_trash.join("0000_old.md"), "old").unwrap();
+        let response = app(runtime_for(dir.path()))
+            .oneshot(request("DELETE", "/api/v1/books/b1", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_body(response).await,
+            json!({ "ok": true, "bookId": "b1" })
+        );
+
+        let trash = dir.path().join(".trash").join("books");
+        let entries: Vec<String> = std::fs::read_dir(&trash)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert!(entries[0].starts_with("b1--"), "{}", entries[0]);
+        let trashed = trash.join(&entries[0]);
+        assert!(trashed.join("book.json").is_file());
+        assert_eq!(
+            std::fs::read_to_string(trashed.join("chapters").join("0001_风起.md")).unwrap(),
+            chapter
+        );
+        assert!(trashed
+            .join("chapters")
+            .join(".trash")
+            .join("0000_old.md")
+            .is_file());
+        assert!(!dir.path().join("books").join("b1").exists());
+
+        let again = app(runtime_for(dir.path()))
+            .oneshot(request("DELETE", "/api/v1/books/b1", None))
+            .await
+            .unwrap();
+        assert_eq!(again.status(), StatusCode::OK);
+        assert_eq!(std::fs::read_dir(&trash).unwrap().count(), 1);
+    }
+
+    /// R58/1676 号：结构操作存下的版本（`{ts}_structure_{uuid}`）读得到、恢复得回去。
+    /// 此前版本 id 的正则里没有 `structure`——列表把它滤掉，恢复回 404。
+    #[tokio::test]
+    async fn structure_source_versions_are_restorable() {
+        let dir = tempfile::tempdir().unwrap();
+        fixture(dir.path());
+        let id = "1700000000000_structure_550e8400-e29b-41d4-a716-446655440000";
+        let versions = dir
+            .path()
+            .join("books")
+            .join("b1")
+            .join("chapters")
+            .join(".versions")
+            .join("0001");
+        std::fs::create_dir_all(&versions).unwrap();
+        let before_split = "# 第1章 风起\n\n拆分前的原文。";
+        std::fs::write(versions.join(format!("{id}.md")), before_split).unwrap();
+
+        let read = app(runtime_for(dir.path()))
+            .oneshot(request(
+                "GET",
+                &format!("/api/v1/books/b1/chapters/1/versions/{id}"),
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(read.status(), StatusCode::OK);
+        assert!(json_body(read).await.to_string().contains("拆分前的原文"));
+
+        let restored = app(runtime_for(dir.path()))
+            .oneshot(request(
+                "POST",
+                &format!("/api/v1/books/b1/chapters/1/versions/{id}/restore"),
+                Some("{}"),
+            ))
+            .await
+            .unwrap();
+        let restored_status = restored.status();
+        let restored_body = json_body(restored).await;
+        assert_eq!(restored_status, StatusCode::OK, "{restored_body}");
+        // 替换事务落盘时补齐结尾换行（既有行为）。
+        assert_eq!(
+            std::fs::read_to_string(
+                dir.path()
+                    .join("books")
+                    .join("b1")
+                    .join("chapters")
+                    .join("0001_风起.md")
+            )
+            .unwrap(),
+            format!("{before_split}\n")
+        );
     }
 
     #[tokio::test]
