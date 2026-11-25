@@ -92,7 +92,12 @@ const ALLOWED_TOKEN_SITES = {
   "packages/core/src/agents/reviser.ts": ["reviewObservations"],
   "packages/core/src/harness/legacy-book-migration.ts": ["lengthWarning"],
   "packages/core/src/pipeline/runner.ts": ["lengthWarning", "hardMin"],
-  "packages/core/src/state/manager.ts": ["lengthWarning"],
+  // 1679 号迁址：state/manager.ts 索引重建的行构造抽到 chapter-meta.ts（回收站
+  // 找回章文件共用同一构造），`lengthWarnings: []` 随之迁到这里——语义同 1666 号
+  // chapter-structure.ts 那条：新做（或找回）的章条目还没有跑过审计，空清单是
+  // 章节状态契约，不是凭空给出的长度判定（Rust 镜像 chapter_meta_from_file 同写
+  // `length_warnings: Vec::new()`）。manager.ts 的旧址随抽取核销。
+  "packages/core/src/state/chapter-meta.ts": ["lengthWarning"],
   // 1666 号补登：R48a/1641 的章节结构事务（晚于 1590 清偿）给拆分新章初始化
   // 空的长度警告清单——与 state/manager.ts 重建行同一个章节状态契约（Rust
   // 镜像 chapter_structure.rs 同写 `length_warnings: Vec::new()`）。本审计此前

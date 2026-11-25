@@ -38,6 +38,7 @@ pub mod static_routes;
 pub mod style_routes;
 pub mod task_store;
 pub mod translation_routes;
+pub mod trash_routes;
 pub mod upload_common;
 pub mod work_routes;
 pub mod write_next_route;
@@ -1204,6 +1205,32 @@ pub fn router_books(
         .route(
             "/api/v1/books/:id/foundation/revise",
             guarded_post(book_create_routes::revise_foundation, &books),
+        )
+        // R60/1679 号：回收站的列出 / 恢复 / 清空（此前只进不出）。六条路由与错误码和
+        // Node 腿 server.ts 同口径；`/api/v1/books/:id/trash*` 在下面的路径段守卫之内。
+        .route(
+            "/api/v1/trash/books",
+            get(trash_routes::list_book_trash).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/trash/books/restore",
+            post(trash_routes::restore_trashed_book).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/trash/books/purge",
+            post(trash_routes::purge_trashed_book).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/trash",
+            get(trash_routes::list_chapter_trash_route).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/trash/restore",
+            post(trash_routes::restore_trashed_chapter).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/trash/purge",
+            post(trash_routes::purge_trashed_chapter).with_state(books.clone()),
         )
         // 路径段守卫（201 号）：books/projects 的 id 段 percent-decode 后统一过
         // is_safe_book_id，拦 `..%2F` 注入穿越——对齐 Node 侧

@@ -213,7 +213,9 @@ import {
 } from "@actalk/inkos-core";
 import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
-import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, sessionTreeProjection, syncWorkSourceArtifacts, loadWritingLog, promptOverridePath, writePromptOverride, removePromptOverride, appendPromptVersion, listPromptVersions, readPromptVersion, trashBook } from "@actalk/inkos-core";
+import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, sessionTreeProjection, syncWorkSourceArtifacts, loadWritingLog, promptOverridePath, writePromptOverride, removePromptOverride, appendPromptVersion, listPromptVersions, readPromptVersion, trashBook,
+  TrashError, listBookTrash, listChapterTrash, purgeBookTrash, purgeChapterTrash, restoreBookFromTrash, restoreChapterTrash,
+} from "@actalk/inkos-core";
 import { BUILTIN_PROMPT_PACKS, BUILTIN_PROMPTS } from "@actalk/inkos-core/prompts/builtin-prompts-data";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { buildTarArchive, listArchiveFiles } from "../lib/tar-write.js";
@@ -9044,6 +9046,109 @@ function yamlScalar(value: unknown): string {
         return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
       }
       return llmConfigResponse(c, e) ?? c.json({ error: String(e) }, 500);
+    }
+  });
+
+  // --- Trash (R60/1679 号) ---
+  // 回收站是「把文件找回来」，不是撤销：目标已在原位 → 409，一个字节都不覆盖。六条路由与
+  // 错误码和产品引擎 server/trash_routes.rs 同口径。书级回收站两腿共用一个目录，本腿只认
+  // 自己删出来的形态（根上有 work.json，或只剩 source/ 的孤儿目录）。
+  const TRASH_STATUS: Record<TrashError["code"], 400 | 404 | 409> = {
+    INVALID_TRASH_REQUEST: 400,
+    TRASH_ENTRY_NOT_FOUND: 404,
+    TRASH_TARGET_EXISTS: 409,
+  };
+  // 盘上的操作失败（权限、磁盘满）两腿同码 500：Node 的系统错误都带字符串 `code`（EACCES、ENOSPC…）。
+  const isSystemError = (error: unknown): error is NodeJS.ErrnoException =>
+    typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string";
+  const trashFailure = (c: Context, error: unknown): Response => {
+    if (error instanceof TrashError) {
+      return c.json(
+        { error: { code: error.code, message: error.message, ...(error.conflicts.length > 0 ? { conflicts: error.conflicts } : {}) } },
+        TRASH_STATUS[error.code],
+      );
+    }
+    if (isSystemError(error)) {
+      return c.json({ error: { code: "TRASH_IO_ERROR", message: `Trash operation failed: ${error.message}` } }, 500);
+    }
+    throw error;
+  };
+  /** 请求体必须是一个 JSON 对象；不是就按「请求不合法」处理。 */
+  const trashBody = async (c: Context): Promise<Record<string, unknown>> => {
+    const body: unknown = await c.req.json().catch(() => null);
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      throw new TrashError("INVALID_TRASH_REQUEST", "Expected a JSON object body");
+    }
+    return body as Record<string, unknown>;
+  };
+  const trashEntryField = (body: Record<string, unknown>): string => {
+    if (typeof body.entry !== "string") throw new TrashError("INVALID_TRASH_REQUEST", "Expected { entry }");
+    return body.entry;
+  };
+  const bookIsThere = async (id: string): Promise<boolean> => state.loadBookConfig(id).then(() => true, () => false);
+
+  app.get("/api/v1/trash/books", async (c) => {
+    try {
+      return c.json({ entries: await listBookTrash(root) });
+    } catch (e) {
+      return trashFailure(c, e);
+    }
+  });
+
+  app.post("/api/v1/trash/books/restore", async (c) => {
+    try {
+      const entry = trashEntryField(await trashBody(c));
+      const { bookId } = await restoreBookFromTrash(root, entry);
+      broadcast("book:restored", { bookId });
+      return c.json({ ok: true, entry, bookId });
+    } catch (e) {
+      return trashFailure(c, e);
+    }
+  });
+
+  app.post("/api/v1/trash/books/purge", async (c) => {
+    try {
+      const entry = trashEntryField(await trashBody(c));
+      return c.json({ ok: true, ...(await purgeBookTrash(root, entry)) });
+    } catch (e) {
+      return trashFailure(c, e);
+    }
+  });
+
+  app.get("/api/v1/books/:id/trash", async (c) => {
+    const id = c.req.param("id");
+    try {
+      if (!(await bookIsThere(id))) return c.json({ error: `Book "${id}" not found` }, 404);
+      return c.json({ entries: await listChapterTrash(state.bookDir(id)) });
+    } catch (e) {
+      return trashFailure(c, e);
+    }
+  });
+
+  app.post("/api/v1/books/:id/trash/restore", async (c) => {
+    const id = c.req.param("id");
+    try {
+      if (!(await bookIsThere(id))) return c.json({ error: `Book "${id}" not found` }, 404);
+      // 找回的章文件登记进目录（目录里缺的章号才补；先写目录、后搬文件）。不补的话，进度
+      // 守卫会把它判成孤儿，这本书在书架接口上就 500 了。状态与快照不动——找回的是文件，
+      // 不是撤销一次回滚。
+      const { restored } = await restoreChapterTrash(state.bookDir(id), await trashBody(c), (chapters) =>
+        state.registerRestoredChapters(id, chapters),
+      );
+      return c.json({ ok: true, restored });
+    } catch (e) {
+      return trashFailure(c, e);
+    }
+  });
+
+  app.post("/api/v1/books/:id/trash/purge", async (c) => {
+    const id = c.req.param("id");
+    try {
+      if (!(await bookIsThere(id))) return c.json({ error: `Book "${id}" not found` }, 404);
+      const { removed } = await purgeChapterTrash(state.bookDir(id), await trashBody(c));
+      return c.json({ ok: true, removed });
+    } catch (e) {
+      return trashFailure(c, e);
     }
   });
 

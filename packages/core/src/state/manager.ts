@@ -17,6 +17,7 @@ import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { ROLLBACK_TRUTH_FILES, reserveRollbackBatch, trashBatchWrites } from "./trash.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
 import { chapterFileNumber, parseChapterFileName, selectChapterFiles } from "../utils/chapter-files.js";
+import { chapterMetaFromFile } from "./chapter-meta.js";
 
 const BOOK_LOCK_HEARTBEAT_MS = 30_000;
 const BOOK_LOCK_LEASE_MS = 3 * 60_000;
@@ -511,28 +512,39 @@ export class StateManager {
         timestamp = new Date().toISOString();
       }
       const content = await readFile(filePath, "utf-8").catch(() => "");
-      // 词数口径：去全部空白后的码元数（Rust 注释引 TS 原版 content.replace(/\s+/g,"").length）。
-      const wordCount = content.replace(/\s+/g, "").length;
-      const rawTitle = parsed.base;
-      const stripped = rawTitle.startsWith("_") ? rawTitle.slice(1) : rawTitle;
-      const spaced = stripped.replace(/_/g, " ").trim();
-      const title = spaced.length > 0 ? spaced : `第${number}章`;
-      rows.push({
-        number,
-        title,
-        status: "ready-for-review",
-        wordCount,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        // 792 号：响应行键与 Rust rebuild 行逐键对齐——auditIssues/
-        // lengthWarnings 空 vec 恒序列化（serde default）；observations/
-        // provenance 不发（Rust ChapterMeta 无此二字段）。
-        auditIssues: [],
-        lengthWarnings: [],
-      });
+      // 1679 号：条目构造归源到共享 chapterMetaFromFile（回收站找回章文件时共用）。
+      const row = chapterMetaFromFile(name, content, timestamp);
+      if (!row) continue;
+      rows.push(row);
     }
     rows.sort((a, b) => a.number - b.number);
     return rows;
+  }
+
+  /**
+   * 回收站找回章文件之后，把目录里还没有的章登记进去（1679 号）。只补缺的章号：目录里
+   * 已经列着这一章就不动它（同章另一个形态的文件回到原位时，章还是那一章）。
+   *
+   * 为什么必须登记：durable 进度的一致性守卫把「目录里没有的正典章文件」判成孤儿并
+   * 抛错——只把文件移回去，这本书在书架接口上就 500 了。状态与快照不在这里动：找回
+   * 的是文件，不是撤销一次回滚。
+   */
+  async registerRestoredChapters(bookId: string, chapters: ReadonlyArray<ChapterMeta>): Promise<void> {
+    if (chapters.length === 0) return;
+    const current = [...(await this.loadChapterIndex(bookId))];
+    const listed = new Set(current.map((meta) => meta.number));
+    const additions: ChapterMeta[] = [];
+    // 同一个章号给了两条（同章双形态一起回到原位）只收第一条——调用方按读侧会打开的
+    // 那一个文件排在前面；目录里一个章号永远只有一行。
+    for (const meta of chapters) {
+      if (listed.has(meta.number)) continue;
+      listed.add(meta.number);
+      additions.push(meta);
+    }
+    if (additions.length === 0) return;
+    current.push(...additions);
+    current.sort((a, b) => a.number - b.number);
+    await this.saveChapterIndex(bookId, current);
   }
 
   async saveChapterIndex(

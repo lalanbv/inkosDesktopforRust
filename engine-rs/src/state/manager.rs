@@ -110,6 +110,42 @@ impl StateManager {
         Ok(TrashBook::Trashed(trashed))
     }
 
+    /// 回收站找回章文件**之前**，把目录里还没有的章登记进去（1679 号）——先写目录、后搬
+    /// 文件。只补缺的章号：目录里已经列着这一章就不动它（同章另一个形态的文件回到原位时，
+    /// 章还是那一章）。
+    ///
+    /// 为什么必须登记：目录驱动章节列表、导出与审稿——文件回到了 `chapters/` 而目录不列
+    /// 它，找回的这一章在界面上看不见，Node 腿那边更是直接被进度守卫判成孤儿（整本书
+    /// 在书架接口上 500）。为什么先写后搬：目录写不下来（磁盘满最典型）就什么都不搬，
+    /// 回收站里原样留着、书架照常，重试即可；反过来做的话文件回位而目录不列，重试又撞上
+    /// 「条目不在」，没法自愈。
+    ///
+    /// 找回的是文件，不是撤销一次回滚：状态与快照不在这里动。条目由回收站层备好——回滚
+    /// 前的目录里存着这一章原来的条目就沿用它，没有的按文件现做（与索引重建同口径）。
+    pub async fn register_restored_chapters(
+        &self,
+        book_id: &str,
+        planned: &[crate::state::trash::PlannedTrashRestore],
+    ) -> Result<(), StateManagerError> {
+        let wanted = crate::state::trash::chapter_metas_of(planned);
+        if wanted.is_empty() {
+            return Ok(());
+        }
+        let mut index = self.load_chapter_index(book_id).await?;
+        let mut changed = false;
+        for meta in wanted {
+            if !index.iter().any(|listed| listed.number == meta.number) {
+                index.push(meta.clone());
+                changed = true;
+            }
+        }
+        if changed {
+            index.sort_by_key(|meta| meta.number);
+            self.save_chapter_index(book_id, &index).await?;
+        }
+        Ok(())
+    }
+
     pub fn state_dir(&self, book_id: &str) -> PathBuf {
         self.book_dir(book_id).join("story").join("state")
     }
@@ -329,12 +365,6 @@ impl StateManager {
 
         let mut rows: Vec<ChapterMeta> = Vec::new();
         for name in select_chapter_files(names) {
-            let Some(captures) = rebuild_file_re().captures(&name) else {
-                continue;
-            };
-            let Ok(number) = captures[1].parse::<u32>() else {
-                continue;
-            };
             let file_path = chapters_dir.join(&name);
             let timestamp = tokio::fs::metadata(&file_path)
                 .await
@@ -351,29 +381,10 @@ impl StateManager {
             let content = tokio::fs::read_to_string(&file_path)
                 .await
                 .unwrap_or_default();
-            // TS content.replace(/\s+/g, "").length：去全部空白后的码元数。
-            let word_count = content.chars().filter(|c| !c.is_whitespace()).count() as u32;
-            // 标题：余部去前导 _、_ → 空格；空 → 第N章。
-            let raw_title = captures.get(2).map(|m| m.as_str()).unwrap_or("");
-            let title = title_from_filename(raw_title, number);
-
-            rows.push(ChapterMeta {
-                number,
-                title,
-                status: ChapterStatus::ReadyForReview,
-                word_count,
-                created_at: timestamp.clone(),
-                updated_at: timestamp,
-                audit_issues: Vec::new(),
-                length_warnings: Vec::new(),
-                volume_id: None,
-                review_note: None,
-                detection_score: None,
-                detection_provider: None,
-                detected_at: None,
-                length_telemetry: None,
-                token_usage: None,
-            });
+            // 1679 号：条目构造归源到共享 chapter_meta_from_file（回收站找回章文件时共用）。
+            if let Some(meta) = chapter_meta_from_file(&name, &content, timestamp) {
+                rows.push(meta);
+            }
         }
         rows.sort_by_key(|a| a.number);
         rows
@@ -725,6 +736,46 @@ fn title_from_filename(raw: &str, number: u32) -> String {
     } else {
         spaced
     }
+}
+
+/// 按一个章文件现做目录条目（1679 号抽出：索引重建与回收站找回共用；Node 腿
+/// `chapterMetaFromFile` 同口径）。标题取文件名余部（去前导 `_`、`_` → 空格，空 →
+/// `第N章`）；词数 = 去全部空白后的 UTF-16 码元数——空白的成员集合与码元计数都对齐
+/// JS（`length_metrics::is_js_whitespace`；此前索引重建这里按码点数，含 emoji 的正文比
+/// Node 腿少算）。时间戳由调用方给（重建用文件修改时间）。不是章文件 / 0 号 → `None`。
+pub(crate) fn chapter_meta_from_file(
+    name: &str,
+    content: &str,
+    timestamp: String,
+) -> Option<ChapterMeta> {
+    let captures = rebuild_file_re().captures(name)?;
+    let number = captures[1].parse::<u32>().ok()?;
+    if number == 0 {
+        return None;
+    }
+    let word_count = content
+        .chars()
+        .filter(|c| !crate::utils::length_metrics::is_js_whitespace(*c))
+        .map(char::len_utf16)
+        .sum::<usize>() as u32;
+    let raw_title = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+    Some(ChapterMeta {
+        number,
+        title: title_from_filename(raw_title, number),
+        status: ChapterStatus::ReadyForReview,
+        word_count,
+        created_at: timestamp.clone(),
+        updated_at: timestamp,
+        audit_issues: Vec::new(),
+        length_warnings: Vec::new(),
+        volume_id: None,
+        review_note: None,
+        detection_score: None,
+        detection_provider: None,
+        detected_at: None,
+        length_telemetry: None,
+        token_usage: None,
+    })
 }
 
 async fn write_if_missing(path: &Path, content: &str) -> Result<(), StateManagerError> {
@@ -1362,6 +1413,60 @@ mod tests {
         let numbers: Vec<u32> = rows.iter().map(|m| m.number).collect();
         assert_eq!(numbers, vec![1, 2]);
         assert_eq!(rows[0].title, "新题");
+    }
+
+    /// 1679 号：条目构造归源到 `chapter_meta_from_file`，词数对齐 Node 腿
+    /// （`content.replace(/\s+/g, "").length`）——BOM 算空白、emoji 占两个码元。此前索引重建
+    /// 按码点数且不算 BOM，含 emoji 的正文比 Node 腿少算。输入与 Node 腿
+    /// `trash-api.test.ts` 的同名断言是同一份。
+    #[tokio::test]
+    async fn chapter_meta_from_file_counts_the_way_the_node_leg_does() {
+        let stamp = "2026-08-17T00:00:00.000Z".to_string();
+        let meta =
+            chapter_meta_from_file("0001_风起.md", "\u{FEFF}正文😀 \n继续", stamp.clone()).unwrap();
+        assert_eq!(
+            (meta.number, meta.title.as_str(), meta.word_count),
+            (1, "风起", 6)
+        );
+        assert_eq!(
+            (meta.created_at.clone(), meta.updated_at.clone()),
+            (stamp.clone(), stamp.clone())
+        );
+        assert_eq!(
+            serde_json::to_value(meta.status).unwrap(),
+            serde_json::json!("ready-for-review")
+        );
+        assert_eq!(
+            chapter_meta_from_file("0002-云_涌.md", "x", stamp.clone())
+                .unwrap()
+                .title,
+            "云 涌"
+        );
+        assert_eq!(
+            chapter_meta_from_file("0003.md", "x", stamp.clone())
+                .unwrap()
+                .title,
+            "第3章"
+        );
+        assert!(chapter_meta_from_file("0000_零.md", "x", stamp.clone()).is_none());
+        assert!(chapter_meta_from_file("notes.md", "x", stamp).is_none());
+
+        // 索引重建走的是同一个函数。
+        let dir = tempfile::tempdir().unwrap();
+        let manager = StateManager::new(dir.path());
+        let book = manager.book_dir("b1");
+        tokio::fs::create_dir_all(book.join("chapters"))
+            .await
+            .unwrap();
+        tokio::fs::write(
+            book.join("chapters").join("0001_风起.md"),
+            "\u{FEFF}正文😀 \n继续",
+        )
+        .await
+        .unwrap();
+        let rows = manager.rebuild_chapter_index_from_files_at(&book).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].word_count, 6);
     }
 
     /// 785 号的首读 ensure 语义在 1682 号收口翻转：读端点零写——legacy 书

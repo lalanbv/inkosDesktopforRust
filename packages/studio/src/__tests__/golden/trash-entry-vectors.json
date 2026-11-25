@@ -1,0 +1,51 @@
+{
+  "_comment": "1679 号（R60）：回收站条目的识别规则——两腿共用向量（Node 腿 trash.test / 产品引擎 trash_routes.rs tests include_str! 同读）。改规则先改这里：两腿对同一输入的判定必须恒等。",
+  "originalPath": {
+    "accept": [
+      { "path": "chapters/.trash/0002_云涌.md", "originalPath": "chapters/0002_云涌.md", "batch": null },
+      { "path": "chapters/.trash/0002_云涌-2.md", "originalPath": "chapters/0002_云涌.md", "batch": null },
+      { "path": "chapters/.trash/0002_云涌-13.md", "originalPath": "chapters/0002_云涌.md", "batch": null },
+      { "path": "chapters/.trash/0009.md", "originalPath": "chapters/0009.md", "batch": null },
+      { "path": "chapters/.trash/rollback-20261125093007-1/chapters/0003.md", "originalPath": "chapters/0003.md", "batch": "rollback-20261125093007-1" },
+      { "path": "chapters/.trash/rollback-20261125093007-1/chapters/index.json", "originalPath": "chapters/index.json", "batch": "rollback-20261125093007-1" },
+      { "path": "chapters/.trash/rollback-20261125093007-1-2/story/snapshots/2/current_state.md", "originalPath": "story/snapshots/2/current_state.md", "batch": "rollback-20261125093007-1-2" }
+    ],
+    "reject": [
+      "chapters/0002_云涌.md",
+      "chapters/.trash/",
+      "chapters/.trash/../0002.md",
+      "chapters/.trash//0002.md",
+      "chapters/.trash/rollback-x/chapters/0003.md",
+      "chapters/.trash/rollback-20261125093007-1",
+      "chapters/.trash/rollback-20261125093007-1/",
+      "chapters/.trash/rollback-20261125093007-1/../x.md",
+      "chapters/.trash/rollback-20261125093007-1//chapters/0003.md",
+      "chapters/.trash/sub/dir/file.md",
+      "/chapters/.trash/0002.md",
+      "chapters\\.trash\\0002.md",
+      "chapters/.trash/0002\u0000.md"
+    ]
+  },
+  "bookEntry": {
+    "accept": [
+      { "entry": "b1--20261125093007", "bookId": "b1", "trashedAt": "2026-11-25T09:30:07.000Z" },
+      { "entry": "legacy-mixed--20261125093007-2", "bookId": "legacy-mixed", "trashedAt": "2026-11-25T09:30:07.000Z" },
+      { "entry": "0000000000000-abc--20260101000000-3", "bookId": "0000000000000-abc", "trashedAt": "2026-01-01T00:00:00.000Z" }
+    ],
+    "reject": [
+      "b1",
+      "b1--20261125",
+      "b1--202611250930070",
+      "--20261125093007",
+      "b1--20261301000000",
+      "b1--20261125246000",
+      "b1--20261125093007-",
+      "b1--20261125093007-x",
+      "../b1--20261125093007",
+      "b1/..--20261125093007",
+      "b1\\x--20261125093007",
+      "..--20261125093007",
+      ".--20261125093007"
+    ]
+  }
+}

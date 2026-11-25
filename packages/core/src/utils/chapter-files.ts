@@ -41,6 +41,8 @@ function leadingChapterNumber(match: RegExpMatchArray): number | undefined {
  * 1681 号：改为 export——导出源一致性校验的 unindexedFiles 排序共用同一把
  * 尺子（Rust 侧 `&str` 字节序恒等；裸 `Array#sort` 是 UTF-16 码元序，增补平面
  * 字符与码点序相反，双端错误消息里数组顺序会漂移）。
+ *
+ * 1679 号起导出：凡是要与产品引擎逐项同序的文本排序（回收站条目表等）都走它，不用 `<`。
  */
 export function compareByCodePoint(a: string, b: string): number {
   const length = Math.min(a.length, b.length);

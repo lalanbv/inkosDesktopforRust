@@ -539,6 +539,25 @@ export { syncChapterWordCounts, type ChapterWordCountChange, type ChapterWordSyn
 export { deleteLatestChapter, type ChapterDeleteDeps, type DeleteLatestChapterOptions, type DeleteLatestChapterResult } from "./state/chapter-delete.js";
 // R58/1676 号：回滚与删书的回收站（名称规则与产品引擎 state/trash.rs 同一条）。
 export { ROLLBACK_TRUTH_FILES, reserveRollbackBatch, trashBatchName, trashBatchWrites, trashBook, trashedBookName } from "./state/trash.js";
+// R60/1679 号：回收站的列出 / 恢复 / 清空（路由与错误码和产品引擎 server/trash_routes.rs 同口径）。
+export {
+  TrashError,
+  bookIdOfTrashEntry,
+  listBookTrash,
+  listChapterTrash,
+  originalPathOfTrashEntry,
+  purgeBookTrash,
+  purgeChapterTrash,
+  restoreBookFromTrash,
+  restoreChapterTrash,
+  trashedAtOfRollbackBatch,
+  trashedAtOfTrashEntry,
+  type BookTrashEntry,
+  type ChapterTrashEntry,
+  type RestoredTrashEntry,
+  type TrashErrorCode,
+  type TrashPathInfo,
+} from "./state/trash.js";
 // ── R48a/1641 号：章节结构操作事务（engine-rs chapter_structure.rs 镜像）──
 export {
   chapterSetRevision,

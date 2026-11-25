@@ -4589,3 +4589,626 @@ async fn export_source_mismatch_duel() {
         "导出源一致性：双形态书两腿同回 409 duplicate=[1]、孤儿旧命名书两腿同回 409 unindexed=[0002-残留.md]（拒绝而非静默残本/旧稿）"
     );
 }
+
+// ── 1679 号：回收站端点（R60）────────────────────────────────────────────────
+
+/// 回收站条目表里跨腿可比的那一面：原路径、批次名的形态（时间戳归一成 `#`）、字节数。
+/// 目录文件的字节数不比——两棵树的目录在回滚之前就不同（Node 腿那棵经迁移脚本规范化过）。
+fn trash_shape(body: &Value) -> Vec<(String, String, u64)> {
+    let mut shape: Vec<(String, String, u64)> = body["entries"]
+        .as_array()
+        .expect("entries 数组")
+        .iter()
+        .map(|entry| {
+            let path = entry["originalPath"].as_str().unwrap();
+            let batch = entry["batch"]
+                .as_str()
+                .map(|batch| {
+                    batch
+                        .chars()
+                        .map(|c| if c.is_ascii_digit() { '#' } else { c })
+                        .collect::<String>()
+                })
+                .unwrap_or_default();
+            let bytes = if path == "chapters/index.json" {
+                0
+            } else {
+                entry["bytes"].as_u64().unwrap()
+            };
+            (path.to_string(), batch, bytes)
+        })
+        .collect();
+    shape.sort();
+    shape
+}
+
+/// 对象的键（排序）——两腿响应的键面必须恒等。
+fn sorted_keys(value: &Value) -> Vec<String> {
+    value
+        .as_object()
+        .expect("响应是对象")
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// 回收站条目表里某个原路径对应的回收站路径。
+fn trash_path_of(body: &Value, original_path: &str) -> String {
+    body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["originalPath"] == json!(original_path))
+        .unwrap_or_else(|| panic!("回收站里应有 {original_path}：{body}"))["path"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn trash_batch_of(body: &Value, original_path: &str) -> String {
+    body["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["originalPath"] == json!(original_path))
+        .unwrap_or_else(|| panic!("回收站里应有 {original_path}：{body}"))["batch"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// 1679 号：回收站的列出 / 恢复 / 清空——六条路由两腿同构。
+///
+/// 两腿写各的树（`books/b1` 与 `works/b1/source`），书级回收站却是两腿共用的同一个目录
+/// （桌面默认产品引擎、Node 是回退，同一个项目根）。所以书级各腿只认自己删出来的形态，
+/// 章级各在自己的树上比。恢复的底线两腿一致：目标已在原位 → 409 一个都不移；找回章
+/// 文件时目录里缺这章就补一条，状态文件一个字节不动。
+#[tokio::test]
+async fn trash_endpoints_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture_book(&root, &[("0002_云涌", "云涌", "江面起了雾。")]);
+    write_fixture_llm(&root, &llm);
+    migrate_fixture_to_works(&root);
+    let rust_tree = root.join("books").join("b1");
+    let ts_tree = root.join("works").join("b1").join("source");
+    let seed = |tree: &Path, rel: &str, content: &str| {
+        let path = tree.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    };
+    for tree in [&rust_tree, &ts_tree] {
+        for n in 0..=2 {
+            seed(
+                tree,
+                &format!("story/snapshots/{n}/current_state.md"),
+                &format!("state-{n}"),
+            );
+            seed(
+                tree,
+                &format!("story/snapshots/{n}/pending_hooks.md"),
+                &format!("hooks-{n}"),
+            );
+            seed(
+                tree,
+                &format!("story/snapshots/{n}/state/manifest.json"),
+                &format!("manifest-{n}"),
+            );
+        }
+        seed(tree, "story/current_state.md", "state-2");
+        seed(tree, "story/pending_hooks.md", "hooks-2");
+        seed(tree, "story/state/manifest.json", "manifest-2");
+        // 旧版本留下的平铺条目（没有批次、没有「删掉的时刻」）与一处认不出的布局。
+        seed(
+            tree,
+            "chapters/.trash/0005_残章.md",
+            "# 第5章 残章\n\n残留的草稿。",
+        );
+        seed(tree, "chapters/.trash/stray/keep.txt", "认不出的布局");
+    }
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+    let legs = [&rust, &ts.base];
+    let client = loopback_client();
+
+    // ① 驳回第 2 章：两腿各自的回收站列出同一份条目（原路径、批次形态、字节数）。
+    for base in legs {
+        let (status, body) = post_json(base, "/api/v1/books/b1/chapters/2/reject", "").await;
+        assert_eq!(
+            (status, body["discarded"].clone()),
+            (200, json!([2])),
+            "{base}：{body}"
+        );
+    }
+    let mut lists = Vec::new();
+    for base in legs {
+        let (status, body) = get_json(base, "/api/v1/books/b1/trash").await;
+        assert_eq!(status, 200, "{base}：{body}");
+        lists.push(body);
+    }
+    assert_eq!(trash_shape(&lists[0]), trash_shape(&lists[1]));
+    let shape = trash_shape(&lists[0]);
+    let originals: Vec<&str> = shape.iter().map(|(path, _, _)| path.as_str()).collect();
+    assert_eq!(
+        originals,
+        [
+            "chapters/0002_云涌.md",
+            "chapters/0005_残章.md",
+            "chapters/index.json",
+            "story/current_state.md",
+            "story/pending_hooks.md",
+            "story/snapshots/2/current_state.md",
+            "story/snapshots/2/pending_hooks.md",
+            "story/snapshots/2/state/manifest.json",
+            "story/state/manifest.json",
+        ]
+    );
+    for (path, batch, _) in &shape {
+        let expected = if path == "chapters/0005_残章.md" {
+            ""
+        } else {
+            "rollback-##############-#"
+        };
+        assert_eq!(batch, expected, "{path}");
+    }
+    // 认不出的布局不是条目：两腿都不列。
+    for list in &lists {
+        assert!(!list.to_string().contains("stray"), "{list}");
+        let flat = list["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["originalPath"] == "chapters/0005_残章.md")
+            .unwrap();
+        assert_eq!(
+            (
+                flat["path"].clone(),
+                flat["batch"].clone(),
+                flat["trashedAt"].clone()
+            ),
+            (
+                json!("chapters/.trash/0005_残章.md"),
+                Value::Null,
+                Value::Null
+            )
+        );
+    }
+    assert_eq!(
+        sorted_keys(&lists[0]["entries"][0]),
+        [
+            "batch",
+            "bytes",
+            "modifiedAt",
+            "originalPath",
+            "path",
+            "trashedAt"
+        ]
+    );
+    assert_eq!(
+        sorted_keys(&lists[0]["entries"][0]),
+        sorted_keys(&lists[1]["entries"][0])
+    );
+    assert!(lists[0]["entries"][0]["trashedAt"]
+        .as_str()
+        .unwrap()
+        .ends_with('Z'));
+
+    // ② 找回第 2 章正文：带着驳回前的目录条目回来并登记进目录；状态文件回到的是驳回后的
+    //    那份，找回不动它。
+    for (base, list) in legs.iter().zip(&lists) {
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/trash/restore",
+            &json!({ "path": trash_path_of(list, "chapters/0002_云涌.md") }).to_string(),
+        )
+        .await;
+        assert_eq!(status, 200, "{base}：{body}");
+        assert_eq!(body["ok"], true);
+        assert_eq!(sorted_keys(&body), ["ok", "restored"]);
+        assert_eq!(
+            sorted_keys(&body["restored"][0]),
+            ["chapter", "originalPath", "path"]
+        );
+        assert_eq!(body["restored"][0]["originalPath"], "chapters/0002_云涌.md");
+        assert_eq!(body["restored"][0]["chapter"]["number"], 2);
+        assert_eq!(body["restored"][0]["chapter"]["meta"]["title"], "云涌");
+        let (status, detail) = get_json(base, "/api/v1/books/b1").await;
+        assert_eq!(status, 200, "{base}：{detail}");
+        let numbers: Vec<u64> = detail["chapters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|meta| meta["number"].as_u64().unwrap())
+            .collect();
+        assert_eq!(numbers, [1, 2], "{base}：{detail}");
+    }
+    for tree in [&rust_tree, &ts_tree] {
+        assert!(tree.join("chapters").join("0002_云涌.md").is_file());
+        assert_eq!(
+            std::fs::read_to_string(tree.join("story").join("current_state.md")).unwrap(),
+            "state-1"
+        );
+    }
+
+    // ②b 平铺的条目：没有回滚前的目录可取，条目按文件现做——两腿现做出来的逐键相同
+    //     （时间戳是各自文件的修改时间，不比）。目录里跟着多出第 5 章。
+    let mut flat_metas = Vec::new();
+    for base in legs {
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/trash/restore",
+            r#"{"path":"chapters/.trash/0005_残章.md"}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "{base}：{body}");
+        assert_eq!(
+            sorted_keys(&body["restored"][0]["chapter"]),
+            ["meta", "number"]
+        );
+        let mut meta = body["restored"][0]["chapter"]["meta"].clone();
+        assert_eq!(
+            (
+                meta["number"].clone(),
+                meta["title"].clone(),
+                meta["wordCount"].clone()
+            ),
+            (json!(5), json!("残章"), json!(12)),
+            "{base}：{meta}"
+        );
+        for key in ["createdAt", "updatedAt"] {
+            assert!(meta[key].as_str().unwrap().ends_with('Z'), "{base}：{meta}");
+            meta[key] = json!("#");
+        }
+        flat_metas.push(meta);
+        let (status, detail) = get_json(base, "/api/v1/books/b1").await;
+        let numbers: Vec<u64> = detail["chapters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|meta| meta["number"].as_u64().unwrap())
+            .collect();
+        assert_eq!((status, numbers), (200, vec![1, 2, 5]), "{base}：{detail}");
+    }
+    assert_eq!(flat_metas[0], flat_metas[1]);
+    for tree in [&rust_tree, &ts_tree] {
+        assert_eq!(
+            std::fs::read_to_string(tree.join("chapters").join("0005_残章.md")).unwrap(),
+            "# 第5章 残章\n\n残留的草稿。"
+        );
+    }
+
+    // ③ 目标已在原位：409 一个都不移——单个文件、整批都一样。
+    for (base, list) in legs.iter().zip(&lists) {
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/trash/restore",
+            &json!({ "path": trash_path_of(list, "story/current_state.md") }).to_string(),
+        )
+        .await;
+        assert_eq!(
+            (
+                status,
+                body["error"]["code"].clone(),
+                body["error"]["conflicts"].clone()
+            ),
+            (
+                409,
+                json!("TRASH_TARGET_EXISTS"),
+                json!(["story/current_state.md"])
+            ),
+            "{base}：{body}"
+        );
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/trash/restore",
+            &json!({ "batch": trash_batch_of(list, "story/current_state.md") }).to_string(),
+        )
+        .await;
+        assert_eq!(status, 409, "{base}：{body}");
+        let conflicts = body["error"]["conflicts"].as_array().unwrap();
+        assert!(
+            conflicts.contains(&json!("chapters/index.json")),
+            "{base}：{body}"
+        );
+        assert!(
+            conflicts.contains(&json!("story/current_state.md")),
+            "{base}：{body}"
+        );
+    }
+    for (index, tree) in [&rust_tree, &ts_tree].iter().enumerate() {
+        // 一个都没移：当前状态还是驳回后的那份，回收站里的条目原样都在。
+        assert_eq!(
+            std::fs::read_to_string(tree.join("story").join("current_state.md")).unwrap(),
+            "state-1"
+        );
+        let batch = trash_batch_of(&lists[index], "story/current_state.md");
+        let trashed = tree.join("chapters").join(".trash").join(&batch);
+        assert!(trashed.join("story").join("current_state.md").is_file());
+        assert!(trashed.join("chapters").join("index.json").is_file());
+    }
+
+    // ④ 清空：单个条目、全部；请求不成形与条目不在的两腿同码。
+    for (base, list) in legs.iter().zip(&lists) {
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/trash/purge",
+            &json!({ "path": trash_path_of(list, "story/current_state.md") }).to_string(),
+        )
+        .await;
+        assert_eq!(
+            (status, body.clone()),
+            (200, json!({ "ok": true, "removed": 1 })),
+            "{base}"
+        );
+        for bad in [
+            r#"{"path":"chapters/0001_风起.md"}"#,
+            r#"{"path":"chapters/.trash/../0001_风起.md"}"#,
+            "{}",
+        ] {
+            let (status, body) = post_json(base, "/api/v1/books/b1/trash/purge", bad).await;
+            assert_eq!(
+                (status, body["error"]["code"].clone()),
+                (400, json!("INVALID_TRASH_REQUEST")),
+                "{base}：{bad} → {body}"
+            );
+        }
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/trash/restore",
+            r#"{"path":"chapters/.trash/0009.md"}"#,
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].clone()),
+            (404, json!("TRASH_ENTRY_NOT_FOUND")),
+            "{base}：{body}"
+        );
+        // 八条：找回一条、清空一条，剩六条。认不出的布局从来没被列出来过——清空不碰它。
+        let (status, body) =
+            post_json(base, "/api/v1/books/b1/trash/purge", r#"{"all":true}"#).await;
+        assert_eq!(
+            (status, body.clone()),
+            (200, json!({ "ok": true, "removed": 6 })),
+            "{base}"
+        );
+        let (status, body) = get_json(base, "/api/v1/books/b1/trash").await;
+        assert_eq!((status, body), (200, json!({ "entries": [] })), "{base}");
+    }
+    for tree in [&rust_tree, &ts_tree] {
+        assert_eq!(
+            std::fs::read_to_string(
+                tree.join("chapters")
+                    .join(".trash")
+                    .join("stray")
+                    .join("keep.txt")
+            )
+            .unwrap(),
+            "认不出的布局"
+        );
+        assert!(!tree
+            .join("chapters")
+            .join(".trash")
+            .join(trash_batch_of(&lists[0], "story/current_state.md"))
+            .exists());
+    }
+
+    // ⑤ 书级：两腿各自删书——共用的回收站目录里各有一条，各腿只列自己那条。
+    for base in legs {
+        let (status, body) = send_json(
+            &client,
+            base,
+            reqwest::Method::DELETE,
+            "/api/v1/books/b1",
+            None,
+        )
+        .await;
+        assert_eq!(
+            (status, body.clone()),
+            (200, json!({ "ok": true, "bookId": "b1" })),
+            "{base}：{body}"
+        );
+    }
+    let (status, rust_books) = get_json(&rust, "/api/v1/trash/books").await;
+    assert_eq!(status, 200);
+    let (status, ts_books) = get_json(&ts.base, "/api/v1/trash/books").await;
+    assert_eq!(status, 200);
+    assert_eq!(sorted_keys(&rust_books), ["entries"]);
+    for listed in [&rust_books, &ts_books] {
+        assert_eq!(listed["entries"].as_array().unwrap().len(), 1, "{listed}");
+        let entry = &listed["entries"][0];
+        assert_eq!(
+            sorted_keys(entry),
+            [
+                "bookId",
+                "bytes",
+                "entry",
+                "fileCount",
+                "title",
+                "trashedAt"
+            ]
+        );
+        assert_eq!(
+            (entry["bookId"].clone(), entry["title"].clone()),
+            (json!("b1"), json!("对跑书"))
+        );
+        assert!(
+            entry["trashedAt"].as_str().unwrap().ends_with('Z'),
+            "{entry}"
+        );
+        assert!(
+            entry["bytes"].as_u64().unwrap() > 0 && entry["fileCount"].as_u64().unwrap() > 0,
+            "{entry}"
+        );
+    }
+    let rust_entry = rust_books["entries"][0]["entry"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ts_entry = ts_books["entries"][0]["entry"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(rust_entry, ts_entry);
+    // 另一条腿删的书不归本腿：搬进本腿的书根会是一本坏书。
+    for (base, foreign) in [(&rust, &ts_entry), (&ts.base, &rust_entry)] {
+        for route in ["restore", "purge"] {
+            let (status, body) = post_json(
+                base,
+                &format!("/api/v1/trash/books/{route}"),
+                &json!({ "entry": foreign }).to_string(),
+            )
+            .await;
+            assert_eq!(
+                (status, body["error"]["code"].clone()),
+                (404, json!("TRASH_ENTRY_NOT_FOUND")),
+                "{base} {route}：{body}"
+            );
+        }
+    }
+    for base in legs {
+        for bad in [
+            "{}",
+            r#"{"entry":"../b1--20261125093007"}"#,
+            r#"{"entry":"notes.txt"}"#,
+        ] {
+            let (status, body) = post_json(base, "/api/v1/trash/books/restore", bad).await;
+            assert_eq!(
+                (status, body["error"]["code"].clone()),
+                (400, json!("INVALID_TRASH_REQUEST")),
+                "{base}：{bad}"
+            );
+        }
+        let (status, body) = post_json(
+            base,
+            "/api/v1/trash/books/restore",
+            r#"{"entry":"nope--20261125093007"}"#,
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].clone()),
+            (404, json!("TRASH_ENTRY_NOT_FOUND")),
+            "{base}：{body}"
+        );
+    }
+    assert!(root.join(".trash").join("books").join(&rust_entry).is_dir());
+    assert!(root.join(".trash").join("books").join(&ts_entry).is_dir());
+
+    // ⑥ 找回：书回到各自的书根，书架重新列得出。
+    let (status, body) = post_json(
+        &rust,
+        "/api/v1/trash/books/restore",
+        &json!({ "entry": rust_entry }).to_string(),
+    )
+    .await;
+    assert_eq!(
+        (status, body.clone()),
+        (
+            200,
+            json!({ "ok": true, "entry": rust_entry, "bookId": "b1" })
+        ),
+        "{body}"
+    );
+    let (status, body) = post_json(
+        &ts.base,
+        "/api/v1/trash/books/restore",
+        &json!({ "entry": ts_entry }).to_string(),
+    )
+    .await;
+    assert_eq!(
+        (status, body.clone()),
+        (
+            200,
+            json!({ "ok": true, "entry": ts_entry, "bookId": "b1" })
+        ),
+        "{body}"
+    );
+    assert!(rust_tree.join("book.json").is_file());
+    assert!(root.join("works").join("b1").join("work.json").is_file());
+    for base in legs {
+        let (status, _) = get_json(base, "/api/v1/books/b1").await;
+        assert_eq!(status, 200, "{base}");
+        let (_, body) = get_json(base, "/api/v1/trash/books").await;
+        assert_eq!(body, json!({ "entries": [] }), "{base}");
+    }
+
+    // ⑦ 书目录已被占用 → 409，被删的那一版留在回收站里；清空是真空删除。
+    let ts_manifest =
+        std::fs::read_to_string(root.join("works").join("b1").join("work.json")).unwrap();
+    for base in legs {
+        let (status, _) = send_json(
+            &client,
+            base,
+            reqwest::Method::DELETE,
+            "/api/v1/books/b1",
+            None,
+        )
+        .await;
+        assert_eq!(status, 200, "{base}");
+    }
+    // 各腿自己的树里再建一本同 id 的书。
+    write_fixture_book(&root, &[]);
+    std::fs::create_dir_all(root.join("works").join("b1")).unwrap();
+    std::fs::write(
+        root.join("works").join("b1").join("work.json"),
+        &ts_manifest,
+    )
+    .unwrap();
+    for base in legs {
+        let (_, body) = get_json(base, "/api/v1/trash/books").await;
+        let entry = body["entries"][0]["entry"].as_str().unwrap().to_string();
+        let (status, body) = post_json(
+            base,
+            "/api/v1/trash/books/restore",
+            &json!({ "entry": entry }).to_string(),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].clone()),
+            (409, json!("TRASH_TARGET_EXISTS")),
+            "{base}：{body}"
+        );
+        assert!(body["error"]["conflicts"].is_array(), "{base}：{body}");
+        let (status, body) = post_json(
+            base,
+            "/api/v1/trash/books/purge",
+            &json!({ "entry": entry }).to_string(),
+        )
+        .await;
+        assert_eq!(
+            (status, body.clone()),
+            (200, json!({ "ok": true, "entry": entry })),
+            "{base}"
+        );
+        let (status, body) = post_json(
+            base,
+            "/api/v1/trash/books/purge",
+            &json!({ "entry": entry }).to_string(),
+        )
+        .await;
+        assert_eq!(
+            (status, body["error"]["code"].clone()),
+            (404, json!("TRASH_ENTRY_NOT_FOUND")),
+            "{base}：{body}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_dir(root.join(".trash").join("books"))
+            .unwrap()
+            .count(),
+        0
+    );
+    // 重建的书没被动。
+    assert!(rust_tree.join("book.json").is_file());
+    assert!(root.join("works").join("b1").join("work.json").is_file());
+
+    eprintln!(
+        "回收站端点：章级与书级的列出 / 恢复 / 清空两腿同构——找回章文件登记进目录、状态不动，目标已在原位 409 一个都不移，清空只删列出来的，平铺条目按文件现做的目录条目两腿逐键相同，书级各腿只认自己删出来的形态"
+    );
+}
