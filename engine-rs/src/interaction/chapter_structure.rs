@@ -1719,6 +1719,104 @@ pub async fn undo_last_structure_operation(
         }
     }
 
+    // R63 立案处置/1698 号：产物逆迁移——runtime/drafts 前导号产物随章号映射
+    // 迁回（章号映射=指纹配对 n→m）；merge 撤销的被删章产物从 .trash 按前导号
+    // 恢复原位（trash 副本保留=永不硬删）。无配对的产物原地保留（产物非正典，
+    // 错位比丢失好）。
+    let mut number_map: BTreeMap<u32, u32> = BTreeMap::new();
+    for target in &tail.before {
+        if let Some(matched) = current
+            .iter()
+            .find(|item| item.fingerprint == target.fingerprint)
+        {
+            if matched.number != target.number {
+                number_map.insert(matched.number, target.number);
+            }
+        }
+    }
+    // 前导号解析：runtime 是 `chapter-NNNN.*`（非章文件名语法——章解析器不识别，
+    // 批一 collect_artifact_files 同款只扫 NNNN_* 形态），drafts 是 `NNNN_*`。
+    let artifact_old_number = |name: &str| -> u32 {
+        if name.starts_with("chapter-") {
+            name.trim_start_matches("chapter-")
+                .chars()
+                .take(4)
+                .collect::<String>()
+                .parse()
+                .unwrap_or(0)
+        } else {
+            crate::state::chapter_filename::parse_chapter_file_number(name).unwrap_or(0)
+        }
+    };
+    for sub in ["runtime", "drafts"] {
+        let sub_dir = root.join("story").join(sub);
+        let Ok(mut entries) = tokio::fs::read_dir(&sub_dir).await else {
+            continue;
+        };
+        let mut names: Vec<String> = Vec::new();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        names.sort();
+        for name in names {
+            let old_number = artifact_old_number(&name);
+            if old_number == 0 || !number_map.contains_key(&old_number) {
+                continue;
+            }
+            let next = number_map[&old_number];
+            let dest_name = if name.starts_with("chapter-") {
+                let suffix: String = name.chars().skip(12).collect();
+                format!("chapter-{next:04}{suffix}")
+            } else {
+                name.replacen(&format!("{old_number:04}"), &format!("{next:04}"), 1)
+            };
+            let dest = sub_dir.join(&dest_name);
+            if let Err(e) = tokio::fs::rename(sub_dir.join(&name), &dest).await {
+                rollback_undo(&written, &executed_renames).await;
+                return Err(StructureError::bad_request(format!(
+                    "undo transaction aborted (no changes persisted): {e}"
+                )));
+            }
+            let _ = &dest;
+        }
+    }
+    // merge 撤销：被删章（removed 号）的产物从 .trash 子目录恢复原位（trash
+    // 副本保留=永不硬删）。trash 内产物名保留原 NNNN 前导号。
+    if let StructureOp::Split { at } = inverse_op {
+        let removed = at + 1;
+        for sub in ["runtime", "drafts"] {
+            let trash_sub = chapters_dir.join(TRASH_DIR).join(sub);
+            let Ok(mut entries) = tokio::fs::read_dir(&trash_sub).await else {
+                continue;
+            };
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let old_number = if name.starts_with("chapter-") {
+                    name.trim_start_matches("chapter-")
+                        .chars()
+                        .take(4)
+                        .collect::<String>()
+                        .parse()
+                        .unwrap_or(0)
+                } else {
+                    crate::state::chapter_filename::parse_chapter_file_number(&name).unwrap_or(0)
+                };
+                if old_number != removed {
+                    continue;
+                }
+                let dest_dir = root.join("story").join(sub);
+                let _ = tokio::fs::create_dir_all(&dest_dir).await;
+                if let Err(e) = tokio::fs::rename(trash_sub.join(&name), dest_dir.join(&name)).await
+                {
+                    rollback_undo(&written, &executed_renames).await;
+                    return Err(StructureError::bad_request(format!(
+                        "undo transaction aborted (no changes persisted): {e}"
+                    )));
+                }
+            }
+        }
+    }
+
     // index 回位：当前行按号落到目标集（title 保留，字数按恢复内容重算）；
     // 目标有而当前无的号按 before 文件名解析 title 新建行（ReadyForReview 惯例）。
     let title_of = |file_name: &str| -> String {
@@ -2040,6 +2138,99 @@ mod tests {
             Some("last entry is itself an undo")
         );
         assert_eq!(status.last_kind.as_deref(), Some("undo"));
+    }
+
+    /// R63 立案处置/1698 号：undo 产物逆迁移——merge 撤销的被删章产物从
+    /// .trash 回 runtime 原位（名保留原 NNNN 前导号）。
+    #[tokio::test]
+    async fn undo_merge_moves_removed_artifacts_back_from_trash() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let book_dir = dir.path().join("books/b1");
+        // 2 号章产物（runtime 前导号形态）。
+        tokio::fs::write(
+            book_dir.join("story/runtime/chapter-0002.plan.md"),
+            "二号章计划\n",
+        )
+        .await
+        .unwrap();
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        merge_chapter(
+            &state,
+            "b1",
+            1,
+            2,
+            None,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("merge");
+        assert!(!book_dir.join("story/runtime/chapter-0002.plan.md").exists());
+        undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000001000,
+            "2026-11-21T01:10:00.000Z",
+        )
+        .await
+        .expect("undo");
+        let restored =
+            tokio::fs::read_to_string(book_dir.join("story/runtime/chapter-0002.plan.md"))
+                .await
+                .unwrap();
+        assert_eq!(restored, "二号章计划\n");
+    }
+
+    /// R63 立案处置/1698 号：undo split——移位章（3→4）的产物随重编号迁回 3 号。
+    #[tokio::test]
+    async fn undo_split_shifts_renumbered_artifacts_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let book_dir = dir.path().join("books/b1");
+        tokio::fs::write(
+            book_dir.join("story/runtime/chapter-0003.trace.md"),
+            "三号章追踪\n",
+        )
+        .await
+        .unwrap();
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            8,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        assert!(book_dir
+            .join("story/runtime/chapter-0004.trace.md")
+            .exists());
+        undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000001000,
+            "2026-11-21T01:10:00.000Z",
+        )
+        .await
+        .expect("undo");
+        assert!(book_dir
+            .join("story/runtime/chapter-0003.trace.md")
+            .exists());
+        assert!(!book_dir
+            .join("story/runtime/chapter-0004.trace.md")
+            .exists());
+        let restored =
+            tokio::fs::read_to_string(book_dir.join("story/runtime/chapter-0003.trace.md"))
+                .await
+                .unwrap();
+        assert_eq!(restored, "三号章追踪\n");
     }
 
     #[tokio::test]

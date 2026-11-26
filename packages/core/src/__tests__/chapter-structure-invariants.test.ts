@@ -209,9 +209,67 @@ describe("undoLastStructureOperation（R61 批二）", () => {
   });
 });
 
+describe("undo 产物逆迁移（R63 立案处置/1698 号）", () => {
+  function seedBookWithArtifacts(): { bookDir: string; deps: ChapterStructureDeps } {
+    const root = mkdtempSync(join(tmpdir(), "chapter-undo-artifacts-"));
+    dirs.push(root);
+    const bookDir = join(root, "works", "b1", "source");
+    mkdirSync(join(bookDir, "chapters"), { recursive: true });
+    mkdirSync(join(bookDir, "story", "runtime"), { recursive: true });
+    mkdirSync(join(bookDir, "story", "drafts"), { recursive: true });
+    for (const [n, title, body] of [
+      [1, "风起", "第一章正文。"],
+      [2, "灵脉", "第二章正文乙。"],
+      [3, "收束", "第三章正文丙。"],
+    ] as const) {
+      writeFileSync(join(bookDir, "chapters", `${String(n).padStart(4, "0")}_${title}.md`), `# ${title}\n\n${body}\n`);
+    }
+    // 产物面：runtime 前导号 + drafts 前导号（各一号，验证两类子目录）。
+    writeFileSync(join(bookDir, "story", "runtime", "chapter-0002.plan.md"), "二号章计划\n");
+    writeFileSync(join(bookDir, "story", "drafts", "0002_灵脉草稿.md"), "二号章草稿\n");
+    writeFileSync(join(bookDir, "story", "runtime", "chapter-0003.trace.md"), "三号章追踪\n");
+    writeFileSync(join(bookDir, "chapters", "index.json"), JSON.stringify([
+      { number: 1, title: "风起", status: "ready-for-review", wordCount: 8, createdAt: "2026-11-21T00:00:00.000Z", updatedAt: "2026-11-21T00:00:00.000Z", auditIssues: [], lengthWarnings: [] },
+      { number: 2, title: "灵脉", status: "ready-for-review", wordCount: 10, createdAt: "2026-11-21T00:00:00.000Z", updatedAt: "2026-11-21T00:00:00.000Z", auditIssues: [], lengthWarnings: [] },
+      { number: 3, title: "收束", status: "ready-for-review", wordCount: 9, createdAt: "2026-11-21T00:00:00.000Z", updatedAt: "2026-11-21T00:00:00.000Z", auditIssues: [], lengthWarnings: [] },
+    ]));
+    const deps: ChapterStructureDeps = {
+      bookDir,
+      loadChapterIndex: async () =>
+        JSON.parse(readFileSync(join(bookDir, "chapters", "index.json"), "utf-8")) as ReadonlyArray<ChapterMeta>,
+    };
+    return { bookDir, deps };
+  }
+
+  it("undo merge: the removed chapter's artifacts move back from trash to runtime/drafts", async () => {
+    const { bookDir, deps } = seedBookWithArtifacts();
+    // merge 1+2（removed=2）：2 号产物进 .trash。
+    await mergeChapters(deps, "b1", 1, 2, undefined, undefined);
+    expect(existsSync(join(bookDir, "story", "runtime", "chapter-0002.plan.md"))).toBe(false);
+    // undo：2 号产物从 trash 恢复原位（正文与产物两层都回）。
+    await undoLastStructureOperation(deps, "b1", undefined);
+    expect(readFileSync(join(bookDir, "story", "runtime", "chapter-0002.plan.md"), "utf-8")).toBe("二号章计划\n");
+    expect(readFileSync(join(bookDir, "story", "drafts", "0002_灵脉草稿.md"), "utf-8")).toBe("二号章草稿\n");
+    // runtime 产物名形态（从 trash 恢复时名保留原 NNNN 前导号）。
+    expect(readFileSync(join(bookDir, "story", "drafts", "0002_灵脉草稿.md"), "utf-8")).toContain("草稿");
+  });
+
+  it("undo split: renumbered chapters' artifacts shift back with the renumbering", async () => {
+    const { bookDir, deps } = seedBookWithArtifacts();
+    // split 2 号：3 号（收束）及其产物移位到 4 号。
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    expect(existsSync(join(bookDir, "story", "runtime", "chapter-0003.trace.md"))).toBe(false);
+    expect(existsSync(join(bookDir, "story", "runtime", "chapter-0004.trace.md"))).toBe(true);
+    // undo：移位产物回 3 号位。
+    await undoLastStructureOperation(deps, "b1", undefined);
+    expect(existsSync(join(bookDir, "story", "runtime", "chapter-0003.trace.md"))).toBe(true);
+    expect(existsSync(join(bookDir, "story", "runtime", "chapter-0004.trace.md"))).toBe(false);
+    expect(readFileSync(join(bookDir, "story", "runtime", "chapter-0003.trace.md"), "utf-8")).toBe("三号章追踪\n");
+  });
+});
+
 describe("structureUndoStatus（R61 批三：可撤销状态查询装配）", () => {
-  it("reports eligible with last operation after a split", async () => {
-    const { deps } = seedBook();
+  it("reports eligible with last operation after a split", async () => {    const { deps } = seedBook();
     await splitChapter(deps, "b1", 2, 6, undefined);
     const status = await structureUndoStatus(deps);
     expect(status.eligible).toBe(true);

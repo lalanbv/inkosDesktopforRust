@@ -500,6 +500,57 @@ export async function undoLastStructureOperation(
     deletes.push(`chapters/${file.fileName}`);
   }
 
+  // R63 立案处置/1698 号：产物逆迁移——runtime/drafts 前导号产物随章号映射
+  // 迁回（章号映射=指纹配对 n→m）；merge 撤销的被删章产物从 .trash 按前导号
+  // 恢复原位（trash 副本保留=永不硬删，产物本体回 runtime/drafts）。无配对的
+  // 产物原地保留（产物非正典，错位比丢失好）。
+  const numberMap = new Map<number, number>();
+  for (const target of tail.before) {
+    const match = current.find((item) => item.fingerprint === target.fingerprint);
+    if (match && match.number !== target.number) numberMap.set(match.number, target.number);
+  }
+  const artifacts = await collectArtifactFiles(deps.bookDir, [...numberMap.keys()]);
+  for (const artifact of artifacts) {
+    const name = artifact.relativePath.split("/").pop()!;
+    const sub = artifact.relativePath.startsWith("story/runtime") ? "runtime" : "drafts";
+    const oldNumber = name.startsWith("chapter-")
+      ? Number.parseInt(name.slice(8, 12), 10)
+      : (parseLeadingNumber(name) ?? 0);
+    const next = numberMap.get(oldNumber) ?? oldNumber;
+    if (next === oldNumber) continue;
+    const destName = name.startsWith("chapter-")
+      ? `chapter-${String(next).padStart(4, "0")}${name.slice(12)}`
+      : name.replace(String(oldNumber).padStart(4, "0"), String(next).padStart(4, "0"));
+    writes.push({
+      relativePath: `story/${sub}/${destName}`,
+      content: await readFile(join(deps.bookDir, artifact.relativePath), "utf-8"),
+    });
+    deletes.push(artifact.relativePath);
+  }
+  // merge 撤销：被删章（removed 号）的产物从 .trash 子目录恢复原位。
+  if (inverseOp.kind === "split") {
+    const removed = inverseOp.at + 1;
+    for (const sub of ["runtime", "drafts"]) {
+      const trashSub = join(deps.bookDir, TRASH_DIR, sub);
+      let entries: string[] = [];
+      try {
+        entries = await readdir(trashSub);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        const oldNumber = name.startsWith("chapter-")
+          ? Number.parseInt(name.slice(8, 12), 10)
+          : (parseLeadingNumber(name) ?? 0);
+        if (oldNumber !== removed) continue;
+        writes.push({
+          relativePath: `story/${sub}/${name}`,
+          content: await readFile(join(trashSub, name), "utf-8"),
+        });
+      }
+    }
+  }
+
   // index 回位：当前行按号落到目标集（title 保留），目标有而当前无的号按
   // before 文件名解析 title 新建行（ReadyForReview 惯例）；当前有而目标无的行删除。
   const titleOf = (fileName: string): string => {
@@ -775,7 +826,7 @@ export async function splitChapter(
     const next = mapping.get(oldNumber) ?? oldNumber;
     if (next === oldNumber) continue; // 不变号产物留原位（write+delete 同路径被 atomic set 拒绝）
     const destName = name.startsWith("chapter-")
-      ? `${paddedRuntimePrefix(next)}${name.slice(12)}`
+      ? `chapter-${String(next).padStart(4, "0")}${name.slice(12)}`
       : name.replace(String(oldNumber).padStart(4, "0"), String(next).padStart(4, "0"));
     writes.push({
       relativePath: `story/${sub}/${destName}`,
@@ -908,7 +959,7 @@ export async function mergeChapters(
     const next = mapping.get(oldNumber) ?? oldNumber;
     if (next === oldNumber) continue; // 不变号产物留原位（write+delete 同路径被 atomic set 拒绝）
     const destName = name.startsWith("chapter-")
-      ? `${paddedRuntimePrefix(next)}${name.slice(12)}`
+      ? `chapter-${String(next).padStart(4, "0")}${name.slice(12)}`
       : name.replace(String(oldNumber).padStart(4, "0"), String(next).padStart(4, "0"));
     writes.push({
       relativePath: `story/${sub}/${destName}`,
@@ -997,7 +1048,7 @@ export async function reorderChapters(
     const next = mapping.get(oldNumber) ?? oldNumber;
     if (next === oldNumber) continue; // 不变号产物留原位（write+delete 同路径被 atomic set 拒绝）
     const destName = name.startsWith("chapter-")
-      ? `${paddedRuntimePrefix(next)}${name.slice(12)}`
+      ? `chapter-${String(next).padStart(4, "0")}${name.slice(12)}`
       : name.replace(String(oldNumber).padStart(4, "0"), String(next).padStart(4, "0"));
     writes.push({
       relativePath: `story/${sub}/${destName}`,
