@@ -7,6 +7,7 @@ import { useServiceStore } from "../store/service";
 import { WritingStatsCard } from "../components/WritingStatsCard";
 import { RunLogPanel } from "../components/RunLogPanel";
 import { BackupPanel } from "../components/BackupPanel";
+import { TrashPanel } from "../components/TrashPanel";
 import { useNewSSEMessages, type SSEMessage } from "../hooks/use-sse";
 import type { Theme } from "../hooks/use-theme";
 import type { TFunction } from "../hooks/use-i18n";
@@ -271,6 +272,9 @@ export function Dashboard({ nav, sse, theme, t }: { nav: Nav; sse: { messages: R
 
       {/* R18/386 号：备份与恢复（全量 tar.gz 导出 + 两段式导入恢复）。 */}
       <BackupPanel />
+
+      {/* R60 第二批/1683 号：书级回收站（列出/恢复/永久删除——1679 号端点的消费面）。 */}
+      <TrashPanel />
 
       <div className="flex items-end justify-between border-b border-border/40 pb-8">
         <div>

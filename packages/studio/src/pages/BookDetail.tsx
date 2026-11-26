@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 // subpath 导入同 book-settings-draft（主入口拖 node:async_hooks 链进浏览器面）
 import type { BookStatus } from "@actalk/inkos-core/models/book";
 import { formatAuditOutcome, summarizeAuditResult } from "../lib/audit-outcome";
+import { ChapterTrashPanel } from "../components/ChapterTrashPanel";
 import { QualityDebtsCard } from "../components/QualityDebtsCard";
 import { PromiseTimelineCard } from "../components/PromiseTimelineCard";
 import { StyleBindingCard } from "../components/StyleBindingCard";
@@ -1357,6 +1358,10 @@ export function BookDetail({
           </div>
         )}
       </div>
+
+      {/* R60 第二批/1683 号：章级回收站（驳回/删除的章节内容——整批或单条找回，
+          服务端找回时已登记进章节目录；onRestored=refetch 章节列表）。 */}
+      <ChapterTrashPanel bookId={bookId} onRestored={refetch} />
 
       <ConfirmDialog
         open={confirmDeleteOpen}

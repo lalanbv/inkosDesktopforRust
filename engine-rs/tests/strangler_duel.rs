@@ -4684,6 +4684,20 @@ async fn trash_endpoints_duel() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
     };
+    // 平铺条目的列表位次由文件 mtime 决定（没有「删掉的时刻」）。把它钉到一小时前：
+    // 驳回批次的时刻恒更新、恒排在它前面——否则 seed 与 reject 落进同一 UTC 秒时，
+    // 平铺条目的毫秒 mtime 会压过批次名的秒级截断、排到 entries[0]（trashedAt=null），
+    // 断言随机炸（1679 号起潜伏，门禁全量跑第一次撞上）。
+    let stale = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let seed_stale = |tree: &Path, rel: &str, content: &str| {
+        seed(tree, rel, content);
+        std::fs::File::options()
+            .write(true)
+            .open(tree.join(rel))
+            .unwrap()
+            .set_modified(stale)
+            .unwrap();
+    };
     for tree in [&rust_tree, &ts_tree] {
         for n in 0..=2 {
             seed(
@@ -4705,8 +4719,9 @@ async fn trash_endpoints_duel() {
         seed(tree, "story/current_state.md", "state-2");
         seed(tree, "story/pending_hooks.md", "hooks-2");
         seed(tree, "story/state/manifest.json", "manifest-2");
-        // 旧版本留下的平铺条目（没有批次、没有「删掉的时刻」）与一处认不出的布局。
-        seed(
+        // 旧版本留下的平铺条目（没有批次、没有「删掉的时刻」——mtime 钉到一小时前，
+        // 见 seed_stale）与一处认不出的布局。
+        seed_stale(
             tree,
             "chapters/.trash/0005_残章.md",
             "# 第5章 残章\n\n残留的草稿。",
