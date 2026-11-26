@@ -1,0 +1,1807 @@
+{
+ "seed": 20261126,
+ "generatedAt": "2026-11-26T00:00:00.000Z",
+ "sampleCount": 200,
+ "samples": [
+  {
+   "input": {
+    "currentWords": 99993,
+    "targetWords": 99984,
+    "dailyPaceWords": 2356,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 0,
+    "targetWords": 2,
+    "dailyPaceWords": -3,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 24093,
+    "targetWords": 99995,
+    "dailyPaceWords": 4961,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-12-07"
+  },
+  {
+   "input": {
+    "currentWords": 80838,
+    "targetWords": 53854,
+    "dailyPaceWords": 7,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 38810,
+    "targetWords": 100000,
+    "dailyPaceWords": -7,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 89708,
+    "targetWords": 71306,
+    "dailyPaceWords": 3025,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 100000,
+    "targetWords": 15,
+    "dailyPaceWords": 1,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 69779,
+    "targetWords": 3,
+    "dailyPaceWords": 4522,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 5,
+    "targetWords": 76249,
+    "dailyPaceWords": 8,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2052-12-29"
+  },
+  {
+   "input": {
+    "currentWords": 3,
+    "targetWords": 56013,
+    "dailyPaceWords": 4819,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2026-12-05"
+  },
+  {
+   "input": {
+    "currentWords": 35239,
+    "targetWords": 75036,
+    "dailyPaceWords": -1,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 91071,
+    "targetWords": 84278,
+    "dailyPaceWords": 4871,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 10,
+    "targetWords": 11,
+    "dailyPaceWords": -8,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 37033,
+    "targetWords": 75063,
+    "dailyPaceWords": 3813,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-11-30"
+  },
+  {
+   "input": {
+    "currentWords": 74327,
+    "targetWords": 79401,
+    "dailyPaceWords": 3523,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-11-24"
+  },
+  {
+   "input": {
+    "currentWords": 13,
+    "targetWords": 5,
+    "dailyPaceWords": 2594,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 45698,
+    "targetWords": 70301,
+    "dailyPaceWords": 4996,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-11-29"
+  },
+  {
+   "input": {
+    "currentWords": 98486,
+    "targetWords": 2041,
+    "dailyPaceWords": 4885,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 27117,
+    "targetWords": 0,
+    "dailyPaceWords": 4047,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 16,
+    "targetWords": 66931,
+    "dailyPaceWords": 4995,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-12-10"
+  },
+  {
+   "input": {
+    "currentWords": 99985,
+    "targetWords": 10,
+    "dailyPaceWords": 991,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 8,
+    "targetWords": 8434,
+    "dailyPaceWords": 3517,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-11-24"
+  },
+  {
+   "input": {
+    "currentWords": 99987,
+    "targetWords": 99997,
+    "dailyPaceWords": 37,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2026-11-24"
+  },
+  {
+   "input": {
+    "currentWords": 79815,
+    "targetWords": 60732,
+    "dailyPaceWords": 3052,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 2,
+    "targetWords": 33196,
+    "dailyPaceWords": 8,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2038-04-02"
+  },
+  {
+   "input": {
+    "currentWords": 56695,
+    "targetWords": 23858,
+    "dailyPaceWords": 2999,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99994,
+    "targetWords": 98418,
+    "dailyPaceWords": 7,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 98829,
+    "targetWords": 56128,
+    "dailyPaceWords": 10,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 58579,
+    "targetWords": 78697,
+    "dailyPaceWords": 4488,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-11-26"
+  },
+  {
+   "input": {
+    "currentWords": 99999,
+    "targetWords": 78068,
+    "dailyPaceWords": 2660,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 24899,
+    "targetWords": 13978,
+    "dailyPaceWords": 761,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99998,
+    "targetWords": 22187,
+    "dailyPaceWords": 2739,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 17138,
+    "targetWords": 72808,
+    "dailyPaceWords": 576,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2027-02-25"
+  },
+  {
+   "input": {
+    "currentWords": 9482,
+    "targetWords": 4942,
+    "dailyPaceWords": 1,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 49654,
+    "targetWords": 30371,
+    "dailyPaceWords": 121,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 95663,
+    "targetWords": 12,
+    "dailyPaceWords": 3044,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 54147,
+    "targetWords": 50440,
+    "dailyPaceWords": 2457,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 10,
+    "targetWords": 99990,
+    "dailyPaceWords": 1782,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2027-01-17"
+  },
+  {
+   "input": {
+    "currentWords": 1019,
+    "targetWords": 98623,
+    "dailyPaceWords": 3913,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-12-19"
+  },
+  {
+   "input": {
+    "currentWords": 3,
+    "targetWords": 92727,
+    "dailyPaceWords": -3,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 14,
+    "targetWords": 13,
+    "dailyPaceWords": 11,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 46921,
+    "targetWords": 76999,
+    "dailyPaceWords": 4,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2047-06-26"
+  },
+  {
+   "input": {
+    "currentWords": 90541,
+    "targetWords": 67601,
+    "dailyPaceWords": 7,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 3,
+    "targetWords": 99996,
+    "dailyPaceWords": 4801,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2026-12-14"
+  },
+  {
+   "input": {
+    "currentWords": 37503,
+    "targetWords": 10,
+    "dailyPaceWords": -1,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 82361,
+    "targetWords": 22646,
+    "dailyPaceWords": 1372,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 83978,
+    "targetWords": 20301,
+    "dailyPaceWords": 1818,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 39252,
+    "targetWords": 72209,
+    "dailyPaceWords": 2242,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-12-07"
+  },
+  {
+   "input": {
+    "currentWords": 76820,
+    "targetWords": 1,
+    "dailyPaceWords": 641,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 64323,
+    "targetWords": 91746,
+    "dailyPaceWords": 2806,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-12-04"
+  },
+  {
+   "input": {
+    "currentWords": 16,
+    "targetWords": 2,
+    "dailyPaceWords": 4992,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 15,
+    "targetWords": 35606,
+    "dailyPaceWords": 1352,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-12-23"
+  },
+  {
+   "input": {
+    "currentWords": 91412,
+    "targetWords": 28680,
+    "dailyPaceWords": 4387,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 15,
+    "targetWords": 64700,
+    "dailyPaceWords": 4137,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-12-06"
+  },
+  {
+   "input": {
+    "currentWords": 38258,
+    "targetWords": 99988,
+    "dailyPaceWords": 3371,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-12-13"
+  },
+  {
+   "input": {
+    "currentWords": 1835,
+    "targetWords": 54316,
+    "dailyPaceWords": 2,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2098-09-29"
+  },
+  {
+   "input": {
+    "currentWords": 2806,
+    "targetWords": 88446,
+    "dailyPaceWords": 4602,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-12-11"
+  },
+  {
+   "input": {
+    "currentWords": 24776,
+    "targetWords": 93644,
+    "dailyPaceWords": 525,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2027-04-05"
+  },
+  {
+   "input": {
+    "currentWords": 68642,
+    "targetWords": 16181,
+    "dailyPaceWords": 3169,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 61490,
+    "targetWords": 0,
+    "dailyPaceWords": 2556,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 48455,
+    "targetWords": 98319,
+    "dailyPaceWords": 4488,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2026-12-05"
+  },
+  {
+   "input": {
+    "currentWords": 20589,
+    "targetWords": 93039,
+    "dailyPaceWords": 200,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2027-11-24"
+  },
+  {
+   "input": {
+    "currentWords": 5004,
+    "targetWords": 24598,
+    "dailyPaceWords": 2606,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2026-12-03"
+  },
+  {
+   "input": {
+    "currentWords": 99995,
+    "targetWords": 18647,
+    "dailyPaceWords": 2307,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 63930,
+    "targetWords": 86929,
+    "dailyPaceWords": 2545,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-12-06"
+  },
+  {
+   "input": {
+    "currentWords": 99985,
+    "targetWords": 48679,
+    "dailyPaceWords": 4344,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 92970,
+    "targetWords": 99995,
+    "dailyPaceWords": 6,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2030-02-05"
+  },
+  {
+   "input": {
+    "currentWords": 57913,
+    "targetWords": 88231,
+    "dailyPaceWords": 4700,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-11-27"
+  },
+  {
+   "input": {
+    "currentWords": 83897,
+    "targetWords": 99985,
+    "dailyPaceWords": 7,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2033-03-07"
+  },
+  {
+   "input": {
+    "currentWords": 58288,
+    "targetWords": 99994,
+    "dailyPaceWords": 3824,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2026-12-04"
+  },
+  {
+   "input": {
+    "currentWords": 30754,
+    "targetWords": 1,
+    "dailyPaceWords": 5,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 88001,
+    "targetWords": 9,
+    "dailyPaceWords": 2181,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 91895,
+    "targetWords": 37762,
+    "dailyPaceWords": 3097,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 93458,
+    "targetWords": 8,
+    "dailyPaceWords": 2088,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99988,
+    "targetWords": 35815,
+    "dailyPaceWords": 104,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 55139,
+    "targetWords": 6,
+    "dailyPaceWords": 1059,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 71955,
+    "targetWords": 15913,
+    "dailyPaceWords": 4993,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99995,
+    "targetWords": 16,
+    "dailyPaceWords": 3169,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 87117,
+    "targetWords": 44958,
+    "dailyPaceWords": 2903,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 13,
+    "targetWords": 98598,
+    "dailyPaceWords": 2294,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2027-01-07"
+  },
+  {
+   "input": {
+    "currentWords": 77847,
+    "targetWords": 17141,
+    "dailyPaceWords": 32,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 16284,
+    "targetWords": 89752,
+    "dailyPaceWords": -3,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 24295,
+    "targetWords": 15,
+    "dailyPaceWords": 4249,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 5635,
+    "targetWords": 13890,
+    "dailyPaceWords": 1630,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-11-28"
+  },
+  {
+   "input": {
+    "currentWords": 61597,
+    "targetWords": 23042,
+    "dailyPaceWords": -7,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 44422,
+    "targetWords": 55477,
+    "dailyPaceWords": -9,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 37601,
+    "targetWords": 9539,
+    "dailyPaceWords": 3093,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 78167,
+    "targetWords": 11,
+    "dailyPaceWords": 233,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 39057,
+    "targetWords": 99985,
+    "dailyPaceWords": 4233,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-12-05"
+  },
+  {
+   "input": {
+    "currentWords": 9,
+    "targetWords": 16,
+    "dailyPaceWords": 3088,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-11-27"
+  },
+  {
+   "input": {
+    "currentWords": 51182,
+    "targetWords": 96996,
+    "dailyPaceWords": 1043,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2027-01-09"
+  },
+  {
+   "input": {
+    "currentWords": 99843,
+    "targetWords": 3,
+    "dailyPaceWords": 11,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 65788,
+    "targetWords": 79633,
+    "dailyPaceWords": 4995,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-11-25"
+  },
+  {
+   "input": {
+    "currentWords": 99103,
+    "targetWords": 86387,
+    "dailyPaceWords": 849,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 16,
+    "targetWords": 7,
+    "dailyPaceWords": 2,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 29538,
+    "targetWords": 2,
+    "dailyPaceWords": 11,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 3,
+    "targetWords": 72617,
+    "dailyPaceWords": 3431,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2026-12-17"
+  },
+  {
+   "input": {
+    "currentWords": 8991,
+    "targetWords": 71117,
+    "dailyPaceWords": 4878,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2026-12-08"
+  },
+  {
+   "input": {
+    "currentWords": 4326,
+    "targetWords": 22400,
+    "dailyPaceWords": 3972,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-11-29"
+  },
+  {
+   "input": {
+    "currentWords": 4836,
+    "targetWords": 99987,
+    "dailyPaceWords": 6,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2070-04-22"
+  },
+  {
+   "input": {
+    "currentWords": 64873,
+    "targetWords": 87433,
+    "dailyPaceWords": 10,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2033-01-27"
+  },
+  {
+   "input": {
+    "currentWords": 29867,
+    "targetWords": 40612,
+    "dailyPaceWords": 4747,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2026-11-26"
+  },
+  {
+   "input": {
+    "currentWords": 96846,
+    "targetWords": 5072,
+    "dailyPaceWords": 1231,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 67251,
+    "targetWords": 55315,
+    "dailyPaceWords": 174,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 0,
+    "targetWords": 29194,
+    "dailyPaceWords": 3165,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-12-04"
+  },
+  {
+   "input": {
+    "currentWords": 2,
+    "targetWords": 89504,
+    "dailyPaceWords": 1830,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2027-01-10"
+  },
+  {
+   "input": {
+    "currentWords": 87892,
+    "targetWords": 50393,
+    "dailyPaceWords": 3895,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 7,
+    "targetWords": 22136,
+    "dailyPaceWords": 4829,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2026-11-28"
+  },
+  {
+   "input": {
+    "currentWords": 99989,
+    "targetWords": 88025,
+    "dailyPaceWords": 2902,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 9001,
+    "targetWords": 29993,
+    "dailyPaceWords": 4,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2041-04-03"
+  },
+  {
+   "input": {
+    "currentWords": 3223,
+    "targetWords": 7,
+    "dailyPaceWords": 5000,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 97191,
+    "targetWords": 73078,
+    "dailyPaceWords": 0,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 0,
+    "targetWords": 99994,
+    "dailyPaceWords": 4924,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-12-17"
+  },
+  {
+   "input": {
+    "currentWords": 17996,
+    "targetWords": 92636,
+    "dailyPaceWords": 4988,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-12-06"
+  },
+  {
+   "input": {
+    "currentWords": 57437,
+    "targetWords": 87926,
+    "dailyPaceWords": 4336,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2026-12-03"
+  },
+  {
+   "input": {
+    "currentWords": 51955,
+    "targetWords": 16528,
+    "dailyPaceWords": 2084,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 12892,
+    "targetWords": 13,
+    "dailyPaceWords": 1340,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 51696,
+    "targetWords": 51751,
+    "dailyPaceWords": 2,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-12-24"
+  },
+  {
+   "input": {
+    "currentWords": 36855,
+    "targetWords": 59303,
+    "dailyPaceWords": -1,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 42818,
+    "targetWords": 4315,
+    "dailyPaceWords": 2037,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 4,
+    "targetWords": 6345,
+    "dailyPaceWords": 3595,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2026-11-27"
+  },
+  {
+   "input": {
+    "currentWords": 99993,
+    "targetWords": 87324,
+    "dailyPaceWords": 3290,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 48098,
+    "targetWords": 5800,
+    "dailyPaceWords": 3300,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 41483,
+    "targetWords": 73011,
+    "dailyPaceWords": 4999,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-11-29"
+  },
+  {
+   "input": {
+    "currentWords": 13,
+    "targetWords": 26925,
+    "dailyPaceWords": 4068,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-11-28"
+  },
+  {
+   "input": {
+    "currentWords": 8093,
+    "targetWords": 7822,
+    "dailyPaceWords": 3917,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99986,
+    "targetWords": 90942,
+    "dailyPaceWords": 856,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 86678,
+    "targetWords": 51631,
+    "dailyPaceWords": 4990,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 32085,
+    "targetWords": 63164,
+    "dailyPaceWords": 210,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2027-04-17"
+  },
+  {
+   "input": {
+    "currentWords": 25468,
+    "targetWords": 86587,
+    "dailyPaceWords": 1047,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2027-01-18"
+  },
+  {
+   "input": {
+    "currentWords": 25978,
+    "targetWords": 78006,
+    "dailyPaceWords": 1115,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2027-01-08"
+  },
+  {
+   "input": {
+    "currentWords": 28964,
+    "targetWords": 35480,
+    "dailyPaceWords": 1393,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-11-26"
+  },
+  {
+   "input": {
+    "currentWords": 45558,
+    "targetWords": 80477,
+    "dailyPaceWords": 1781,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-12-11"
+  },
+  {
+   "input": {
+    "currentWords": 42983,
+    "targetWords": 46974,
+    "dailyPaceWords": 4075,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-11-25"
+  },
+  {
+   "input": {
+    "currentWords": 9013,
+    "targetWords": 81860,
+    "dailyPaceWords": 580,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2027-03-26"
+  },
+  {
+   "input": {
+    "currentWords": 66336,
+    "targetWords": 15471,
+    "dailyPaceWords": 914,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 85948,
+    "targetWords": 97237,
+    "dailyPaceWords": 8,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2030-10-05"
+  },
+  {
+   "input": {
+    "currentWords": 34776,
+    "targetWords": 2,
+    "dailyPaceWords": 4083,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 89279,
+    "targetWords": 15608,
+    "dailyPaceWords": 4284,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99998,
+    "targetWords": 6,
+    "dailyPaceWords": 11,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 29450,
+    "targetWords": 9,
+    "dailyPaceWords": 888,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99987,
+    "targetWords": 3,
+    "dailyPaceWords": 1782,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 19272,
+    "targetWords": 10,
+    "dailyPaceWords": 995,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 52949,
+    "targetWords": 12,
+    "dailyPaceWords": 1515,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 72793,
+    "targetWords": 57140,
+    "dailyPaceWords": 3940,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 40337,
+    "targetWords": 39814,
+    "dailyPaceWords": 2705,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 28688,
+    "targetWords": 24138,
+    "dailyPaceWords": 3,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 41174,
+    "targetWords": 13165,
+    "dailyPaceWords": 3525,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 34710,
+    "targetWords": 96762,
+    "dailyPaceWords": 4989,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2026-12-08"
+  },
+  {
+   "input": {
+    "currentWords": 5484,
+    "targetWords": 12,
+    "dailyPaceWords": 3063,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 64194,
+    "targetWords": 48201,
+    "dailyPaceWords": 3736,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 11,
+    "targetWords": 14619,
+    "dailyPaceWords": -10,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 98859,
+    "targetWords": 77019,
+    "dailyPaceWords": 3016,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 5563,
+    "targetWords": 7068,
+    "dailyPaceWords": 504,
+    "todayKey": "2026-11-25"
+   },
+   "output": "2026-11-28"
+  },
+  {
+   "input": {
+    "currentWords": 60134,
+    "targetWords": 69614,
+    "dailyPaceWords": 3116,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-11-30"
+  },
+  {
+   "input": {
+    "currentWords": 48219,
+    "targetWords": 16,
+    "dailyPaceWords": 4050,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 7,
+    "targetWords": 69709,
+    "dailyPaceWords": 338,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2027-06-16"
+  },
+  {
+   "input": {
+    "currentWords": 83778,
+    "targetWords": 10,
+    "dailyPaceWords": -9,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 76792,
+    "targetWords": 27741,
+    "dailyPaceWords": 2502,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 97208,
+    "targetWords": 81865,
+    "dailyPaceWords": 4428,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 62206,
+    "targetWords": 99984,
+    "dailyPaceWords": 10,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2037-03-26"
+  },
+  {
+   "input": {
+    "currentWords": 81802,
+    "targetWords": 50302,
+    "dailyPaceWords": 3063,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 56516,
+    "targetWords": 99126,
+    "dailyPaceWords": 1275,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-12-24"
+  },
+  {
+   "input": {
+    "currentWords": 5450,
+    "targetWords": 46115,
+    "dailyPaceWords": 163,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2027-07-30"
+  },
+  {
+   "input": {
+    "currentWords": 97786,
+    "targetWords": 44439,
+    "dailyPaceWords": 3449,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 65572,
+    "targetWords": 99995,
+    "dailyPaceWords": 1288,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-12-21"
+  },
+  {
+   "input": {
+    "currentWords": 64930,
+    "targetWords": 56975,
+    "dailyPaceWords": 1054,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 46115,
+    "targetWords": 23391,
+    "dailyPaceWords": 146,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 73784,
+    "targetWords": 61803,
+    "dailyPaceWords": 3543,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 9,
+    "targetWords": 99988,
+    "dailyPaceWords": 4901,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-12-11"
+  },
+  {
+   "input": {
+    "currentWords": 81040,
+    "targetWords": 35133,
+    "dailyPaceWords": 3,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 36200,
+    "targetWords": 44905,
+    "dailyPaceWords": 2759,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-11-30"
+  },
+  {
+   "input": {
+    "currentWords": 99995,
+    "targetWords": 4129,
+    "dailyPaceWords": 4251,
+    "todayKey": "2026-11-20"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 65750,
+    "targetWords": 25898,
+    "dailyPaceWords": 3172,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 10495,
+    "targetWords": 89115,
+    "dailyPaceWords": 4330,
+    "todayKey": "2026-11-21"
+   },
+   "output": "2026-12-10"
+  },
+  {
+   "input": {
+    "currentWords": 78950,
+    "targetWords": 58778,
+    "dailyPaceWords": 2467,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 83534,
+    "targetWords": 10,
+    "dailyPaceWords": 2199,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 60890,
+    "targetWords": 99989,
+    "dailyPaceWords": 3652,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-12-03"
+  },
+  {
+   "input": {
+    "currentWords": 31395,
+    "targetWords": 86160,
+    "dailyPaceWords": 4890,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-12-02"
+  },
+  {
+   "input": {
+    "currentWords": 40329,
+    "targetWords": 99989,
+    "dailyPaceWords": 7,
+    "todayKey": "2026-11-23"
+   },
+   "output": "2050-03-25"
+  },
+  {
+   "input": {
+    "currentWords": 99999,
+    "targetWords": 83876,
+    "dailyPaceWords": 4934,
+    "todayKey": "2026-11-21"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 42517,
+    "targetWords": 36901,
+    "dailyPaceWords": 3899,
+    "todayKey": "2026-11-23"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 33167,
+    "targetWords": 31244,
+    "dailyPaceWords": 1683,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 50967,
+    "targetWords": 99989,
+    "dailyPaceWords": 5,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2053-09-30"
+  },
+  {
+   "input": {
+    "currentWords": 99998,
+    "targetWords": 15490,
+    "dailyPaceWords": 2395,
+    "todayKey": "2026-11-26"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 84964,
+    "targetWords": 29210,
+    "dailyPaceWords": 1833,
+    "todayKey": "2026-11-24"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 99990,
+    "targetWords": 89679,
+    "dailyPaceWords": 4582,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 77146,
+    "targetWords": 81187,
+    "dailyPaceWords": 231,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-12-08"
+  },
+  {
+   "input": {
+    "currentWords": 99994,
+    "targetWords": 17142,
+    "dailyPaceWords": 4575,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 45306,
+    "targetWords": 79766,
+    "dailyPaceWords": 854,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2027-01-02"
+  },
+  {
+   "input": {
+    "currentWords": 10,
+    "targetWords": 22415,
+    "dailyPaceWords": 280,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2027-02-13"
+  },
+  {
+   "input": {
+    "currentWords": 99985,
+    "targetWords": 43402,
+    "dailyPaceWords": 3408,
+    "todayKey": "2026-11-22"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 47099,
+    "targetWords": 13,
+    "dailyPaceWords": 806,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  },
+  {
+   "input": {
+    "currentWords": 61776,
+    "targetWords": 99998,
+    "dailyPaceWords": 4657,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-12-05"
+  },
+  {
+   "input": {
+    "currentWords": 19740,
+    "targetWords": 79462,
+    "dailyPaceWords": 2505,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-12-16"
+  },
+  {
+   "input": {
+    "currentWords": 64733,
+    "targetWords": 77972,
+    "dailyPaceWords": 3777,
+    "todayKey": "2026-11-20"
+   },
+   "output": "2026-11-24"
+  },
+  {
+   "input": {
+    "currentWords": 48806,
+    "targetWords": 99296,
+    "dailyPaceWords": 4788,
+    "todayKey": "2026-11-22"
+   },
+   "output": "2026-12-03"
+  },
+  {
+   "input": {
+    "currentWords": 44797,
+    "targetWords": 64264,
+    "dailyPaceWords": 4876,
+    "todayKey": "2026-11-24"
+   },
+   "output": "2026-11-28"
+  },
+  {
+   "input": {
+    "currentWords": 96994,
+    "targetWords": 97497,
+    "dailyPaceWords": 2764,
+    "todayKey": "2026-11-26"
+   },
+   "output": "2026-11-27"
+  },
+  {
+   "input": {
+    "currentWords": 100000,
+    "targetWords": 11263,
+    "dailyPaceWords": 2,
+    "todayKey": "2026-11-25"
+   },
+   "output": null
+  }
+ ]
+}

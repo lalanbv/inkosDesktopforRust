@@ -1,0 +1,5148 @@
+{
+ "seed": 20261126,
+ "generatedAt": "2026-11-26T00:00:00.000Z",
+ "sampleCount": 200,
+ "samples": [
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1997,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": -8
+     }
+    ],
+    "dailyGoalWords": 1,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1722
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2828
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2454
+     }
+    ],
+    "dailyGoalWords": 5,
+    "todayKey": "2026-11-25"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1425
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1552
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2812
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -128
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1547
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2019
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -356
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 860
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -394
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1734
+     }
+    ],
+    "dailyGoalWords": 668,
+    "todayKey": "2026-11-22"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2667
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -54
+     }
+    ],
+    "dailyGoalWords": 11,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2315
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2054
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1539
+     }
+    ],
+    "dailyGoalWords": 8,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": -499
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 720
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2350
+     }
+    ],
+    "dailyGoalWords": 1384,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1244
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1120
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1348
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1453
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 282
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -118
+     }
+    ],
+    "dailyGoalWords": 9,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 0
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -431
+     }
+    ],
+    "dailyGoalWords": 3,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2201
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2989
+     }
+    ],
+    "dailyGoalWords": 17,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1566
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 424
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 98
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -475
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -214
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2547
+     }
+    ],
+    "dailyGoalWords": 1996,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1139
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1215
+     }
+    ],
+    "dailyGoalWords": 1254,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": -497
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 171
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 4
+     }
+    ],
+    "dailyGoalWords": 1292,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 968
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 684
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2115
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 499
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -445
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2259
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 95
+     }
+    ],
+    "dailyGoalWords": 3,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 823,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": -464
+     }
+    ],
+    "dailyGoalWords": 1685,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 137
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1568
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1254
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -75
+     }
+    ],
+    "dailyGoalWords": 1487,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 632
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 868
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -6
+     }
+    ],
+    "dailyGoalWords": 1997,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 262
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1789
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": -2
+     }
+    ],
+    "dailyGoalWords": 642,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 7
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2995
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1377
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2250
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1921
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 11
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1808
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 8
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 9
+     }
+    ],
+    "dailyGoalWords": 7,
+    "todayKey": "2026-11-23"
+   },
+   "output": 5
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 507
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1129
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 559
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1362
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2989
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2755
+     }
+    ],
+    "dailyGoalWords": 1105,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": -261
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 396
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2731
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2279
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2438
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2629
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 241
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 194
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1921
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2586
+     }
+    ],
+    "dailyGoalWords": 1585,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 829
+     }
+    ],
+    "dailyGoalWords": 989,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1620
+     }
+    ],
+    "dailyGoalWords": 360,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 379
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 757
+     }
+    ],
+    "dailyGoalWords": 769,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 583
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 403
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2857
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 285
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -178
+     }
+    ],
+    "dailyGoalWords": 1138,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1587
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 838
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 596
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1537
+     }
+    ],
+    "dailyGoalWords": 7,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 263
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1192
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2259
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2996
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2991
+     }
+    ],
+    "dailyGoalWords": 936,
+    "todayKey": "2026-11-25"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2748
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 466
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -496
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -125
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1728
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2928
+     }
+    ],
+    "dailyGoalWords": 1449,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 797
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -5
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 863
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 217
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -1
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 3
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1946
+     }
+    ],
+    "dailyGoalWords": 1999,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1575,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1128,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1389,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2870
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -360
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1856
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 414
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2329
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2044
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 42
+     }
+    ],
+    "dailyGoalWords": 1298,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2075
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 475
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 326
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2556
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1221
+     }
+    ],
+    "dailyGoalWords": 306,
+    "todayKey": "2026-11-25"
+   },
+   "output": 3
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2934
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1016
+     }
+    ],
+    "dailyGoalWords": 209,
+    "todayKey": "2026-11-23"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 949
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 130
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 683
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1918
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2001
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2434
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -424
+     }
+    ],
+    "dailyGoalWords": 117,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 70,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2989
+     }
+    ],
+    "dailyGoalWords": 5,
+    "todayKey": "2026-11-25"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1756
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1151
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2492
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 726
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2667
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2004
+     }
+    ],
+    "dailyGoalWords": 1687,
+    "todayKey": "2026-11-23"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 21,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1585
+     }
+    ],
+    "dailyGoalWords": 1553,
+    "todayKey": "2026-11-23"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 731
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2277
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -483
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2778
+     }
+    ],
+    "dailyGoalWords": 705,
+    "todayKey": "2026-11-21"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": -402
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2541
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 279
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2664
+     }
+    ],
+    "dailyGoalWords": 1699,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1567
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2379
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 118
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 804
+     }
+    ],
+    "dailyGoalWords": 7,
+    "todayKey": "2026-11-24"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2304
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 236
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 877
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -108
+     }
+    ],
+    "dailyGoalWords": 1999,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": -185
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -199
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -28
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2713
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 667
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 130
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -209
+     }
+    ],
+    "dailyGoalWords": 9,
+    "todayKey": "2026-11-26"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 408
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -434
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 888
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2580
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -8
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1925
+     }
+    ],
+    "dailyGoalWords": 1998,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 853
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 0
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 531
+     }
+    ],
+    "dailyGoalWords": 609,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 437
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 5
+     }
+    ],
+    "dailyGoalWords": 531,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 690
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 685
+     }
+    ],
+    "dailyGoalWords": 276,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1733,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1998,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 680
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2156
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1028
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2608
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 834
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -330
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2716
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -5
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 495
+     }
+    ],
+    "dailyGoalWords": 618,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": -468
+     }
+    ],
+    "dailyGoalWords": 1614,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2942
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 984
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 665
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -177
+     }
+    ],
+    "dailyGoalWords": 801,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1105
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2593
+     }
+    ],
+    "dailyGoalWords": 751,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 2,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 680,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 711
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 183
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 400
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2761
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 820
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1563
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -373
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 720
+     }
+    ],
+    "dailyGoalWords": 1262,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 709
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1751
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2922
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1194
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 706
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2334
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 155
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1072
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2015
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -274
+     }
+    ],
+    "dailyGoalWords": 11,
+    "todayKey": "2026-11-22"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2865
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1199
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2220
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2683
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 724
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 0
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 6
+     }
+    ],
+    "dailyGoalWords": 1178,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2357
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1802
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 213
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 243
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -387
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1940
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2064
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1014
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1899
+     }
+    ],
+    "dailyGoalWords": 1203,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 273,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 408
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1441
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -380
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 402
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1122
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2149
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -291
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 225
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 87
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 588
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 648
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1914
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2122
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 382
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 202
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1703
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 369
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 329
+     }
+    ],
+    "dailyGoalWords": 1140,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1994,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1854
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 159
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -110
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1761
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2124
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -242
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 548
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2520
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2724
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2443
+     }
+    ],
+    "dailyGoalWords": 177,
+    "todayKey": "2026-11-24"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1583
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2113
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 489
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1701
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1492
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1081
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 961
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 742
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 678
+     }
+    ],
+    "dailyGoalWords": 212,
+    "todayKey": "2026-11-20"
+   },
+   "output": 6
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2806
+     }
+    ],
+    "dailyGoalWords": 1384,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1111
+     }
+    ],
+    "dailyGoalWords": 1013,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2476
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2586
+     }
+    ],
+    "dailyGoalWords": 482,
+    "todayKey": "2026-11-22"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2961
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 918
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 4
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2631
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2989
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2407
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 407
+     }
+    ],
+    "dailyGoalWords": 1604,
+    "todayKey": "2026-11-25"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1139
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 411
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -377
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 931
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 558
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 834
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 688
+     }
+    ],
+    "dailyGoalWords": 1994,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 267
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1432
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 526
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1885
+     }
+    ],
+    "dailyGoalWords": 406,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 646
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 295
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2273
+     }
+    ],
+    "dailyGoalWords": 1737,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 794
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2736
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2527
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2303
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2189
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 690
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2199
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 373
+     }
+    ],
+    "dailyGoalWords": 1999,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": -2
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 5
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2309
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2990
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1911
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 552
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -495
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2053
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1127,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2874
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1387
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -348
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2764
+     }
+    ],
+    "dailyGoalWords": 1195,
+    "todayKey": "2026-11-25"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 118
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1500
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 430
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -351
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1127
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1576
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 450
+     }
+    ],
+    "dailyGoalWords": 1671,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2136
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1574
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2164
+     }
+    ],
+    "dailyGoalWords": 756,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": -193
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1433
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1990
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2372
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1463
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2159
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 583
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 39
+     }
+    ],
+    "dailyGoalWords": 1115,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": -164
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -301
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 318
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2198
+     }
+    ],
+    "dailyGoalWords": 24,
+    "todayKey": "2026-11-26"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": -71
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2528
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 587
+     }
+    ],
+    "dailyGoalWords": 9,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": -470
+     }
+    ],
+    "dailyGoalWords": 1506,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": -384
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -221
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1552
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1793
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 211
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2792
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 852
+     }
+    ],
+    "dailyGoalWords": 36,
+    "todayKey": "2026-11-21"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2595
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 337
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -412
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1137
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2529
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -289
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 81
+     }
+    ],
+    "dailyGoalWords": 199,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2341
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1194
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2669
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1063
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -146
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -121
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1084
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1794
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 587
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1427
+     }
+    ],
+    "dailyGoalWords": 298,
+    "todayKey": "2026-11-23"
+   },
+   "output": 4
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1006
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 640
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 472
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 767
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2008
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 982
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 703
+     }
+    ],
+    "dailyGoalWords": 1808,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 289
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 484
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1483
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2376
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2716
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1184
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 141
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -408
+     }
+    ],
+    "dailyGoalWords": 1095,
+    "todayKey": "2026-11-21"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2673
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -119
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2669
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -467
+     }
+    ],
+    "dailyGoalWords": 1564,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 8
+     }
+    ],
+    "dailyGoalWords": 2000,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1925
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2113
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 981
+     }
+    ],
+    "dailyGoalWords": 550,
+    "todayKey": "2026-11-26"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 327
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 59
+     }
+    ],
+    "dailyGoalWords": 1,
+    "todayKey": "2026-11-26"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": -311
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1665
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -402
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 656
+     }
+    ],
+    "dailyGoalWords": 1995,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2616
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1281
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 911
+     }
+    ],
+    "dailyGoalWords": 1990,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1686
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -234
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1583
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2256
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 815
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2138
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2588
+     }
+    ],
+    "dailyGoalWords": 577,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1942
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 452
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -126
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1287
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 113
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1835
+     }
+    ],
+    "dailyGoalWords": 1953,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2522
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 379
+     }
+    ],
+    "dailyGoalWords": 841,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2363
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1828
+     }
+    ],
+    "dailyGoalWords": 1464,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1889
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -65
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1997
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 433
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -247
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2107
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 944
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2255
+     }
+    ],
+    "dailyGoalWords": 2,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 958,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1261,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2378
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2901
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2604
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 859
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1287
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -336
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 11
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2201
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2992
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 6
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2860
+     }
+    ],
+    "dailyGoalWords": 1056,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 910
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -291
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 47
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2060
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 951
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 11
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -386
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 193
+     }
+    ],
+    "dailyGoalWords": 2000,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1043
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 23
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 754
+     }
+    ],
+    "dailyGoalWords": 613,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 4,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1366
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2893
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1305
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2719
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 75
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1814
+     }
+    ],
+    "dailyGoalWords": 1548,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2604
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2561
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -423
+     }
+    ],
+    "dailyGoalWords": 1907,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 197,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 137
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2498
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -223
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2661
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 246
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1598
+     }
+    ],
+    "dailyGoalWords": 1774,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1734
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 105
+     }
+    ],
+    "dailyGoalWords": 544,
+    "todayKey": "2026-11-23"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 8,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1014
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 414
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 964
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2488
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 450
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 925
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 582
+     }
+    ],
+    "dailyGoalWords": 585,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2921
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 208
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -174
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2119
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 388
+     }
+    ],
+    "dailyGoalWords": 11,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2812
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 827
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -81
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 608
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1731
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1611
+     }
+    ],
+    "dailyGoalWords": 1647,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 531
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2216
+     }
+    ],
+    "dailyGoalWords": 1785,
+    "todayKey": "2026-11-23"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 4
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1661
+     }
+    ],
+    "dailyGoalWords": 6,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 690
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 106
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -20
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1120
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 110
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -239
+     }
+    ],
+    "dailyGoalWords": 1993,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2942
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1794
+     }
+    ],
+    "dailyGoalWords": 1978,
+    "todayKey": "2026-11-23"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2940
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1964
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 0
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 630
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1130
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1871
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 442
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1534
+     }
+    ],
+    "dailyGoalWords": 1,
+    "todayKey": "2026-11-21"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 23
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 72
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 546
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -226
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2031
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2543
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1231
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1624
+     }
+    ],
+    "dailyGoalWords": 1,
+    "todayKey": "2026-11-23"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2088
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1232
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1341
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -343
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -127
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -120
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -138
+     }
+    ],
+    "dailyGoalWords": 1307,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": -392
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2470
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1851
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1091
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 345
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2000
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 352
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2219
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1681
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-25"
+   },
+   "output": 4
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2728
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1875
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 113
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1649
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1077
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2567
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2024
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2765
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 389
+     }
+    ],
+    "dailyGoalWords": 1743,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 333
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2615
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 582
+     }
+    ],
+    "dailyGoalWords": 525,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 753
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2195
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 131
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2557
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1142
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -455
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 213
+     }
+    ],
+    "dailyGoalWords": 470,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1462
+     }
+    ],
+    "dailyGoalWords": 1745,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2226
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1620
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1960
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 706
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1675
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 393
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1907
+     }
+    ],
+    "dailyGoalWords": 454,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1176
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 891
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1815
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2532
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1821
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2481
+     }
+    ],
+    "dailyGoalWords": 1924,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2212
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1422
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 238
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -218
+     }
+    ],
+    "dailyGoalWords": 8,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1087
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1132
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1581
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1045
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2614
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 155
+     }
+    ],
+    "dailyGoalWords": 1419,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2648
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1762
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1163
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1752
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -28
+     }
+    ],
+    "dailyGoalWords": 1068,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1052
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1717
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1256
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 731
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 609
+     }
+    ],
+    "dailyGoalWords": 5,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 426
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2003
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2907
+     }
+    ],
+    "dailyGoalWords": 205,
+    "todayKey": "2026-11-25"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 3,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1343
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1584
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 777
+     }
+    ],
+    "dailyGoalWords": 1996,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1059
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -265
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2890
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2606
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 3
+     }
+    ],
+    "dailyGoalWords": 822,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 9,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 997
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 484
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 715
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2970
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1853
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1527
+     }
+    ],
+    "dailyGoalWords": 9,
+    "todayKey": "2026-11-26"
+   },
+   "output": 4
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 838
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 320
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2666
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -260
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1869
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2978
+     }
+    ],
+    "dailyGoalWords": 16,
+    "todayKey": "2026-11-20"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 239,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 206,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2531
+     }
+    ],
+    "dailyGoalWords": 1576,
+    "todayKey": "2026-11-25"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1934
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1804
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1719
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2275
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -482
+     }
+    ],
+    "dailyGoalWords": 660,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": -329
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2165
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 13
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2881
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 692
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2827
+     }
+    ],
+    "dailyGoalWords": 502,
+    "todayKey": "2026-11-24"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2140
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2172
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -154
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2705
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 91
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2884
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 883
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2187
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2099
+     }
+    ],
+    "dailyGoalWords": 2,
+    "todayKey": "2026-11-23"
+   },
+   "output": 5
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": -68
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1721
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -6
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -6
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2671
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2164
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2251
+     }
+    ],
+    "dailyGoalWords": 30,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 610
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 6
+     }
+    ],
+    "dailyGoalWords": 1398,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 62
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1627
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1465
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 557
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2604
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 246
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2214
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1100
+     }
+    ],
+    "dailyGoalWords": 1632,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 241
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2996
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 796
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": -372
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 415
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2294
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 401
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 757
+     }
+    ],
+    "dailyGoalWords": 1745,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1562
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1117
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1474
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2967
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1120
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1623
+     }
+    ],
+    "dailyGoalWords": 1225,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2989
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2786
+     }
+    ],
+    "dailyGoalWords": 1,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2380
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2985
+     }
+    ],
+    "dailyGoalWords": 216,
+    "todayKey": "2026-11-20"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": -278
+     }
+    ],
+    "dailyGoalWords": 943,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1391
+     }
+    ],
+    "dailyGoalWords": 6,
+    "todayKey": "2026-11-25"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2184
+     }
+    ],
+    "dailyGoalWords": 5,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 550
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2459
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2430
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 179
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 549
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1787
+     }
+    ],
+    "dailyGoalWords": 1266,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 952
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 455
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1646
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1743
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -422
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 427
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 128
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1683
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1446
+     }
+    ],
+    "dailyGoalWords": 1822,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1615
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 748
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2157
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 961
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1945
+     }
+    ],
+    "dailyGoalWords": 1875,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 322
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2474
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1681
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 282
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1271
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 837
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2973
+     }
+    ],
+    "dailyGoalWords": 1991,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 309
+     }
+    ],
+    "dailyGoalWords": 1080,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1884
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2361
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 650
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 40
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2081
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1724
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2961
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -282
+     }
+    ],
+    "dailyGoalWords": 1248,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": -203
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1234
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2255
+     }
+    ],
+    "dailyGoalWords": 7,
+    "todayKey": "2026-11-26"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 484
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2005
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2871
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2050
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1038
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 664
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -259
+     }
+    ],
+    "dailyGoalWords": 1563,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1323
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 644
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2505
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2190
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2160
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2051
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 942
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2534
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1348
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -2
+     }
+    ],
+    "dailyGoalWords": 1198,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1743
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 16
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 478
+     }
+    ],
+    "dailyGoalWords": 707,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1170
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1319
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1479
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 995
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1775
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1388
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2672
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2562
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2146
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1409
+     }
+    ],
+    "dailyGoalWords": 8,
+    "todayKey": "2026-11-26"
+   },
+   "output": 3
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1209,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2611
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1892
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 302
+     }
+    ],
+    "dailyGoalWords": 350,
+    "todayKey": "2026-11-21"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1433
+     }
+    ],
+    "dailyGoalWords": 1431,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1569
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1361
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 254
+     }
+    ],
+    "dailyGoalWords": 917,
+    "todayKey": "2026-11-20"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2712
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1654
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 279
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1912
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1375
+     }
+    ],
+    "dailyGoalWords": 100,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": -357
+     }
+    ],
+    "dailyGoalWords": 99,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1680
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -292
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2921
+     }
+    ],
+    "dailyGoalWords": 1628,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-26",
+      "delta": -45
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1651
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 305
+     }
+    ],
+    "dailyGoalWords": 1201,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 664
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2544
+     }
+    ],
+    "dailyGoalWords": 433,
+    "todayKey": "2026-11-25"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 284
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1878
+     }
+    ],
+    "dailyGoalWords": 932,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 975
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2479
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 576
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2569
+     }
+    ],
+    "dailyGoalWords": 921,
+    "todayKey": "2026-11-26"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 8
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 421
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -5
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2707
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 194
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1864
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 838
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 6
+     }
+    ],
+    "dailyGoalWords": 11,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1934,
+    "todayKey": "2026-11-24"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1476
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2990
+     }
+    ],
+    "dailyGoalWords": 974,
+    "todayKey": "2026-11-20"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 89
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2169
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 761
+     }
+    ],
+    "dailyGoalWords": 1623,
+    "todayKey": "2026-11-22"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": -5
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 138
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 312
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1522
+     }
+    ],
+    "dailyGoalWords": 2,
+    "todayKey": "2026-11-24"
+   },
+   "output": 3
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2993
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1390
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 658
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2057
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2100
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": -432
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -143
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 338
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-25"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2313
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -490
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 2239
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 1616
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -497
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1662
+     }
+    ],
+    "dailyGoalWords": 88,
+    "todayKey": "2026-11-21"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": -4
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1649
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1010
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1385
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 290
+     }
+    ],
+    "dailyGoalWords": 478,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2938
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1156
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 753
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1008
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1598
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2559
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": -216
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1455
+     }
+    ],
+    "dailyGoalWords": 672,
+    "todayKey": "2026-11-22"
+   },
+   "output": 5
+  },
+  {
+   "input": {
+    "deltas": [],
+    "dailyGoalWords": 1993,
+    "todayKey": "2026-11-23"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": -269
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -270
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 856
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2645
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 32
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1687
+     }
+    ],
+    "dailyGoalWords": 1202,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-23",
+      "delta": 2789
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1278
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 584
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2176
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1900
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": -404
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -439
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 522
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2144
+     }
+    ],
+    "dailyGoalWords": 1126,
+    "todayKey": "2026-11-22"
+   },
+   "output": 2
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-22",
+      "delta": 1223
+     },
+     {
+      "dayKey": "2026-11-24",
+      "delta": 1582
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2374
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 353
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -154
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": -385
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2611
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 1723
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 430
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 2237
+     }
+    ],
+    "dailyGoalWords": 1106,
+    "todayKey": "2026-11-24"
+   },
+   "output": 1
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-24",
+      "delta": 256
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 951
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2176
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 217
+     },
+     {
+      "dayKey": "2026-11-23",
+      "delta": 1043
+     }
+    ],
+    "dailyGoalWords": 10,
+    "todayKey": "2026-11-24"
+   },
+   "output": 3
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-20",
+      "delta": 2262
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2573
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": -281
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 451
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2148
+     },
+     {
+      "dayKey": "2026-11-25",
+      "delta": 1188
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1162
+     }
+    ],
+    "dailyGoalWords": 1483,
+    "todayKey": "2026-11-22"
+   },
+   "output": 0
+  },
+  {
+   "input": {
+    "deltas": [
+     {
+      "dayKey": "2026-11-25",
+      "delta": 2930
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 2267
+     },
+     {
+      "dayKey": "2026-11-26",
+      "delta": 3
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": -1
+     },
+     {
+      "dayKey": "2026-11-22",
+      "delta": 94
+     },
+     {
+      "dayKey": "2026-11-20",
+      "delta": 1548
+     },
+     {
+      "dayKey": "2026-11-21",
+      "delta": 2168
+     }
+    ],
+    "dailyGoalWords": 137,
+    "todayKey": "2026-11-21"
+   },
+   "output": 0
+  }
+ ]
+}

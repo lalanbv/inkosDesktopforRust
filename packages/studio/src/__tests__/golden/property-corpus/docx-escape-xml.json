@@ -1,0 +1,807 @@
+{
+ "seed": 20261126,
+ "generatedAt": "2026-11-26T00:00:00.000Z",
+ "sampleCount": 200,
+ "samples": [
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "%",
+   "output": "%"
+  },
+  {
+   "input": "/D\\",
+   "output": "/D\\"
+  },
+  {
+   "input": "xTcz~d[}L=",
+   "output": "xTcz~d[}L="
+  },
+  {
+   "input": "nE",
+   "output": "nE"
+  },
+  {
+   "input": "0B ",
+   "output": "0B "
+  },
+  {
+   "input": "ref",
+   "output": "ref"
+  },
+  {
+   "input": "\"/)OB+",
+   "output": "&quot;/)OB+"
+  },
+  {
+   "input": "x[",
+   "output": "x["
+  },
+  {
+   "input": "s{",
+   "output": "s{"
+  },
+  {
+   "input": "]8}(LP",
+   "output": "]8}(LP"
+  },
+  {
+   "input": "]f",
+   "output": "]f"
+  },
+  {
+   "input": "ref",
+   "output": "ref"
+  },
+  {
+   "input": "lSu=(T#",
+   "output": "lSu=(T#"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "a",
+   "output": "a"
+  },
+  {
+   "input": "_=-v",
+   "output": "_=-v"
+  },
+  {
+   "input": ")LK",
+   "output": ")LK"
+  },
+  {
+   "input": ".U",
+   "output": ".U"
+  },
+  {
+   "input": "#",
+   "output": "#"
+  },
+  {
+   "input": "__proto__",
+   "output": "__proto__"
+  },
+  {
+   "input": "H%&",
+   "output": "H%&amp;"
+  },
+  {
+   "input": "__lo",
+   "output": "__lo"
+  },
+  {
+   "input": "y\\vIKm? 9\"",
+   "output": "y\\vIKm? 9&quot;"
+  },
+  {
+   "input": "I",
+   "output": "I"
+  },
+  {
+   "input": "3",
+   "output": "3"
+  },
+  {
+   "input": "%}",
+   "output": "%}"
+  },
+  {
+   "input": "e/jqD",
+   "output": "e/jqD"
+  },
+  {
+   "input": "F-S?",
+   "output": "F-S?"
+  },
+  {
+   "input": "D\"xY~",
+   "output": "D&quot;xY~"
+  },
+  {
+   "input": "Ng-45>",
+   "output": "Ng-45&gt;"
+  },
+  {
+   "input": "6+&_,l<",
+   "output": "6+&amp;_,l&lt;"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "x>.J0ze",
+   "output": "x&gt;.J0ze"
+  },
+  {
+   "input": "NE_sN",
+   "output": "NE_sN"
+  },
+  {
+   "input": "S+",
+   "output": "S+"
+  },
+  {
+   "input": "^8roh[\"",
+   "output": "^8roh[&quot;"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": " ",
+   "output": " "
+  },
+  {
+   "input": "dlZ.+5",
+   "output": "dlZ.+5"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "t",
+   "output": "t"
+  },
+  {
+   "input": "=z3<",
+   "output": "=z3&lt;"
+  },
+  {
+   "input": "ex+j",
+   "output": "ex+j"
+  },
+  {
+   "input": "O:;a",
+   "output": "O:;a"
+  },
+  {
+   "input": ",64w",
+   "output": ",64w"
+  },
+  {
+   "input": "h o Ldw",
+   "output": "h o Ldw"
+  },
+  {
+   "input": "0w|y*f",
+   "output": "0w|y*f"
+  },
+  {
+   "input": "val",
+   "output": "val"
+  },
+  {
+   "input": "((",
+   "output": "(("
+  },
+  {
+   "input": "n`",
+   "output": "n`"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "& cDO-*xM",
+   "output": "&amp; cDO-*xM"
+  },
+  {
+   "input": "k",
+   "output": "k"
+  },
+  {
+   "input": "G}V\\",
+   "output": "G}V\\"
+  },
+  {
+   "input": "ss",
+   "output": "ss"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "\"Y_ozZ%k",
+   "output": "&quot;Y_ozZ%k"
+  },
+  {
+   "input": "}?.fjGV7/F",
+   "output": "}?.fjGV7/F"
+  },
+  {
+   "input": "2&&m!3$",
+   "output": "2&amp;&amp;m!3$"
+  },
+  {
+   "input": "0+b'amnxy",
+   "output": "0+b&apos;amnxy"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "a4C\\`kvwg",
+   "output": "a4C\\`kvwg"
+  },
+  {
+   "input": "{b+vW{[BO",
+   "output": "{b+vW{[BO"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "(`|)B-l1qF",
+   "output": "(`|)B-l1qF"
+  },
+  {
+   "input": "ru)F.c?QL",
+   "output": "ru)F.c?QL"
+  },
+  {
+   "input": "I",
+   "output": "I"
+  },
+  {
+   "input": "#",
+   "output": "#"
+  },
+  {
+   "input": ";o",
+   "output": ";o"
+  },
+  {
+   "input": "W~j%&}2",
+   "output": "W~j%&amp;}2"
+  },
+  {
+   "input": "{2$8.5P",
+   "output": "{2$8.5P"
+  },
+  {
+   "input": "`4y`",
+   "output": "`4y`"
+  },
+  {
+   "input": "toS",
+   "output": "toS"
+  },
+  {
+   "input": "U]$VfbTb",
+   "output": "U]$VfbTb"
+  },
+  {
+   "input": "&!d&q#xA",
+   "output": "&amp;!d&amp;q#xA"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "q]w\\",
+   "output": "q]w\\"
+  },
+  {
+   "input": "$&\"pTr@",
+   "output": "$&amp;&quot;pTr@"
+  },
+  {
+   "input": "bFn",
+   "output": "bFn"
+  },
+  {
+   "input": ">JSuL `2",
+   "output": "&gt;JSuL `2"
+  },
+  {
+   "input": "'/sq",
+   "output": "&apos;/sq"
+  },
+  {
+   "input": "m?E",
+   "output": "m?E"
+  },
+  {
+   "input": "q",
+   "output": "q"
+  },
+  {
+   "input": "OJ~fCvt",
+   "output": "OJ~fCvt"
+  },
+  {
+   "input": "{%5&&pr",
+   "output": "{%5&amp;&amp;pr"
+  },
+  {
+   "input": ",{<EG/^924",
+   "output": ",{&lt;EG/^924"
+  },
+  {
+   "input": "HIx*&Q+",
+   "output": "HIx*&amp;Q+"
+  },
+  {
+   "input": "1s:7eo]x",
+   "output": "1s:7eo]x"
+  },
+  {
+   "input": "|Tj~",
+   "output": "|Tj~"
+  },
+  {
+   "input": "&",
+   "output": "&amp;"
+  },
+  {
+   "input": "?IU",
+   "output": "?IU"
+  },
+  {
+   "input": "^x",
+   "output": "^x"
+  },
+  {
+   "input": "~rk[",
+   "output": "~rk["
+  },
+  {
+   "input": "?$#",
+   "output": "?$#"
+  },
+  {
+   "input": "\\%9eZ.~",
+   "output": "\\%9eZ.~"
+  },
+  {
+   "input": "4@_4MM",
+   "output": "4@_4MM"
+  },
+  {
+   "input": "V0",
+   "output": "V0"
+  },
+  {
+   "input": "Nb",
+   "output": "Nb"
+  },
+  {
+   "input": "'z7lY\"yz",
+   "output": "&apos;z7lY&quot;yz"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "RI",
+   "output": "RI"
+  },
+  {
+   "input": "z(^-D}% 8",
+   "output": "z(^-D}% 8"
+  },
+  {
+   "input": "!dub!2 M",
+   "output": "!dub!2 M"
+  },
+  {
+   "input": "gHm",
+   "output": "gHm"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": ">@&9#M",
+   "output": "&gt;@&amp;9#M"
+  },
+  {
+   "input": "@37",
+   "output": "@37"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "']|uN0",
+   "output": "&apos;]|uN0"
+  },
+  {
+   "input": "T*",
+   "output": "T*"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "td%O277",
+   "output": "td%O277"
+  },
+  {
+   "input": "MV}(x",
+   "output": "MV}(x"
+  },
+  {
+   "input": "#m\"g-=",
+   "output": "#m&quot;g-="
+  },
+  {
+   "input": "d#",
+   "output": "d#"
+  },
+  {
+   "input": "!/",
+   "output": "!/"
+  },
+  {
+   "input": "aF\\V57",
+   "output": "aF\\V57"
+  },
+  {
+   "input": "G\\",
+   "output": "G\\"
+  },
+  {
+   "input": "u3&j!z5+",
+   "output": "u3&amp;j!z5+"
+  },
+  {
+   "input": "iF!5\\X0R",
+   "output": "iF!5\\X0R"
+  },
+  {
+   "input": "yjAyZ}}",
+   "output": "yjAyZ}}"
+  },
+  {
+   "input": "E}JVJMInq",
+   "output": "E}JVJMInq"
+  },
+  {
+   "input": "F8gad^&02",
+   "output": "F8gad^&amp;02"
+  },
+  {
+   "input": "= e",
+   "output": "= e"
+  },
+  {
+   "input": ">u0MM&;",
+   "output": "&gt;u0MM&amp;;"
+  },
+  {
+   "input": "r",
+   "output": "r"
+  },
+  {
+   "input": "liotE\"<",
+   "output": "liotE&quot;&lt;"
+  },
+  {
+   "input": "0Oq-}o",
+   "output": "0Oq-}o"
+  },
+  {
+   "input": "e<yy",
+   "output": "e&lt;yy"
+  },
+  {
+   "input": "K%l_u3",
+   "output": "K%l_u3"
+  },
+  {
+   "input": "tp,l?",
+   "output": "tp,l?"
+  },
+  {
+   "input": "=%M0n",
+   "output": "=%M0n"
+  },
+  {
+   "input": "|lH",
+   "output": "|lH"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "s<I",
+   "output": "s&lt;I"
+  },
+  {
+   "input": ")*Nca",
+   "output": ")*Nca"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "f\"II\"\"",
+   "output": "f&quot;II&quot;&quot;"
+  },
+  {
+   "input": "<-iB#n",
+   "output": "&lt;-iB#n"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "D",
+   "output": "D"
+  },
+  {
+   "input": ")p?)X",
+   "output": ")p?)X"
+  },
+  {
+   "input": "2z;:F`",
+   "output": "2z;:F`"
+  },
+  {
+   "input": "!J2kf4ivk",
+   "output": "!J2kf4ivk"
+  },
+  {
+   "input": ">cgy\"h@",
+   "output": "&gt;cgy&quot;h@"
+  },
+  {
+   "input": "j_",
+   "output": "j_"
+  },
+  {
+   "input": "?]v~[W?f",
+   "output": "?]v~[W?f"
+  },
+  {
+   "input": "{[7K|Eh~",
+   "output": "{[7K|Eh~"
+  },
+  {
+   "input": "yD*H'r",
+   "output": "yD*H&apos;r"
+  },
+  {
+   "input": "\"[",
+   "output": "&quot;["
+  },
+  {
+   "input": "tJ",
+   "output": "tJ"
+  },
+  {
+   "input": "A",
+   "output": "A"
+  },
+  {
+   "input": "Z",
+   "output": "Z"
+  },
+  {
+   "input": "K",
+   "output": "K"
+  },
+  {
+   "input": "Co9;<o",
+   "output": "Co9;&lt;o"
+  },
+  {
+   "input": "m.6-#gcCI",
+   "output": "m.6-#gcCI"
+  },
+  {
+   "input": "gEdT.",
+   "output": "gEdT."
+  },
+  {
+   "input": ".tW10Qj",
+   "output": ".tW10Qj"
+  },
+  {
+   "input": "N",
+   "output": "N"
+  },
+  {
+   "input": "S~rkBRyw",
+   "output": "S~rkBRyw"
+  },
+  {
+   "input": "K{i",
+   "output": "K{i"
+  },
+  {
+   "input": "WDQrUE`",
+   "output": "WDQrUE`"
+  },
+  {
+   "input": "tQskeyyx:c",
+   "output": "tQskeyyx:c"
+  },
+  {
+   "input": "+Qu",
+   "output": "+Qu"
+  },
+  {
+   "input": "]bO6y?:iv ",
+   "output": "]bO6y?:iv "
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": ",2D",
+   "output": ",2D"
+  },
+  {
+   "input": "F",
+   "output": "F"
+  },
+  {
+   "input": "rv|",
+   "output": "rv|"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "Nj&zB",
+   "output": "Nj&amp;zB"
+  },
+  {
+   "input": "Q",
+   "output": "Q"
+  },
+  {
+   "input": ".Ll",
+   "output": ".Ll"
+  },
+  {
+   "input": "N.g",
+   "output": "N.g"
+  },
+  {
+   "input": "y]",
+   "output": "y]"
+  },
+  {
+   "input": "/,",
+   "output": "/,"
+  },
+  {
+   "input": "RS~Y",
+   "output": "RS~Y"
+  },
+  {
+   "input": "zJ/P%\"U ",
+   "output": "zJ/P%&quot;U "
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": ")Q",
+   "output": ")Q"
+  },
+  {
+   "input": "^a.",
+   "output": "^a."
+  },
+  {
+   "input": "\"$t*",
+   "output": "&quot;$t*"
+  },
+  {
+   "input": "F#KK53D7",
+   "output": "F#KK53D7"
+  },
+  {
+   "input": "5$&9!'",
+   "output": "5$&amp;9!&apos;"
+  },
+  {
+   "input": "%\"2$G",
+   "output": "%&quot;2$G"
+  },
+  {
+   "input": "?pKA,)u#",
+   "output": "?pKA,)u#"
+  },
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "io/k'l",
+   "output": "io/k&apos;l"
+  },
+  {
+   "input": "@[kC6+HwB",
+   "output": "@[kC6+HwB"
+  },
+  {
+   "input": "JRUz|!LWov",
+   "output": "JRUz|!LWov"
+  },
+  {
+   "input": "^)gh$",
+   "output": "^)gh$"
+  },
+  {
+   "input": "[Jlb|.r",
+   "output": "[Jlb|.r"
+  },
+  {
+   "input": ">psW&^!",
+   "output": "&gt;psW&amp;^!"
+  }
+ ]
+}

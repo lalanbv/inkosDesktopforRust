@@ -199,7 +199,11 @@ export function mdZipEntryPath(
   chapterNumber: number,
   chapterTitle: string,
 ): string {
-  const sanitizeName = (raw: string): string => raw.replace(/[/\\:*?"<>|]/g, "-");
+  // R62/1690 号性质测试抓出：章/卷标题含连续点（如 ".."）会落进 zip 段——
+  // 解包器 zip-slip 家族。非法字符替换之外折叠连续点为 "-"（单点保留），
+  // 并剥离段尾点（"标题." + ".md" 相连同样成 ".."）。
+  const sanitizeName = (raw: string): string =>
+    raw.replace(/[/\\:*?"<>|]/g, "-").replace(/\.{2,}/g, "-").replace(/\.+$/u, "");
   const dir = volumeId
     ? (() => {
       const volume = volumes.find((candidate) => candidate.id === volumeId);

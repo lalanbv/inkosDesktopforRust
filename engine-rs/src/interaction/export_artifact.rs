@@ -526,7 +526,11 @@ pub fn md_zip_entry_path(
     chapter_title: &str,
 ) -> String {
     let sanitize_name = |raw: &str| -> String {
-        raw.chars()
+        // R62/1690 号性质测试抓出：标题含连续点（".."）落进 zip 段=zip-slip
+        // 家族——非法字符替换之外折叠连续点为 "-"，并剥离段尾点（与 TS 同修；
+        // "标题." + ".md" 相连同样成 ".."）。
+        let sanitized: String = raw
+            .chars()
             .map(|c| {
                 if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
                     '-'
@@ -534,7 +538,11 @@ pub fn md_zip_entry_path(
                     c
                 }
             })
-            .collect()
+            .collect();
+        sanitized
+            .replace("..", "-")
+            .trim_end_matches('.')
+            .to_string()
     };
     let dir = volume_id
         .and_then(|id| volumes.iter().find(|volume| volume.id == id))

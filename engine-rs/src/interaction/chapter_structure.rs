@@ -1815,6 +1815,11 @@ mod tests {
         "../../../packages/studio/src/__tests__/golden/structure-invariant-vectors.json"
     );
 
+    /// R62/1691 号：LCG 共享语料（与 TS 测试同一份文件；生成算法见 _comment）。
+    const PROPERTY_CORPUS: &str = include_str!(
+        "../../../packages/studio/src/__tests__/golden/structure-property-corpus.json"
+    );
+
     #[test]
     fn content_fingerprint_matches_golden_vectors() {
         let vectors: serde_json::Value = serde_json::from_str(INVARIANT_VECTORS).unwrap();
@@ -1850,6 +1855,35 @@ mod tests {
                 vector["ok"].as_bool().unwrap(),
                 "vector: {}",
                 vector["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn structure_invariant_matches_property_corpus() {
+        // R62/1691 号：LCG 共享语料（与 TS chapter-structure-property.test.ts 同一份文件；
+        // 生成算法见文件 _comment——seed 5776、指纹字母表 4 值强制重复、size 0..8 全边界、
+        // after 盘面洗牌钉数组序无关性）。两腿逐字 parity 到机器生成的语料。
+        let corpus: serde_json::Value = serde_json::from_str(PROPERTY_CORPUS).unwrap();
+        for c in corpus["cases"].as_array().unwrap() {
+            let op: StructureOp = serde_json::from_value(c["op"].clone()).unwrap();
+            let before: Vec<ChapterFingerprint> =
+                serde_json::from_value(c["before"].clone()).unwrap();
+            let after: Vec<ChapterFingerprint> =
+                serde_json::from_value(c["after"].clone()).unwrap();
+            let violations = structure_invariant(&op, &before, &after);
+            let expected: Vec<String> = c["violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(violations, expected, "case: {}", c["name"]);
+            assert_eq!(
+                violations.is_empty(),
+                c["ok"].as_bool().unwrap(),
+                "case: {}",
+                c["name"]
             );
         }
     }
