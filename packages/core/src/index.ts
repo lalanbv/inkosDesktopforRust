@@ -583,6 +583,8 @@ export {
   structureInvariant,
   assertStructureInvariants,
   appendStructureOpsLog,
+  undoEligible,
+  undoLastStructureOperation,
   type ChapterFingerprint,
   type StructureOp,
   type StructureOperationRecord,

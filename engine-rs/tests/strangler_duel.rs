@@ -4787,6 +4787,95 @@ fn trash_batch_of(body: &Value, original_path: &str) -> String {
 
 /// 1679 号：回收站的列出 / 恢复 / 清空——六条路由两腿同构。
 ///
+/// R61 批二/1688 号：结构撤销端点同构 duel——两腿各自的双根书（`books/b1` 与
+/// `works/b1/source`）上走「拆分 → 撤销 → 再撤销」全链：拆分成功、撤销盘面
+/// 复原（新章消失、2 号原文回位、index 号集复原）、操作日志两行（原笔
+/// undone:true + undo 行指向原笔 opId）、第二次撤销两腿同拒（尾笔是 undo 行，
+/// 错误体逐字一致）。行中切分（offset 落在正文中间）顺带守住「撤销不触发
+/// 拼回规范化假红」。
+#[tokio::test]
+async fn structure_undo_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture_book(&root, &[("0002_云涌", "云涌", "江面起了雾。")]);
+    write_fixture_llm(&root, &llm);
+    migrate_fixture_to_works(&root);
+    let rust_tree = root.join("books").join("b1");
+    let ts_tree = root.join("works").join("b1").join("source");
+    let rust = spawn_rust_engine(&root, &llm).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+    let legs = [&rust, &ts.base];
+    for base in legs {
+        // 行中切分：offset 10 落在「江面」句中段（写入侧补尾换行是展示规范化，
+        // 撤销的拼回校验用原始切分——见批一）。
+        let (status, body) = post_json(
+            base,
+            "/api/v1/books/b1/chapters/2/split",
+            r#"{"offset":10}"#,
+        )
+        .await;
+        assert_eq!(status, 200, "split：{body}");
+        assert_eq!(body["op"], "split");
+        let (status, body) = post_json(base, "/api/v1/books/b1/chapters/structure/undo", "").await;
+        assert_eq!(status, 200, "undo：{body}");
+        assert_eq!(body["op"], "undo");
+        let (status, body) = post_json(base, "/api/v1/books/b1/chapters/structure/undo", "").await;
+        assert_eq!(status, 409, "second undo：{body}");
+        assert_eq!(
+            body,
+            json!({ "error": "Undo refused: last entry is itself an undo" }),
+            "两腿错误体逐字一致：{body}"
+        );
+    }
+    // 盘面 / index / 操作日志对账（各自树，字段与关系一致、ts/opId 各腿本地不比）。
+    for tree in [&rust_tree, &ts_tree] {
+        assert!(
+            !tree.join("chapters/0003_云涌.md").exists(),
+            "拆出的新章应消失：{}",
+            tree.display()
+        );
+        let chapter2 = std::fs::read_to_string(tree.join("chapters/0002_云涌.md")).unwrap();
+        assert_eq!(
+            chapter2,
+            "# 第2章 云涌\n\n江面起了雾。",
+            "2 号原文回位：{}",
+            tree.display()
+        );
+        let index: Vec<Value> = serde_json::from_str(
+            &std::fs::read_to_string(tree.join("chapters/index.json")).unwrap(),
+        )
+        .unwrap();
+        // 夹具书只有两章：undo split 后号集复原到 [1,2]。
+        assert_eq!(
+            index
+                .iter()
+                .map(|meta| meta["number"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!(1), json!(2)],
+            "index 号集复原：{}",
+            tree.display()
+        );
+        let raw = std::fs::read_to_string(tree.join("story/structure-ops.jsonl")).unwrap();
+        let rows: Vec<Value> = raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "日志两行：{raw}");
+        assert_eq!(rows[0]["kind"], "split");
+        assert_eq!(rows[0]["at"], json!(2));
+        assert_eq!(rows[0]["undone"], json!(true), "原笔标已撤销：{raw}");
+        assert_eq!(rows[1]["kind"], "undo");
+        assert_eq!(rows[1]["undoOf"], rows[0]["opId"], "undo 行指向原笔：{raw}");
+        assert_eq!(rows[1]["undone"], json!(false));
+    }
+}
+
 /// 两腿写各的树（`books/b1` 与 `works/b1/source`），书级回收站却是两腿共用的同一个目录
 /// （桌面默认产品引擎、Node 是回退，同一个项目根）。所以书级各腿只认自己删出来的形态，
 /// 章级各在自己的树上比。恢复的底线两腿一致：目标已在原位 → 409 一个都不移；找回章

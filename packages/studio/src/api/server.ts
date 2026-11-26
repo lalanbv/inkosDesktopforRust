@@ -200,6 +200,7 @@ import {
   splitChapter,
   mergeChapters,
   reorderChapters,
+  undoLastStructureOperation,
   ChapterStructureError,
   // R49/1644 号：卷/幕元数据面（Rust state/volumes.rs 镜像）。
   sortVolumes as sortVolumesCore,
@@ -3641,6 +3642,29 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         structureDeps(id),
         id,
         order,
+        body.expectedRevision,
+      );
+      broadcast("chapter:restructured", { bookId: id, op: outcome.op });
+      return c.json({ ok: true, ...outcome });
+    } catch (e) {
+      return structureErrorResponse(c, e);
+    } finally {
+      await releaseLock();
+    }
+  });
+
+  // R61 批二/1688 号：撤销上一笔结构事务（undoEligible 守卫 + 回位来源链
+  // 现盘→.trash→.versions structure 存档；撤销本身是一笔新结构事务记日志）。
+  app.post("/api/v1/books/:id/chapters/structure/undo", async (c) => {
+    const id = c.req.param("id");
+    const body = await c.req
+      .json<{ expectedRevision?: string }>()
+      .catch(() => ({}) as { expectedRevision?: string });
+    const releaseLock = await state.acquireBookLock(id);
+    try {
+      const outcome = await undoLastStructureOperation(
+        structureDeps(id),
+        id,
         body.expectedRevision,
       );
       broadcast("chapter:restructured", { bookId: id, op: outcome.op });

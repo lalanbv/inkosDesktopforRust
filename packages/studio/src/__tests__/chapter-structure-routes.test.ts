@@ -151,4 +151,34 @@ describe("chapter structure routes (R48a/1641)", () => {
     });
     expect(stale.status).toBe(409);
   });
+
+  it("undo：拆分后撤销回位（R61 批二）+ 负路径文案逐字", async () => {
+    const { bookDir, app } = seedApp();
+    const split = await app.request("/api/v1/books/b1/chapters/2/split", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: '{"offset":6}',
+    });
+    expect(split.status).toBe(200);
+    const undo = await app.request("/api/v1/books/b1/chapters/structure/undo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "",
+    });
+    expect(undo.status).toBe(200);
+    const undoBody = (await undo.json()) as { op: string };
+    expect(undoBody.op).toBe("undo");
+    // 盘面复原：4 号消失、index 号集 [1,2,3]。
+    expect(readFileSync(join(bookDir, "chapters", "index.json"), "utf-8")).toContain('"number":3');
+    // 第二次撤销 → 尾笔是 undo 行（文案与产品引擎逐字同）。
+    const again = await app.request("/api/v1/books/b1/chapters/structure/undo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "",
+    });
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: string }).error).toBe(
+      "Undo refused: last entry is itself an undo",
+    );
+  });
 });

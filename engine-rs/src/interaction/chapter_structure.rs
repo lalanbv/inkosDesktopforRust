@@ -647,10 +647,14 @@ pub async fn split_chapter(
     // （内容面已落盘），记 stderr——批二撤销遇缺日志会拒绝并说明原因。
     if let Err(error) = append_structure_ops(
         &root,
-        &StructureOp::Split { at: chapter_number },
+        "split",
         &before_list,
         &after_list,
         now_iso,
+        StructureOpsExtra {
+            at: Some(chapter_number),
+            ..Default::default()
+        },
     )
     .await
     {
@@ -943,10 +947,14 @@ pub async fn merge_chapter(
     // （内容面已落盘），记 stderr——批二撤销遇缺日志会拒绝并说明原因。
     if let Err(error) = append_structure_ops(
         &root,
-        &StructureOp::Merge { removed },
+        "merge",
         &before_list,
         &after_list,
         now_iso,
+        StructureOpsExtra {
+            removed: Some(removed),
+            ..Default::default()
+        },
     )
     .await
     {
@@ -1109,10 +1117,11 @@ pub async fn reorder_chapters(
     // （内容面已落盘），记 stderr——批二撤销遇缺日志会拒绝并说明原因。
     if let Err(error) = append_structure_ops(
         &root,
-        &StructureOp::Reorder,
+        "reorder",
         &before_list,
         &after_list,
         now_iso,
+        StructureOpsExtra::default(),
     )
     .await
     {
@@ -1172,6 +1181,15 @@ pub struct StructureOperationRecord {
     pub before: Vec<ChapterFingerprint>,
     pub after: Vec<ChapterFingerprint>,
     pub undone: bool,
+    /// split 行：被拆章号（撤销推导逆 op 用）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<u32>,
+    /// merge 行：被并章号（同上）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<u32>,
+    /// undo 行指向被撤销那笔的 opId。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undo_of: Option<String>,
 }
 
 /// 清单级不变量判定（镜像 TS `structureInvariant` 逐字消息；多指纹违反按指纹
@@ -1373,27 +1391,33 @@ async fn collect_fingerprints(
     Ok(out)
 }
 
+/// 操作日志行附加参数（undo 行的 undoOf；split/merge 行的操作参数——撤销推导逆 op 用）。
+#[derive(Debug, Clone, Default)]
+pub struct StructureOpsExtra {
+    pub undo_of: Option<String>,
+    pub at: Option<u32>,
+    pub removed: Option<u32>,
+}
+
 /// 成功提交后追加操作日志（读改写整文件 + 原子写，writing-log 同族）。
 pub async fn append_structure_ops(
     book_dir: &Path,
-    op: &StructureOp,
+    kind: &str,
     before: &[ChapterFingerprint],
     after: &[ChapterFingerprint],
     ts: &str,
+    extra: StructureOpsExtra,
 ) -> std::io::Result<StructureOperationRecord> {
-    let kind = match op {
-        StructureOp::Reorder => "reorder",
-        StructureOp::Split { .. } => "split",
-        StructureOp::Merge { .. } => "merge",
-    }
-    .to_string();
     let record = StructureOperationRecord {
         ts: ts.to_string(),
         op_id: format!("{kind}-{}", uuid::Uuid::new_v4().simple()),
-        kind,
+        kind: kind.to_string(),
         before: before.to_vec(),
         after: after.to_vec(),
         undone: false,
+        at: extra.at,
+        removed: extra.removed,
+        undo_of: extra.undo_of.clone(),
     };
     let path = book_dir.join("story").join("structure-ops.jsonl");
     if let Some(parent) = path.parent() {
@@ -1410,6 +1434,342 @@ pub async fn append_structure_ops(
     lines.push(serde_json::to_string(&record).unwrap_or_default());
     write_file_atomic(&path, &format!("{}\n", lines.join("\n"))).await?;
     Ok(record)
+}
+
+/// 读操作日志（文件缺 → 空；坏行忽略）。
+async fn load_structure_ops(book_dir: &Path) -> Vec<StructureOperationRecord> {
+    match tokio::fs::read_to_string(book_dir.join("story").join("structure-ops.jsonl")).await {
+        Ok(raw) => raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 原笔标已撤销（读改写整文件；行按 opId 匹配）。
+async fn mark_undone(book_dir: &Path, op_id: &str) -> std::io::Result<()> {
+    let mut rows = load_structure_ops(book_dir).await;
+    for row in rows.iter_mut() {
+        if row.op_id == op_id {
+            row.undone = true;
+        }
+    }
+    let path = book_dir.join("story").join("structure-ops.jsonl");
+    let text = format!(
+        "{}\n",
+        rows.iter()
+            .map(|row| serde_json::to_string(row).unwrap_or_default())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    write_file_atomic(&path, &text).await
+}
+
+/// 可撤销判定（镜像 TS `undoEligible` 逐字 reason）：当且仅当尾笔存在、
+/// undone:false、kind 不是 undo、且尾笔 after 与当前盘面（号集合 + 指纹多重集）
+/// 一致——其后没有编辑改写。
+pub fn undo_eligible(
+    tail: Option<&StructureOperationRecord>,
+    current: &[ChapterFingerprint],
+) -> (bool, Option<&'static str>) {
+    let Some(tail) = tail else {
+        return (false, Some("no structure operations logged"));
+    };
+    if tail.undone {
+        return (false, Some("last operation is already undone"));
+    }
+    if tail.kind == "undo" {
+        return (false, Some("last entry is itself an undo"));
+    }
+    let same_numbers = tail.after.len() == current.len()
+        && tail.after.iter().all(|item| {
+            current
+                .iter()
+                .any(|candidate| candidate.number == item.number)
+        })
+        && current.iter().all(|candidate| {
+            tail.after
+                .iter()
+                .any(|item| item.number == candidate.number)
+        });
+    let multiset = |list: &[ChapterFingerprint]| -> Vec<String> {
+        let mut keys: Vec<String> = list
+            .iter()
+            .map(|item| format!("{}\u{0}{}", item.number, item.fingerprint))
+            .collect();
+        keys.sort();
+        keys
+    };
+    if !same_numbers || multiset(&tail.after) != multiset(current) {
+        return (false, Some("disk state changed since the last operation"));
+    }
+    (true, None)
+}
+
+/// 目录内按内容指纹找正文（.trash 根 / .versions/<号>/；找不到 → None）。
+async fn find_content_by_fingerprint(dir: &Path, fingerprint: &str) -> Option<String> {
+    let mut entries = tokio::fs::read_dir(dir).await.ok()?;
+    let mut names: Vec<String> = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    names.reverse();
+    for name in names {
+        if !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(content) = tokio::fs::read_to_string(dir.join(&name)).await else {
+            continue;
+        };
+        if content_fingerprint(&content) == fingerprint {
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// 撤销上一笔结构事务（R61 批二；镜像 TS `undoLastStructureOperation`）：
+/// undoEligible 守卫 → 内容来源链（现盘指纹配对 → .trash → .versions/<号>
+/// structure 存档；缺失拒绝点名章）→ 逆 op 过同一清单守卫 → 提交（写面=
+/// 目标号原子写/回名 + 非目标号删除；staging 两相失败回位与批一同构）→
+/// undo 行 + 原笔标 undone:true。
+#[allow(clippy::too_many_arguments)]
+pub async fn undo_last_structure_operation(
+    state: &StateManager,
+    book_id: &str,
+    expected_revision: Option<&str>,
+    now_millis: i64,
+    now_iso: &str,
+) -> Result<StructureOutcome, StructureError> {
+    let _ = now_millis;
+    let root = state.book_dir(book_id);
+    let chapters_dir = root.join("chapters");
+    let index = state
+        .load_chapter_index(book_id)
+        .await
+        .map_err(|e| StructureError::bad_request(e.to_string()))?;
+    if expected_revision.is_some_and(|expected| chapter_set_revision(&index) != expected) {
+        return Err(StructureError::conflict());
+    }
+    let numbers: Vec<u32> = index.iter().map(|meta| meta.number).collect();
+    let current = collect_fingerprints(&chapters_dir, &numbers, &index).await?;
+    let rows = load_structure_ops(&root).await;
+    let tail = rows.last();
+    let (eligible, reason) = undo_eligible(tail, &current);
+    let Some(tail) = tail else {
+        return Err(StructureError::bad_request(format!(
+            "Undo refused: {}",
+            reason.unwrap_or("unknown")
+        )));
+    };
+    if !eligible {
+        return Err(StructureError {
+            status: 409,
+            message: format!("Undo refused: {}", reason.unwrap_or("unknown")),
+            code: None,
+        });
+    }
+
+    // 逆 op 从日志行的操作参数推导（行携带 at/removed——指纹推导不唯一）。
+    let inverse_op = match tail.kind.as_str() {
+        "split" => StructureOp::Merge {
+            removed: tail.at.map(|at| at + 1).unwrap_or(0),
+        },
+        "merge" => StructureOp::Split {
+            at: tail
+                .removed
+                .map(|removed| removed.saturating_sub(1))
+                .unwrap_or(0),
+        },
+        _ => StructureOp::Reorder,
+    };
+
+    // 当前内容的指纹索引（回位时「内容只搬位置」的来源）。
+    let mut current_by_fingerprint: BTreeMap<String, String> = BTreeMap::new();
+    let mut current_paths: BTreeMap<u32, PathBuf> = BTreeMap::new();
+    let mut current_names: BTreeMap<u32, String> = BTreeMap::new();
+    for item in &current {
+        if let Some(file) = collect_chapter_files(&chapters_dir, &[item.number], index.as_slice())
+            .await?
+            .get(&item.number)
+        {
+            let content = tokio::fs::read_to_string(&file.path)
+                .await
+                .map_err(|e| StructureError::bad_request(format!("chapter unreadable: {e}")))?;
+            current_by_fingerprint.insert(item.fingerprint.clone(), content);
+            current_paths.insert(item.number, file.path.clone());
+            current_names.insert(item.number, file.file_name.clone());
+        }
+    }
+
+    // 目标章内容来源链：现盘 → .trash（根文件）→ .versions/<号>/ structure 存档。
+    let mut resolved: BTreeMap<u32, String> = BTreeMap::new();
+    for target in &tail.before {
+        if let Some(content) = current_by_fingerprint.get(&target.fingerprint) {
+            resolved.insert(target.number, content.clone());
+            continue;
+        }
+        let trash_dir = chapters_dir.join(TRASH_DIR);
+        if let Some(content) = find_content_by_fingerprint(&trash_dir, &target.fingerprint).await {
+            resolved.insert(target.number, content);
+            continue;
+        }
+        let padded = format!("{:04}", target.number);
+        let versions_dir = chapters_dir.join(".versions").join(&padded);
+        if let Some(content) = find_content_by_fingerprint(&versions_dir, &target.fingerprint).await
+        {
+            resolved.insert(target.number, content);
+            continue;
+        }
+        return Err(StructureError {
+            status: 409,
+            message: format!(
+                "Undo refused: cannot restore chapter {} ({}): no matching content in disk, .trash or .versions",
+                target.number, target.file_name
+            ),
+            code: None,
+        });
+    }
+
+    // 守卫（逆 op 过同一清单判定）——抛在提交之前=零落盘。
+    let violations = structure_invariant(&inverse_op, &current, &tail.before);
+    if !violations.is_empty() {
+        return Err(StructureError::bad_request(format!(
+            "structure invariant violated: {}",
+            violations.join("; ")
+        )));
+    }
+
+    // 写面：目标号 → 目标名（内容变更则原子写；名不同则删旧名）；当前号
+    // ∉ 目标号集 → 该章内容已按指纹配对搬走，旧文件删除。
+    let mut written: Vec<PathBuf> = Vec::new();
+    let mut executed_renames: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let target_numbers: std::collections::BTreeSet<u32> =
+        tail.before.iter().map(|item| item.number).collect();
+    for target in &tail.before {
+        let content = resolved.get(&target.number).expect("resolved above");
+        let dest = chapters_dir.join(&target.file_name);
+        let current_path = current_paths.get(&target.number);
+        let needs_write = match current_path {
+            Some(path) => tokio::fs::read_to_string(path).await.unwrap_or_default() != *content,
+            None => true,
+        };
+        if needs_write {
+            if let Err(e) = write_file_atomic(&dest, content).await {
+                rollback_undo(&written, &executed_renames).await;
+                return Err(StructureError::bad_request(format!(
+                    "undo transaction aborted (no changes persisted): {e}"
+                )));
+            }
+            written.push(dest.clone());
+        }
+        if let Some(path) = current_path {
+            if current_names.get(&target.number).map(String::as_str)
+                != Some(target.file_name.as_str())
+            {
+                executed_renames.push((dest.clone(), path.clone()));
+            }
+        }
+    }
+    for (number, path) in &current_paths {
+        if !target_numbers.contains(number) {
+            if let Err(e) = tokio::fs::remove_file(path).await {
+                rollback_undo(&written, &executed_renames).await;
+                return Err(StructureError::bad_request(format!(
+                    "undo transaction aborted (no changes persisted): {e}"
+                )));
+            }
+        }
+    }
+
+    // index 回位：当前行按号落到目标集（title 保留，字数按恢复内容重算）；
+    // 目标有而当前无的号按 before 文件名解析 title 新建行（ReadyForReview 惯例）。
+    let title_of = |file_name: &str| -> String {
+        let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
+        match stem.find('_') {
+            Some(dash) => stem[dash + 1..].to_string(),
+            None => stem.to_string(),
+        }
+    };
+    let mut next_index: Vec<ChapterMeta> = Vec::new();
+    for target in &tail.before {
+        if let Some(meta) = index.iter().find(|meta| meta.number == target.number) {
+            let mut row = meta.clone();
+            let content = resolved.get(&target.number).expect("resolved above");
+            row.word_count = crate::utils::language::utf16_len(content.trim()) as u32;
+            row.updated_at = now_iso.to_string();
+            next_index.push(row);
+        } else {
+            let content = resolved.get(&target.number).expect("resolved above");
+            next_index.push(ChapterMeta {
+                number: target.number,
+                title: title_of(&target.file_name),
+                status: ChapterStatus::ReadyForReview,
+                word_count: crate::utils::language::utf16_len(content.trim()) as u32,
+                created_at: now_iso.to_string(),
+                updated_at: now_iso.to_string(),
+                audit_issues: Vec::new(),
+                length_warnings: Vec::new(),
+                volume_id: None,
+                review_note: None,
+                detection_score: None,
+                detection_provider: None,
+                detected_at: None,
+                length_telemetry: None,
+                token_usage: None,
+            });
+        }
+    }
+    next_index.sort_by_key(|meta| meta.number);
+    state
+        .save_chapter_index_at(&root, &next_index, false)
+        .await
+        .map_err(|e| StructureError::bad_request(e.to_string()))?;
+
+    if let Err(error) = append_structure_ops(
+        &root,
+        "undo",
+        &current,
+        &tail.before,
+        now_iso,
+        StructureOpsExtra {
+            undo_of: Some(tail.op_id.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        eprintln!("structure ops log write failed: {error}");
+    }
+    if let Err(error) = mark_undone(&root, &tail.op_id).await {
+        eprintln!("structure ops log mark-undone failed: {error}");
+    }
+
+    Ok(StructureOutcome {
+        op: "undo",
+        book_id: book_id.to_string(),
+        split_from: None,
+        new_chapter: None,
+        merged_into: None,
+        removed_chapter: None,
+        renumbered: Vec::new(),
+        revision: chapter_set_revision(&next_index),
+        touched_files: vec!["chapters/index.json".to_string()],
+        summary: format!("Undid {} ({}).", tail.kind, tail.op_id),
+    })
+}
+
+/// undo 事务失败回位：删本轮新写文件 → 逆序撤销已回名。
+async fn rollback_undo(written: &[PathBuf], executed_renames: &[(PathBuf, PathBuf)]) {
+    for path in written {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    for (dest, staged_src) in executed_renames.iter().rev() {
+        let _ = tokio::fs::rename(dest, staged_src).await;
+    }
 }
 
 #[cfg(test)]
@@ -1472,10 +1832,11 @@ mod tests {
         let after = before.clone();
         let record = append_structure_ops(
             &book_dir,
-            &StructureOp::Reorder,
+            "reorder",
             &before,
             &after,
             "2026-11-26T00:00:00.000Z",
+            StructureOpsExtra::default(),
         )
         .await
         .unwrap();
@@ -1538,6 +1899,187 @@ mod tests {
                 .fingerprint,
             content_fingerprint(&original)
         );
+    }
+
+    #[test]
+    fn undo_eligible_matches_golden_vectors() {
+        let vectors: serde_json::Value = serde_json::from_str(INVARIANT_VECTORS).unwrap();
+        for vector in vectors["undoEligible"].as_array().unwrap() {
+            let tail: Option<StructureOperationRecord> = if vector["tail"].is_null() {
+                None
+            } else {
+                Some(serde_json::from_value(vector["tail"].clone()).unwrap())
+            };
+            let current: Vec<ChapterFingerprint> =
+                serde_json::from_value(vector["current"].clone()).unwrap();
+            let (eligible, reason) = undo_eligible(tail.as_ref(), &current);
+            assert_eq!(
+                eligible,
+                vector["eligible"].as_bool().unwrap(),
+                "vector: {}",
+                vector["name"]
+            );
+            let expected_reason = vector["reason"].as_str();
+            assert_eq!(reason, expected_reason, "vector: {}", vector["name"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn undo_undoes_split_and_marks_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let book_dir = dir.path().join("books/b1");
+        let original = tokio::fs::read_to_string(book_dir.join("chapters/0002_灵脉.md"))
+            .await
+            .unwrap();
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            8,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        let outcome = undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000001000,
+            "2026-11-21T01:10:00.000Z",
+        )
+        .await
+        .expect("undo");
+        assert_eq!(outcome.op, "undo");
+        // 盘面复原：2 号原文回位、4 号消失、index 号集 [1,2,3]。
+        let restored = tokio::fs::read_to_string(book_dir.join("chapters/0002_灵脉.md"))
+            .await
+            .unwrap();
+        assert_eq!(restored, original);
+        assert!(!book_dir.join("chapters/0004_收束.md").exists());
+        let index = state.load_chapter_index("b1").await.unwrap();
+        assert_eq!(
+            index.iter().map(|meta| meta.number).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        // 日志：两行——undo 行指向原笔，原笔 undone:true。
+        let rows = load_structure_ops(&book_dir).await;
+        assert_eq!(rows.len(), 2);
+        assert!(rows[0].undone, "原笔应标已撤销");
+        assert_eq!(rows[1].kind, "undo");
+        assert_eq!(rows[1].undo_of.as_deref(), Some(rows[0].op_id.as_str()));
+        assert!(!rows[1].undone);
+        assert_eq!(
+            rows[1]
+                .after
+                .iter()
+                .map(|item| item.number)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        // 再撤销 → 拒绝（尾笔是 undo 行）。
+        let error = undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000002000,
+            "2026-11-21T01:20:00.000Z",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.message.contains("last entry is itself an undo"),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_refuses_without_log_and_after_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let error = undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.message.contains("no structure operations logged"),
+            "{error:?}"
+        );
+
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            8,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        // 事后编辑：盘面漂移 → after 指纹不符。
+        tokio::fs::write(
+            dir.path().join("books/b1/chapters/0002_灵脉.md"),
+            "# 灵脉\n\n被改过的正文\n",
+        )
+        .await
+        .unwrap();
+        let error = undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000001000,
+            "2026-11-21T01:10:00.000Z",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.message.contains("disk state changed"), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn undo_refuses_naming_chapter_when_no_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            8,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        // 抹掉来源链：.versions 拆分归档清掉 → 目标指纹无来源。
+        tokio::fs::remove_dir_all(dir.path().join("books/b1/chapters/.versions"))
+            .await
+            .unwrap();
+        let error = undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000001000,
+            "2026-11-21T01:10:00.000Z",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.message.contains("cannot restore chapter"),
+            "{error:?}"
+        );
+        // 零落盘：盘面保持 split 后状态（守卫抛在提交之前）。
+        assert!(dir.path().join("books/b1/chapters/0004_收束.md").exists());
     }
 
     #[test]

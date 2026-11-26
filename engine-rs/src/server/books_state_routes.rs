@@ -971,6 +971,43 @@ pub async fn reorder_chapters_route(
     }
 }
 
+/// R61 批二/1688 号：撤销上一笔结构事务（undoEligible 守卫 + 回位来源链
+/// 现盘→.trash→.versions structure 存档；撤销本身是一笔新结构事务记日志）。
+pub async fn undo_chapter_structure_route(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let expected_revision = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("expectedRevision")
+                .and_then(Value::as_str)
+                .map(String::from)
+        });
+    match crate::interaction::chapter_structure::undo_last_structure_operation(
+        &runtime.state,
+        &book_id,
+        expected_revision.as_deref(),
+        utc_now_millis(),
+        &utc_now_iso(),
+    )
+    .await
+    {
+        Ok(outcome) => {
+            runtime.hub.broadcast(
+                "chapter:restructured",
+                &json!({ "bookId": book_id, "op": outcome.op }),
+            );
+            let mut body = serde_json::to_value(&outcome).unwrap_or_else(|_| json!({}));
+            body["ok"] = json!(true);
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Err(error) => structure_error_response(error),
+    }
+}
+
 // ── R49/1644 号：卷/幕元数据面（book.json.writing.volumes）──────────
 // GET/PUT volumes（全量事务：新建/改名/重排/删卷合一，删卷时其章归默认卷）
 // + PUT chapters/:num/volume（章归属行级更新）。卷是组织面非上下文层

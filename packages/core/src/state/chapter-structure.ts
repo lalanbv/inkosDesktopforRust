@@ -49,7 +49,7 @@ export interface RenumberedEntry {
 }
 
 export interface StructureOutcome {
-  readonly op: "split" | "merge" | "reorder";
+  readonly op: "split" | "merge" | "reorder" | "undo";
   readonly bookId: string;
   readonly splitFrom?: number;
   readonly newChapter?: number;
@@ -172,10 +172,16 @@ export type StructureOp =
 export interface StructureOperationRecord {
   readonly ts: string;
   readonly opId: string;
-  readonly kind: "split" | "merge" | "reorder";
+  readonly kind: "split" | "merge" | "reorder" | "undo";
   readonly before: ReadonlyArray<ChapterFingerprint>;
   readonly after: ReadonlyArray<ChapterFingerprint>;
   readonly undone: boolean;
+  /** split 行：被拆章号（撤销推导逆 op 用；undo 行缺省）。 */
+  readonly at?: number;
+  /** merge 行：被并章号（同上）。 */
+  readonly removed?: number;
+  /** undo 行指向被撤销那笔的 opId（其余行缺省）。 */
+  readonly undoOf?: string;
 }
 
 /** 章内容指纹：UTF-8 sha256 前 16 hex（chapterSetRevision 同族；只在结构操作时计算）。 */
@@ -304,18 +310,22 @@ export function assertStructureInvariants(
 /** 成功提交后追加操作日志（append-only；读改写整文件 + 原子写，writing-log 同族）。 */
 export async function appendStructureOpsLog(
   bookDir: string,
-  op: StructureOp,
+  kind: StructureOperationRecord["kind"],
   before: ReadonlyArray<ChapterFingerprint>,
   after: ReadonlyArray<ChapterFingerprint>,
   ts: string,
+  extra?: { readonly undoOf?: string; readonly at?: number; readonly removed?: number },
 ): Promise<StructureOperationRecord> {
   const record: StructureOperationRecord = {
     ts,
-    opId: `${op.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    kind: op.kind,
+    opId: `${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind,
     before,
     after,
     undone: false,
+    ...(extra?.undoOf !== undefined ? { undoOf: extra.undoOf } : {}),
+    ...(extra?.at !== undefined ? { at: extra.at } : {}),
+    ...(extra?.removed !== undefined ? { removed: extra.removed } : {}),
   };
   const path = join(bookDir, "story", "structure-ops.jsonl");
   await mkdir(join(bookDir, "story"), { recursive: true });
@@ -328,6 +338,220 @@ export async function appendStructureOpsLog(
   lines.push(JSON.stringify(record));
   await writeTextAtomic(path, `${lines.join("\n")}\n`);
   return record;
+}
+
+/** 成功提交后追加操作日志（append-only；读改写整文件 + 原子写，writing-log 同族）。 */
+async function loadStructureOpsLog(bookDir: string): Promise<ReadonlyArray<StructureOperationRecord>> {
+  try {
+    const raw = await readFile(join(bookDir, "story", "structure-ops.jsonl"), "utf-8");
+    return raw
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line) as StructureOperationRecord);
+  } catch {
+    return [];
+  }
+}
+
+/** 原笔标已撤销（读改写整文件；行按 opId 匹配）。 */
+async function markUndone(bookDir: string, opId: string): Promise<void> {
+  const rows = await loadStructureOpsLog(bookDir);
+  const lines = rows.map((row) =>
+    row.opId === opId ? ({ ...row, undone: true } satisfies StructureOperationRecord) : row,
+  );
+  await writeTextAtomic(
+    join(bookDir, "story", "structure-ops.jsonl"),
+    `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
+  );
+}
+
+/**
+ * 可撤销判定（R61 批二）：当且仅当尾笔存在、undone:false、kind 不是 undo、
+ * 且尾笔 after 与当前盘面（号集合 + 指纹多重集）一致——其后没有编辑改写。
+ */
+export function undoEligible(
+  tail: StructureOperationRecord | null,
+  current: ReadonlyArray<ChapterFingerprint>,
+): { readonly eligible: boolean; readonly reason: string | null } {
+  if (!tail) return { eligible: false, reason: "no structure operations logged" };
+  if (tail.undone) return { eligible: false, reason: "last operation is already undone" };
+  if (tail.kind === "undo") return { eligible: false, reason: "last entry is itself an undo" };
+  const sameNumbers = tail.after.length === current.length
+    && tail.after.every((item) => current.some((candidate) => candidate.number === item.number))
+    && current.every((candidate) => tail.after.some((item) => item.number === candidate.number));
+  const multiset = (list: ReadonlyArray<ChapterFingerprint>): ReadonlyArray<string> =>
+    list.map((item) => `${item.number}\u0000${item.fingerprint}`).sort();
+  if (!sameNumbers || multiset(tail.after).join("|") !== multiset(current).join("|")) {
+    return { eligible: false, reason: "disk state changed since the last operation" };
+  }
+  return { eligible: true, reason: null };
+}
+
+/**
+ * 撤销上一笔结构事务（R61 批二）：把盘面恢复到尾笔 before 清单。内容来源链=
+ * 现盘（指纹配对，reorder 撤销/未动章）→ `.trash`（merge 被删章）→
+ * `.versions/<号>/` structure 存档（split/merge 操作前旧文）；三处都没有 →
+ * 拒绝并点名章。撤销本身是一笔新结构事务：逆 op（split↔Merge、merge↔Split、
+ * reorder↔Reorder）过同一守卫，成功后记 undo 行并把原笔标 undone:true。
+ */
+export async function undoLastStructureOperation(
+  deps: ChapterStructureDeps,
+  bookId: string,
+  expectedRevision: string | undefined,
+): Promise<StructureOutcome> {
+  const index = await deps.loadChapterIndex();
+  checkRevision(index, expectedRevision);
+  const numbers = sortedNumbers(index);
+  const rows = await loadStructureOpsLog(deps.bookDir);
+  const tail = rows.at(-1) ?? null;
+  const current = await collectFingerprints(deps.bookDir, numbers, index);
+  const verdict = undoEligible(tail, current);
+  if (!verdict.eligible || !tail) {
+    throw new ChapterStructureError(409, `Undo refused: ${verdict.reason}`);
+  }
+
+  // 逆 op 从日志行的操作参数推导（行携带 at/removed——指纹推导不唯一：
+  // split 后 head/tail 两个指纹都不在 before 多重集里，号差集又含移位章）。
+  const inverseOp: StructureOp = tail.kind === "reorder"
+    ? { kind: "reorder" }
+    : tail.kind === "split"
+      ? { kind: "merge", removed: (tail.at ?? 0) + 1 }
+      : { kind: "split", at: (tail.removed ?? 1) - 1 };
+
+  const files = await collectChapterFiles(deps.bookDir, numbers, index);
+  // 当前内容的指纹索引（回位时「内容只搬位置」的来源）。
+  const currentByFingerprint = new Map<string, { readonly fileName: string; readonly content: string }>();
+  for (const item of current) {
+    const file = files.get(item.number);
+    if (!file) continue;
+    currentByFingerprint.set(item.fingerprint, {
+      fileName: file.fileName,
+      content: await readFile(join(deps.bookDir, "chapters", file.fileName), "utf-8"),
+    });
+  }
+
+  // 目标章内容来源链：现盘 → .trash（根文件）→ .versions/<号>/ structure 存档。
+  const resolveTarget = async (target: ChapterFingerprint): Promise<string> => {
+    const onDisk = currentByFingerprint.get(target.fingerprint);
+    if (onDisk) return onDisk.content;
+    const trashDir = join(deps.bookDir, TRASH_DIR);
+    try {
+      for (const name of await readdir(trashDir)) {
+        const path = join(trashDir, name);
+        if (!name.endsWith(".md")) continue;
+        const content = await readFile(path, "utf-8");
+        if (contentFingerprint(content) === target.fingerprint) return content;
+      }
+    } catch {
+      // 无 trash。
+    }
+    const versionsDirPath = join(deps.bookDir, "chapters", ".versions", String(target.number).padStart(4, "0"));
+    try {
+      for (const name of (await readdir(versionsDirPath)).sort().reverse()) {
+        if (!name.endsWith(".md")) continue;
+        const content = await readFile(join(versionsDirPath, name), "utf-8");
+        if (contentFingerprint(content) === target.fingerprint) return content;
+      }
+    } catch {
+      // 无该号存档。
+    }
+    throw new ChapterStructureError(
+      409,
+      `Undo refused: cannot restore chapter ${target.number} (${target.fileName}): no matching content in disk, .trash or .versions`,
+    );
+  };
+
+  // 目标清单解析（任何一个来源缺失即整体拒绝——守卫抛在提交之前=零落盘）。
+  const resolved = new Map<number, string>();
+  const missing: string[] = [];
+  for (const target of tail.before) {
+    try {
+      resolved.set(target.number, await resolveTarget(target));
+    } catch (error) {
+      missing.push(error instanceof ChapterStructureError ? error.message : String(error));
+    }
+  }
+  if (missing.length > 0) {
+    throw new ChapterStructureError(409, missing.join("; "));
+  }
+
+  // 写面：目标号 → 新名写目标内容；当前同号旧名 ≠ 目标名 → rename 语义删旧名；
+  // 当前号 ∉ 目标号集 → 该章内容并入别处（指纹已配对），旧名删除。
+  const writes: Array<{ relativePath: string; content: string }> = [];
+  const deletes: string[] = [];
+  const targetNumbers = new Set(tail.before.map((item) => item.number));
+  for (const target of tail.before) {
+    const fileName = target.fileName;
+    const content = resolved.get(target.number)!;
+    const currentFile = files.get(target.number);
+    if (!currentFile || currentFile.fileName !== fileName) {
+      writes.push({ relativePath: `chapters/${fileName}`, content });
+    } else {
+      const onDisk = await readFile(join(deps.bookDir, "chapters", fileName), "utf-8");
+      if (onDisk !== content) writes.push({ relativePath: `chapters/${fileName}`, content });
+    }
+    if (currentFile && currentFile.fileName !== fileName) {
+      deletes.push(`chapters/${currentFile.fileName}`);
+    }
+  }
+  for (const item of current) {
+    if (targetNumbers.has(item.number)) continue;
+    const file = files.get(item.number)!;
+    deletes.push(`chapters/${file.fileName}`);
+  }
+
+  // index 回位：当前行按号落到目标集（title 保留），目标有而当前无的号按
+  // before 文件名解析 title 新建行（ReadyForReview 惯例）；当前有而目标无的行删除。
+  const titleOf = (fileName: string): string => {
+    const stem = fileName.replace(/\.md$/u, "");
+    const dash = stem.indexOf("_");
+    return dash >= 0 ? stem.slice(dash + 1) : stem;
+  };
+  const nowIso = new Date().toISOString();
+  const nextIndex: ChapterMeta[] = [];
+  for (const target of tail.before) {
+    const existing = index.find((meta) => meta.number === target.number);
+    const content = resolved.get(target.number)!;
+    if (existing) {
+      nextIndex.push({
+        ...existing,
+        wordCount: content.replace(/\s+/gu, "").length,
+        updatedAt: nowIso,
+      });
+    } else {
+      nextIndex.push({
+        number: target.number,
+        title: titleOf(target.fileName),
+        status: "ready-for-review",
+        wordCount: content.replace(/\s+/gu, "").length,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        auditIssues: [],
+        lengthWarnings: [],
+      });
+    }
+  }
+  nextIndex.sort((a, b) => a.number - b.number);
+
+  // 守卫（逆 op 过同一清单判定）→ 提交 → 日志（undo 行 + 原笔标已撤销）。
+  assertStructureInvariants(inverseOp, current, tail.before, []);
+
+  await commitAtomicFileSet({
+    rootDir: deps.bookDir,
+    writes: [...writes, { relativePath: "chapters/index.json", content: JSON.stringify(nextIndex) }],
+    deletes,
+  });
+  await appendStructureOpsLog(deps.bookDir, "undo", current, tail.before, nowIso, { undoOf: tail.opId });
+  await markUndone(deps.bookDir, tail.opId);
+
+  return {
+    op: "undo",
+    bookId,
+    renumbered: [],
+    revision: chapterSetRevision(nextIndex),
+    touchedFiles: ["chapters/index.json"],
+    summary: `Undid ${tail.kind} (${tail.opId}).`,
+  };
 }
 
 /** 操作前全书指纹清单（撤销批二的全量回位依据；结构操作低频，逐章重读可承受）。 */
@@ -566,7 +790,7 @@ export async function splitChapter(
     writes: [...writes, { relativePath: "chapters/index.json", content: JSON.stringify(nextIndex) }],
     deletes,
   });
-  await appendStructureOpsLog(deps.bookDir, { kind: "split", at: chapterNumber }, beforeList, afterList, new Date().toISOString());
+  await appendStructureOpsLog(deps.bookDir, "split", beforeList, afterList, new Date().toISOString(), { at: chapterNumber });
 
   return {
     op: "split",
@@ -692,7 +916,7 @@ export async function mergeChapters(
     writes: [...writes, { relativePath: "chapters/index.json", content: JSON.stringify(nextIndex) }],
     deletes,
   });
-  await appendStructureOpsLog(deps.bookDir, { kind: "merge", removed }, beforeList, afterList, new Date().toISOString());
+  await appendStructureOpsLog(deps.bookDir, "merge", beforeList, afterList, new Date().toISOString(), { removed });
 
   return {
     op: "merge",
@@ -767,7 +991,7 @@ export async function reorderChapters(
     writes: [...writes, { relativePath: "chapters/index.json", content: JSON.stringify(nextIndex) }],
     deletes,
   });
-  await appendStructureOpsLog(deps.bookDir, { kind: "reorder" }, beforeList, afterList, new Date().toISOString());
+  await appendStructureOpsLog(deps.bookDir, "reorder", beforeList, afterList, new Date().toISOString());
 
   return {
     op: "reorder",

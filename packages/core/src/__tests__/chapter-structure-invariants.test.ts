@@ -10,8 +10,11 @@ import {
   structureInvariant,
   assertStructureInvariants,
   appendStructureOpsLog,
+  undoEligible,
+  undoLastStructureOperation,
   type ChapterStructureDeps,
   type ChapterFingerprint,
+  type StructureOperationRecord,
 } from "../state/chapter-structure.js";
 import type { ChapterMeta } from "../models/chapter.js";
 
@@ -31,6 +34,13 @@ const golden = JSON.parse(readFileSync(goldenPath, "utf-8")) as {
     after: ReadonlyArray<ChapterFingerprint>;
     ok: boolean;
     violations: ReadonlyArray<string>;
+  }>;
+  undoEligible: ReadonlyArray<{
+    name: string;
+    tail: StructureOperationRecord | null;
+    current: ReadonlyArray<ChapterFingerprint>;
+    eligible: boolean;
+    reason: string | null;
   }>;
 };
 
@@ -116,7 +126,7 @@ describe("assertStructureInvariants / appendStructureOpsLog（提交前守卫 + 
     const after: ReadonlyArray<ChapterFingerprint> = [
       { number: 1, fileName: "0001_甲.md", fingerprint: "fp-1" },
     ];
-    const record = await appendStructureOpsLog(root, { kind: "reorder" }, before, after, "2026-11-26T00:00:00.000Z");
+    const record = await appendStructureOpsLog(root, "reorder", before, after, "2026-11-26T00:00:00.000Z");
     expect(record.undone).toBe(false);
     const line = JSON.parse(readFileSync(join(root, "story", "structure-ops.jsonl"), "utf-8")) as {
       ts: string;
@@ -132,6 +142,69 @@ describe("assertStructureInvariants / appendStructureOpsLog（提交前守卫 + 
     expect(line.opId).not.toBe("");
     expect(line.before).toEqual(before);
     expect(line.after).toEqual(after);
+  });
+});
+
+describe("undoEligible（R61 批二 golden 判定向量）", () => {
+  for (const vector of golden.undoEligible) {
+    it(vector.name, () => {
+      const result = undoEligible(vector.tail, vector.current);
+      expect(result.reason).toEqual(vector.reason);
+      expect(result.eligible).toBe(vector.eligible);
+    });
+  }
+});
+
+describe("undoLastStructureOperation（R61 批二）", () => {
+  it("undoes a split: chapters reassemble, log records the undo and marks the original", async () => {
+    const { bookDir, deps } = seedBook();
+    const originalChapter2 = readFileSync(join(bookDir, "chapters", "0002_灵脉.md"), "utf-8");
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    const outcome = await undoLastStructureOperation(deps, "b1", undefined);
+    expect(outcome.op).toBe("undo");
+    // 盘面复原：三章、2 号原文回位、4 号消失。
+    expect(existsSync(join(bookDir, "chapters", "0004_灵脉.md"))).toBe(false);
+    expect(readFileSync(join(bookDir, "chapters", "0002_灵脉.md"), "utf-8")).toBe(originalChapter2);
+    const restored = JSON.parse(readFileSync(join(bookDir, "chapters", "index.json"), "utf-8")) as ReadonlyArray<{ number: number }>;
+    expect(restored.map((meta) => meta.number)).toEqual([1, 2, 3]);
+    // 日志：两行——undo 行指向原笔，原笔 undone:true。
+    const lines = readFileSync(join(bookDir, "story", "structure-ops.jsonl"), "utf-8")
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .map((line) => JSON.parse(line) as StructureOperationRecord);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.undone).toBe(true);
+    expect(lines[1]!.kind).toBe("undo");
+    expect(lines[1]!.undoOf).toBe(lines[0]!.opId);
+    expect(lines[1]!.undone).toBe(false);
+    expect(lines[1]!.after.map((item) => item.number)).toEqual([1, 2, 3]);
+    // 再撤销 → 拒绝（尾笔是 undo 行）。
+    await expect(undoLastStructureOperation(deps, "b1", undefined)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("refuses when nothing is logged", async () => {
+    const { deps } = seedBook();
+    await expect(undoLastStructureOperation(deps, "b1", undefined)).rejects.toMatchObject({
+      status: 409,
+    });
+  });
+
+  it("refuses when the disk drifted after the last operation", async () => {
+    const { bookDir, deps } = seedBook();
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    // 事后编辑：盘面漂移 → after 指纹不符。
+    writeFileSync(join(bookDir, "chapters", "0002_灵脉.md"), "# 灵脉\n\n被改过的正文\n");
+    await expect(undoLastStructureOperation(deps, "b1", undefined)).rejects.toThrowError(/disk state changed/);
+  });
+
+  it("refuses naming the chapter when no restore source matches the target fingerprint", async () => {
+    const { bookDir, deps } = seedBook();
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    // 抹掉来源链：.versions 里拆分归档与 .trash 全部清掉 → 目标指纹无来源。
+    rmSync(join(bookDir, "chapters", ".versions"), { recursive: true, force: true });
+    await expect(undoLastStructureOperation(deps, "b1", undefined)).rejects.toThrowError(/cannot restore chapter/);
+    // 零落盘：盘面保持 split 后状态（守卫抛在提交之前）。
+    expect(existsSync(join(bookDir, "chapters", "0004_收束.md"))).toBe(true);
   });
 });
 
