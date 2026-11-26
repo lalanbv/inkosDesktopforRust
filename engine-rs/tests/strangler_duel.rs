@@ -4821,6 +4821,24 @@ async fn structure_undo_duel() {
         .await;
         assert_eq!(status, 200, "split：{body}");
         assert_eq!(body["op"], "split");
+        // R61 批三：GET 状态查询（拆分后可撤销）。
+        let (status, status_body) =
+            get_json(base, "/api/v1/books/b1/chapters/structure/undo").await;
+        assert_eq!(status, 200, "undo status：{status_body}");
+        assert_eq!(
+            &status_body["eligible"],
+            &json!(true),
+            "拆分后可撤销：{status_body}"
+        );
+        assert!(
+            status_body["reason"].is_null(),
+            "拆分后无原因：{status_body}"
+        );
+        assert_eq!(
+            &status_body["lastKind"],
+            &json!("split"),
+            "拆分后尾笔：{status_body}"
+        );
         let (status, body) = post_json(base, "/api/v1/books/b1/chapters/structure/undo", "").await;
         assert_eq!(status, 200, "undo：{body}");
         assert_eq!(body["op"], "undo");
@@ -4830,6 +4848,25 @@ async fn structure_undo_duel() {
             body,
             json!({ "error": "Undo refused: last entry is itself an undo" }),
             "两腿错误体逐字一致：{body}"
+        );
+        // R61 批三：撤销后状态（尾笔是 undo 行 → 不可撤销、原因逐字）。
+        let (status, status_body) =
+            get_json(base, "/api/v1/books/b1/chapters/structure/undo").await;
+        assert_eq!(status, 200, "undo status after undo：{status_body}");
+        assert_eq!(
+            &status_body["eligible"],
+            &json!(false),
+            "撤销后不可撤销：{status_body}"
+        );
+        assert_eq!(
+            &status_body["reason"],
+            &json!("last entry is itself an undo"),
+            "撤销后原因逐字：{status_body}"
+        );
+        assert_eq!(
+            &status_body["lastKind"],
+            &json!("undo"),
+            "撤销后尾笔：{status_body}"
         );
     }
     // 盘面 / index / 操作日志对账（各自树，字段与关系一致、ts/opId 各腿本地不比）。

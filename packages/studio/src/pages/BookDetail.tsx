@@ -232,7 +232,7 @@ export function BookDetail({
   // 1650/1651 号：wry 壳内 window.prompt 返回 null、alert 静默（WKUIDelegate
   // 未实现 JS 对话框）——人工反馈输入走 React PromptDialog，错误/结果提示走
   // 页内 notice 文本条。
-  const [actionNotice, setActionNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [actionNotice, setActionNotice] = useState<{ text: string; error: boolean; undoable?: boolean } | null>(null);
   const [pendingBrief, setPendingBrief] = useState<{
     title: string;
     message: string;
@@ -252,10 +252,43 @@ export function BookDetail({
   const notifyError = (fallback: string) => (e: unknown) => {
     setActionNotice({ text: e instanceof Error ? e.message : fallback, error: true });
   };
-  const notify = (text: string) => {
-    setActionNotice({ text, error: false });
+  const notify = (text: string, undoable = false) => {
+    setActionNotice({ text, error: false, undoable });
   };
   const [restructuring, setRestructuring] = useState(false);
+  // R61 批三/1689 号：可撤销上一笔状态（结构操作/撤销后刷新）。
+  const { data: undoStatus, refetch: refetchUndoStatus } = useApi<{
+    eligible: boolean;
+    reason: string | null;
+    lastKind: string | null;
+    lastOpId: string | null;
+  }>(`/books/${bookId}/chapters/structure/undo`);
+  const undoKindLabel = (kind: string | null): string | null => {
+    if (kind === "split") return t("book.structureUndoKindSplit");
+    if (kind === "merge") return t("book.structureUndoKindMerge");
+    if (kind === "reorder") return t("book.structureUndoKindReorder");
+    if (kind === "undo") return t("book.structureUndoKindUndo");
+    return null;
+  };
+  const handleUndo = async () => {
+    if (restructuring) return;
+    setRestructuring(true);
+    try {
+      const body = await postApi<{ ok: boolean; revision: string }>(
+        `/books/${bookId}/chapters/structure/undo`,
+        {},
+      );
+      if (body.revision) setStructureRevision(body.revision);
+      refetch();
+      void refetchUndoStatus();
+      notify(t("book.structureUndone"));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setActionNotice({ text: `${t("book.structureUndoFailed")}: ${message}`, error: true });
+    } finally {
+      setRestructuring(false);
+    }
+  };
   // 拖拽重排在途章号（HTML5 DnD：dragStart 记录源章，drop 落目标章）。
   const dragChapterRef = useRef<number | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
@@ -726,6 +759,9 @@ export function BookDetail({
       const body = await action();
       if (body.revision) setStructureRevision(body.revision);
       refetch();
+      void refetchUndoStatus();
+      // R61 批三：结构操作成功通知带「撤销」按钮（VS Code 文件操作撤销语义）。
+      notify(t("book.structureUndoAvailable"), true);
       return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -814,7 +850,8 @@ export function BookDetail({
         <span className="text-foreground">{book.title}</span>
       </nav>
 
-      {/* 1651 号：操作通知条（壳内 alert 静默——错误/结果改页内可见）。 */}
+      {/* 1651 号：操作通知条（壳内 alert 静默——错误/结果改页内可见）。
+          R61 批三/1689 号：结构操作成功通知带「撤销」按钮。 */}
       {actionNotice ? (
         <div
           role="status"
@@ -825,6 +862,38 @@ export function BookDetail({
           }`}
         >
           {actionNotice.text}
+          {actionNotice.undoable ? (
+            <button
+              type="button"
+              onClick={() => void handleUndo()}
+              disabled={restructuring}
+              className="ml-3 underline underline-offset-2 text-primary disabled:opacity-50"
+            >
+              {t("book.structureUndo")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* R61 批三/1689 号：可撤销上一笔状态行（无日志时隐藏；不可撤销且原因明确时显示原因）。 */}
+      {undoStatus?.eligible ? (
+        <div
+          role="status"
+          data-testid="structure-undo-status"
+          className="rounded-xl border border-primary/20 bg-secondary/30 px-4 py-2 text-xs text-muted-foreground flex items-center gap-3"
+        >
+          <span>
+            {t("book.structureUndoAvailable")}
+            {undoKindLabel(undoStatus.lastKind) ? `（${undoKindLabel(undoStatus.lastKind)}）` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={() => void handleUndo()}
+            disabled={restructuring}
+            className="underline underline-offset-2 text-primary disabled:opacity-50"
+          >
+            {t("book.structureUndo")}
+          </button>
         </div>
       ) : null}
 

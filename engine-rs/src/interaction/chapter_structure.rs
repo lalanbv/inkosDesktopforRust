@@ -1531,6 +1531,40 @@ async fn find_content_by_fingerprint(dir: &Path, fingerprint: &str) -> Option<St
     None
 }
 
+/// 可撤销状态查询（R61 批三：GET 端点/UI「可撤销上一笔」的装配面；镜像 TS
+/// `structureUndoStatus`）：读日志尾笔 + 当前盘面 → undo_eligible 判定 + 尾笔元数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructureUndoStatus {
+    pub eligible: bool,
+    pub reason: Option<String>,
+    pub last_kind: Option<String>,
+    pub last_op_id: Option<String>,
+}
+
+pub async fn structure_undo_status(
+    state: &StateManager,
+    book_id: &str,
+) -> Result<StructureUndoStatus, StructureError> {
+    let root = state.book_dir(book_id);
+    let chapters_dir = root.join("chapters");
+    let index = state
+        .load_chapter_index(book_id)
+        .await
+        .map_err(|e| StructureError::bad_request(e.to_string()))?;
+    let numbers: Vec<u32> = index.iter().map(|meta| meta.number).collect();
+    let current = collect_fingerprints(&chapters_dir, &numbers, &index).await?;
+    let rows = load_structure_ops(&root).await;
+    let tail = rows.last();
+    let (eligible, reason) = undo_eligible(tail, &current);
+    Ok(StructureUndoStatus {
+        eligible,
+        reason: reason.map(String::from),
+        last_kind: tail.map(|row| row.kind.clone()),
+        last_op_id: tail.map(|row| row.op_id.clone()),
+    })
+}
+
 /// 撤销上一笔结构事务（R61 批二；镜像 TS `undoLastStructureOperation`）：
 /// undoEligible 守卫 → 内容来源链（现盘指纹配对 → .trash → .versions/<号>
 /// structure 存档；缺失拒绝点名章）→ 逆 op 过同一清单守卫 → 提交（写面=
@@ -1922,6 +1956,56 @@ mod tests {
             let expected_reason = vector["reason"].as_str();
             assert_eq!(reason, expected_reason, "vector: {}", vector["name"]);
         }
+    }
+
+    #[tokio::test]
+    async fn undo_status_reflects_split_and_undo() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        // 无日志：不可撤销、原因点名、尾笔元数据空。
+        let status = structure_undo_status(&state, "b1").await.unwrap();
+        assert!(!status.eligible);
+        assert_eq!(
+            status.reason.as_deref(),
+            Some("no structure operations logged")
+        );
+        assert_eq!(status.last_kind, None);
+        assert_eq!(status.last_op_id, None);
+        // split：可撤销、尾笔元数据就位。
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            8,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        let status = structure_undo_status(&state, "b1").await.unwrap();
+        assert!(status.eligible);
+        assert_eq!(status.reason, None);
+        assert_eq!(status.last_kind.as_deref(), Some("split"));
+        assert!(status.last_op_id.is_some());
+        // undo：尾笔是 undo 行 → 不可撤销（原因逐字）。
+        undo_last_structure_operation(
+            &state,
+            "b1",
+            None,
+            1700000001000,
+            "2026-11-21T01:10:00.000Z",
+        )
+        .await
+        .expect("undo");
+        let status = structure_undo_status(&state, "b1").await.unwrap();
+        assert!(!status.eligible);
+        assert_eq!(
+            status.reason.as_deref(),
+            Some("last entry is itself an undo")
+        );
+        assert_eq!(status.last_kind.as_deref(), Some("undo"));
     }
 
     #[tokio::test]

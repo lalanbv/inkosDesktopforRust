@@ -12,6 +12,7 @@ import {
   appendStructureOpsLog,
   undoEligible,
   undoLastStructureOperation,
+  structureUndoStatus,
   type ChapterStructureDeps,
   type ChapterFingerprint,
   type StructureOperationRecord,
@@ -205,6 +206,38 @@ describe("undoLastStructureOperation（R61 批二）", () => {
     await expect(undoLastStructureOperation(deps, "b1", undefined)).rejects.toThrowError(/cannot restore chapter/);
     // 零落盘：盘面保持 split 后状态（守卫抛在提交之前）。
     expect(existsSync(join(bookDir, "chapters", "0004_收束.md"))).toBe(true);
+  });
+});
+
+describe("structureUndoStatus（R61 批三：可撤销状态查询装配）", () => {
+  it("reports eligible with last operation after a split", async () => {
+    const { deps } = seedBook();
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    const status = await structureUndoStatus(deps);
+    expect(status.eligible).toBe(true);
+    expect(status.reason).toBeNull();
+    expect(status.lastKind).toBe("split");
+    expect(status.lastOpId).not.toBeNull();
+  });
+
+  it("reports ineligible with reason when nothing is logged", async () => {
+    const { deps } = seedBook();
+    const status = await structureUndoStatus(deps);
+    expect(status.eligible).toBe(false);
+    expect(status.reason).toBe("no structure operations logged");
+    expect(status.lastKind).toBeNull();
+    expect(status.lastOpId).toBeNull();
+  });
+
+  it("reports ineligible after the undo entry", async () => {
+    const { deps } = seedBook();
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    await undoLastStructureOperation(deps, "b1", undefined);
+    const status = await structureUndoStatus(deps);
+    expect(status.eligible).toBe(false);
+    expect(status.reason).toBe("last entry is itself an undo");
+    expect(status.lastKind).toBe("undo");
+    expect(status.lastOpId).not.toBeNull();
   });
 });
 

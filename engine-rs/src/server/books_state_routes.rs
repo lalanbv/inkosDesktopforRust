@@ -971,6 +971,22 @@ pub async fn reorder_chapters_route(
     }
 }
 
+/// R61 批三/1689 号：可撤销状态查询（UI「可撤销上一笔」数据源）。
+pub async fn get_chapter_structure_undo(
+    State(runtime): State<BooksRuntime>,
+    Path(book_id): Path<String>,
+) -> impl IntoResponse {
+    match crate::interaction::chapter_structure::structure_undo_status(&runtime.state, &book_id)
+        .await
+    {
+        Ok(status) => {
+            let body = serde_json::to_value(&status).unwrap_or_else(|_| json!({}));
+            (StatusCode::OK, Json(body)).into_response()
+        }
+        Err(error) => structure_error_response(error),
+    }
+}
+
 /// R61 批二/1688 号：撤销上一笔结构事务（undoEligible 守卫 + 回位来源链
 /// 现盘→.trash→.versions structure 存档；撤销本身是一笔新结构事务记日志）。
 pub async fn undo_chapter_structure_route(

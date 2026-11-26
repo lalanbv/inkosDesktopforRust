@@ -514,6 +514,10 @@ pub fn router_books(
         // R61 批二/1688 号：撤销上一笔结构事务。
         .route(
             "/api/v1/books/:id/chapters/structure/undo",
+            get(books_state_routes::get_chapter_structure_undo).with_state(books.clone()),
+        )
+        .route(
+            "/api/v1/books/:id/chapters/structure/undo",
             post(books_state_routes::undo_chapter_structure_route).with_state(books.clone()),
         )
         // R49/1644 号：卷/幕元数据面（组织面非上下文层）。

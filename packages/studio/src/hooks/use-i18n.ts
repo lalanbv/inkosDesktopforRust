@@ -527,6 +527,15 @@ const strings = {
   "book.mergeIntoPrevious": { zh: "合并到上一章", en: "Merge into previous chapter" },
   "book.dragToReorder": { zh: "拖拽重排章节", en: "Drag to reorder chapters" },
   "book.structureConflict": { zh: "章节集合已被其他操作修改，视图已刷新——请重试。", en: "The chapter set changed from another action. View refreshed — please retry." },
+  // R61 批三/1689 号：结构操作撤销（VS Code 文件操作撤销语义）。
+  "book.structureUndo": { zh: "撤销", en: "Undo" },
+  "book.structureUndoFailed": { zh: "撤销失败", en: "Undo failed" },
+  "book.structureUndone": { zh: "已撤销上一笔结构操作。", en: "Last structure operation undone." },
+  "book.structureUndoAvailable": { zh: "可撤销上一笔结构操作", en: "Last structure operation can be undone" },
+  "book.structureUndoKindSplit": { zh: "拆分", en: "split" },
+  "book.structureUndoKindMerge": { zh: "合并", en: "merge" },
+  "book.structureUndoKindReorder": { zh: "重排", en: "reorder" },
+  "book.structureUndoKindUndo": { zh: "撤销", en: "undo" },
   // 1651 号：人工反馈输入弹层标题（rewrite/revise/sync/foundation/plan/compose 六面）。
   "book.rewriteBriefTitle": { zh: "重写补充说明", en: "Rewrite brief" },
   "book.reviseBriefTitle": { zh: "修订补充说明", en: "Revise brief" },

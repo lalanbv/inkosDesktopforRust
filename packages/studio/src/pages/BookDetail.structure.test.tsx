@@ -7,7 +7,7 @@
 //! ③409 revision conflict → structureConflict 提示 + revision 清链（下一笔
 //!   回到缺省跳过）。拖拽源=目标 no-op 一并锁。
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { BookDetail } from "./BookDetail";
 import type { Nav } from "../lib/nav";
 import type { TFunction } from "../hooks/use-i18n";
@@ -35,6 +35,7 @@ vi.mock("../components/DirectorPanel", () => ({ DirectorPanel: () => null }));
 const postApiMock = vi.fn(async (_path: string, _body?: unknown) => ({ ok: true, revision: "0000000000000000" }));
 const fetchJsonMock = vi.fn(async (_path: string, _init?: unknown) => ({}));
 const refetchMock = vi.fn();
+// data: unknown——useApi 按 path 分流（书面数据 / structure/undo 状态），泛型由调用方定。
 const useApiMock = vi.fn((_path: string) => ({
   data: {
     book: { id: "b1", title: "拖拽测试书", genre: "xuanhuan", status: "active", chapterWordCount: 2000, targetChapters: 10, language: "zh" },
@@ -44,7 +45,7 @@ const useApiMock = vi.fn((_path: string) => ({
       { number: 3, title: "收束", status: "drafting", wordCount: 190 },
     ],
     nextChapter: 4,
-  },
+  } as unknown,
   error: null,
   loading: false,
   refetch: refetchMock,
@@ -242,5 +243,94 @@ describe("BookDetail best-of-N 腿型标注（1668 号）", () => {
     await act(async () => {});
     expect(toggle().getAttribute("title")).toBe("book.bestOfNHint");
     expect(toggle().textContent).not.toContain("book.nodeLegBadge");
+  });
+});
+
+// R61 批三/1689 号：结构操作撤销——①重排成功通知条带「撤销」按钮，点击打
+// undo 端点并把通知换成已撤销文案；②undoStatus eligible → 状态行渲染（含
+// 尾笔类型名）；③不可撤销时不渲染状态行。undoStatus 的 useApi 按 path 分流。
+describe("BookDetail 结构撤销（R61 批三/1689 号）", () => {
+  const refetchUndoMock = vi.fn();
+  let undoStatusPayload: { eligible: boolean; reason: string | null; lastKind: string | null; lastOpId: string | null };
+
+  beforeEach(() => {
+    undoStatusPayload = { eligible: true, reason: null, lastKind: "split", lastOpId: "split-1" };
+    useApiMock.mockImplementation((path: string) => {
+      if (path.endsWith("/chapters/structure/undo")) {
+        return { data: undoStatusPayload, error: null, loading: false, refetch: refetchUndoMock };
+      }
+      return {
+        data: {
+          book: { id: "b1", title: "拖拽测试书", genre: "xuanhuan", status: "active", chapterWordCount: 2000, targetChapters: 10, language: "zh" },
+          chapters: [
+            { number: 1, title: "风起", status: "approved", wordCount: 200 },
+            { number: 2, title: "云涌", status: "ready-for-review", wordCount: 210 },
+            { number: 3, title: "收束", status: "drafting", wordCount: 190 },
+          ],
+          nextChapter: 4,
+        },
+        error: null,
+        loading: false,
+        refetch: refetchMock,
+      };
+    });
+  });
+
+  afterEach(() => {
+    useApiMock.mockImplementation((path: string) => useApiMock(path));
+  });
+
+  it("重排成功后通知条带撤销按钮，点击撤销打 undo 端点并换已撤销文案", async () => {
+    postApiMock.mockImplementation(async (path: string) => {
+      if (path.endsWith("/chapters/structure/undo")) return { ok: true, revision: "1111111111111111" };
+      return { ok: true, revision: "0000000000000000" };
+    });
+    renderPage();
+    await vi.waitFor(() => expect(document.querySelector('[data-chapter-row="1"]')).not.toBeNull());
+    // 拖拽 3 → 1 触发 reorder（既有链同款手法）。
+    fireEvent.dragStart(row(3));
+    fireEvent.drop(row(1));
+    await vi.waitFor(() =>
+      expect(postApiMock).toHaveBeenCalledWith(
+        "/books/b1/chapters/reorder",
+        expect.objectContaining({ order: [3, 1, 2] }),
+      ),
+    );
+    // 成功通知条带「撤销」按钮（按文案定位通知条容器——状态行同名按钮不算；
+    // findByText 自带等待与 act 包裹）。
+    const notice = (await screen.findByText("book.structureUndoAvailable")).closest("div");
+    expect(notice).not.toBeNull();
+    const undoButton = within(notice!).getByRole("button", { name: "book.structureUndo" });
+    // 点击撤销 → undo 端点 + 通知换已撤销文案 + undoStatus 刷新。
+    await act(async () => {
+      fireEvent.click(undoButton);
+    });
+    await vi.waitFor(() =>
+      expect(postApiMock).toHaveBeenCalledWith("/books/b1/chapters/structure/undo", {}),
+    );
+    await vi.waitFor(() => expect(screen.getByText("book.structureUndone")).toBeTruthy());
+    expect(refetchUndoMock).toHaveBeenCalled();
+    postApiMock.mockImplementation(async (_path: string) => ({ ok: true, revision: "0000000000000000" }));
+  });
+
+  it("undoStatus eligible → 状态行渲染尾笔类型", async () => {
+    renderPage();
+    const statusRow = await screen.findByTestId("structure-undo-status");
+    expect(statusRow.textContent).toContain("book.structureUndoAvailable");
+    expect(statusRow.textContent).toContain("book.structureUndoKindSplit");
+  });
+
+  it("undoStatus ineligible（盘面漂移）→ 状态行不渲染", async () => {
+    undoStatusPayload = {
+      eligible: false,
+      reason: "disk state changed since the last operation",
+      lastKind: "split",
+      lastOpId: "split-1",
+    };
+    renderPage();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-chapter-row="1"]')).not.toBeNull(),
+    );
+    expect(screen.queryByTestId("structure-undo-status")).toBeNull();
   });
 });

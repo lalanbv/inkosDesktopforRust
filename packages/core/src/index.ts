@@ -585,6 +585,7 @@ export {
   appendStructureOpsLog,
   undoEligible,
   undoLastStructureOperation,
+  structureUndoStatus,
   type ChapterFingerprint,
   type StructureOp,
   type StructureOperationRecord,

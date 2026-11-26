@@ -201,6 +201,7 @@ import {
   mergeChapters,
   reorderChapters,
   undoLastStructureOperation,
+  structureUndoStatus,
   ChapterStructureError,
   // R49/1644 号：卷/幕元数据面（Rust state/volumes.rs 镜像）。
   sortVolumes as sortVolumesCore,
@@ -3650,6 +3651,16 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
       return structureErrorResponse(c, e);
     } finally {
       await releaseLock();
+    }
+  });
+
+  // R61 批三/1689 号：可撤销状态查询（UI「可撤销上一笔」数据源）。
+  app.get("/api/v1/books/:id/chapters/structure/undo", async (c) => {
+    const id = c.req.param("id");
+    try {
+      return c.json(await structureUndoStatus(structureDeps(id)));
+    } catch (e) {
+      return structureErrorResponse(c, e);
     }
   });
 

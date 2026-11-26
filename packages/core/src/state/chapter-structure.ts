@@ -554,6 +554,32 @@ export async function undoLastStructureOperation(
   };
 }
 
+/**
+ * 可撤销状态查询（R61 批三：GET 端点/UI「可撤销上一笔」的装配面）：
+ * 读日志尾笔 + 当前盘面 → undoEligible 判定 + 尾笔元数据。
+ */
+export async function structureUndoStatus(
+  deps: ChapterStructureDeps,
+): Promise<{
+  readonly eligible: boolean;
+  readonly reason: string | null;
+  readonly lastKind: string | null;
+  readonly lastOpId: string | null;
+}> {
+  const index = await deps.loadChapterIndex();
+  const numbers = sortedNumbers(index);
+  const current = await collectFingerprints(deps.bookDir, numbers, index);
+  const rows = await loadStructureOpsLog(deps.bookDir);
+  const tail = rows.at(-1) ?? null;
+  const verdict = undoEligible(tail, current);
+  return {
+    eligible: verdict.eligible,
+    reason: verdict.reason,
+    lastKind: tail?.kind ?? null,
+    lastOpId: tail?.opId ?? null,
+  };
+}
+
 /** 操作前全书指纹清单（撤销批二的全量回位依据；结构操作低频，逐章重读可承受）。 */
 async function collectFingerprints(
   bookDir: string,
