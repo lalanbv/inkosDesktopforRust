@@ -414,6 +414,13 @@ mod tests {
             millis_to_iso(1672531200123).as_deref(),
             Some("2023-01-01T00:00:00.123Z")
         );
+        // R63/1693 号（变异 spike 补断言）：负毫秒守卫（<0 → None——变异 ==/<=
+        // 把负数放进格式化会产错值或溢出）与零点恰值（<= 变异把 0 也拒掉即红）。
+        assert_eq!(millis_to_iso(-1), None);
+        assert_eq!(
+            millis_to_iso(0).as_deref(),
+            Some("1970-01-01T00:00:00.000Z")
+        );
     }
 
     #[test]
@@ -440,6 +447,13 @@ mod tests {
             read_chapter_user_brief(&store, "book", 1).await.unwrap(),
             "hello"
         );
+        // R63/1693 号（变异 spike 补断言）：落位文件名形态（pad 章号+固定后缀）
+        // ——user_brief_path 路径函数变异（空串/xyzzy）让文件错位即红。
+        let files = store
+            .list_dir(&join_path(&join_path("book", "story"), "runtime"))
+            .await
+            .unwrap();
+        assert_eq!(files, vec!["chapter-0001.user-brief.md".to_string()]);
         // 空串 → 删除。
         save_chapter_user_brief(&store, "book", 1, "   ")
             .await
