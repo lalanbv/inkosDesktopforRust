@@ -3993,8 +3993,134 @@ async fn interactive_world_engine_created_world_is_shared_duel() {
         "产品引擎：{body}"
     );
 
+    // ⑤ 1686 号：跨腿顺序契约钉。共享库里的记录按「乱序到达」写入（z-5 在 a-4 前、
+    //    😀门/B-锚/a-灯 混插、b-链 在 rel-gate 之后、新槽乱插），两腿的读取面必须
+    //    同序返回：entities/edges/stateSlots 按码点序（id 字节序）、events 按
+    //    (turn, id)。任一腿丢了显式排序就退回到达序——本步当场红。1684 号曾立案
+    //    「Node 读取面无显式排序」：取证后不成立（TS snapshot 全程 SQL ORDER BY），
+    //    此案撤，改为钉住这条跨腿契约防漂移。
+    let mut graph = inkos_engine::play_graph::open_play_graph_db(
+        &inkos_engine::play::run_dir(&root, id, "main").unwrap(),
+    )
+    .unwrap();
+    graph
+        .record_event(&json!({
+            "id": "z-5", "turn": 5, "actionKind": "look",
+            "rawInput": "先到的高回", "createdAt": "2026-11-26T00:05:00.000Z",
+        }))
+        .unwrap();
+    graph
+        .record_event(&json!({
+            "id": "a-4", "turn": 4, "actionKind": "look",
+            "rawInput": "后到的低回", "createdAt": "2026-11-26T00:04:00.000Z",
+        }))
+        .unwrap();
+    for entity in [
+        json!({ "id": "😀门", "type": "location", "label": "月门", "summary": "" }),
+        json!({ "id": "B-锚", "type": "actor", "label": "北锚", "summary": "" }),
+        json!({ "id": "a-灯", "type": "item", "label": "西灯", "summary": "" }),
+    ] {
+        graph.upsert_entity(&entity).unwrap();
+    }
+    graph
+        .upsert_edge(&json!({
+            "id": "b-链", "fromId": "B-锚", "type": "guards", "toId": "😀门",
+            "validFromEventId": "z-5", "sourceEventId": "z-5",
+        }))
+        .unwrap();
+    graph
+        .upsert_state_slot(&json!({
+            "id": "B-槽", "ownerEntityId": "B-锚", "kind": "flag", "label": "北槽",
+            "value": "稳", "updatedEventId": "z-5",
+        }))
+        .unwrap();
+    graph
+        .upsert_state_slot(&json!({
+            "id": "！槽", "ownerEntityId": "a-灯", "kind": "flag", "label": "灯槽",
+            "value": "亮", "updatedEventId": "a-4",
+        }))
+        .unwrap();
+    graph.flush().unwrap();
+    drop(graph);
+    let ids_of = |body: &Value, key: &str| -> Vec<String> {
+        body["graph"][key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (status, body) = get_json(&ts, &path).await;
+    assert_eq!(
+        (status, shape(&body)),
+        (200, (3, 7, 2, 3, 3)),
+        "Node 腿计数：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "entities"),
+        [
+            "B-锚",
+            "a-灯",
+            "engine-gate",
+            "engine-hero",
+            "late-hero",
+            "node-hero",
+            "😀门"
+        ],
+        "Node 腿实体序（码点序）：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "edges"),
+        ["b-链", "rel-gate"],
+        "Node 腿关系序：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "stateSlots"),
+        ["B-槽", "slot-mood", "！槽"],
+        "Node 腿状态槽序：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "events"),
+        ["e1", "a-4", "z-5"],
+        "Node 腿事件序（turn,id）：{body}"
+    );
+    let (status, body) = get_json(&rust, &path).await;
+    assert_eq!(
+        (status, shape(&body)),
+        (200, (3, 7, 2, 3, 3)),
+        "产品引擎计数：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "entities"),
+        [
+            "B-锚",
+            "a-灯",
+            "engine-gate",
+            "engine-hero",
+            "late-hero",
+            "node-hero",
+            "😀门"
+        ],
+        "产品引擎实体序（码点序）：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "edges"),
+        ["b-链", "rel-gate"],
+        "产品引擎关系序：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "stateSlots"),
+        ["B-槽", "slot-mood", "！槽"],
+        "产品引擎状态槽序：{body}"
+    );
+    assert_eq!(
+        ids_of(&body, "events"),
+        ["e1", "a-4", "z-5"],
+        "产品引擎事件序（turn,id）：{body}"
+    );
+
     eprintln!(
-        "互动叙事第二批：产品引擎创建的世界 Node 腿读得到（按需迁移 + 文件图谱导入），此后两腿写同一棵树，图谱双向可见"
+        "互动叙事第二批：产品引擎创建的世界 Node 腿读得到（按需迁移 + 文件图谱导入），此后两腿写同一棵树，图谱双向可见、四集合跨腿同序"
     );
 }
 
