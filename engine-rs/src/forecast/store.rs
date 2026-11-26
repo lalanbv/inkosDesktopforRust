@@ -230,6 +230,26 @@ pub fn fingerprint_canonical_json(base_chapter: u32, files: &[(String, String)])
 mod tests {
     use super::*;
 
+    /// 1684 号（跨腿排序口径全仓扫）：指纹 canonical 输入的文件对按码点序排
+    /// （字节序），与 Node 腿 `computeContextFingerprint`（compareByCodePoint）对
+    /// 同一文件集算出同一个 sha256——输入顺序故意与 TS 测试相反，排序不正确就
+    /// 对不上这个值。TS 侧同值钉：packages/core/src/__tests__/forecast-fingerprint.test.ts。
+    #[test]
+    fn fingerprint_matches_node_leg() {
+        let files = vec![
+            ("\u{1F600}.md".to_string(), "a".to_string()),
+            ("\u{FF01}.md".to_string(), "b".to_string()),
+        ];
+        assert_eq!(
+            fingerprint_canonical_json(1, &files),
+            "{\"baseChapter\":1,\"files\":[[\"！.md\",\"b\"],[\"😀.md\",\"a\"]]}"
+        );
+        assert_eq!(
+            super::super::context_builder::compute_context_fingerprint(1, &files),
+            "f582f187284453bf63e7381c0f576a29c6e6531e03f9521484401c15decd756f",
+        );
+    }
+
     fn sample_forecast(id: &str) -> NarrativeForecast {
         NarrativeForecast {
             version: 1,

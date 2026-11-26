@@ -6,6 +6,7 @@ import { loadRuntimeStateSnapshot } from "../state/runtime-state-store.js";
 import { renderChapterSummariesProjection, renderCurrentStateProjection, renderHooksProjection } from "../state/state-projections.js";
 import { BookConfigSchema } from "../models/book.js";
 import { resolveDurableStoryProgress } from "../state/state-bootstrap.js";
+import { compareByCodePoint } from "../utils/chapter-files.js";
 
 // Read-only view of the canonical book used as forecast input. Everything in
 // here MUST stay side-effect free: building a forecast context never creates
@@ -101,9 +102,12 @@ export function computeContextFingerprint(input: {
   readonly baseChapter: number;
   readonly files: ReadonlyArray<readonly [string, string]>;
 }): string {
+  // 1684 号：文件对按码点序（`<` 是 UTF-16 码元序，增补平面文件名相反）——
+  // 与产品引擎 forecast/store fingerprint_canonical_json（字节序）同一 sha256 输入，
+  // 两侧对同一文件集算出同一个指纹（缓存有效性判定跨腿互认的前提）。
   const canonical = JSON.stringify({
     baseChapter: input.baseChapter,
-    files: [...input.files].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
+    files: [...input.files].sort((a, b) => compareByCodePoint(a[0], b[0])),
   });
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }

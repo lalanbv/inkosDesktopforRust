@@ -111,7 +111,8 @@ pub async fn list_translations(State(runtime): State<BooksRuntime>) -> impl Into
             "chapters": manifest.chapters.len(),
         }));
     }
-    // TS `b.projectId.localeCompare(a)` 降序（新项目在前——id 前缀是时间戳）。
+    // 两腿同口径码点降序（1684 号收编：TS 此前 `localeCompare` 降序——ICU 大小写
+    // tertiary 连 ASCII 大小写序都与码点序不同，已换 compareByCodePoint 对齐此处）。
     translations.sort_by(|a, b| {
         let a = a["projectId"].as_str().unwrap_or_default();
         let b = b["projectId"].as_str().unwrap_or_default();

@@ -375,8 +375,8 @@ pub async fn list_interactive_films(State(runtime): State<BooksRuntime>) -> impl
             films.push((project_id, title));
         }
     }
-    // TS localeCompare(zh)：拼音序需 ICU；Rust 按码点序（前端按标题展示，
-    // 排序差仅在同名首字不同拼音的场景，偏差备案）。
+    // 两腿同口径码点序（1684 号收编：TS 此前 localeCompare(zh) 拼音序需 ICU、
+    // 两腿不可复现，已换 compareByCodePoint 对齐此处字节序）。
     films.sort_by(|a, b| a.1.cmp(&b.1));
     (
         StatusCode::OK,

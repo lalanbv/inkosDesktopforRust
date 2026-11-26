@@ -215,7 +215,7 @@ import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
 import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, sessionTreeProjection, syncWorkSourceArtifacts, loadWritingLog, promptOverridePath, writePromptOverride, removePromptOverride, appendPromptVersion, listPromptVersions, readPromptVersion, trashBook,
   TrashError, listBookTrash, listChapterTrash, purgeBookTrash, purgeChapterTrash, restoreBookFromTrash, restoreChapterTrash,
-  MAX_TRASH_RETENTION_DAYS, sweepExpiredTrash, trashRetentionDaysFromRaw,
+  MAX_TRASH_RETENTION_DAYS, sweepExpiredTrash, trashRetentionDaysFromRaw, compareByCodePoint,
 } from "@actalk/inkos-core";
 import { normalizeTrashRetentionDays } from "@actalk/inkos-core";
 import { BUILTIN_PROMPT_PACKS, BUILTIN_PROMPTS } from "@actalk/inkos-core/prompts/builtin-prompts-data";
@@ -2331,7 +2331,9 @@ async function loadRadarHistory(root: string): Promise<Array<{
 
   return scans
     .filter((item): item is NonNullable<typeof item> => item !== null)
-    .sort((a, b) => b.file.localeCompare(a.file));
+    // 1684 号：码点降序（Rust ops_routes `b.cmp(a)` 字节序同口径；localeCompare
+    // 连 ASCII 大小写都与码点序不同）。
+    .sort((a, b) => compareByCodePoint(b.file, a.file));
 }
 
 function fallbackTextModelsForEndpoint(
@@ -4579,8 +4581,10 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
     };
     await visit(skill.baseDir);
     // 884 号双端对齐：原为 readdir 顺序——顺序对编辑器 UI 无语义；排序使双端
-    // 契约确定性（engine-contract-diff works 域活体 body 对比前提）。
-    documents.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    // 契约确定性（engine-contract-diff works 域活体 body 对比前提）。1684 号：
+    // `<` 是 UTF-16 码元序，增补平面文件名与产品引擎（字节序=码点序）相反——
+    // 换 compareByCodePoint。
+    documents.sort((a, b) => compareByCodePoint(a.path, b.path));
     return c.json({ id, documents });
   });
 
@@ -4893,7 +4897,9 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
         : llm.services && typeof llm.services === "object"
           ? Object.entries(llm.services as Record<string, unknown>)
             .filter((pair): pair is [string, Record<string, unknown>] => Boolean(pair[1]) && typeof pair[1] === "object")
-            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            // 1684 号：码点序对齐产品引擎（serde_json Map 无 preserve_order =
+            // BTreeMap 字节序；`<` 是 UTF-16 码元序，增补平面键相反）。
+            .sort(([a], [b]) => compareByCodePoint(a, b))
           : [];
       const statuses = serviceItems.flatMap(([serviceId, value]) => {
         const entry = serviceId === undefined ? normalizeServiceConfig([value])[0] : normalizeServiceEntry(serviceId, value);
@@ -5265,7 +5271,8 @@ export function createStudioServer(initialConfig: ProjectConfig, root: string, o
           currentChapter,
           ...(typeof targetChapters === "number" ? { targetChapters } : {}),
         }))
-        .sort((a, b) => b.urgency - a.urgency || (a.hookId < b.hookId ? -1 : a.hookId > b.hookId ? 1 : 0));
+        // 1684 号：hookId 平手裁决走码点序（Rust ops_routes `a.hook_id.cmp` 同口径）。
+        .sort((a, b) => b.urgency - a.urgency || compareByCodePoint(a.hookId, b.hookId));
 
     const dbPath = join(root, "books", id, "story", "memory.db");
     if (await access(dbPath).then(() => true).catch(() => false)) {
@@ -6922,7 +6929,11 @@ function yamlScalar(value: unknown): string {
         return [];
       }
     }
-    // 792 号：各子清单排序（裸 readdir 序跨机不稳定——契约确定性）。
+    // 792 号：各子清单排序（裸 readdir 序跨机不稳定——契约确定性）。1684 号：
+    // 默认 `.sort()` 是 UTF-16 码元序——flat/outline 是 ASCII 白名单、runtime 名被
+    // RUNTIME_DIAGNOSTIC_FILE_RE 钉在 ASCII，两序不可区分故维持原样；roles 四组
+    // 文件名开放（模型/用户起名），与产品引擎 truth_search_files（字节序=码点序）
+    // 相反——换 compareByCodePoint。
     const flatFiles = (await listDir(".")).filter((file) => TRUTH_FLAT_FILES.includes(file)).sort();
     const outlineFiles = (await listDir("outline"))
       .map((file) => `outline/${file}`)
@@ -6930,10 +6941,10 @@ function yamlScalar(value: unknown): string {
       .sort();
     // Phase 5 roles/主要角色 + roles/次要角色, plus Phase hotfix 3
     // English-locale equivalents so en-language books are visible.
-    const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`).sort();
-    const minorRolesZh = (await listDir("roles/次要角色")).map((f) => `roles/次要角色/${f}`).sort();
-    const majorRolesEn = (await listDir("roles/major")).map((f) => `roles/major/${f}`).sort();
-    const minorRolesEn = (await listDir("roles/minor")).map((f) => `roles/minor/${f}`).sort();
+    const majorRolesZh = (await listDir("roles/主要角色")).map((f) => `roles/主要角色/${f}`).sort(compareByCodePoint);
+    const minorRolesZh = (await listDir("roles/次要角色")).map((f) => `roles/次要角色/${f}`).sort(compareByCodePoint);
+    const majorRolesEn = (await listDir("roles/major")).map((f) => `roles/major/${f}`).sort(compareByCodePoint);
+    const minorRolesEn = (await listDir("roles/minor")).map((f) => `roles/minor/${f}`).sort(compareByCodePoint);
     const runtimeFiles = (await listDir("runtime"))
       .map((f) => `runtime/${f}`)
       .filter((f) => RUNTIME_DIAGNOSTIC_FILE_RE.test(f))
@@ -7132,7 +7143,9 @@ function yamlScalar(value: unknown): string {
         matchLength: snippet.matchLength,
       });
     }
-    hits.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    // 1684 号：score 平手裁决走码点序（Rust search_routes sort_roster_hits
+    // `a.id.cmp` 字节序同口径；`<` 是 UTF-16 码元序，增补平面 id 相反）。
+    hits.sort((a, b) => b.score - a.score || compareByCodePoint(a.id, b.id));
     return hits.slice(0, limit);
   }
 
@@ -7200,7 +7213,8 @@ function yamlScalar(value: unknown): string {
           matchLength: snippet.matchLength,
         });
       }
-      hits.sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      // 1684 号：同上——hook 轴平手裁决码点序（sort_roster_hits 共用规则）。
+      hits.sort((a, b) => b.score - a.score || compareByCodePoint(a.id, b.id));
       return hits.slice(0, limit);
     } catch {
       return [];
@@ -9777,7 +9791,9 @@ function yamlScalar(value: unknown): string {
         if (graph) films.push({ projectId: work.id, title: graph.title || work.title });
       } catch { /* skip dirs without valid story-graph */ }
     }
-    films.sort((a, b) => a.title.localeCompare(b.title, "zh"));
+    // 1684 号：码点序收编（Rust interactive_film_routes `a.1.cmp(&b.1)` 字节序
+    // 早已就位等这条收敛；localeCompare("zh") 要 ICU 拼音序，两腿不可复现）。
+    films.sort((a, b) => compareByCodePoint(a.title, b.title));
     return c.json({ films });
   });
 
@@ -9797,7 +9813,9 @@ function yamlScalar(value: unknown): string {
         // Skip dirs without a valid translation manifest.
       }
     }
-    translations.sort((a, b) => b.projectId.localeCompare(a.projectId));
+    // 1684 号：码点降序（Rust translation_routes `b.cmp(a)` 字节序同口径；
+    // localeCompare 连 ASCII 大小写都与码点序不同）。
+    translations.sort((a, b) => compareByCodePoint(b.projectId, a.projectId));
     return c.json({ translations });
   });
 
