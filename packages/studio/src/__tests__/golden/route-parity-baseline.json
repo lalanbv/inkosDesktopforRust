@@ -1,0 +1,24 @@
+{
+ "_comment": [
+  "跨腿路由 parity 基线：1693 号全仓扫定性（9 惰性路由+2 单腿设计有消费面）；新不对称必须显式加表并定性。"
+ ],
+ "rustOnly": [
+  "/api/v1/books/:id/settle",
+  "/api/v1/debug/tools",
+  "/api/v1/health",
+  "/api/v1/interaction/session",
+  "/api/v1/translations/:id/revise",
+  "/api/v1/utils/cap-context",
+  "/api/v1/utils/count-length",
+  "/api/v1/utils/derive-book-id",
+  "/api/v1/works/:id/capabilities/short-fiction/:actionId",
+  "/api/v1/writing-stats-rows"
+ ],
+ "tsOnly": [
+  "*",
+  "/api/v1/sessions/:sessionId/branch",
+  "/api/v1/sessions/:sessionId/branches",
+  "/api/v1/writing-stats",
+  "/assets/*"
+ ]
+}

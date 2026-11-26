@@ -10166,12 +10166,6 @@ function yamlScalar(value: unknown): string {
     });
   });
 
-  app.get("/api/v1/projects/:id/preview/html",async(c)=>{
-    const response=await app.request(`/api/v1/projects/${encodeURIComponent(c.req.param('id'))}/export/html`);
-    const headers=new Headers(response.headers);headers.delete('Content-Disposition');
-    return new Response(response.body,{status:response.status,headers});
-  });
-
   app.post("/api/v1/projects/:id/nodes/:nodeId/image", async (c) => {
     const id = c.req.param("id");
     const nodeId = c.req.param("nodeId");

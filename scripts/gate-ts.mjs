@@ -55,6 +55,9 @@ const steps = [
         ["work-alternation", ["node", ["scripts/work-domain-alternation.mjs"]]],
         // 915 号：路由注册完整性哨（孤儿端点检测器，411/412 实证器械入常驻）。
         ["check-routes", ["node", ["scripts/check-routes.mjs"]]],
+        // R61 出口立案 (a)/1695 号：跨腿路由 parity 机械守卫（1693 全仓扫机制化
+        // ——新不对称 exit 1，基线表含 1693 定性的惰性/单腿设计项）。
+        ["route-parity", ["node", ["scripts/check-route-parity.mjs"]]],
       ]),
 ];
 

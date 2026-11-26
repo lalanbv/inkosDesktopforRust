@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "R63/1694 号：变异基线快照——四文件 missed 全零（1692 spike + 1694 分文件跑收官）。",
+    "后续增量跑 scripts/mutation-gate.mjs --files <触及文件> --baseline scripts/mutation-baseline.json：",
+    "missed 只许下降（1664 惯例）；新增 missed 必须归三类处置（补断言/等价标注/接受写理由）。",
+    "unviable（等价变异）单列不计入 missed。范围=首批解析与判定类纯函数（施工图 R63 §2）；",
+    "扩充新文件时重跑该文件并以 --update 语义并入本基线。"
+  ],
+  "generatedAt": "2026-11-27T00:00:00.000Z",
+  "tool": "cargo-mutants v27.1.0（--in-place --baseline skip --cargo-test-arg=--lib）",
+  "files": {
+    "engine-rs/src/state/chapter_filename.rs": { "mutants": 14, "caught": 14, "missed": 0 },
+    "engine-rs/src/utils/usage_ledger.rs": { "mutants": 42, "caught": 36, "missed": 0 },
+    "engine-rs/src/state/chapter_workspace.rs": { "mutants": 99, "caught": 94, "missed": 0 },
+    "engine-rs/src/server/audit_route.rs": { "mutants": 3, "caught": 2, "missed": 0 }
+  }
+}
