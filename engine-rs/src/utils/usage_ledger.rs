@@ -299,6 +299,116 @@ mod tests {
         assert!(!status.confirm_required);
     }
 
+    /// R63/1691 号（变异 spike 补断言）：预算档位的算术与边界——ratio 两位舍
+    /// 入、双 cap 取 worst、=1.0 与 0.8 恰界、0 cap 过滤、host 不含端口。
+    #[test]
+    fn budget_status_precision_worst_cap_and_boundaries() {
+        let budget = ServiceBudget {
+            daily_token_budget: Some(1000),
+            monthly_token_budget: None,
+            confirm_at_budget: false,
+        };
+        // ratio 两位舍入：850/1000 = 0.85（除法变异 ×/% 当场红）。
+        let usage = ServiceUsage {
+            daily: 850,
+            monthly: 0,
+            total: 850,
+        };
+        let status = budget_status("a", &usage, Some(&budget));
+        assert_eq!(status.ratio, 0.85);
+        // =1.0 恰 Over（>= 变异 > 即红）。
+        let exact = ServiceUsage {
+            daily: 1000,
+            monthly: 0,
+            total: 1000,
+        };
+        let status = budget_status("a", &exact, Some(&budget));
+        assert_eq!(status.level, BudgetLevel::Over);
+        assert_eq!(status.ratio, 1.0);
+        // 0.8 恰 Warn（>= 变异 > 即红：799/1000=Ok）。
+        let warn_edge = ServiceUsage {
+            daily: 800,
+            monthly: 0,
+            total: 800,
+        };
+        let status = budget_status("a", &warn_edge, Some(&budget));
+        assert_eq!(status.level, BudgetLevel::Warn);
+        let ok_edge = ServiceUsage {
+            daily: 799,
+            monthly: 0,
+            total: 799,
+        };
+        let status = budget_status("a", &ok_edge, Some(&budget));
+        assert_eq!(status.level, BudgetLevel::Ok);
+        // 双 cap 取 worst（月 1.2 > 日 0.85 → Over+ratio=1.2；乘法/换位变异即红）。
+        let dual = ServiceUsage {
+            daily: 850,
+            monthly: 1200,
+            total: 2050,
+        };
+        let dual_budget = ServiceBudget {
+            daily_token_budget: Some(1000),
+            monthly_token_budget: Some(1000),
+            confirm_at_budget: true,
+        };
+        let status = budget_status("a", &dual, Some(&dual_budget));
+        assert_eq!(status.level, BudgetLevel::Over);
+        assert_eq!(status.ratio, 1.2);
+        assert!(status.confirm_required);
+        // 0 cap 过滤（除零防护：cap=0 不产比率 → Ok/ratio 0；日/月各自过各自的
+        // filter——R63 变异 spike 抓出月 cap 侧缺测）。
+        let zero_daily = ServiceBudget {
+            daily_token_budget: Some(0),
+            monthly_token_budget: None,
+            confirm_at_budget: true,
+        };
+        let status = budget_status("a", &usage, Some(&zero_daily));
+        assert_eq!(status.level, BudgetLevel::Ok);
+        assert_eq!(status.ratio, 0.0);
+        assert!(!status.confirm_required);
+        let zero_month = ServiceBudget {
+            daily_token_budget: None,
+            monthly_token_budget: Some(0),
+            confirm_at_budget: false,
+        };
+        // 月用量非零：cap=0 若被放行（> → >= 变异）比率=1200/0=inf → Over 反例红
+        // （monthly=0 时 0/0=NaN 会被 f64::max 忽略成等价变异）。
+        let heavy_month = ServiceUsage {
+            daily: 0,
+            monthly: 1200,
+            total: 1200,
+        };
+        let status = budget_status("a", &heavy_month, Some(&zero_month));
+        assert_eq!(status.level, BudgetLevel::Ok);
+        assert_eq!(status.ratio, 0.0);
+    }
+
+    /// R63/1691 号（变异 spike 补断言）：host 不含端口、不可解析回退原值；
+    /// default_confirm 恒 true（缺省即需确认——翻 false 立即红）。
+    #[test]
+    fn service_host_of_strips_port_and_default_confirm_is_true() {
+        assert_eq!(
+            service_host_of("http://api.example.com:8080/v1"),
+            "api.example.com"
+        );
+        assert_eq!(service_host_of("https://a.b/c"), "a.b");
+        assert_eq!(service_host_of("not a url"), "not a url");
+        assert!(default_confirm());
+    }
+
+    /// R63/1691 号（变异 spike 补断言）：读不出来（权限/IO）= Err 的 1666 语义
+    /// ——NotFound 是唯一静默缺失（首启）；路径是目录（Is a directory IO 错）
+    /// 必须报错（NotFound 守卫变异翻 true 时此测红）。
+    #[tokio::test]
+    async fn load_usage_ledger_errors_on_io_failure_not_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+        // 账本路径上是目录 → read_to_string 报 Is-a-directory（非 NotFound）。
+        let ledger_dir = dir.path().join(".inkos").join("usage-log.jsonl");
+        tokio::fs::create_dir_all(&ledger_dir).await.unwrap();
+        assert!(load_usage_ledger(&root).await.is_err());
+    }
+
     #[tokio::test]
     async fn ledger_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
