@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+// 浏览器组件走独立子路径（纯算术模块）——别把 state/trash 的 node:fs 依赖链
+// 经 CJS 桶拉进 vite 图（gate:ts build 腿红过的点）。
+import { trashDaysLeft } from "@actalk/inkos-core/utils/trash-countdown";
 import { fetchJson, invalidateApiPaths } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -7,6 +10,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
 // 恢复=把书搬回作品库（可逆，不需要确认）；彻底删除=真空删除（danger 两步确认）。
 // 消费 1679 号的端点：GET /api/v1/trash/books、POST …/restore、POST …/purge。
 // 409（书目录已被同 id 新书占用）与 404（条目已被别的窗口清掉）落错误条并重列。
+// R60 第三批/1685 号：保留期提示——每条剩几天（≤7 天或已到期红色）；保留天数
+// 来自 GET /project/trash-retention，取不到就只显示既有描述。
 
 interface BookTrashEntry {
   readonly entry: string;
@@ -49,6 +54,22 @@ export function TrashPanel() {
   useEffect(() => {
     void loadEntries();
   }, [loadEntries]);
+
+  // 保留天数（GET 失败 = 不显示倒计时，只显示既有描述）。
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
+  useEffect(() => {
+    void fetchJson<{ retentionDays: number }>("/api/v1/project/trash-retention")
+      .then((payload) => setRetentionDays(Number.isInteger(payload.retentionDays) && payload.retentionDays > 0 ? payload.retentionDays : null))
+      .catch(() => setRetentionDays(null));
+  }, []);
+  const expiryBadge = (trashedAt: string) => {
+    if (retentionDays === null) return null;
+    const left = trashDaysLeft(trashedAt, retentionDays, Date.now());
+    if (left === null) return null;
+    return left <= 0
+      ? <span className="text-destructive ml-2">{tr("已到期，下次启动时清空", "Expired; purged on next launch")}</span>
+      : <span className={`ml-2 ${left <= 7 ? "text-destructive" : "text-muted-foreground"}`}>{tr(`剩 ${left} 天`, `${left} ${left === 1 ? "day" : "days"} left`)}</span>;
+  };
 
   // 955 号惯例：在途互斥（真人双击=两次请求）。
   const runExclusive = async (action: () => Promise<void>) => {
@@ -95,6 +116,11 @@ export function TrashPanel() {
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
             {tr("被删除的书在这里，可恢复或永久删除。", "Deleted books are kept here; restore them or delete them for good.")}
+            {retentionDays !== null && (
+              <span className="ml-1">
+                {tr(`保留 ${retentionDays} 天，到期自动清空。`, `Kept for ${retentionDays} days, then purged automatically.`)}
+              </span>
+            )}
           </div>
         </div>
         <button
@@ -119,6 +145,7 @@ export function TrashPanel() {
                 <span className="font-medium">{book.title ?? book.bookId}</span>
                 <span className="text-muted-foreground ml-2">
                   {new Date(book.trashedAt).toLocaleString()} · {book.fileCount} {tr("个文件", "files")} · {formatBytes(book.bytes)}
+                  {expiryBadge(book.trashedAt)}
                 </span>
               </span>
               <span className="flex items-center gap-2 shrink-0">

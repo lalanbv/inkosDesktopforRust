@@ -23,6 +23,8 @@ export default defineConfig({
       "@actalk/inkos-core/models/book": resolve(__dirname, "../core/src/models/book.ts"),
       // R47/1640 号：retrieval/global-search subpath（高亮/分词纯函数，⌘P 命中档与章阅读器焦点消费）
       "@actalk/inkos-core/retrieval/global-search": resolve(__dirname, "../core/src/retrieval/global-search.ts"),
+      // R60 第三批/1685 号：utils/trash-countdown subpath（回收站倒计时纯算术，浏览器组件专用——别把 state/trash 的 node:fs 链拉进包）
+      "@actalk/inkos-core/utils/trash-countdown": resolve(__dirname, "../core/src/utils/trash-countdown.ts"),
       // R49/1644 号：state/volumes subpath（卷分组投影纯函数，卷管理卡消费）
       "@actalk/inkos-core/state/volumes": resolve(__dirname, "../core/src/state/volumes.ts"),
       // R51/1653 号：utils/writing-goal subpath（写作目标纯函数，目标面板消费）

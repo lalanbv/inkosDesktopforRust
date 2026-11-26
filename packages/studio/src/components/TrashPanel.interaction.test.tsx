@@ -132,4 +132,38 @@ describe("TrashPanel", () => {
     expect(calls.some((call) => call.path === "/api/v1/trash/books/purge")).toBe(false);
     expect(screen.getByText("被删的书")).toBeTruthy();
   });
+
+  // R60 第三批/1685 号：保留期——提示行 + 每条倒计时（≤7 天红色、已到期红色）。
+  const withRetention = (days: number) => async (path: string, init?: { method?: string; body?: string }): Promise<unknown> => {
+    if (path === "/api/v1/project/trash-retention") return { retentionDays: days };
+    return defaultFetch(path, init);
+  };
+
+  it("shows the retention hint and per-entry countdown when retention is configured", async () => {
+    fetchJsonMock.mockImplementation(withRetention(30));
+    booksInTrash = [
+      { ...entry("old--20200101000000", "很老的书"), trashedAt: "2020-01-01T00:00:00.000Z" },
+      // 28 天前删、保留 30 天 → 恒剩 2 天（相对当前时钟，测试不随日期漂移）。
+      { ...entry("recent--20200101000000", "最近的书"), trashedAt: new Date(Date.now() - 28 * 86_400_000).toISOString() },
+    ];
+    await openPanel();
+    expect(await screen.findByText(/保留 30 天，到期自动清空/)).toBeTruthy();
+    const expired = screen.getByText(/已到期，下次启动时清空/);
+    const twoDays = screen.getByText(/剩 2 天/);
+    // 已到期与 ≤7 天同一红色档（destructive）；正常余量是灰。
+    expect(expired.className).toContain("text-destructive");
+    expect(twoDays.className).toContain("text-destructive");
+  });
+
+  it("keeps the plain description when the retention endpoint fails", async () => {
+    fetchJsonMock.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path === "/api/v1/project/trash-retention") throw new Error("retention down");
+      return defaultFetch(path, init);
+    });
+    await openPanel();
+    expect(await screen.findByText("被删的书")).toBeTruthy();
+    expect(screen.queryByText(/保留 \d+ 天/)).toBeNull();
+    expect(screen.queryByText(/剩 \d+ 天/)).toBeNull();
+    expect(screen.queryByText(/已到期/)).toBeNull();
+  });
 });

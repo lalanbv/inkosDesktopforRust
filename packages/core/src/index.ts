@@ -541,20 +541,28 @@ export { deleteLatestChapter, type ChapterDeleteDeps, type DeleteLatestChapterOp
 export { ROLLBACK_TRUTH_FILES, reserveRollbackBatch, trashBatchName, trashBatchWrites, trashBook, trashedBookName } from "./state/trash.js";
 // R60/1679 号：回收站的列出 / 恢复 / 清空（路由与错误码和产品引擎 server/trash_routes.rs 同口径）。
 export {
+  DEFAULT_TRASH_RETENTION_DAYS,
+  MAX_TRASH_RETENTION_DAYS,
   TrashError,
   bookIdOfTrashEntry,
   listBookTrash,
   listChapterTrash,
+  normalizeTrashRetentionDays,
   originalPathOfTrashEntry,
   purgeBookTrash,
   purgeChapterTrash,
   restoreBookFromTrash,
   restoreChapterTrash,
+  sweepExpiredTrash,
   trashedAtOfRollbackBatch,
   trashedAtOfTrashEntry,
+  trashDaysLeft,
+  trashRetentionDaysFromRaw,
+  trashSweepExpired,
   type BookTrashEntry,
   type ChapterTrashEntry,
   type RestoredTrashEntry,
+  type SweptTrash,
   type TrashErrorCode,
   type TrashPathInfo,
 } from "./state/trash.js";

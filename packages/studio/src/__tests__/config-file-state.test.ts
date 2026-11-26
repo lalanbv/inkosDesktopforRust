@@ -121,7 +121,7 @@ describe("config file state contract (inkos.json missing / corrupt)", () => {
 
   it("对照表·矩阵：13 个写入点 × 7 种文件状态，拒绝格逐字命中、文件逐字节不动", async () => {
     expect(Object.keys(table.states)).toHaveLength(7);
-    expect(table.matrix).toHaveLength(13);
+    expect(table.matrix).toHaveLength(14);
     let checked = 0;
     for (const row of table.matrix) {
       // 每行必须列全全部状态：状态名写错会让那一格被静默跳过。
@@ -146,9 +146,9 @@ describe("config file state contract (inkos.json missing / corrupt)", () => {
         checked += 1;
       }
     }
-    // 4 × 6（服务配置族：缺失即新建，不在本表）+ 9 × 7（`/project` 族）：表被
+    // 4 × 6（服务配置族：缺失即新建，不在本表）+ 10 × 7（`/project` 族）：表被
     // 删行 / 删格时立刻可见。
-    expect(checked).toBe(87);
+    expect(checked).toBe(94);
   });
 
   it("对照表·专项：llm 段形态、请求体不是 JSON、书级审稿模式在坏配置上的读面", async () => {

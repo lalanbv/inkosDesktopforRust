@@ -36,7 +36,8 @@
     "flatReadFailed": { "status": 500, "response": { "error": "inkos.json read failed" } },
     "flatLlmNotObject": { "status": 500, "response": { "error": "inkos.json llm section is not an object" } },
     "flatSaveFailed": { "status": 500, "response": { "error": "failed to save inkos.json" } },
-    "flatInvalidJson": { "status": 400, "response": { "error": "invalid JSON body" } }
+    "flatInvalidJson": { "status": 400, "response": { "error": "invalid JSON body" } },
+    "retentionInvalid": { "status": 500, "response": { "error": "retentionDays must be an integer between 1 and 36500" } }
   },
   "states": {
     "missing": null,
@@ -95,6 +96,12 @@
       "method": "PUT",
       "path": "/api/v1/project/writing-goal",
       "body": "{\"dailyGoalWords\":500}",
+      "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/project/trash-retention",
+      "body": "{\"retentionDays\":30}",
       "expect": { "missing": "internal", "corrupt": "internal", "array": "contractNotObject", "number": "contractNotObject", "string": "contractNotObject", "bool": "contractNotObject", "null": "contractNotObject" }
     },
     {
@@ -237,6 +244,22 @@
       "path": "/api/v1/books/ghost/chapter-review-mode",
       "body": null,
       "shape": "bookNotFound"
+    },
+    {
+      "name": "PUT /project/trash-retention：请求体不是 JSON",
+      "config": "{\"name\":\"x\",\"llm\":{}}",
+      "method": "PUT",
+      "path": "/api/v1/project/trash-retention",
+      "body": "{",
+      "shape": "internal"
+    },
+    {
+      "name": "PUT /project/trash-retention：非法值（0）平铺 500、两腿同文",
+      "config": "{\"name\":\"x\",\"llm\":{}}",
+      "method": "PUT",
+      "path": "/api/v1/project/trash-retention",
+      "body": "{\"retentionDays\":0}",
+      "shape": "retentionInvalid"
     }
   ],
   "bodyCases": {

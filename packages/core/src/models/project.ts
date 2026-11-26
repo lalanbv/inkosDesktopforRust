@@ -185,6 +185,16 @@ export const ProjectConfigSchema = z.object({
     reviewMode: z.enum(["auto", "manual"]).optional(),
     revisionGate: z.enum(["strict", "lenient", "always"]).optional(),
   }).optional(),
+  // ── 1685 号：回收站保留段（Rust TrashConfig 镜像，models/project.rs）──
+  // R60 第三批：`trash.retentionDays`（正整数天）——有删除时刻记录的条目（书级
+  // 条目、回滚批次）过保留期在启动清扫时自动清空；平铺条目无时刻记录不参与。
+  // 端点与清扫读 raw JSON（core/state/trash.ts 的 trashRetentionDaysFromRaw，
+  // 值非法在那一层回落缺省 30）；schema 在此只为 strict 根认识这个键——709/
+  // 1429 同族教训：Rust 写进 inkos.json 的键，strict 根不认 = Node 回退腿对
+  // 碰过的项目 boot 即崩。子键可选=serde Option 同水位。
+  trash: z.object({
+    retentionDays: z.number().int().positive().optional(),
+  }).optional(),
   // ── 1429 号：inputGovernanceMode 遗留键容忍（686 号删管线遗留，709 同族）──
   // 686 号随 TS 上游 e7c04465 删除 legacy 输入治理管线，Rust 侧
   //（engine-rs project_config_routes.rs 头注）对齐备案「inkos.json 遗留

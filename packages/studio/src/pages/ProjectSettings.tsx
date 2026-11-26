@@ -128,6 +128,19 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
       })
       .catch(() => undefined);
   }, []);
+  // R60 第三批/1685 号：回收站保留天数（project config trash.retentionDays，正整数
+  // ≤36500；缺省 30。有删除时刻记录的条目到期在服务启动时自动清空；平铺条目无
+  // 时刻记录不参与）。
+  const [trashRetention, setTrashRetention] = useState("30");
+  useEffect(() => {
+    void fetchJson<{ retentionDays: number }>("/project/trash-retention")
+      .then((payload) => {
+        if (Number.isInteger(payload.retentionDays) && payload.retentionDays > 0) {
+          setTrashRetention(String(payload.retentionDays));
+        }
+      })
+      .catch(() => undefined);
+  }, []);
   const skillFolderInputRef = useRef<HTMLInputElement>(null);
   const toolDetailsDefaultOpen = usePreferencesStore((s) => s.toolDetailsDefaultOpen);
   const setToolDetailsDefaultOpen = usePreferencesStore((s) => s.setToolDetailsDefaultOpen);
@@ -443,6 +456,39 @@ export function ProjectSettings({ nav, theme, t, sse }: { nav: Nav; theme: Theme
               data-settings-goal="save"
             >
               {saving === "writing-goal" ? t("config.saving") : t("config.save")}
+            </button>
+          </div>
+        </div>
+      </SettingsCard>
+
+      {/* R60 第三批/1685 号：回收站保留期。 */}
+      <SettingsCard title={tr("回收站保留期", "Trash retention")} description={tr("回收站里的书与回滚批次超过保留天数后，在服务下次启动时自动清空；无删除时刻记录的平铺条目不参与。", "Books and rollback batches in the trash are purged automatically on the next service launch once past the retention; loose entries without a recorded trash time are never auto-purged.")} icon={<Settings2 size={18} />}>
+        <div className="rounded-xl border border-border/60 bg-secondary/20 p-3 space-y-2">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] items-end">
+            <label className="space-y-1">
+              <span className="text-sm font-semibold">{tr("保留天数", "Retention days")}</span>
+              <input
+                type="number"
+                min={1}
+                max={36500}
+                value={trashRetention}
+                onChange={(e) => setTrashRetention(e.target.value)}
+                className={fieldClass}
+                data-testid="trash-retention-input"
+              />
+            </label>
+            <button
+              onClick={() => runSave("trash-retention", async () => {
+                const parsed = Number.parseInt(trashRetention, 10);
+                if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 36500) throw new Error(tr("保留天数须为 1–36500 的整数", "Retention must be an integer between 1 and 36500"));
+                await putApi("/project/trash-retention", { retentionDays: parsed });
+                await fetchJson<{ retentionDays: number }>("/project/trash-retention").then((payload) => setTrashRetention(String(payload.retentionDays)));
+              }, t("settings.saved"))}
+              disabled={saving === "trash-retention"}
+              className={`rounded-lg px-4 py-2 text-sm font-bold ${c.btnPrimary} disabled:opacity-40`}
+              data-testid="trash-retention-save"
+            >
+              {saving === "trash-retention" ? t("config.saving") : t("config.save")}
             </button>
           </div>
         </div>

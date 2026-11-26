@@ -168,4 +168,37 @@ describe("ChapterTrashPanel", () => {
     expect(await screen.findByText(/回收站是空的/)).toBeTruthy();
     expect(onRestored).toHaveBeenCalled();
   });
+
+  // R60 第三批/1685 号：保留期——批次头倒计时（≤7 天红色）；平铺条目无删除时刻
+  // 记录，永无倒计时。
+  const withRetention = (days: number) => async (path: string, init?: { method?: string; body?: string }): Promise<unknown> => {
+    if (path === "/api/v1/project/trash-retention") return { retentionDays: days };
+    return defaultFetch(path, init);
+  };
+
+  it("shows the retention hint on the batch header and never on loose entries", async () => {
+    // 28 天前删、保留 30 天 → 恒剩 2 天（相对当前时钟，测试不随日期漂移）。
+    const recent = new Date(Date.now() - 28 * 86_400_000).toISOString();
+    trashEntries = [
+      { ...entry("rollback-20260101000000-2", "0002_云涌.md"), trashedAt: recent },
+      entry(null, "0003_收束.md"),
+    ];
+    fetchJsonMock.mockImplementation(withRetention(30));
+    await openPanel();
+    expect(await screen.findByText(/回滚批次保留 30 天，到期自动清空；平铺条目不自动清空/)).toBeTruthy();
+    expect(screen.getByText(/剩 2 天/)).toBeTruthy();
+    // 全面板只有批次头这一处倒计时——平铺条目行没有。
+    expect(screen.getAllByText(/剩 \d+ 天|已到期/)).toHaveLength(1);
+  });
+
+  it("keeps the plain description when the retention endpoint fails", async () => {
+    fetchJsonMock.mockImplementation(async (path: string, init?: { method?: string; body?: string }) => {
+      if (path === "/api/v1/project/trash-retention") throw new Error("retention down");
+      return defaultFetch(path, init);
+    });
+    await openPanel();
+    expect(await screen.findByText("chapters/0002_云涌.md")).toBeTruthy();
+    expect(screen.queryByText(/回滚批次保留 \d+ 天/)).toBeNull();
+    expect(screen.queryByText(/剩 \d+ 天/)).toBeNull();
+  });
 });

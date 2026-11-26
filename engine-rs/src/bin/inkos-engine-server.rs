@@ -45,8 +45,10 @@ const AGENTS: &[&str] = &[
     "writer-settler",
 ];
 
-fn build_router() -> (axum::Router, Arc<BroadcastHub>) {
-    let project_root = std::path::PathBuf::from(env("INKOS_PROJECT_ROOT", "."));
+/// R60 第三批/1685 号：装配带根——`main` 在 bind 之前跑启动清扫时用同一个
+/// project_root，不再各解析一遍 env。
+fn build_router_with_root(project_root: &std::path::Path) -> (axum::Router, Arc<BroadcastHub>) {
+    let project_root = project_root.to_path_buf();
     let env_model = env("INKOS_LLM_MODEL", "default");
     // 441 号：上下文窗口镜像 TS 模型卡缺省（内建卡查不到 → 128k）；
     // INKOS_LLM_CONTEXT_WINDOW 显式覆盖（直启路径无 inkos.json 服务卡的等价通道）。
@@ -270,7 +272,18 @@ async fn main() -> Result<(), std::io::Error> {
     // 置于 bind 之前——父亡时连端口都不必占。
     inkos_engine::server::parent_watchdog::spawn_from_env();
     let port: u16 = env("INKOS_PORT", "8787").parse().unwrap_or(8787);
-    let (app, hub) = build_router();
+    // R60 第三批/1685 号：启动清扫——过保留期的书级条目与回滚批次自动真空删除
+    //（读端点零写，1682 号定线：清空只在装配点做）。bind 之前跑完，清扫慢/失败
+    // 都不占端口也不阻启动。
+    let project_root = std::path::PathBuf::from(env("INKOS_PROJECT_ROOT", "."));
+    let swept = inkos_engine::server::trash_routes::startup_trash_sweep(&project_root).await;
+    if swept.books > 0 || swept.batches > 0 {
+        eprintln!(
+            "inkos-engine-server: trash sweep purged {} book(s), {} rollback batch(es) past retention",
+            swept.books, swept.batches
+        );
+    }
+    let (app, hub) = build_router_with_root(&project_root);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
     eprintln!("inkos-engine-server listening on 127.0.0.1:{port}");
     let serve = axum::serve(listener, app)

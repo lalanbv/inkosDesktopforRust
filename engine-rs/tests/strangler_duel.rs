@@ -5227,3 +5227,136 @@ async fn trash_endpoints_duel() {
         "回收站端点：章级与书级的列出 / 恢复 / 清空两腿同构——找回章文件登记进目录、状态不动，目标已在原位 409 一个都不移，清空只删列出来的，平铺条目按文件现做的目录条目两腿逐键相同，书级各腿只认自己删出来的形态"
     );
 }
+
+/// 1685 号（R60 第三批）：保留期启动清扫——真实 bin / 真实 sidecar 的**装配面**
+/// 活体（纯判定与配置端点由向量表与契约测试钉死，这里咬的是「服务起来真的扫了」）。
+/// 种子先于服务启动落盘：过期的书级条目（两腿各自的形态）与过期回滚批次在双腿
+/// ready 后必须已经消失；未来时刻的条目、平铺条目（mtime 推到 1970——保留期不拿
+/// 内容时刻判它）必须原样保留。顺带钉 GET 缺省 30 与跨腿 PUT→GET 同文件语义。
+#[tokio::test]
+async fn trash_retention_sweep_duel() {
+    if !duel_enabled() {
+        eprintln!("INKOS_DUEL 未设——跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    let llm = spawn_mock_llm().await;
+    write_fixture_book(&root, &[("0002_云涌", "云涌", "江面起了雾。")]);
+    write_fixture_llm(&root, &llm);
+    migrate_fixture_to_works(&root);
+    let rust_tree = root.join("books").join("b1");
+    let ts_tree = root.join("works").join("b1").join("source");
+
+    // 书级回收站种子（先于启动落盘）：过期 = 2020 年删；保留 = 2999 年删。
+    // TS 认 work.json 形态、产品引擎认 book.json 形态，各给一份。
+    let seed_book_entry = |name: &str, form: &str| {
+        let dir = root.join(".trash").join("books").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(form), format!(r#"{{"id":"{name}"}}"#)).unwrap();
+    };
+    seed_book_entry("gone-ts--20200101000000", "work.json");
+    seed_book_entry("gone-rs--20200101000000", "book.json");
+    seed_book_entry("kept-ts--29991231000000", "work.json");
+    seed_book_entry("kept-rs--29991231000000", "book.json");
+
+    // 章级：两棵树各一份过期批次（整批清走）+ 未来批次 + 平铺老文件（不参与）。
+    for tree in [&rust_tree, &ts_tree] {
+        let trash = tree.join("chapters").join(".trash");
+        for batch in ["rollback-20200101000000-2", "rollback-29991231000000-2"] {
+            let inner = trash.join(batch).join("chapters");
+            std::fs::create_dir_all(&inner).unwrap();
+            std::fs::write(
+                inner.join("0002_云涌.md"),
+                "# 第2章 云涌\n\n过期批次的旧正文。",
+            )
+            .unwrap();
+        }
+        let flat = trash.join("0009_残稿.md");
+        std::fs::write(&flat, "1970 年代写下的残稿。").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&flat)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap();
+    }
+
+    // Rust 腿必须是**真实 bin**（装配面 = bin main 的启动清扫；进程内装配
+    // [spawn_rust_engine] 不跑 main，咬不住装配遗漏）。
+    let rust = spawn_engine_bin(&root, "trash-retention", Some(&llm)).await;
+    let ts = spawn_ts_sidecar_ready(&root).await;
+    let client = loopback_client();
+
+    // ① 书级：过期条目（各自形态）已被启动清扫清掉，未来时刻的仍在（各腿只列自己的形态）。
+    let (status, ts_books) = get_json(&ts, "/api/v1/trash/books").await;
+    assert_eq!(status, 200, "{ts_books}");
+    let ts_names: Vec<&str> = ts_books["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["entry"].as_str().unwrap())
+        .collect();
+    assert_eq!(ts_names, ["kept-ts--29991231000000"], "{ts_books}");
+    let (status, rust_books) = get_json(&rust.base, "/api/v1/trash/books").await;
+    assert_eq!(status, 200, "{rust_books}");
+    let rust_names: Vec<&str> = rust_books["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["entry"].as_str().unwrap())
+        .collect();
+    assert_eq!(rust_names, ["kept-rs--29991231000000"], "{rust_books}");
+
+    // ② 章级：过期批次整批消失；未来批次与平铺条目（mtime=1970）原样保留。
+    for (base, label) in [(ts.base.as_str(), "ts"), (rust.base.as_str(), "rust")] {
+        let (status, body) = get_json(base, "/api/v1/books/b1/trash").await;
+        assert_eq!(status, 200, "{label}：{body}");
+        let listed = body.to_string();
+        assert!(
+            !listed.contains("rollback-20200101000000-2"),
+            "{label}：过期批次应已清扫：{listed}"
+        );
+        assert!(
+            listed.contains("rollback-29991231000000-2"),
+            "{label}：未来批次应保留：{listed}"
+        );
+        assert!(
+            listed.contains("0009_残稿.md"),
+            "{label}：平铺条目必须保留：{listed}"
+        );
+    }
+
+    // ③ 配置面：缺省 30 两腿一致；PUT 走一腿、另一腿读同一份 inkos.json。
+    for base in [ts.base.as_str(), rust.base.as_str()] {
+        let (status, body) = get_json(base, "/api/v1/project/trash-retention").await;
+        assert_eq!(
+            (status, body.clone()),
+            (200, json!({ "retentionDays": 30 })),
+            "{base}：{body}"
+        );
+    }
+    let (status, body) = send_json(
+        &client,
+        &ts.base,
+        reqwest::Method::PUT,
+        "/api/v1/project/trash-retention",
+        Some(r#"{"retentionDays":45}"#),
+    )
+    .await;
+    assert_eq!(
+        (status, body.clone()),
+        (200, json!({ "ok": true, "retentionDays": 45 })),
+        "{body}"
+    );
+    let (status, body) = get_json(&rust.base, "/api/v1/project/trash-retention").await;
+    assert_eq!(
+        (status, body.clone()),
+        (200, json!({ "retentionDays": 45 })),
+        "{body}"
+    );
+
+    eprintln!(
+        "保留期清扫：双腿启动即清——过期书级条目（各腿形态）与过期回滚批次消失，未来批次与平铺条目（mtime=1970）保留，trash-retention 缺省 30 两腿一致、跨腿 PUT→GET 同文件"
+    );
+}

@@ -215,7 +215,9 @@ import { parsePendingHooks } from "../lib/truth-display.js";
 // 692 号：R36 会话树化重施（fork 会话分支面；store 模块独立于 2.0 book-session-store）。
 import { BranchTargetNotFoundError, branchBookSession, deriveSessionBranchPoints, sessionTreeProjection, syncWorkSourceArtifacts, loadWritingLog, promptOverridePath, writePromptOverride, removePromptOverride, appendPromptVersion, listPromptVersions, readPromptVersion, trashBook,
   TrashError, listBookTrash, listChapterTrash, purgeBookTrash, purgeChapterTrash, restoreBookFromTrash, restoreChapterTrash,
+  MAX_TRASH_RETENTION_DAYS, sweepExpiredTrash, trashRetentionDaysFromRaw,
 } from "@actalk/inkos-core";
+import { normalizeTrashRetentionDays } from "@actalk/inkos-core";
 import { BUILTIN_PROMPT_PACKS, BUILTIN_PROMPTS } from "@actalk/inkos-core/prompts/builtin-prompts-data";
 import { access, cp, mkdir, readFile, readdir, rename, rm, stat, lstat, writeFile } from "node:fs/promises";
 import { buildTarArchive, listArchiveFiles } from "../lib/tar-write.js";
@@ -6029,6 +6031,30 @@ function yamlScalar(value: unknown): string {
     return c.json({ ok: true, dailyGoalWords: goal });
   });
 
+  // R60 第三批/1685 号：回收站保留期（project config trash.retentionDays，正整数
+  // 天 ≤36500；缺省 30——启动清扫与 TrashPanel/ChapterTrashPanel 倒计时共用这一
+  // 读面，产品引擎 server/project_config_routes.rs get/put_trash_retention 镜像）。
+  // GET 读面降级：缺失/损坏一律按空配置（配置文件状态契约注释同款——清扫绝不因
+  // 配置缺失/损坏而拒跑）；PUT 是 /project 族写入点（错误形态与 writing-goal 同
+  // 位，config-write-parity.json 登记；非法值平铺 500，两腿同文）。
+  app.get("/api/v1/project/trash-retention", async (c) => {
+    const raw = await loadRawConfigForRead(root);
+    return c.json({ retentionDays: trashRetentionDaysFromRaw(raw) });
+  });
+
+  app.put("/api/v1/project/trash-retention", async (c) => {
+    const { retentionDays } = await c.req.json<{ retentionDays?: unknown }>();
+    // 只认 JSON 数字（与产品引擎 Value::as_u64 同式——不 Number() 强转，字符串拒）。
+    const days = retentionDays;
+    if (typeof days !== "number" || !Number.isInteger(days) || days <= 0 || days > MAX_TRASH_RETENTION_DAYS) {
+      return c.json({ error: "retentionDays must be an integer between 1 and 36500" }, 500);
+    }
+    const raw = await loadRawConfigForObjectWrite(root);
+    raw.trash = { ...((raw.trash as Record<string, unknown> | undefined) ?? {}), retentionDays: days };
+    await saveRawConfig(root, raw);
+    return c.json({ ok: true, retentionDays: days });
+  });
+
   app.get("/api/v1/books/:id/chapter-review-mode", async (c) => {
     const bookId = c.req.param("id");
     if (!isSafeBookId(bookId)) return c.json({ error: "Invalid book id" }, 400);
@@ -10115,6 +10141,18 @@ function yamlScalar(value: unknown): string {
 
 // --- Standalone runner ---
 
+// R60 第三批/1685 号：启动装配点的一次性清扫。retentionDaysInput 由调用方从已
+// 解析的项目配置传入（zod 校验后的 trash.retentionDays；undefined = 缺省 30，
+// 归一化在 core 一侧统一兜底）；nowMillis 可注入（测试钉时钟，生产走真实时钟）。
+// 书目录跟随书架同一枚举面（listBooks → bookDir）——本腿只清自己列得出来的书。
+// 清扫失败的条目在 core 内逐条跳过，永不阻塞启动。
+export async function startupTrashSweep(root: string, retentionDaysInput?: unknown, nowMillis: number = Date.now()) {
+  const retentionDays = normalizeTrashRetentionDays(retentionDaysInput);
+  const state = new StateManager(root);
+  const bookDirs = (await state.listBooks()).map((bookId) => state.bookDir(bookId));
+  return sweepExpiredTrash(root, bookDirs, retentionDays, nowMillis);
+}
+
 export async function startStudioServer(
   root: string,
   port = 4567,
@@ -10122,6 +10160,17 @@ export async function startStudioServer(
 ): Promise<void> {
   await recoverAtomicFileSets(root, true);
   const config = await loadProjectConfig(root, { consumer: "studio", requireApiKey: false });
+
+  // R60 第三批/1685 号：启动清扫（读端点零写，1682 号定线——清空只在装配点跑）。
+  // 清扫本身吞掉逐条 IO 错；这里再兜一层，清扫出了任何意外也不阻启动。
+  try {
+    const swept = await startupTrashSweep(root, config.trash?.retentionDays);
+    if (swept.books > 0 || swept.batches > 0) {
+      console.log(`[studio] Trash sweep: purged ${swept.books} book(s), ${swept.batches} rollback batch(es) past retention.`);
+    }
+  } catch (error) {
+    console.warn(`[studio] Trash sweep skipped: ${String(error)}`);
+  }
 
   const app = createStudioServer(config, root, { hostname: options?.hostname, allowedOrigins: options?.allowedOrigins });
 

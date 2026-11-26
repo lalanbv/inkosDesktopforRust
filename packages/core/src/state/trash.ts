@@ -549,3 +549,92 @@ export async function purgeChapterTrash(
   await pruneEmptyDirs(join(bookDir, CHAPTER_TRASH), picked.map((entry) => dirname(join(bookDir, entry.path))));
   return { removed: picked.length };
 }
+
+// ── R60 第三批/1685 号：保留期（到期自动真空删除）────────────────────────────
+//
+// 只有「有删除时刻记录」的条目参与保留期：
+// - 书级条目 `{bookId}--{ts}`：时刻在条目名里；
+// - 回滚批次 `rollback-{ts}-{target}`：时刻在批次名里。
+// 平铺条目（章删除 / 结构合并放进来的散文件）没有删除时刻记录——文件的 mtime
+// 是内容时刻：今天驳回一章，正文可能是四十天前写的；拿 mtime 判保留期会让
+// 「刚进回收站的内容」下次启动就被清掉。它们仍走界面上的删除按钮（两步确认）。
+//
+// 判定式两腿同一条（`golden/trash-retention-vectors.json` 两端同读）：
+// 回收时刻（UTC，秒粒度）≤ compactTimestamp(now − days×86400000) 即过期——
+// 回收时刻本来就是秒粒度，与毫秒比较式精确等价，也免去产品引擎侧的 ISO 解析。
+// 清扫只在服务启动装配点跑（读端点零写，1682 号定线）；清不掉的逐条跳过，
+// 清扫永不阻塞启动。
+
+export const DEFAULT_TRASH_RETENTION_DAYS = 30;
+/** 保留期上限（100 年）：配置写得再大也封到这一档——cutoff 计算保持有界。 */
+export const MAX_TRASH_RETENTION_DAYS = 36500;
+const DAY_MS = 86_400_000;
+
+/** 只有正整数认账（超上限封顶）；其余（字符串 / 0 / 负数 / 小数 / null / 布尔）一律缺省 30。 */
+export function normalizeTrashRetentionDays(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) return DEFAULT_TRASH_RETENTION_DAYS;
+  return Math.min(value, MAX_TRASH_RETENTION_DAYS);
+}
+
+/** raw 配置（inkos.json 原样对象）→ 保留天数；缺失 / 形态不对回落缺省。 */
+export function trashRetentionDaysFromRaw(raw: unknown): number {
+  const section = (raw as { trash?: unknown } | null | undefined)?.trash;
+  return normalizeTrashRetentionDays((section as { retentionDays?: unknown } | null | undefined)?.retentionDays);
+}
+
+/** ISO（本模块各列表函数的产出，UTC 固定格式）→ `yyyyMMddHHmmss` 秒粒度名时刻。 */
+function isoToCompact(iso: string): string {
+  return iso.replace(/\D/g, "").slice(0, 14);
+}
+
+/** 清扫 cutoff：`now − days 天` 的秒粒度截断（与条目名时刻同一形态，直接比大小；下限 0 与产品引擎 saturating 同式）。 */
+function trashSweepCutoff(nowMillis: number, retentionDays: number): string {
+  return compactTimestamp(Math.max(0, nowMillis - retentionDays * DAY_MS));
+}
+
+/** 已过保留期？恰等于 cutoff = 过期（到点就走）。 */
+export function trashSweepExpired(trashedAtIso: string, retentionDays: number, nowMillis: number): boolean {
+  return isoToCompact(trashedAtIso) <= trashSweepCutoff(nowMillis, retentionDays);
+}
+
+// 界面倒计时（trashDaysLeft）在 `utils/trash-countdown.ts`——浏览器组件经独立
+// 子路径导入，别把本模块的 node:fs 依赖链拉进 vite 图；这里转出保持桶面不变。
+export { trashDaysLeft } from "../utils/trash-countdown.js";
+
+/** 启动清扫清掉的东西：书级条目数与回滚批次数。 */
+export interface SweptTrash {
+  readonly books: number;
+  readonly batches: number;
+}
+
+/**
+ * 清掉已过保留期的书级条目与回滚批次。只清「列出来的」（与清空端点同一纪律：
+ * 本腿认不出的形态、另一腿删的书都不碰）；失败逐条吞掉继续，返回各类清掉的
+ * 数目——调用方记日志用。回收站目录本身留着。
+ */
+export async function sweepExpiredTrash(
+  projectRoot: string,
+  bookDirs: ReadonlyArray<string>,
+  retentionDays: number,
+  nowMillis: number,
+): Promise<SweptTrash> {
+  let books = 0;
+  for (const entry of await listBookTrash(projectRoot)) {
+    if (!trashSweepExpired(entry.trashedAt, retentionDays, nowMillis)) continue;
+    if (!(await rm(join(projectRoot, BOOK_TRASH, entry.entry), { recursive: true, force: true }).then(() => true, () => false))) continue;
+    books += 1;
+  }
+  let batches = 0;
+  for (const bookDir of bookDirs) {
+    const seen = new Set<string>();
+    for (const entry of await listChapterTrash(bookDir)) {
+      // 批次条目一定带着批次名的时刻；真缺（不该发生）就跳过——绝不拿 mtime 兜底。
+      if (entry.batch === null || entry.trashedAt === null || seen.has(entry.batch)) continue;
+      if (!trashSweepExpired(entry.trashedAt, retentionDays, nowMillis)) continue;
+      seen.add(entry.batch);
+      if (!(await rm(join(bookDir, CHAPTER_TRASH, entry.batch), { recursive: true, force: true }).then(() => true, () => false))) continue;
+      batches += 1;
+    }
+  }
+  return { books, batches };
+}

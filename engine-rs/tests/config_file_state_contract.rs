@@ -211,7 +211,7 @@ async fn parity_matrix_refusals_match_the_shared_table() {
         .collect();
     assert_eq!(states.len(), 7);
     let matrix = table["matrix"].as_array().unwrap();
-    assert_eq!(matrix.len(), 13);
+    assert_eq!(matrix.len(), 14);
     let state_names: BTreeSet<&str> = states.iter().map(|(name, _)| *name).collect();
     let mut checked = 0usize;
     for row in matrix {
@@ -248,9 +248,9 @@ async fn parity_matrix_refusals_match_the_shared_table() {
             checked += 1;
         }
     }
-    // 4 × 6（服务配置族：缺失即新建，不在本表）+ 9 × 7（`/project` 族）：表被
+    // 4 × 6（服务配置族：缺失即新建，不在本表）+ 10 × 7（`/project` 族）：表被
     // 删行 / 删格时立刻可见。
-    assert_eq!(checked, 87);
+    assert_eq!(checked, 94);
 }
 
 #[tokio::test]
@@ -448,4 +448,86 @@ async fn failed_config_write_reports_the_failure_and_keeps_secrets() {
         Some(key.as_str()),
         "落盘失败后不得动密钥"
     );
+}
+
+// R60 第三批/1685 号：回收站保留期端点（GET/PUT /api/v1/project/trash-retention）
+// ——GET 读面降级（缺失 → 30）、PUT 合法值落盘回读、非法值平铺 500 且文件逐字节
+// 不动（矩阵行 + retentionInvalid case 钉拒绝面；这里钉 happy path 与降级读面）。
+// 与 Node 腿 packages/studio/src/__tests__/trash-retention-endpoint.test.ts 同域。
+#[tokio::test]
+async fn trash_retention_endpoints_match_the_node_leg() {
+    let project = Project::new(Some(r#"{"name":"p","version":"0.1.0"}"#));
+    let root = project.path();
+    let router = app(root);
+
+    // 配置缺失时的 GET 降级（`Project::new(None)` 的空根同式，矩阵行钉 PUT 的 missing=internal）。
+    let empty = Project::new(None);
+    let (status, body) = call(
+        app(empty.path()),
+        "GET",
+        "/api/v1/project/trash-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "retentionDays": 30 }));
+
+    let (status, body) = call(
+        router.clone(),
+        "GET",
+        "/api/v1/project/trash-retention",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "retentionDays": 30 }));
+
+    let (status, body) = call(
+        router.clone(),
+        "PUT",
+        "/api/v1/project/trash-retention",
+        Some(r#"{"retentionDays":45}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "ok": true, "retentionDays": 45 }));
+    let saved: Value = serde_json::from_str(&project.config_text().unwrap()).unwrap();
+    assert_eq!(saved["trash"], json!({ "retentionDays": 45 }));
+    let (_, body) = call(
+        router.clone(),
+        "GET",
+        "/api/v1/project/trash-retention",
+        None,
+    )
+    .await;
+    assert_eq!(body, json!({ "retentionDays": 45 }));
+
+    let before = project.config_text().unwrap();
+    for bad in [
+        r#"{"retentionDays":0}"#,
+        r#"{"retentionDays":-1}"#,
+        r#"{"retentionDays":1.5}"#,
+        r#"{"retentionDays":40000}"#,
+        r#"{"retentionDays":"45"}"#,
+        r#"{"retentionDays":null}"#,
+    ] {
+        let (status, body) = call(
+            router.clone(),
+            "PUT",
+            "/api/v1/project/trash-retention",
+            Some(bad),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{bad}");
+        assert_eq!(
+            body,
+            table()["shapes"]["retentionInvalid"]["response"],
+            "{bad}"
+        );
+        assert_eq!(
+            project.config_text().as_deref(),
+            Some(before.as_str()),
+            "{bad}: 文件不动"
+        );
+    }
 }

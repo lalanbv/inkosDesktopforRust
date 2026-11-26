@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+// 浏览器组件走独立子路径（纯算术模块）——别把 state/trash 的 node:fs 依赖链
+// 经 CJS 桶拉进 vite 图（gate:ts build 腿红过的点）。
+import { trashDaysLeft } from "@actalk/inkos-core/utils/trash-countdown";
 import { fetchJson } from "../hooks/use-api";
 import { tr } from "../lib/app-language";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -9,6 +12,8 @@ import { ConfirmDialog } from "./ConfirmDialog";
 // 成功回调 onRestored（BookDetail refetch 章节列表——找回的章已由服务端登记
 // 进章节目录）。消费 1679 号端点：GET /api/v1/books/:id/trash、POST …/restore
 // （{path} 单条 | {batch} 整批）、POST …/purge（{path} | {batch} | {all:true}）。
+// R60 第三批/1685 号：保留期提示——批次头倒计时（≤7 天或已到期红色）；保留天数
+// 来自 GET /project/trash-retention。平铺条目没有删除时刻记录，不参与自动清空。
 
 interface ChapterTrashEntry {
   readonly path: string;
@@ -65,6 +70,22 @@ export function ChapterTrashPanel({ bookId, onRestored }: { readonly bookId: str
     if (expanded) void loadEntries();
   }, [expanded, loadEntries]);
 
+  // 保留天数（GET 失败 = 不显示倒计时，只显示既有描述）。
+  const [retentionDays, setRetentionDays] = useState<number | null>(null);
+  useEffect(() => {
+    void fetchJson<{ retentionDays: number }>("/api/v1/project/trash-retention")
+      .then((payload) => setRetentionDays(Number.isInteger(payload.retentionDays) && payload.retentionDays > 0 ? payload.retentionDays : null))
+      .catch(() => setRetentionDays(null));
+  }, []);
+  const expiryBadge = (trashedAt: string) => {
+    if (retentionDays === null) return null;
+    const left = trashDaysLeft(trashedAt, retentionDays, Date.now());
+    if (left === null) return null;
+    return left <= 0
+      ? <span className="text-destructive ml-2">{tr("已到期，下次启动时清空", "Expired; purged on next launch")}</span>
+      : <span className={`ml-2 ${left <= 7 ? "text-destructive" : "text-muted-foreground"}`}>{tr(`剩 ${left} 天`, `${left} ${left === 1 ? "day" : "days"} left`)}</span>;
+  };
+
   const runExclusive = async (action: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -112,6 +133,11 @@ export function ChapterTrashPanel({ bookId, onRestored }: { readonly bookId: str
           </div>
           <div className="text-xs text-muted-foreground mt-0.5">
             {tr("被驳回/删除的章节内容在这里，可整批或单条找回。", "Rejected and deleted chapter content is kept here; restore it per entry or per rollback batch.")}
+            {retentionDays !== null && (
+              <span className="ml-1">
+                {tr(`回滚批次保留 ${retentionDays} 天，到期自动清空；平铺条目不自动清空。`, `Rollback batches are kept for ${retentionDays} days, then purged automatically; loose entries are never auto-purged.`)}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -153,6 +179,7 @@ export function ChapterTrashPanel({ bookId, onRestored }: { readonly bookId: str
                 <div className="flex items-center justify-between gap-3 text-xs pt-1">
                   <span className="text-muted-foreground font-medium">
                     {tr("回滚批次", "Rollback batch")} {group.batch} · {new Date(group.items[0]!.trashedAt ?? group.items[0]!.modifiedAt).toLocaleString()}
+                    {group.items[0]!.trashedAt !== null && expiryBadge(group.items[0]!.trashedAt)}
                   </span>
                   <span className="flex items-center gap-2 shrink-0">
                     <button

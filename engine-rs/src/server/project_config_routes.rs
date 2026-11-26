@@ -791,6 +791,59 @@ pub async fn put_writing_goal(
     ok_json(json!({ "ok": true, "dailyGoalWords": goal }))
 }
 
+// ── GET/PUT /api/v1/project/trash-retention ──────────────────────
+
+/// R60 第三批/1685 号：回收站保留期（project config `trash.retentionDays`，
+/// 正整数天 ≤36500；缺省 30——启动清扫与界面倒计时共用这一读面）。
+/// GET 是读面降级（缺失/损坏一律按空配置——配置文件状态契约注释同款，清扫
+/// 绝不因配置缺失/损坏而拒跑）；PUT 是 /project 族写入点（错误形态与
+/// writing-goal 同位，config-write-parity.json 登记；非法值平铺 500，Node
+/// 腿同文）。
+pub async fn get_trash_retention(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
+    let raw = load_raw_config(runtime.state.project_root())
+        .await
+        .unwrap_or(serde_json::Value::Null);
+    ok_json(json!({
+        "retentionDays": crate::state::trash::trash_retention_days_from_raw(&raw)
+    }))
+}
+
+pub async fn put_trash_retention(
+    State(runtime): State<BooksRuntime>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let Ok(parsed) = serde_json::from_slice::<Value>(&body) else {
+        return internal_error();
+    };
+    // 正整数且 ≤36500 才收（TS Number.isInteger 同语义）；无效 500 平铺（Node 腿同文）。
+    let Some(days) = parsed
+        .get("retentionDays")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0 && *value <= crate::state::trash::MAX_TRASH_RETENTION_DAYS)
+    else {
+        return flat_internal("retentionDays must be an integer between 1 and 36500");
+    };
+    let root = runtime.state.project_root();
+    let Some(mut raw) = load_raw_config(root).await else {
+        return internal_error();
+    };
+    // 根不是对象 → 配置文件状态契约拒绝（Node 腿同位）。
+    let Value::Object(obj) = &mut raw else {
+        return config_refused(CONFIG_NOT_OBJECT);
+    };
+    let mut trash = obj
+        .get("trash")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    trash.insert("retentionDays".to_string(), json!(days));
+    obj.insert("trash".to_string(), Value::Object(trash));
+    if !save_raw_config(root, &raw).await {
+        return internal_error();
+    }
+    ok_json(json!({ "ok": true, "retentionDays": days }))
+}
+
 // ── GET/PUT /api/v1/project/notify ───────────────────────────────
 
 pub async fn get_notify(State(runtime): State<BooksRuntime>) -> impl IntoResponse {

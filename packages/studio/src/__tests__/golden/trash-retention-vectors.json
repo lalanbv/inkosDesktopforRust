@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "R60 第三批/1685 号：回收站保留期两腿同判定向量——Node 腿 trash-retention.test.ts 与",
+    "产品引擎 state/trash.rs 测试各读一次，逐格断言。",
+    "normalization：retentionDays 归一化——只有正整数认账，其余（字符串/0/负数/小数/null/布尔）",
+    "一律回落缺省 30（defaultDays）；超过 maxDays（36500=100 年）按上限封顶——配置写得再大",
+    "cutoff 计算也有界（两端日期/整数类型都不会被打穿）。",
+    "expiry：清扫判定，两腿同式——compact(trashedAt) <= compactTimestamp(nowMillis − days×86400000)",
+    "即过期（秒粒度字符串比大小；回收时刻来自条目名，本来就是秒粒度，判定与毫秒式精确等价）。",
+    "恰等于 cutoff = 过期（垃圾清扫的边界语义：到点就走）；差 1 秒 = 未过期。",
+    "trashedAt 一律是两腿列表函数自己产出的 ISO（UTC、固定格式）；now 用毫秒时刻，免掉测试侧的时区歧义。"
+  ],
+  "defaultDays": 30,
+  "maxDays": 36500,
+  "normalization": [
+    { "value": 1, "days": 1 },
+    { "value": 7, "days": 7 },
+    { "value": 45, "days": 45 },
+    { "value": 3650, "days": 3650 },
+    { "value": 36500, "days": 36500 },
+    { "value": 36501, "days": 36500 },
+    { "value": 100000, "days": 36500 },
+    { "value": "30", "days": 30 },
+    { "value": 0, "days": 30 },
+    { "value": -5, "days": 30 },
+    { "value": 1.5, "days": 30 },
+    { "value": null, "days": 30 },
+    { "value": true, "days": 30 }
+  ],
+  "expiry": [
+    { "name": "exactlyAtCutoffIsExpired", "trashedAt": "2026-10-01T00:00:00.000Z", "days": 30, "nowMillis": 1793404800000, "expired": true },
+    { "name": "oneSecondBeforeCutoffIsKept", "trashedAt": "2026-10-01T00:00:00.000Z", "days": 30, "nowMillis": 1793404799000, "expired": false },
+    { "name": "oneSecondAfterCutoffIsExpired", "trashedAt": "2026-10-01T00:00:00.000Z", "days": 30, "nowMillis": 1793404801000, "expired": true },
+    { "name": "wellPastCutoffIsExpired", "trashedAt": "2026-10-01T00:00:00.000Z", "days": 30, "nowMillis": 1797292800000, "expired": true },
+    { "name": "oneDayWindowExactBoundary", "trashedAt": "2026-10-01T00:00:00.000Z", "days": 1, "nowMillis": 1790899200000, "expired": true },
+    { "name": "oneDayWindowOneSecondShort", "trashedAt": "2026-10-01T00:00:00.000Z", "days": 1, "nowMillis": 1790899199000, "expired": false }
+  ]
+}

@@ -66,6 +66,46 @@ async fn book_is_there(runtime: &BooksRuntime, book_id: &str) -> bool {
     runtime.state.load_book_config(book_id).await.is_ok()
 }
 
+// ── 启动清扫（R60 第三批/1685 号）────────────────────────────────────
+
+/// 服务启动装配点的一次性清扫（bin 的 `main` 在 bind 之前调用）。读端点零写
+///（1682 号定线）——过保留期的自动清空只在装配点做。保留天数读 raw inkos.json
+///（缺失/损坏按缺省 30——清扫绝不因配置缺失/损坏而拒跑）；书目录跟随书架同一
+/// 枚举面（`StateManager::list_books`）——本腿只清自己列得出来的书。清扫失败
+/// 记日志返回零值，永不阻塞启动。
+pub async fn startup_trash_sweep(
+    project_root: &std::path::Path,
+) -> crate::state::trash::SweptTrash {
+    let raw = crate::server::project_config_routes::load_raw_config(project_root)
+        .await
+        .unwrap_or(Value::Null);
+    let days = crate::state::trash::trash_retention_days_from_raw(&raw);
+    let state = crate::state::manager::StateManager::new(project_root.to_path_buf());
+    let book_dirs: Vec<std::path::PathBuf> = state
+        .list_books()
+        .await
+        .iter()
+        .map(|book_id| state.book_dir(book_id))
+        .collect();
+    match crate::state::trash::sweep_expired_trash(
+        project_root,
+        &book_dirs,
+        days,
+        crate::state::trash::now_millis(),
+    )
+    .await
+    {
+        Ok(swept) => swept,
+        Err(error) => {
+            eprintln!("inkos-engine-server: trash sweep skipped: {error}");
+            crate::state::trash::SweptTrash {
+                books: 0,
+                batches: 0,
+            }
+        }
+    }
+}
+
 // ── GET /api/v1/trash/books ─────────────────────────────────────────
 
 pub async fn list_book_trash(State(runtime): State<BooksRuntime>) -> impl IntoResponse {
@@ -848,5 +888,88 @@ mod tests {
             (status, body["error"]["code"].clone()),
             (StatusCode::BAD_REQUEST, json!("INVALID_BOOK_ID"))
         );
+    }
+
+    #[tokio::test]
+    async fn startup_sweep_reads_config_and_enumerates_books() {
+        // 装配面：inkos.json 里的 retentionDays=1 决定窗口；书目录走书架枚举面
+        //（books/<id>）。条目名用生产函数按真实时钟构造（2 天前 = 过期，1 天窗口）。
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(root.join("inkos.json"), r#"{"trash":{"retentionDays":1}}"#).unwrap();
+        let book = root.join("books").join("b1");
+        std::fs::create_dir_all(book.join("chapters").join(".trash")).unwrap();
+        std::fs::write(book.join("book.json"), r#"{"id":"b1"}"#).unwrap();
+        let old = crate::state::trash::compact_timestamp(
+            crate::state::trash::now_millis() - 2 * 86_400_000,
+        );
+        let fresh = crate::state::trash::compact_timestamp(crate::state::trash::now_millis());
+        let expired_batch = format!("rollback-{old}-3");
+        std::fs::create_dir_all(
+            book.join("chapters")
+                .join(".trash")
+                .join(&expired_batch)
+                .join("chapters"),
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters")
+                .join(".trash")
+                .join(&expired_batch)
+                .join("chapters")
+                .join("0003_回.md"),
+            "旧正文",
+        )
+        .unwrap();
+        let fresh_batch = format!("rollback-{fresh}-3");
+        std::fs::create_dir_all(book.join("chapters").join(".trash").join(&fresh_batch)).unwrap();
+        std::fs::write(
+            book.join("chapters")
+                .join(".trash")
+                .join(&fresh_batch)
+                .join("0004_留.md"),
+            "留",
+        )
+        .unwrap();
+        std::fs::write(
+            book.join("chapters").join(".trash").join("0009_旧形态.md"),
+            "平铺",
+        )
+        .unwrap();
+        let gone = format!("gone--{old}");
+        std::fs::create_dir_all(root.join(".trash").join("books").join(&gone)).unwrap();
+        std::fs::write(
+            root.join(".trash")
+                .join("books")
+                .join(&gone)
+                .join("book.json"),
+            r#"{"id":"gone"}"#,
+        )
+        .unwrap();
+
+        let swept = startup_trash_sweep(root).await;
+        assert_eq!(
+            swept,
+            crate::state::trash::SweptTrash {
+                books: 1,
+                batches: 1
+            }
+        );
+        assert!(!book
+            .join("chapters")
+            .join(".trash")
+            .join(&expired_batch)
+            .exists());
+        assert!(book
+            .join("chapters")
+            .join(".trash")
+            .join(&fresh_batch)
+            .is_dir());
+        assert!(book
+            .join("chapters")
+            .join(".trash")
+            .join("0009_旧形态.md")
+            .is_file());
+        assert!(!root.join(".trash").join("books").join(&gone).exists());
     }
 }

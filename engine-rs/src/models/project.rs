@@ -444,6 +444,8 @@ pub struct ProjectConfig {
     pub foundation: FoundationConfig,
     #[serde(default = "default_writing")]
     pub writing: WritingConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trash: Option<TrashConfig>,
     pub research_search: ResearchSearchConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_overrides: Option<HashMap<String, ModelOverrideValue>>,
@@ -462,6 +464,20 @@ fn default_writing() -> WritingConfig {
         review_mode: super::book::ChapterReviewModeVal::Auto,
         revision_gate: super::book::RevisionGateVal::Strict,
     }
+}
+
+// ── 回收站保留段（R60 第三批/1685 号；TS models/project.ts trash 镜像）──
+// 只有 `trash.retentionDays`（正整数天）一个键。端点与启动清扫读 raw JSON
+//（state/trash.rs 的 trash_retention_days_from_raw，值非法在那一层回落缺省
+// 30）；struct 在此只为 ProjectConfig 反序列化认识这个段——serde 对未知键
+// 本来宽容，TS strict 根没有这份宽容（709/1429 同族：Rust 写进 inkos.json
+// 的键，schema 不认 = Node 回退腿对碰过的项目 boot 即崩），两边都要登记。
+// skip_serializing_if：没配过的项目序列化形态保持原样（键面夹具不动）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<u64>,
 }
 
 #[cfg(test)]

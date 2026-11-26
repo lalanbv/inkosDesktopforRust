@@ -629,6 +629,13 @@ pub fn router_books(
                 .put(project_config_routes::put_writing_goal)
                 .with_state(books.clone()),
         )
+        // R60 第三批/1685 号：回收站保留期（启动清扫与界面倒计时共用）。
+        .route(
+            "/api/v1/project/trash-retention",
+            get(project_config_routes::get_trash_retention)
+                .put(project_config_routes::put_trash_retention)
+                .with_state(books.clone()),
+        )
         .route(
             "/api/v1/project/notify",
             get(project_config_routes::get_notify)

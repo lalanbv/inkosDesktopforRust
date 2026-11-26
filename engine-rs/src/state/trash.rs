@@ -826,6 +826,114 @@ pub async fn purge_chapter_trash(
     Ok(picked.len())
 }
 
+// ── R60 第三批/1685 号：保留期（到期自动真空删除）────────────────────────────
+//
+// 只有「有删除时刻记录」的条目参与保留期：
+// - 书级条目 `{bookId}--{ts}`：时刻在条目名里；
+// - 回滚批次 `rollback-{ts}-{target}`：时刻在批次名里。
+// 平铺条目（章删除 / 结构合并放进来的散文件）没有删除时刻记录——文件的 mtime
+// 是内容时刻：今天驳回一章，正文可能是四十天前写的；拿 mtime 判保留期会让
+// 「刚进回收站的内容」下次启动就被清掉。它们仍走界面上的删除按钮（两步确认）。
+//
+// 判定式两腿同一条（`packages/studio/src/__tests__/golden/trash-retention-vectors.json`
+// 两端同读）：回收时刻（UTC，秒粒度）≤ compact_timestamp(now − days×86400000)
+// 即过期——回收时刻本来就是秒粒度，与毫秒比较式精确等价，也免去这边的 ISO 解析。
+// 清扫只在服务启动装配点跑（读端点零写，1682 号定线）；清不掉的逐条跳过，
+// 清扫永不阻塞启动。
+
+pub const DEFAULT_TRASH_RETENTION_DAYS: u64 = 30;
+/// 保留期上限（100 年）：配置写得再大也封到这一档——cutoff 计算保持有界。
+pub const MAX_TRASH_RETENTION_DAYS: u64 = 36500;
+const DAY_MILLIS: u64 = 86_400_000;
+
+/// 只有正整数认账（超上限封顶）；其余一律缺省 30（与 TS normalizeTrashRetentionDays 同式）。
+pub fn normalize_trash_retention_days(value: &serde_json::Value) -> u64 {
+    value
+        .as_u64()
+        .filter(|days| *days > 0)
+        .map(|days| days.min(MAX_TRASH_RETENTION_DAYS))
+        .unwrap_or(DEFAULT_TRASH_RETENTION_DAYS)
+}
+
+/// raw 配置（inkos.json 原样对象）→ 保留天数；缺失 / 形态不对回落缺省。
+pub fn trash_retention_days_from_raw(raw: &serde_json::Value) -> u64 {
+    normalize_trash_retention_days(
+        raw.get("trash")
+            .and_then(|section| section.get("retentionDays"))
+            .unwrap_or(&serde_json::Value::Null),
+    )
+}
+
+/// ISO（本模块列表函数的产出，UTC 固定格式）→ `yyyyMMddHHmmss` 秒粒度名时刻。
+fn iso_to_compact(iso: &str) -> String {
+    iso.chars()
+        .filter(|c| c.is_ascii_digit())
+        .take(14)
+        .collect()
+}
+
+/// 已过保留期？恰等于 cutoff = 过期（到点就走；下限 0 与 TS `Math.max(0, …)` 同式）。
+pub fn trash_sweep_expired(trashed_at_iso: &str, retention_days: u64, now_millis: u64) -> bool {
+    let cutoff =
+        compact_timestamp(now_millis.saturating_sub(retention_days.saturating_mul(DAY_MILLIS)));
+    iso_to_compact(trashed_at_iso) <= cutoff
+}
+
+/// 启动清扫清掉的东西：书级条目数与回滚批次数。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct SweptTrash {
+    pub books: usize,
+    pub batches: usize,
+}
+
+/// 清掉已过保留期的书级条目与回滚批次。只清「列出来的」（与清空端点同一纪律：
+/// 本腿认不出的形态、另一腿删的书都不碰）；失败逐条吞掉继续，返回各类清掉的
+/// 数目——调用方记日志用。回收站目录本身留着。
+pub async fn sweep_expired_trash(
+    project_root: &Path,
+    book_dirs: &[PathBuf],
+    retention_days: u64,
+    now_millis: u64,
+) -> io::Result<SweptTrash> {
+    let mut swept = SweptTrash {
+        books: 0,
+        batches: 0,
+    };
+    for entry in list_book_trash(project_root).await? {
+        if !trash_sweep_expired(&entry.trashed_at, retention_days, now_millis) {
+            continue;
+        }
+        let dir = project_root.join(".trash").join("books").join(&entry.entry);
+        if !tokio::fs::remove_dir_all(&dir).await.is_ok() {
+            continue;
+        }
+        swept.books += 1;
+    }
+    for book_dir in book_dirs {
+        let mut seen = std::collections::HashSet::new();
+        for entry in list_chapter_trash(book_dir).await? {
+            // 批次条目一定带着批次名的时刻；真缺（不该发生）就跳过——绝不拿 mtime 兜底。
+            let Some(batch) = entry.batch.as_deref() else {
+                continue;
+            };
+            let Some(trashed_at) = entry.trashed_at.as_deref() else {
+                continue;
+            };
+            if !seen.insert(batch.to_string())
+                || !trash_sweep_expired(trashed_at, retention_days, now_millis)
+            {
+                continue;
+            }
+            let dir = book_dir.join("chapters").join(".trash").join(batch);
+            if !tokio::fs::remove_dir_all(&dir).await.is_ok() {
+                continue;
+            }
+            swept.batches += 1;
+        }
+    }
+    Ok(swept)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1624,5 +1732,205 @@ mod tests {
             read_to_string(&book.join("chapters").join("0002_云涌.md")).await,
             "# 第2章 云涌\n\n第二份。"
         );
+    }
+
+    // ── R60 第三批/1685 号：保留期 ────────────────────────────────
+
+    fn retention_vectors() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../../../packages/studio/src/__tests__/golden/trash-retention-vectors.json"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn retention_vectors_match_the_shared_table() {
+        let vectors = retention_vectors();
+        assert_eq!(
+            vectors["defaultDays"].as_u64().unwrap(),
+            DEFAULT_TRASH_RETENTION_DAYS
+        );
+        assert_eq!(
+            vectors["maxDays"].as_u64().unwrap(),
+            MAX_TRASH_RETENTION_DAYS
+        );
+        for vector in vectors["normalization"].as_array().unwrap() {
+            assert_eq!(
+                normalize_trash_retention_days(&vector["value"]),
+                vector["days"].as_u64().unwrap(),
+                "normalization {:?}",
+                vector["value"]
+            );
+        }
+        for vector in vectors["expiry"].as_array().unwrap() {
+            assert_eq!(
+                trash_sweep_expired(
+                    vector["trashedAt"].as_str().unwrap(),
+                    vector["days"].as_u64().unwrap(),
+                    vector["nowMillis"].as_u64().unwrap(),
+                ),
+                vector["expired"].as_bool().unwrap(),
+                "expiry {}",
+                vector["name"].as_str().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn retention_days_from_raw_falls_back_to_the_default() {
+        assert_eq!(
+            trash_retention_days_from_raw(&serde_json::json!({"trash": {"retentionDays": 45}})),
+            45
+        );
+        assert_eq!(
+            trash_retention_days_from_raw(&serde_json::json!({})),
+            DEFAULT_TRASH_RETENTION_DAYS
+        );
+        assert_eq!(
+            trash_retention_days_from_raw(&serde_json::json!({"trash": 5})),
+            DEFAULT_TRASH_RETENTION_DAYS
+        );
+        assert_eq!(
+            trash_retention_days_from_raw(&serde_json::json!({"trash": {"retentionDays": "45"}})),
+            DEFAULT_TRASH_RETENTION_DAYS
+        );
+    }
+
+    /// 本腿删出来的书级条目（根上有 `book.json`）。
+    fn seed_book_trash_entry(root: &Path, entry: &str) {
+        std::fs::create_dir_all(root.join(".trash").join("books").join(entry)).unwrap();
+        std::fs::write(
+            root.join(".trash")
+                .join("books")
+                .join(entry)
+                .join("book.json"),
+            format!(r#"{{"id":"{}"}}"#, entry.split("--").next().unwrap()),
+        )
+        .unwrap();
+    }
+
+    fn seed_book_trash(root: &Path, id: &str, batch: Option<&str>, flat: Option<&str>) -> PathBuf {
+        let book = root.join("works").join(id).join("source");
+        std::fs::create_dir_all(book.join("chapters").join(".trash")).unwrap();
+        if let Some(batch) = batch {
+            let inner = book
+                .join("chapters")
+                .join(".trash")
+                .join(batch)
+                .join("chapters");
+            std::fs::create_dir_all(&inner).unwrap();
+            std::fs::write(inner.join("0003_回.md"), "旧正文").unwrap();
+        }
+        if let Some(flat) = flat {
+            std::fs::write(
+                book.join("chapters").join(".trash").join(flat),
+                "更旧的正文",
+            )
+            .unwrap();
+        }
+        book
+    }
+
+    const NOW: u64 = 1_795_651_200_000; // 2026-11-26T00:00:00Z，cutoff = 2026-10-27
+
+    #[tokio::test]
+    async fn sweep_expires_book_entries_and_batches_but_never_flat_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        seed_book_trash_entry(root, "gone--20260901000000"); // 过期
+        seed_book_trash_entry(root, "kept--20261125000000"); // 未过期
+        std::fs::create_dir_all(
+            root.join(".trash")
+                .join("books")
+                .join("weird-form--20260101000000"),
+        )
+        .unwrap(); // 认不出（无 book.json）
+        let b1 = seed_book_trash(root, "b1", Some("rollback-20260901000000-3"), None); // 过期批次
+        let b2 = seed_book_trash(
+            root,
+            "b2",
+            Some("rollback-20261125000000-3"),
+            Some("0009_旧形态.md"),
+        );
+        // 平铺条目的 mtime 推到 1970——保留期不得拿内容时刻判它（删除时刻无记录）。
+        let flat = b2.join("chapters").join(".trash").join("0009_旧形态.md");
+        let handle = std::fs::File::options().write(true).open(&flat).unwrap();
+        handle.set_modified(std::time::UNIX_EPOCH).unwrap();
+
+        let swept = sweep_expired_trash(root, &[b1.clone(), b2.clone()], 30, NOW)
+            .await
+            .unwrap();
+        assert_eq!(
+            swept,
+            SweptTrash {
+                books: 1,
+                batches: 1
+            }
+        );
+
+        let books = list_book_trash(root).await.unwrap();
+        let names: Vec<_> = books.iter().map(|entry| entry.entry.as_str()).collect();
+        assert_eq!(names, ["kept--20261125000000"]);
+        // 认不出的形态不进列表也就不清扫——它必须原样留在磁盘上。
+        assert!(root
+            .join(".trash")
+            .join("books")
+            .join("weird-form--20260101000000")
+            .is_dir());
+        assert!(list_chapter_trash(&b1).await.unwrap().is_empty()); // 过期批次整批清走
+        assert_eq!(list_chapter_trash(&b2).await.unwrap().len(), 2); // 未过期批次 + 平铺都在
+    }
+
+    #[tokio::test]
+    async fn sweep_on_missing_trash_dirs_is_zero_and_silent() {
+        let dir = tempfile::tempdir().unwrap();
+        let swept = sweep_expired_trash(
+            dir.path(),
+            &[dir.path().join("works/ghost/source")],
+            30,
+            NOW,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            swept,
+            SweptTrash {
+                books: 0,
+                batches: 0
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_swept_batch_leaves_no_empty_shell_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let book = seed_book_trash(root, "b1", Some("rollback-20260601000000-2"), None);
+        sweep_expired_trash(root, std::slice::from_ref(&book), 30, NOW)
+            .await
+            .unwrap();
+        let trash = book.join("chapters").join(".trash");
+        let names: Vec<_> = sorted_dir_names(&trash).await.unwrap();
+        assert!(names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_one_day_window_sweeps_by_exact_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        seed_book_trash_entry(root, "gone--20261125090000"); // 昨天 09:00
+        seed_book_trash_entry(root, "kept--20261125120000"); // 昨天 12:00
+        let now = 1_795_687_200_000; // 2026-11-26T10:00Z，days=1 的 cutoff = 昨天 10:00
+        let swept = sweep_expired_trash(root, &[], 1, now).await.unwrap();
+        assert_eq!(
+            swept,
+            SweptTrash {
+                books: 1,
+                batches: 0
+            }
+        );
+        let books = list_book_trash(root).await.unwrap();
+        let names: Vec<_> = books.iter().map(|entry| entry.entry.as_str()).collect();
+        assert_eq!(names, ["kept--20261125120000"]);
     }
 }
