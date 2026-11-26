@@ -8,6 +8,7 @@ import {
   loadRuntimeStateSnapshot,
   saveRuntimeStateSnapshot,
 } from "../state/runtime-state-store.js";
+import { StateManifestSchema } from "../models/runtime-state.js";
 
 describe("runtime state mini-flow", () => {
   const roots: string[] = [];
@@ -99,6 +100,34 @@ describe("runtime state mini-flow", () => {
 // 788 号：legacy 书 bootstrap（Rust ensure 语义 TS 镜像）——状态四件缺失/损坏
 // 时从 markdown 真相面派生物化；两腿（Rust/TS）行为收敛。
 // =============================================================================
+describe("manifest cross-engine tolerance (R65 轮键面同族小修)", () => {
+  it("accepts product-engine manifests carrying migrationWarnings (Rust 恒序列化)", () => {
+    // 键面漂移族：上游 2.0 删键、Rust 移植 1.x 保留——strict 拒收会让
+    // readStateJsonTolerant 把整份结构化状态当缺失静默重建（md 重建无有效期
+    // 历史=正好伤 R65 新语义）。optional 容错=消费端兼容权威写入方。
+    const rustWritten = {
+      schemaVersion: 2,
+      language: "zh",
+      lastAppliedChapter: 6,
+      projectionVersion: 1,
+      migrationWarnings: [],
+    };
+    expect(StateManifestSchema.parse(rustWritten)).toEqual(rustWritten);
+    // 上游 2.0 原生形态（无该键）照常通过。
+    expect(StateManifestSchema.parse({
+      schemaVersion: 2,
+      language: "zh",
+      lastAppliedChapter: 6,
+      projectionVersion: 1,
+    })).toEqual({
+      schemaVersion: 2,
+      language: "zh",
+      lastAppliedChapter: 6,
+      projectionVersion: 1,
+    });
+  });
+});
+
 describe("788 legacy bootstrap", () => {
   const roots: string[] = [];
 

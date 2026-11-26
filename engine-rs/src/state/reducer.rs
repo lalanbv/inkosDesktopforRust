@@ -391,15 +391,29 @@ fn apply_current_state_patch(
             Some(v) => v,
             None => continue,
         };
-        // 倒序删除匹配别名的旧 fact
-        let mut index = next_facts.len() as i64 - 1;
-        while index >= 0 {
-            let i = index as usize;
-            let predicate = next_facts[i].predicate.to_lowercase();
-            if aliases.iter().any(|a| a.to_lowercase() == predicate) {
-                next_facts.remove(i);
+        // R65 第一步：改事实不再删除旧行——历史保留、按有效期失效（对齐 TS
+        // `applyFactOps.upsert`：活跃同谓词旧事实置 valid_until=chapter-1；
+        // 精确同值活跃事实整跳过保幂等；已失效历史行不重触）。此前「倒序删除」
+        // 丢弃历史=双端漂移（TS 面保留 validUntilChapter 历史），语义表见共享
+        // golden `state-fact-validity.json` 的 `supersede`。
+        let alias_set: std::collections::HashSet<String> =
+            aliases.iter().map(|a| a.to_lowercase()).collect();
+        let slot_active = |fact: &CurrentStateFact| -> bool {
+            fact.subject == "protagonist"
+                && alias_set.contains(&fact.predicate.to_lowercase())
+                && fact.is_active_at(delta.chapter)
+        };
+        // 精确同值（同谓词同 object）且仍活跃 → 跳过（同 delta 重施零重复活跃行）。
+        let exact_active = next_facts
+            .iter()
+            .any(|f| slot_active(f) && f.object == value);
+        if exact_active {
+            continue;
+        }
+        for fact in next_facts.iter_mut() {
+            if slot_active(fact) {
+                fact.valid_until_chapter = Some(delta.chapter.saturating_sub(1));
             }
-            index -= 1;
         }
         next_facts.push(CurrentStateFact {
             subject: "protagonist".into(),
@@ -914,7 +928,8 @@ mod tests {
     }
 
     #[test]
-    fn current_state_patch_replaces_by_alias() {
+    fn current_state_patch_supersedes_by_alias_keeps_history() {
+        // R65 第一步：改事实失效旧行、保留历史（旧语义=倒序删除，与 TS 漂移）。
         let mut snap = empty_snapshot(5);
         snap.current_state.facts.push(CurrentStateFact {
             subject: "protagonist".into(),
@@ -939,9 +954,49 @@ mod tests {
             .iter()
             .filter(|f| f.predicate == "当前位置")
             .collect();
-        assert_eq!(locs.len(), 1);
-        assert_eq!(locs[0].object, "新位置");
-        assert_eq!(locs[0].valid_from_chapter, 6);
+        assert_eq!(locs.len(), 2);
+        let active = locs.iter().find(|f| f.object == "新位置").unwrap();
+        assert_eq!(active.valid_from_chapter, 6);
+        assert_eq!(active.valid_until_chapter, None);
+        let expired = locs.iter().find(|f| f.object == "旧位置").unwrap();
+        assert_eq!(expired.valid_from_chapter, 3);
+        assert_eq!(expired.valid_until_chapter, Some(5)); // 失效于 chapter-1
+        assert!(!expired.is_active_at(6));
+        assert!(active.is_active_at(6));
+    }
+
+    #[test]
+    fn current_state_patch_same_value_is_idempotent() {
+        // R65 第一步：精确同值活跃事实整跳过——allow_reapply 重施同 delta 不产生
+        // 重复活跃行，也不给既有行误置失效。
+        let snap_facts = |last: u32| {
+            let mut snap = empty_snapshot(last);
+            snap.current_state.facts.push(CurrentStateFact {
+                subject: "protagonist".into(),
+                predicate: "当前位置".into(),
+                object: "新位置".into(),
+                valid_from_chapter: 3,
+                valid_until_chapter: None,
+                source_chapter: 3,
+            });
+            snap
+        };
+        let delta = RuntimeStateDelta {
+            chapter: 6,
+            current_state_patch: Some(CurrentStatePatch {
+                current_location: Some("新位置".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let next = apply_runtime_state_delta(&snap_facts(5), &delta, None).unwrap();
+        assert_eq!(next.current_state.facts.len(), 1);
+        assert_eq!(next.current_state.facts[0].valid_from_chapter, 3);
+        assert_eq!(next.current_state.facts[0].valid_until_chapter, None);
+        // allow_reapply 重施（last_applied 已到 6）：仍单行、仍无失效标记。
+        let reapplied = apply_runtime_state_delta(&next, &delta, Some(true)).unwrap();
+        assert_eq!(reapplied.current_state.facts.len(), 1);
+        assert_eq!(reapplied.current_state.facts[0].valid_until_chapter, None);
     }
 
     #[test]

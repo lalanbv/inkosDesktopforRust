@@ -8,6 +8,11 @@ export const StateManifestSchema = z.object({
   language: RuntimeStateLanguageSchema,
   lastAppliedChapter: z.number().int().min(0),
   projectionVersion: z.number().int().min(1),
+  // migrationWarnings：上游 2.0 从 schema 删除，Rust 移植自 1.x 保留（承载迁移
+  // 告警，恒序列化）。TS 以 optional 容错产品引擎写入的 manifest——strict 拒收
+  // 会经 readStateJsonTolerant 把整份结构化状态当缺失静默重建（键面漂移族：
+  // 考古=24b5c213 移植时 1.x 有 default([])→7e60e13f 删→Rust 对齐对象是消费端）。
+  migrationWarnings: z.array(z.string()).optional(),
 }).strict();
 
 export type StateManifest = z.infer<typeof StateManifestSchema>;
@@ -81,6 +86,22 @@ export const CurrentStateFactSchema = z.object({
 }).strict();
 
 export type CurrentStateFact = z.infer<typeof CurrentStateFactSchema>;
+
+/**
+ * 事实在 `chapter` 是否有效：未失效或失效章等于当前章仍有效（`>=`）。
+ *
+ * R65 第一步：有效期判定单一真源——reducer 的失效写入（`applyFactOps` 的
+ * active 判定）、投影过滤（`renderCurrentStateProjection`）与状态校验装配
+ * （state-validator）三处共用本判定，语义与 Rust
+ * `CurrentStateFact::is_active_at` 逐字对齐。边界向量共享 golden：
+ * `__tests__/golden/state-fact-validity.json` 的 `activeAt` 表。
+ */
+export function isFactActiveAt(
+  fact: Pick<CurrentStateFact, "validUntilChapter">,
+  chapter: number,
+): boolean {
+  return fact.validUntilChapter === null || fact.validUntilChapter >= chapter;
+}
 
 export const CurrentStateStateSchema = z.object({
   chapter: z.number().int().min(0),

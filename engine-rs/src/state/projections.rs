@@ -323,6 +323,11 @@ pub fn render_current_state_projection(
     let mut additional: Vec<&CurrentStateFact> = state
         .facts
         .iter()
+        // R65 第一步：投影按有效期过滤（对齐 TS `renderCurrentStateProjection` 的
+        // `validUntil === null || >= state.chapter`）——失效历史事实只留在结构化
+        // 状态里，不再出现在渲染面。与 reducer 的失效写入同一判定单源
+        // （`CurrentStateFact::is_active_at`）。
+        .filter(|f| f.is_active_at(state.chapter))
         .filter(|f| !known_predicates.contains(&normalize_predicate(&f.predicate)))
         .collect();
     additional.sort_by(|a, b| compare_additional_facts(&a.predicate, &b.predicate));
@@ -344,9 +349,12 @@ pub fn render_current_state_projection(
 fn find_fact_value(state: &CurrentStateState, aliases: &[&str]) -> Option<String> {
     let alias_set: std::collections::HashSet<String> =
         aliases.iter().map(|a| normalize_predicate(a)).collect();
+    // R65 第一步：槽位取值同样按有效期过滤——否则保留历史后，失效旧行若排在
+    // 活跃新行之前会被 `find` 选中，投影展示过期值（修 A 引入 B 的典型面）。
     state
         .facts
         .iter()
+        .filter(|f| f.is_active_at(state.chapter))
         .find(|f| alias_set.contains(&normalize_predicate(&f.predicate)))
         .map(|f| f.object.clone())
 }
@@ -503,6 +511,68 @@ mod tests {
         assert!(md.contains("图书馆"));
         assert!(md.contains("## 其他状态"));
         assert!(md.contains("- 随笔")); // note_1 → 无前缀
+    }
+
+    #[test]
+    fn current_state_projection_filters_expired_facts() {
+        // R65 第一步：保留历史后投影必须按有效期过滤——失效槽位行若排在活跃行
+        // 前会被 find 选中（展示过期值=修 A 引入 B），失效的 additional 行同理。
+        let state = CurrentStateState {
+            chapter: 7,
+            facts: vec![
+                CurrentStateFact {
+                    subject: "protagonist".into(),
+                    predicate: "当前位置".into(),
+                    object: "旧位置".into(),
+                    valid_from_chapter: 1,
+                    valid_until_chapter: Some(5), // 已失效（5 < 7）
+                    source_chapter: 1,
+                },
+                CurrentStateFact {
+                    subject: "protagonist".into(),
+                    predicate: "当前位置".into(),
+                    object: "新位置".into(),
+                    valid_from_chapter: 6,
+                    valid_until_chapter: None,
+                    source_chapter: 6,
+                },
+                CurrentStateFact {
+                    subject: "current_state".into(),
+                    predicate: "note_1".into(),
+                    object: "过期随笔".into(),
+                    valid_from_chapter: 1,
+                    valid_until_chapter: Some(3), // 已失效
+                    source_chapter: 1,
+                },
+                CurrentStateFact {
+                    subject: "current_state".into(),
+                    predicate: "note_2".into(),
+                    object: "现行随笔".into(),
+                    valid_from_chapter: 6,
+                    valid_until_chapter: None,
+                    source_chapter: 6,
+                },
+            ],
+        };
+        let md = render_current_state_projection(&state, WritingLanguage::Zh);
+        assert!(md.contains("新位置"));
+        assert!(!md.contains("旧位置"), "失效槽位行不得渲染：{md}");
+        assert!(md.contains("现行随笔"));
+        assert!(!md.contains("过期随笔"), "失效 additional 行不得渲染：{md}");
+        // 边界：失效章等于当前章仍有效（>= 语义，共享 golden activeAt 同表）。
+        let boundary = CurrentStateState {
+            chapter: 5,
+            facts: vec![CurrentStateFact {
+                subject: "protagonist".into(),
+                predicate: "当前位置".into(),
+                object: "恰值位置".into(),
+                valid_from_chapter: 1,
+                valid_until_chapter: Some(5),
+                source_chapter: 1,
+            }],
+        };
+        let bd = render_current_state_projection(&boundary, WritingLanguage::Zh);
+        assert!(bd.contains("恰值位置"), "失效章=当前章仍有效：{bd}");
     }
 
     #[test]

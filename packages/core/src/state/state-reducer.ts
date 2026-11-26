@@ -4,6 +4,7 @@ import {
   HooksStateSchema,
   RuntimeStateDeltaSchema,
   StateManifestSchema,
+  isFactActiveAt,
   type HookRecord,
   type ChapterSummariesState,
   type CurrentStateState,
@@ -151,9 +152,6 @@ function applyFactOps(
   delta: RuntimeStateDelta,
 ): CurrentStateState {
   const nextFacts = currentState.facts.map((fact) => ({ ...fact }));
-  const active = (fact: CurrentStateState["facts"][number]) => (
-    fact.validUntilChapter === null || fact.validUntilChapter >= delta.chapter
-  );
   const sameKey = (
     fact: CurrentStateState["facts"][number],
     selector: { readonly subject: string; readonly predicate: string; readonly object?: string },
@@ -163,7 +161,7 @@ function applyFactOps(
 
   for (const selector of delta.factOps.expire) {
     for (const fact of nextFacts) {
-      if (active(fact) && sameKey(fact, selector)) fact.validUntilChapter = Math.max(0, delta.chapter - 1);
+      if (isFactActiveAt(fact, delta.chapter) && sameKey(fact, selector)) fact.validUntilChapter = Math.max(0, delta.chapter - 1);
     }
   }
 
@@ -173,10 +171,10 @@ function applyFactOps(
       predicate: input.predicate.trim(),
       object: input.object.trim(),
     };
-    const exact = nextFacts.some((candidate) => active(candidate) && sameKey(candidate, fact));
+    const exact = nextFacts.some((candidate) => isFactActiveAt(candidate, delta.chapter) && sameKey(candidate, fact));
     if (exact) continue;
     for (const candidate of nextFacts) {
-      if (active(candidate) && candidate.subject === fact.subject && candidate.predicate === fact.predicate) {
+      if (isFactActiveAt(candidate, delta.chapter) && candidate.subject === fact.subject && candidate.predicate === fact.predicate) {
         candidate.validUntilChapter = Math.max(0, delta.chapter - 1);
       }
     }

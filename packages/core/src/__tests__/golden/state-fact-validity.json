@@ -1,0 +1,69 @@
+{
+  "_comment": "R65 第一步：快照事实有效期语义共享 golden（双腿同一事实源：Rust tests/golden_state_fact_validity_diff.rs + TS state-fact-validity.test.ts）。activeAt=有效期判定边界表，语义「validUntil===null 或 validUntil>=queryChapter」——失效章等于当前章时仍有效（TS 既有口径为准）。supersede=改事实保留历史语义表（TS factOps.upsert 与 Rust CurrentStatePatch 同语义）：①活跃同谓词旧事实置 validUntil=chapter-1（历史保留、非删除）②精确同值活跃事实整跳过（幂等：同 delta 重施不产生重复活跃行）③已失效历史行不重触④不同槽位事实不受牵连。expectedFacts 由测试侧按 [predicate,object] 码点序规范化后逐字段比对（各腿落盘顺序归各自 reducer 排序管，本表不钉）。新增边界/形态时两侧同登记。",
+  "activeAt": [
+    { "name": "null-still-active", "validUntil": null, "queryChapter": 12, "active": true },
+    { "name": "boundary-equal-active", "validUntil": 5, "queryChapter": 5, "active": true },
+    { "name": "just-expired", "validUntil": 5, "queryChapter": 6, "active": false },
+    { "name": "chapter-zero-boundary-active", "validUntil": 0, "queryChapter": 0, "active": true },
+    { "name": "chapter-zero-expired-later", "validUntil": 0, "queryChapter": 1, "active": false }
+  ],
+  "supersede": [
+    {
+      "name": "supersede-keeps-history",
+      "language": "zh",
+      "chapter": 6,
+      "inputFacts": [
+        { "subject": "protagonist", "predicate": "当前位置", "object": "旧位置", "validFromChapter": 3, "validUntilChapter": null, "sourceChapter": 3 }
+      ],
+      "rustPatch": { "field": "currentLocation", "value": "新位置" },
+      "tsUpsert": { "subject": "protagonist", "predicate": "当前位置", "object": "新位置" },
+      "expectedFacts": [
+        { "subject": "protagonist", "predicate": "当前位置", "object": "新位置", "validFromChapter": 6, "validUntilChapter": null, "sourceChapter": 6 },
+        { "subject": "protagonist", "predicate": "当前位置", "object": "旧位置", "validFromChapter": 3, "validUntilChapter": 5, "sourceChapter": 3 }
+      ]
+    },
+    {
+      "name": "exact-same-value-active-skips",
+      "language": "zh",
+      "chapter": 6,
+      "inputFacts": [
+        { "subject": "protagonist", "predicate": "当前位置", "object": "新位置", "validFromChapter": 3, "validUntilChapter": null, "sourceChapter": 3 }
+      ],
+      "rustPatch": { "field": "currentLocation", "value": "新位置" },
+      "tsUpsert": { "subject": "protagonist", "predicate": "当前位置", "object": "新位置" },
+      "expectedFacts": [
+        { "subject": "protagonist", "predicate": "当前位置", "object": "新位置", "validFromChapter": 3, "validUntilChapter": null, "sourceChapter": 3 }
+      ]
+    },
+    {
+      "name": "expired-history-not-retouched",
+      "language": "zh",
+      "chapter": 6,
+      "inputFacts": [
+        { "subject": "protagonist", "predicate": "当前位置", "object": "旧位置", "validFromChapter": 3, "validUntilChapter": 4, "sourceChapter": 3 },
+        { "subject": "protagonist", "predicate": "当前位置", "object": "现位置", "validFromChapter": 5, "validUntilChapter": null, "sourceChapter": 5 }
+      ],
+      "rustPatch": { "field": "currentLocation", "value": "新位置" },
+      "tsUpsert": { "subject": "protagonist", "predicate": "当前位置", "object": "新位置" },
+      "expectedFacts": [
+        { "subject": "protagonist", "predicate": "当前位置", "object": "新位置", "validFromChapter": 6, "validUntilChapter": null, "sourceChapter": 6 },
+        { "subject": "protagonist", "predicate": "当前位置", "object": "旧位置", "validFromChapter": 3, "validUntilChapter": 4, "sourceChapter": 3 },
+        { "subject": "protagonist", "predicate": "当前位置", "object": "现位置", "validFromChapter": 5, "validUntilChapter": 5, "sourceChapter": 5 }
+      ]
+    },
+    {
+      "name": "other-slot-fact-untouched",
+      "language": "zh",
+      "chapter": 6,
+      "inputFacts": [
+        { "subject": "protagonist", "predicate": "当前目标", "object": "目标A", "validFromChapter": 2, "validUntilChapter": null, "sourceChapter": 2 }
+      ],
+      "rustPatch": { "field": "currentLocation", "value": "新位置" },
+      "tsUpsert": { "subject": "protagonist", "predicate": "当前位置", "object": "新位置" },
+      "expectedFacts": [
+        { "subject": "protagonist", "predicate": "当前位置", "object": "新位置", "validFromChapter": 6, "validUntilChapter": null, "sourceChapter": 6 },
+        { "subject": "protagonist", "predicate": "当前目标", "object": "目标A", "validFromChapter": 2, "validUntilChapter": null, "sourceChapter": 2 }
+      ]
+    }
+  ]
+}

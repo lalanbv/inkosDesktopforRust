@@ -258,6 +258,19 @@ pub struct CurrentStateFact {
     pub source_chapter: u32,
 }
 
+impl CurrentStateFact {
+    /// 事实在 `chapter` 是否有效：未失效或失效章等于当前章仍有效（`>=`）。
+    ///
+    /// R65 第一步：有效期判定单一真源——投影过滤（`state/projections.rs`）与
+    /// reducer 失效写入（`state/reducer.rs`）共用本判定，语义与 TS
+    /// `isFactActiveAt` 逐字对齐（`validUntil === null || validUntil >= chapter`）。
+    /// 边界向量共享 golden：`golden/state-fact-validity.json` 的 `activeAt` 表。
+    pub fn is_active_at(&self, chapter: u32) -> bool {
+        self.valid_until_chapter
+            .is_none_or(|until| until >= chapter)
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "export-bindings", derive(TS))]
 #[cfg_attr(feature = "export-bindings", ts(export))]

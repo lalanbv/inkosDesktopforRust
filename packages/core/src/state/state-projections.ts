@@ -1,7 +1,8 @@
-import type {
-  ChapterSummariesState,
-  CurrentStateState,
-  HooksState,
+import {
+  isFactActiveAt,
+  type ChapterSummariesState,
+  type CurrentStateState,
+  type HooksState,
 } from "../models/runtime-state.js";
 // 816 号：单元格转义单一真源（曾与 story-markdown 物理拷贝两处，810/811/812 各修一处后收敛）。
 import { escapeTableCell } from "../utils/markdown-table.js";
@@ -98,7 +99,7 @@ export function renderCurrentStateProjection(
         "| --- | --- | --- | --- | --- |",
       ];
   const facts = state.facts
-    .filter((fact) => fact.validUntilChapter === null || fact.validUntilChapter >= state.chapter)
+    .filter((fact) => isFactActiveAt(fact, state.chapter))
     .sort((left, right) => (
       left.subject.localeCompare(right.subject)
       || left.predicate.localeCompare(right.predicate)

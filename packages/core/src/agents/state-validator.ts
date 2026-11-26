@@ -2,6 +2,7 @@ import { BaseAgent } from "./base.js";
 import { StateValidationToolSchema, StateProjectionReviewToolSchema } from "./state-validation-tool.js";
 import type { Observation } from "../models/observation.js";
 import { numberReviewSource, resolveObservationSources } from '../models/observation.js';
+import { isFactActiveAt } from "../models/runtime-state.js";
 import type { RuntimeStateSnapshot } from '../state/state-reducer.js';
 
 export interface ValidationResult {
@@ -115,7 +116,7 @@ ${chapterContent}`;
     const targets=[
       ...proposed.currentState.facts.map((after,index)=>({
         id:`fact-${index}`,kind:'state',
-        active:after.validUntilChapter===null||after.validUntilChapter>=proposed.currentState.chapter,
+        active:isFactActiveAt(after,proposed.currentState.chapter),
         before:previous.currentState.facts.find(fact=>fact.subject===after.subject&&fact.predicate===after.predicate&&fact.validFromChapter===after.validFromChapter),
         after,
       })),
