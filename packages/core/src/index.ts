@@ -584,6 +584,7 @@ export {
   assertStructureInvariants,
   appendStructureOpsLog,
   undoEligible,
+  migrateDoubleDotArtifacts,
   undoLastStructureOperation,
   structureUndoStatus,
   type ChapterFingerprint,

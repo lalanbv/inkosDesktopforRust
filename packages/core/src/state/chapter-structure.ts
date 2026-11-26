@@ -18,7 +18,8 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
 import { writeTextAtomic } from "../utils/atomic-write.js";
@@ -399,6 +400,8 @@ export async function undoLastStructureOperation(
   bookId: string,
   expectedRevision: string | undefined,
 ): Promise<StructureOutcome> {
+    // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+  await migrateDoubleDotArtifacts(deps.bookDir);
   const index = await deps.loadChapterIndex();
   checkRevision(index, expectedRevision);
   const numbers = sortedNumbers(index);
@@ -632,8 +635,35 @@ export async function structureUndoStatus(
 }
 
 /** 操作前全书指纹清单（撤销批二的全量回位依据；结构操作低频，逐章重读可承受）。 */
-async function collectFingerprints(
-  bookDir: string,
+/**
+ * 双点产物迁移（R63 立案处置/1699 号）：1698 号修复前的 TS split/merge 曾把
+ * runtime 产物迁成双点名（`chapter-0004..trace.md`——paddedRuntimePrefix 尾点
+ * 与 slice(12) 起始点拼接），读侧单点匹配不识别=孤儿产物。结构事务入口先扫
+ * `story/runtime` 折叠连续点（目标在位则保留不动=不覆盖），幂等（无双点零操作）。
+ * 返回迁移数。
+ */
+export async function migrateDoubleDotArtifacts(bookDir: string): Promise<number> {
+  const runtimeDir = join(bookDir, "story", "runtime");
+  let names: string[] = [];
+  try {
+    names = await readdir(runtimeDir);
+  } catch {
+    return 0;
+  }
+  let migrated = 0;
+  for (const name of names) {
+    if (!name.includes("..")) continue;
+    const fixed = name.replace(/\.{2,}/gu, ".");
+    const from = join(runtimeDir, name);
+    const to = join(runtimeDir, fixed);
+    if (existsSync(to)) continue;
+    await rename(from, to);
+    migrated += 1;
+  }
+  return migrated;
+}
+
+async function collectFingerprints(  bookDir: string,
   numbers: ReadonlyArray<number>,
   index: ReadonlyArray<ChapterMeta>,
 ): Promise<ReadonlyArray<ChapterFingerprint>> {
@@ -768,6 +798,8 @@ export async function splitChapter(
   offset: number,
   expectedRevision: string | undefined,
 ): Promise<StructureOutcome> {
+    // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+  await migrateDoubleDotArtifacts(deps.bookDir);
   const index = await deps.loadChapterIndex();
   checkRevision(index, expectedRevision);
   const numbers = sortedNumbers(index);
@@ -890,6 +922,8 @@ export async function mergeChapters(
   separator: string | undefined,
   expectedRevision: string | undefined,
 ): Promise<StructureOutcome> {
+  // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+  await migrateDoubleDotArtifacts(deps.bookDir);
   if (chapterNumber === mergeWith) {
     throw new ChapterStructureError(400, "Merge requires two distinct adjacent chapters.");
   }
@@ -1014,6 +1048,8 @@ export async function reorderChapters(
   order: ReadonlyArray<number>,
   expectedRevision: string | undefined,
 ): Promise<StructureOutcome> {
+    // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+  await migrateDoubleDotArtifacts(deps.bookDir);
   const index = await deps.loadChapterIndex();
   checkRevision(index, expectedRevision);
   const numbers = sortedNumbers(index);

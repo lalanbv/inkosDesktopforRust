@@ -10,6 +10,7 @@ import {
   structureInvariant,
   assertStructureInvariants,
   appendStructureOpsLog,
+  migrateDoubleDotArtifacts,
   undoEligible,
   undoLastStructureOperation,
   structureUndoStatus,
@@ -265,6 +266,26 @@ describe("undo 产物逆迁移（R63 立案处置/1698 号）", () => {
     expect(existsSync(join(bookDir, "story", "runtime", "chapter-0003.trace.md"))).toBe(true);
     expect(existsSync(join(bookDir, "story", "runtime", "chapter-0004.trace.md"))).toBe(false);
     expect(readFileSync(join(bookDir, "story", "runtime", "chapter-0003.trace.md"), "utf-8")).toBe("三号章追踪\n");
+  });
+});
+
+describe("双点产物迁移（R63 立案处置/1699 号）", () => {
+  it("split migrates double-dot runtime artifact names before renumbering", async () => {
+    const { bookDir, deps } = seedBook();
+    mkdirSync(join(bookDir, "story", "runtime"), { recursive: true });
+    // 1698 号修复前的 TS split 时代双点产物（读侧不识别的孤儿）。
+    writeFileSync(join(bookDir, "story", "runtime", "chapter-0003..trace.md"), "三号章追踪\n");
+    await splitChapter(deps, "b1", 2, 6, undefined);
+    // 事务入口先迁单点、再随 3→4 移位：双点形态消失、单点 4 号在位。
+    expect(existsSync(join(bookDir, "story", "runtime", "chapter-0003..trace.md"))).toBe(false);
+    expect(readFileSync(join(bookDir, "story", "runtime", "chapter-0004.trace.md"), "utf-8")).toBe("三号章追踪\n");
+  });
+
+  it("migrateDoubleDotArtifacts is idempotent when nothing is double-dotted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "chapter-dd-migrate-"));
+    dirs.push(root);
+    await migrateDoubleDotArtifacts(root);
+    expect(existsSync(join(root, "story", "runtime"))).toBe(false);
   });
 });
 

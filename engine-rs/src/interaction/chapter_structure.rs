@@ -412,6 +412,8 @@ pub async fn split_chapter(
     now_iso: &str,
 ) -> Result<StructureOutcome, StructureError> {
     let root = state.book_dir(book_id);
+    // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+    let _ = migrate_double_dot_artifacts(&root).await;
     let chapters_dir = root.join("chapters");
     let index = state
         .load_chapter_index(book_id)
@@ -699,6 +701,8 @@ pub async fn merge_chapter(
         ));
     }
     let root = state.book_dir(book_id);
+    // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+    let _ = migrate_double_dot_artifacts(&root).await;
     let chapters_dir = root.join("chapters");
     let index = state
         .load_chapter_index(book_id)
@@ -984,6 +988,8 @@ pub async fn reorder_chapters(
     now_iso: &str,
 ) -> Result<StructureOutcome, StructureError> {
     let root = state.book_dir(book_id);
+    // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+    let _ = migrate_double_dot_artifacts(&root).await;
     let chapters_dir = root.join("chapters");
     let index = state
         .load_chapter_index(book_id)
@@ -1565,6 +1571,43 @@ pub async fn structure_undo_status(
     })
 }
 
+/// 双点产物迁移（R63 立案处置/1699 号；镜像 TS `migrateDoubleDotArtifacts`）：
+/// 1698 号修复前的 TS split/merge 曾把 runtime 产物迁成双点名
+/// （`chapter-0004..trace.md`——paddedRuntimePrefix 尾点与 slice(12) 起始点拼接），
+/// 读侧单点匹配不识别=孤儿产物。结构事务入口先扫 `story/runtime` 折叠连续点
+/// （目标在位则保留不动=不覆盖），幂等（无双点零操作）。返回迁移数。
+pub async fn migrate_double_dot_artifacts(book_dir: &Path) -> usize {
+    let runtime_dir = book_dir.join("story").join("runtime");
+    let Ok(mut entries) = tokio::fs::read_dir(&runtime_dir).await else {
+        return 0;
+    };
+    let mut names: Vec<String> = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    let mut migrated = 0;
+    for name in names {
+        if !name.contains("..") {
+            continue;
+        }
+        // 折叠目标=单点形态（与批一迁移/读侧的 `chapter-NNNN.` 前缀匹配兼容；
+        // 连字符形态会让后续产物迁移/读侧全部漏掉）。
+        let mut fixed = name.clone();
+        while fixed.contains("..") {
+            fixed = fixed.replace("..", ".");
+        }
+        let from = runtime_dir.join(&name);
+        let to = runtime_dir.join(&fixed);
+        if to.exists() {
+            continue;
+        }
+        tokio::fs::rename(&from, &to).await.ok();
+        migrated += 1;
+    }
+    migrated
+}
+
 /// 撤销上一笔结构事务（R61 批二；镜像 TS `undoLastStructureOperation`）：
 /// undoEligible 守卫 → 内容来源链（现盘指纹配对 → .trash → .versions/<号>
 /// structure 存档；缺失拒绝点名章）→ 逆 op 过同一清单守卫 → 提交（写面=
@@ -1581,6 +1624,8 @@ pub async fn undo_last_structure_operation(
     let _ = now_millis;
     let root = state.book_dir(book_id);
     let chapters_dir = root.join("chapters");
+    // R63 立案处置/1699 号：入口先迁双点产物（幂等——无双点零操作）。
+    let _ = migrate_double_dot_artifacts(&root).await;
     let index = state
         .load_chapter_index(book_id)
         .await
@@ -2138,6 +2183,62 @@ mod tests {
             Some("last entry is itself an undo")
         );
         assert_eq!(status.last_kind.as_deref(), Some("undo"));
+    }
+
+    /// R63 立案处置/1699 号：双点产物迁移——事务入口先迁单点、再随 3→4 移位。
+    #[tokio::test]
+    async fn split_migrates_double_dot_artifact_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let book_dir = dir.path().join("books/b1");
+        // 1698 号修复前的 TS split 时代双点产物（读侧不识别的孤儿）。
+        tokio::fs::write(
+            book_dir.join("story/runtime/chapter-0003..trace.md"),
+            "三号章追踪\n",
+        )
+        .await
+        .unwrap();
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            8,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        assert!(!book_dir
+            .join("story/runtime/chapter-0003..trace.md")
+            .exists());
+        // 折叠后的单点/连字符形态都是章文件名合法语法（读侧按前导号识别）。
+        let runtime_dir = book_dir.join("story/runtime");
+        let mut names: Vec<String> = Vec::new();
+        let mut entries = tokio::fs::read_dir(&runtime_dir).await.unwrap();
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+        names.sort();
+        eprintln!("runtime contents after split: {:?}", names);
+        let moved = names
+            .iter()
+            .find(|name| name.contains("0004"))
+            .expect("双点应折叠为合法 4 号形态");
+        let content = tokio::fs::read_to_string(runtime_dir.join(moved))
+            .await
+            .unwrap();
+        assert_eq!(content, "三号章追踪\n");
+    }
+
+    #[tokio::test]
+    async fn migrate_double_dot_is_idempotent_without_runtime_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            migrate_double_dot_artifacts(&dir.path().join("books/b1")).await,
+            0
+        );
     }
 
     /// R63 立案处置/1698 号：undo 产物逆迁移——merge 撤销的被删章产物从
