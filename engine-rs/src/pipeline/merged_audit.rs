@@ -63,10 +63,12 @@ pub async fn evaluate_merged_audit(
     chapter_number: u32,
     language: WritingLanguage,
     options: &AuditChapterOptions,
+    // R64/1700 号：自定义敏感词表（bookRules.sensitiveWords；None=仅内置词表）。
+    custom_sensitive_words: Option<&[String]>,
 ) -> Result<MergedAuditEvaluation, String> {
     let llm_audit = llm.audit(chapter_content, options).await?;
     let ai_tells = analyze_ai_tells(chapter_content, language);
-    let sensitive = analyze_sensitive_words(chapter_content, None, language);
+    let sensitive = analyze_sensitive_words(chapter_content, custom_sensitive_words, language);
     let fatigue = analyze_long_span_fatigue(&AnalyzeLongSpanFatigueInput {
         book_dir,
         chapter_number,
@@ -294,6 +296,7 @@ mod tests {
             1,
             WritingLanguage::Zh,
             &AuditChapterOptions::default(),
+            None,
         )
         .await
         .unwrap();
@@ -325,12 +328,68 @@ mod tests {
             1,
             WritingLanguage::Zh,
             &AuditChapterOptions::default(),
+            None,
         )
         .await
         .unwrap();
         assert!(!eval.audit_result.passed);
         assert!(!eval.revision_blocking_issues.is_empty());
         assert!(eval.blocking_count >= 1);
+    }
+
+    /// R64/1700 号：custom_sensitive_words 接线——词表外的自定义词命中（内置
+    /// 词表不含该词 → None 时不命中，Some 时命中阻断）。
+    #[tokio::test]
+    async fn custom_sensitive_word_hits_when_wired() {
+        let dir = tempfile::tempdir().unwrap();
+        // 「灵气紊乱」不在内置词表（内置词表为平台敏感词）。
+        let content = "他的灵气紊乱了，随后离开。";
+        let llm = CannedAudit(AuditResult {
+            passed: true,
+            issues: vec![],
+            summary: "clean".to_string(),
+            parse_failed: None,
+            overall_score: None,
+            token_usage: None,
+        });
+        let without = evaluate_merged_audit(
+            &llm,
+            dir.path(),
+            content,
+            1,
+            WritingLanguage::Zh,
+            &AuditChapterOptions::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !without
+                .revision_blocking_issues
+                .iter()
+                .any(|issue| issue.description.contains("灵气紊乱")),
+            "无自定义词表时不应命中：{:?}",
+            without.revision_blocking_issues
+        );
+        let custom = ["灵气紊乱".to_string()];
+        let with = evaluate_merged_audit(
+            &llm,
+            dir.path(),
+            content,
+            1,
+            WritingLanguage::Zh,
+            &AuditChapterOptions::default(),
+            Some(&custom),
+        )
+        .await
+        .unwrap();
+        assert!(
+            with.revision_blocking_issues
+                .iter()
+                .any(|issue| issue.description.contains("灵气紊乱")),
+            "接线自定义词表后应命中：{:?}",
+            with.revision_blocking_issues
+        );
     }
 
     #[test]

@@ -786,6 +786,12 @@ async fn write_next_chapter_locked(
         // 确定性后写检查（每轮重跑）：post-write error 级 + hook 账本校验。
         let parsed_rules = read_book_rules(&book_dir).await;
         let gp_checks = gp.clone();
+        // R64/1700 号：自定义敏感词表（bookRules.sensitiveWords；空表折 None=仅内置）。
+        // 先借 rules 再 clone 词表（rules_checks 的 map 会消费 parsed_rules）。
+        let custom_sensitive_words = parsed_rules
+            .as_ref()
+            .map(|parsed| parsed.rules.sensitive_words.clone())
+            .filter(|words| !words.is_empty());
         let rules_checks = parsed_rules.map(|parsed| parsed.rules);
         let memo_body = write_input
             .chapter_memo
@@ -917,7 +923,12 @@ async fn write_next_chapter_locked(
                     .collect()
             }),
             analyze_sensitive_words: Arc::new(move |content| {
-                let result = analyze_sensitive_words(content, None, pipeline_language);
+                // R64/1700 号：接线 bookRules.sensitiveWords 自定义词表（空表=仅内置）。
+                let result = analyze_sensitive_words(
+                    content,
+                    custom_sensitive_words.as_deref(),
+                    pipeline_language,
+                );
                 SensitiveScanResult {
                     blocked: result.found.iter().any(|m| {
                         m.severity == crate::agents::sensitive_words::SensitiveWordSeverity::Block

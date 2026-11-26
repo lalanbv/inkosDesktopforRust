@@ -1091,7 +1091,7 @@
   "parse_book_rules": [
     {
       "name": "frontmatter-full",
-      "input": "---\nversion: \"2.0\"\nprotagonist:\n  name: 林动\n  personalityLock: [冷静, 果决]\n  behavioralConstraints: [不滥杀]\ngenreLock:\n  primary: 仙侠\n  forbidden: [科幻]\nprohibitions: [无逻辑巧合]\nfatigueWordsOverride: [震惊]\nadditionalAuditDimensions: [5, \"战力崩坏\"]\neraConstraints:\n  enabled: true\n  period: 宋代\nnumericalSystemOverrides:\n  hardCap: 100\n  resourceTypes: [灵石]\nfanficMode: canon\n---\n\n正文规则说明\n",
+      "input": "---\nversion: \"2.0\"\nprotagonist:\n  name: 林动\n  personalityLock: [冷静, 果决]\n  behavioralConstraints: [不滥杀]\ngenreLock:\n  primary: 仙侠\n  forbidden: [科幻]\nprohibitions: [无逻辑巧合]\nfatigueWordsOverride: [震惊]\nsensitiveWords: [黑哨, 权钱交易]\nadditionalAuditDimensions: [5, \"战力崩坏\"]\neraConstraints:\n  enabled: true\n  period: 宋代\nnumericalSystemOverrides:\n  hardCap: 100\n  resourceTypes: [灵石]\nfanficMode: canon\n---\n\n正文规则说明\n",
       "expected": {
         "ok": true,
         "value": {
@@ -1129,6 +1129,10 @@
             "chapterTypesOverride": [],
             "fatigueWordsOverride": [
               "震惊"
+            ],
+            "sensitiveWords": [
+              "黑哨",
+              "权钱交易"
             ],
             "additionalAuditDimensions": [
               5,

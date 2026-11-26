@@ -897,6 +897,25 @@ pub(crate) async fn resolve_effective_revision_gate(
     }
 }
 
+/// R64/1700 号：读 bookRules.sensitiveWords 自定义词表（book_rules.json 的
+/// sensitiveWords 节；缺失/损坏/空 → None=仅内置词表）。与 TS rules-reader
+/// 同文件同节（TS BookRulesSchema 已同步该键）。
+async fn read_sensitive_custom_words(book_dir: &std::path::Path) -> Option<Vec<String>> {
+    let path = book_dir.join("story").join("book_rules.json");
+    let raw = tokio::fs::read_to_string(&path).await.ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let words = parsed.get("sensitiveWords")?.as_array()?;
+    let list: Vec<String> = words
+        .iter()
+        .filter_map(|word| word.as_str().map(String::from))
+        .collect();
+    if list.is_empty() {
+        None
+    } else {
+        Some(list)
+    }
+}
+
 pub(crate) async fn run_revise_chain(
     runtime: &BooksRuntime,
     book_id: &str,
@@ -986,6 +1005,8 @@ pub(crate) async fn run_revise_chain(
         chapter_number,
         genre: book.genre.clone(),
     };
+    // R64/1700 号：接线 bookRules.sensitiveWords 自定义词表（缺失/空=仅内置）。
+    let custom_sensitive_words = read_sensitive_custom_words(&book_dir).await;
     let pre = evaluate_merged_audit(
         &auditor,
         &book_dir,
@@ -993,6 +1014,7 @@ pub(crate) async fn run_revise_chain(
         chapter_number,
         language,
         &AuditChapterOptions::default(),
+        custom_sensitive_words.as_deref(),
     )
     .await
     .map_err(internal)?;
@@ -1196,6 +1218,7 @@ pub(crate) async fn run_revise_chain(
         chapter_number,
         language,
         &post_options,
+        custom_sensitive_words.as_deref(),
     )
     .await
     .map_err(internal)?;

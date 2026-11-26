@@ -18,6 +18,7 @@ import {
   type ChapterFingerprint,
   type StructureOperationRecord,
 } from "../state/chapter-structure.js";
+import { BookRulesSchema } from "../models/book-rules.js";
 import type { ChapterMeta } from "../models/chapter.js";
 
 // R61 批一/1687 号：结构事务不变量守卫 + 操作日志。施工图（v11 深化二 §2 R61）：
@@ -370,5 +371,30 @@ describe("三事务成功后落操作日志（R61 批一）", () => {
     expect([...line.before].map((item) => item.fingerprint).sort()).toEqual(
       [...line.after].map((item) => item.fingerprint).sort(),
     );
+  });
+});
+
+describe("BookRulesSchema.sensitiveWords（R64 批一/1700 号键面 parity）", () => {
+  it("accepts the Rust serialized form (sensitiveWords always present)", () => {
+    // Rust BookRules serde camelCase default 恒序列化 sensitiveWords: []。
+    const rustForm = {
+      version: "2",
+      protagonist: { name: "林动", personalityLock: ["冷静"], behavioralConstraints: ["不滥杀"] },
+      genreLock: { primary: "仙侠", forbidden: ["科幻"] },
+      prohibitions: ["无逻辑巧合"],
+      fatigueWordsOverride: ["震惊"],
+      sensitiveWords: ["黑哨", "权钱交易"],
+      additionalAuditDimensions: [5, "战力崩坏"],
+      enableFullCastTracking: false,
+      allowedDeviations: [],
+    };
+    const parsed = BookRulesSchema.parse(rustForm);
+    expect(parsed.sensitiveWords).toEqual(["黑哨", "权钱交易"]);
+    // 空表形态（Rust default 序列化）也接受。
+    expect(BookRulesSchema.parse({ ...rustForm, sensitiveWords: [] }).sensitiveWords).toEqual([]);
+    // 旧文件不带该键也接受（optional）。
+    const legacy = { ...rustForm };
+    delete (legacy as { sensitiveWords?: string[] }).sensitiveWords;
+    expect(BookRulesSchema.parse(legacy).sensitiveWords).toBeUndefined();
   });
 });

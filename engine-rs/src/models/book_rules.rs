@@ -114,6 +114,12 @@ pub struct BookRules {
     pub chapter_types_override: Vec<String>,
     #[serde(default)]
     pub fatigue_words_override: Vec<String>,
+    /// R64/1700 号：自定义敏感词表（逐行一词；与 fatigue_words_override 同族解析）。
+    /// 空表=仅内置词表（analyze_sensitive_words 的 custom_words 接线点）。
+    /// fork 自有增强用 skip_on_empty（同族 Vec 恒产出是 1.x shim 默认行为的
+    /// 忠实镜像；shim 无此键——空表缺省、非空才产出，leaf.json 冻结形态不破）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sensitive_words: Vec<String>,
     #[serde(default)]
     pub additional_audit_dimensions: Vec<AuditDimension>,
     #[serde(default)]
@@ -180,6 +186,7 @@ struct BookRulesRaw {
     prohibitions: Vec<String>,
     chapter_types_override: Vec<String>,
     fatigue_words_override: Vec<String>,
+    sensitive_words: Vec<String>,
     additional_audit_dimensions: Vec<AuditDimension>,
     enable_full_cast_tracking: bool,
     /// z.enum(["canon","au","ooc","cp"]).optional()：非法值 throw（无 catch）。
@@ -271,6 +278,7 @@ impl TryFrom<BookRulesRaw> for BookRules {
             prohibitions: raw.prohibitions,
             chapter_types_override: raw.chapter_types_override,
             fatigue_words_override: raw.fatigue_words_override,
+            sensitive_words: raw.sensitive_words,
             additional_audit_dimensions: raw.additional_audit_dimensions,
             enable_full_cast_tracking: raw.enable_full_cast_tracking,
             fanfic_mode,
@@ -712,7 +720,7 @@ mod tests {
 
     // --- parse_book_rules / try_parse_book_rules_frontmatter ------------------
 
-    const FM_RULES: &str = "---\nversion: \"2.0\"\nprotagonist:\n  name: 林动\n  personalityLock: [冷静, 果决]\n  behavioralConstraints: [不滥杀]\ngenreLock:\n  primary: 仙侠\n  forbidden: [科幻]\nprohibitions: [无逻辑巧合]\nfatigueWordsOverride: [震惊]\nadditionalAuditDimensions: [5, \"战力崩坏\"]\neraConstraints:\n  enabled: true\n  period: 宋代\nnumericalSystemOverrides:\n  hardCap: 100\nfanficMode: canon\n---\n\n正文规则说明\n";
+    const FM_RULES: &str = "---\nversion: \"2.0\"\nprotagonist:\n  name: 林动\n  personalityLock: [冷静, 果决]\n  behavioralConstraints: [不滥杀]\ngenreLock:\n  primary: 仙侠\n  forbidden: [科幻]\nprohibitions: [无逻辑巧合]\nfatigueWordsOverride: [震惊]\nsensitiveWords: [黑哨, 权钱交易]\nadditionalAuditDimensions: [5, \"战力崩坏\"]\neraConstraints:\n  enabled: true\n  period: 宋代\nnumericalSystemOverrides:\n  hardCap: 100\nfanficMode: canon\n---\n\n正文规则说明\n";
 
     #[test]
     fn parse_frontmatter_full() {
@@ -731,6 +739,10 @@ mod tests {
         assert_eq!(g.forbidden, vec!["科幻".to_string()]);
         assert_eq!(r.prohibitions, vec!["无逻辑巧合".to_string()]);
         assert_eq!(r.fatigue_words_override, vec!["震惊".to_string()]);
+        assert_eq!(
+            r.sensitive_words,
+            vec!["黑哨".to_string(), "权钱交易".to_string()]
+        );
         assert_eq!(
             r.additional_audit_dimensions,
             vec![
@@ -757,6 +769,7 @@ mod tests {
         assert_eq!(parsed.rules.version, "1.0");
         assert!(parsed.rules.protagonist.is_none());
         assert!(parsed.rules.prohibitions.is_empty());
+        assert!(parsed.rules.sensitive_words.is_empty());
         assert!(!parsed.rules.enable_full_cast_tracking);
         assert_eq!(parsed.body, "body");
     }
