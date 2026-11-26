@@ -4194,23 +4194,18 @@ async fn destructive_operations_trash_duel() {
             "Node 腿批次里的 {rel} 应等于回滚前"
         );
     }
-    // 回滚之前两棵树就不一样的，批次里恰好是这四件：产品引擎的书架接口顺带把结构化
-    // 状态物化落盘（`get_next_chapter_number` 里的 bootstrap，788 号的 ensure 语义），
-    // Node 腿的读取面不写——夹具只播种了 `story/state/manifest.json`。
+    // 1682 号收口：读取面零写——`get_next_chapter_number` 的 ensure 副作用已删
+    //（此前这里钉定「批次里恰好是产品引擎书架接口物化的结构化状态四件」，788 号
+    // ensure 语义；夹具只播种了 `story/state/manifest.json`）。此后两棵树回滚前
+    // 完全可比（无物化差异），全部批次项都进逐字节对账。
     let pre_existing: std::collections::BTreeSet<&String> = rust_trash
         .keys()
         .chain(ts_trash.keys())
         .filter(|rel| !comparable_before(rel))
         .collect();
-    assert_eq!(
-        pre_existing.into_iter().collect::<Vec<_>>(),
-        vec![
-            &"story/state/chapter_summaries.json".to_string(),
-            &"story/state/current_state.json".to_string(),
-            &"story/state/hooks.json".to_string(),
-            &"story/state/manifest.json".to_string(),
-        ],
-        "回滚之前两棵树不同的文件应当恰好是产品引擎物化的结构化状态四件"
+    assert!(
+        pre_existing.is_empty(),
+        "读取面零写后回滚之前两棵树不应再有差异：{pre_existing:?}"
     );
     for (rel, bytes) in &rust_trash {
         assert_ne!(rel.as_str(), "story/memory.db", "派生物不进回收站");
@@ -4306,9 +4301,10 @@ async fn destructive_operations_trash_duel() {
             .unwrap_or(rel);
         rust_before.get(source) == ts_before.get(source)
     };
-    // 回滚之前只有产品引擎那棵树才有的文件（书架接口顺带物化的结构化状态三件）：回滚把
-    // 整个 `story/state/` 移进了批次，所以它们只以批次拷贝的形式出现在回收站里；除此之外
-    // 两腿条目集相同。
+    // 1682 号收口：读取面零写——产品引擎不再经书架接口物化结构化状态三件，两棵树
+    // 回滚前的文件集与字节完全可比（manifest 两腿同是夹具播种值，不再被 bootstrap
+    // 改写）；回收站条目集两腿相同，全部逐字节对账（此前这里钉定「只有产品引擎树
+    // 才有的三件批次拷贝 + 被改写的 manifest 差异」）。
     let only_rust_tree = |rel: &str| {
         let source = rel
             .strip_prefix("chapters/.trash/rollback-*/")
@@ -4326,29 +4322,19 @@ async fn destructive_operations_trash_duel() {
             Some(_) => divergent_before.push(rel.clone()),
         }
     }
-    assert_eq!(
-        only_rust,
-        [
-            "chapters/.trash/rollback-*/story/state/chapter_summaries.json",
-            "chapters/.trash/rollback-*/story/state/current_state.json",
-            "chapters/.trash/rollback-*/story/state/hooks.json",
-        ]
-        .map(String::from)
-        .to_vec(),
-        "回滚之前只有产品引擎那棵树才有的文件，回收站里应当恰好是它们在批次里的拷贝"
+    assert!(
+        only_rust.is_empty(),
+        "读取面零写后不应再有「只有产品引擎树才有的文件」：{only_rust:?}"
     );
     for rel in ts_book.keys() {
         assert!(rust_book.contains_key(rel), "产品引擎回收站缺 {rel}");
     }
     assert_eq!(
         divergent_before,
-        [
-            "chapters/.trash/rollback-*/chapters/index.json",
-            "chapters/.trash/rollback-*/story/state/manifest.json",
-        ]
-        .map(String::from)
-        .to_vec(),
-        "回滚之前两棵树里字节不同的，回收站里也只有它们（批次里的回滚前索引拷贝 + 被产品引擎 bootstrap 改写过的 manifest）"
+        ["chapters/.trash/rollback-*/chapters/index.json"]
+            .map(String::from)
+            .to_vec(),
+        "回滚之前两棵树里字节不同的，回收站里也只有它们（批次里的回滚前索引拷贝——夹具紧凑 JSON vs 迁移规范化；manifest 两腿同值）"
     );
     for rel in [
         "book.json",

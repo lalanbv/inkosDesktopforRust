@@ -175,10 +175,11 @@ fn assemble(root: &Path) -> axum::Router {
 /// 全部书域 GET 端点（787 号普查清单）：每端点先断言 2xx（712 号教训：
 /// 404/5xx 链拒绝静默入锁），再断言树快照不变。
 ///
-/// 两相编码（787 号锁首轮即现形的行为面）：**legacy 书（无状态四件）首读会
-/// 一次性 ensure 补齐**（784 号台账记为 legacy 可用性所依，load-bearing）——
-/// 故先跑 warmup 扫链让 ensure 物化并断言四件确实出现；随后 steady-state
-/// 扫链必须逐位零写（785 号快路径性质）。
+/// 1682 号收口后单相零写：**legacy 书（无状态四件）首读也不物化**——
+/// get_next_chapter_number 的 ensure 副作用已删（对齐 TS `getNextChapterNumber`
+/// 同名链；784/785 号「每读必写 → 首读一次+快路径」的两相折衷随读副作用一并
+/// 消失）。seed 后即 legacy 形态：首轮 sweep 前+后对整棵项目树快照，断言逐位
+/// 不变且状态四件不在树内。
 #[tokio::test]
 async fn read_chain_get_endpoints_leave_project_tree_untouched() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -218,8 +219,10 @@ async fn read_chain_get_endpoints_leave_project_tree_untouched() {
         }
     }
 
-    // 相一：legacy 书 warmup——首读 ensure 物化四件（784 号行为面保持探针）。
+    let (files_before, dirs_before) = snapshot(&root);
     sweep(&app, endpoints).await;
+
+    // legacy 书读链零写：状态四件（784 号 ensure 物化面）不得出现。
     let state_dir = root.join("books/b1/story/state");
     for file in [
         "manifest.json",
@@ -228,23 +231,17 @@ async fn read_chain_get_endpoints_leave_project_tree_untouched() {
         "chapter_summaries.json",
     ] {
         assert!(
-            state_dir.join(file).exists(),
-            "legacy 书首读应 ensure 补齐 {file}（ensure 语义不得被快路径吞掉）"
+            !state_dir.join(file).exists(),
+            "读链不得物化 {file}（1682 号收口：读取面零写，四件由写路径与记忆检索产出）；内容={:?}，mtime={:?}",
+            std::fs::read_to_string(state_dir.join(file)).unwrap_or_default(),
+            state_dir.join(file).metadata().ok().and_then(|m| m.modified().ok()),
         );
     }
-
-    // 相二：steady-state 零写——物化后再全量扫链，树快照逐位不变。
-    let (files_before, dirs_before) = snapshot(&root);
-    assert!(
-        files_before.keys().any(|p| p.contains("story/state/")),
-        "warmup 后状态四件应在树内"
-    );
-    sweep(&app, endpoints).await;
 
     let (files_after, dirs_after) = snapshot(&root);
     assert_eq!(
         files_before, files_after,
-        "读链写盘现形：文件路径/长度/mtime 变化（steady-state 读端点不应落盘）"
+        "读链写盘现形：文件路径/长度/mtime 变化（读端点不应落盘——含 legacy 首读）"
     );
     assert_eq!(
         dirs_before, dirs_after,

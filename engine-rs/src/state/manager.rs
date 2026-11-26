@@ -23,9 +23,7 @@ use std::sync::OnceLock;
 
 use crate::models::book::BookConfig;
 use crate::models::chapter::{ChapterMeta, ChapterStatus};
-use crate::state::state_bootstrap::{
-    bootstrap_structured_state_from_markdown, resolve_durable_story_progress,
-};
+use crate::state::state_bootstrap::resolve_durable_story_progress;
 use crate::state::store::FsStateStore;
 use crate::utils::language::WritingLanguage;
 use crate::utils::utc_time::utc_now_iso;
@@ -238,6 +236,13 @@ impl StateManager {
     }
 
     /// 下一章号：durable 连续工件链权威（结构化状态只 bootstrap 不采信）。
+    ///
+    /// 1682 号：读取面零写——此前的 ensure 副作用（`let _ =
+    /// bootstrap_structured_state_from_markdown(...)`，785 号「首读物化一次 +
+    /// 快路径」折衷）删除：TS 同名链 `getNextChapterNumber` 只算 durable 链
+    /// 从不落盘，784 号「每读必写」的性能病灶与 785 号折衷的读副作用一并消失。
+    /// 状态四件的合法生产者=写路径（write_next save_truth_files 的 ensure）与
+    /// 记忆检索（TS 同款镜像面），读取面不再是其中之一。
     pub async fn get_next_chapter_number(&self, book_id: &str) -> Result<u32, StateManagerError> {
         let book_dir = self.book_dir(book_id);
         // 失败按 0 处理（durable 链缺失 = 新书起始）。
@@ -245,12 +250,6 @@ impl StateManager {
             resolve_durable_story_progress(&FsStateStore, &book_dir.to_string_lossy(), None)
                 .await
                 .unwrap_or(0);
-        let _ = bootstrap_structured_state_from_markdown(
-            &FsStateStore,
-            &book_dir.to_string_lossy(),
-            Some(durable_chapter as u32),
-        )
-        .await;
         Ok(durable_chapter as u32 + 1)
     }
 
@@ -1365,12 +1364,14 @@ mod tests {
         assert_eq!(rows[0].title, "新题");
     }
 
-    /// 785 号：get_next_chapter_number 读端点语义探针——legacy 书（章节产物，
-    /// 无结构化状态）首读补齐四件且章号权威=durable 链（784 号台账行为面保持）；
-    /// 状态齐备后二读零写（manifest mtime 不变 = fsync 原子写不再每次触发，
-    /// 784 号台账 9ms 归因的端到端回归锁）。
+    /// 785 号的首读 ensure 语义在 1682 号收口翻转：读端点零写——legacy 书
+    ///（章节产物，无结构化状态）首读**不**物化状态四件（读取面纯派生，对齐
+    /// TS `getNextChapterNumber` 同名链——TS 侧从来只算 durable 链）；下一章号
+    /// 语义不变（durable 链权威）。四件的合法生产者收窄为写路径（write_next
+    /// ensure）与记忆检索（TS 同款镜像面）——784 号「每读必写」的性能病灶与
+    /// 785 号「首读一次」的折衷都随读副作用一并消失。
     #[tokio::test]
-    async fn get_next_chapter_number_ensures_legacy_state_then_stops_rewriting() {
+    async fn get_next_chapter_number_is_read_only_for_legacy_books() {
         let dir = tempfile::tempdir().unwrap();
         let manager = StateManager::new(dir.path());
         let book_dir = manager.book_dir("b1");
@@ -1387,7 +1388,7 @@ mod tests {
             .await
             .unwrap();
 
-        // legacy 书首读：durable 链权威 → 3；ensure 补齐结构化状态。
+        // legacy 书首读：durable 链权威 → 3；读端点不得物化状态四件。
         assert_eq!(manager.get_next_chapter_number("b1").await.unwrap(), 3);
         let state_dir = book_dir.join("story").join("state");
         for file in [
@@ -1396,29 +1397,14 @@ mod tests {
             "hooks.json",
             "chapter_summaries.json",
         ] {
-            assert!(state_dir.join(file).exists(), "ensure 补齐 {file}");
+            assert!(
+                !state_dir.join(file).exists(),
+                "读端点不得物化 {file}（1682 号收口：读取面零写，对齐 TS 同名链）"
+            );
         }
-        let manifest = tokio::fs::read_to_string(state_dir.join("manifest.json"))
-            .await
-            .unwrap();
-        assert!(
-            manifest.contains("\"lastAppliedChapter\": 2"),
-            "manifest 记 durable 进度"
-        );
 
-        // 二读：快路径零写——manifest mtime 不变。
-        let before = tokio::fs::metadata(state_dir.join("manifest.json"))
-            .await
-            .unwrap()
-            .modified()
-            .unwrap();
+        // 二读同值（幂等纯读——章号只来自 durable 链派生）。
         assert_eq!(manager.get_next_chapter_number("b1").await.unwrap(), 3);
-        let after = tokio::fs::metadata(state_dir.join("manifest.json"))
-            .await
-            .unwrap()
-            .modified()
-            .unwrap();
-        assert_eq!(before, after, "快路径二读零写（mtime 不变）");
     }
 
     #[tokio::test]
