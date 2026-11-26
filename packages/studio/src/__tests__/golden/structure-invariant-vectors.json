@@ -1,0 +1,153 @@
+{
+  "_comment": [
+    "R61 批一（1687 号）：结构事务不变量纯函数双端向量——contentFingerprint 与 structureInvariant。",
+    "Node 腿：packages/core/src/state/chapter-structure.ts；产品引擎：engine-rs/src/interaction/chapter_structure.rs（include_str! 同读）。",
+    "改不变量判定规则先改这里的向量，两端测试各跑一遍。指纹用可读假值（纯函数只比对相等性，fileName 是展示值不参与判定）；",
+    "清单级语义：reorder 全员保指纹；split 被拆号（at）允许变、新号 at+1 出现、其余按 +1 移位保指纹；",
+    "merge 被并号（removed）消失、keep 号（removed-1）允许变（合并覆写）、其余按 -1 移位保指纹。内容级校验（两片拼回/合并拼接）归事务钩子，不在纯函数。"
+  ],
+  "contentFingerprint": [
+    { "content": "第一章正文", "fingerprint": "21b87a81ef1739c6" },
+    { "content": "第二段内容", "fingerprint": "9043e8a753be2426" },
+    { "content": "甲。", "fingerprint": "8c253750d3f6defe" },
+    { "content": "乙。", "fingerprint": "2fa35ac9d5889885" },
+    { "content": "甲。\n\n乙。", "fingerprint": "d2dc16bcf2d1dea1" }
+  ],
+  "structureInvariant": [
+    {
+      "name": "reorder passes when the multiset is preserved",
+      "op": { "kind": "reorder" },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" },
+        { "number": 3, "fileName": "0003_丙.md", "fingerprint": "fp-3" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_丙.md", "fingerprint": "fp-3" },
+        { "number": 2, "fileName": "0002_甲.md", "fingerprint": "fp-1" },
+        { "number": 3, "fileName": "0003_乙.md", "fingerprint": "fp-2" }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "reorder fails when a member is lost",
+      "op": { "kind": "reorder" },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" },
+        { "number": 3, "fileName": "0003_丙.md", "fingerprint": "fp-3" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_丙.md", "fingerprint": "fp-3" }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter count changed: 3 -> 2 (reorder must keep the count)",
+        "missing chapter 3 (0003_丙.md) has no counterpart in the after set",
+        "fingerprint fp-2 (chapter 2 (0002_乙.md)) is missing from the after set but reorder must not rewrite any chapter"
+      ]
+    },
+    {
+      "name": "reorder fails when a member content changed",
+      "op": { "kind": "reorder" },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-9" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint fp-1 (chapter 1 (0001_甲.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint fp-9 (after chapter 1 (0001_甲.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "split passes with renumbered tails intact",
+      "op": { "kind": "split", "at": 2 },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" },
+        { "number": 3, "fileName": "0003_丙.md", "fingerprint": "fp-3" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-head" },
+        { "number": 3, "fileName": "0003_乙.md", "fingerprint": "fp-tail" },
+        { "number": 4, "fileName": "0004_丙.md", "fingerprint": "fp-3" }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "split fails when a renumbered chapter lost content",
+      "op": { "kind": "split", "at": 2 },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" },
+        { "number": 3, "fileName": "0003_丙.md", "fingerprint": "fp-3" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-head" },
+        { "number": 3, "fileName": "0003_乙.md", "fingerprint": "fp-tail" },
+        { "number": 4, "fileName": "0004_丙.md", "fingerprint": "fp-9" }
+      ],
+      "ok": false,
+      "violations": ["chapter 3 (0003_丙.md) content changed (fp-3 -> fp-9) but split only renumbers it"]
+    },
+    {
+      "name": "merge passes when keep chapter is rewritten and tails shift",
+      "op": { "kind": "merge", "removed": 2 },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" },
+        { "number": 3, "fileName": "0003_丙.md", "fingerprint": "fp-3" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-merged" },
+        { "number": 2, "fileName": "0002_丙.md", "fingerprint": "fp-3" }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "merge fails when the removed number survives",
+      "op": { "kind": "merge", "removed": 2 },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" },
+        { "number": 3, "fileName": "0003_丙.md", "fingerprint": "fp-3" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-merged" },
+        { "number": 2, "fileName": "0002_丙.md", "fingerprint": "fp-3" },
+        { "number": 3, "fileName": "0003_乙.md", "fingerprint": "fp-2" }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter count changed: 3 -> 3 (merge must remove exactly one)",
+        "unexpected chapter 3 (0003_乙.md) survived the merge"
+      ]
+    },
+    {
+      "name": "merge fails when a renumbered chapter content changed",
+      "op": { "kind": "merge", "removed": 2 },
+      "before": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-1" },
+        { "number": 2, "fileName": "0002_乙.md", "fingerprint": "fp-2" },
+        { "number": 3, "fileName": "0003_丙.md", "fingerprint": "fp-3" }
+      ],
+      "after": [
+        { "number": 1, "fileName": "0001_甲.md", "fingerprint": "fp-merged" },
+        { "number": 2, "fileName": "0002_丙.md", "fingerprint": "fp-9" }
+      ],
+      "ok": false,
+      "violations": ["chapter 3 (0003_丙.md) content changed (fp-3 -> fp-9) but merge only renumbers it"]
+    }
+  ]
+}

@@ -579,6 +579,13 @@ export {
   splitUtf16,
   ChapterStructureError,
   REVISION_CONFLICT_CODE,
+  contentFingerprint,
+  structureInvariant,
+  assertStructureInvariants,
+  appendStructureOpsLog,
+  type ChapterFingerprint,
+  type StructureOp,
+  type StructureOperationRecord,
   type RenumberedEntry,
   type StructureOutcome,
 } from "./state/chapter-structure.js";

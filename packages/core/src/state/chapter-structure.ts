@@ -18,9 +18,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { commitAtomicFileSet } from "../utils/atomic-file-set.js";
+import { writeTextAtomic } from "../utils/atomic-write.js";
 import type { ChapterMeta } from "../models/chapter.js";
 import { archiveChapterVersion } from "./chapter-workspace.js";
 import { findChapterFileByNumber } from "../utils/chapter-files.js";
@@ -149,6 +150,219 @@ export function mergeContent(a: string, b: string, separator: string): string {
   return `${a}${separator}${b}`;
 }
 
+// ── R61 批一（1687 号）：结构事务不变量守卫 + 操作日志 ─────────────
+// 施工图（v11 深化二 §2）：①提交前不变量断言（操作前指纹清单 vs 提交面清单，
+// 违反即抛——TS 单提交面下抛在 commitAtomicFileSet 之前=零落盘）；②操作日志
+// append-only `{bookDir}/story/structure-ops.jsonl`（每行 {ts, opId, kind,
+// before, after, undone}，只有章号/文件名/指纹，无正文；原子写与 writing-log
+// 同族）。纯函数双端 golden 同读（golden/structure-invariant-vectors.json，
+// 产品引擎 include_str!）。撤销端点与 undoEligible 归批二。
+
+export interface ChapterFingerprint {
+  readonly number: number;
+  readonly fileName: string;
+  readonly fingerprint: string;
+}
+
+export type StructureOp =
+  | { readonly kind: "reorder" }
+  | { readonly kind: "split"; readonly at: number }
+  | { readonly kind: "merge"; readonly removed: number };
+
+export interface StructureOperationRecord {
+  readonly ts: string;
+  readonly opId: string;
+  readonly kind: "split" | "merge" | "reorder";
+  readonly before: ReadonlyArray<ChapterFingerprint>;
+  readonly after: ReadonlyArray<ChapterFingerprint>;
+  readonly undone: boolean;
+}
+
+/** 章内容指纹：UTF-8 sha256 前 16 hex（chapterSetRevision 同族；只在结构操作时计算）。 */
+export function contentFingerprint(content: string): string {
+  return createHash("sha256").update(content, "utf-8").digest("hex").slice(0, 16);
+}
+
+/**
+ * 清单级不变量判定（内容级校验——拆分两片拼回、合并拼接——由事务钩子携带内容做）：
+ * reorder 全员保指纹；split 被拆号允许变、新号 at+1 出现、其余按 +1 移位保指纹；
+ * merge 被并号消失、keep 号（removed-1）允许变、其余按 -1 移位保指纹。
+ * 违反项逐条点名（章号 + before 文件名 + 前后指纹）。
+ */
+export function structureInvariant(
+  op: StructureOp,
+  before: ReadonlyArray<ChapterFingerprint>,
+  after: ReadonlyArray<ChapterFingerprint>,
+): { readonly ok: boolean; readonly violations: ReadonlyArray<string> } {
+  const violations: string[] = [];
+  const expectedCount = op.kind === "split"
+    ? before.length + 1
+    : op.kind === "merge"
+      ? before.length - 1
+      : before.length;
+  if (after.length !== expectedCount) {
+    const expectation = op.kind === "split"
+      ? "split must add exactly one"
+      : op.kind === "merge"
+        ? "merge must remove exactly one"
+        : "reorder must keep the count";
+    violations.push(`chapter count changed: ${before.length} -> ${after.length} (${expectation})`);
+  }
+  const afterByNumber = new Map(after.map((item) => [item.number, item]));
+  const changed = (item: ChapterFingerprint, counterpart: ChapterFingerprint, action: string): string =>
+    `chapter ${item.number} (${item.fileName}) content changed (${item.fingerprint} -> ${counterpart.fingerprint}) but ${action}`;
+  if (op.kind === "reorder") {
+    // 施工图：重排 = {sha256} 多重集前后相等 + 章数相等（内容只换位不改写）。
+    const beforeNumbers = new Set(before.map((item) => item.number));
+    const afterNumbers = new Set(after.map((item) => item.number));
+    for (const number of beforeNumbers) {
+      if (!afterNumbers.has(number)) {
+        violations.push(`missing chapter ${number} (${before.find((item) => item.number === number)!.fileName}) has no counterpart in the after set`);
+      }
+    }
+    for (const number of afterNumbers) {
+      if (!beforeNumbers.has(number)) {
+        violations.push(`unexpected chapter ${number} (${after.find((item) => item.number === number)!.fileName}) appeared in the after set`);
+      }
+    }
+    const beforeCounts = new Map<string, number>();
+    for (const item of before) beforeCounts.set(item.fingerprint, (beforeCounts.get(item.fingerprint) ?? 0) + 1);
+    const afterCounts = new Map<string, number>();
+    for (const item of after) afterCounts.set(item.fingerprint, (afterCounts.get(item.fingerprint) ?? 0) + 1);
+    // 迭代按指纹字典序（Rust BTreeMap 同序——多指纹违反的两腿消息逐字一致）。
+    for (const fingerprint of [...beforeCounts.keys()].sort()) {
+      const count = beforeCounts.get(fingerprint)!;
+      if ((afterCounts.get(fingerprint) ?? 0) < count) {
+        const owners = before.filter((item) => item.fingerprint === fingerprint)
+          .map((item) => `${item.number} (${item.fileName})`).join(", ");
+        violations.push(`fingerprint ${fingerprint} (chapter ${owners}) is missing from the after set but reorder must not rewrite any chapter`);
+      }
+    }
+    for (const fingerprint of [...afterCounts.keys()].sort()) {
+      const count = afterCounts.get(fingerprint)!;
+      if ((beforeCounts.get(fingerprint) ?? 0) < count) {
+        const owners = after.filter((item) => item.fingerprint === fingerprint)
+          .map((item) => `${item.number} (${item.fileName})`).join(", ");
+        violations.push(`fingerprint ${fingerprint} (after chapter ${owners}) matches no before chapter`);
+      }
+    }
+  } else if (op.kind === "split") {
+    const expectedNumbers = new Set<number>([op.at, op.at + 1]);
+    for (const item of before) {
+      if (item.number === op.at) continue; // 被拆章允许变（截断成前段）
+      const target = item.number > op.at ? item.number + 1 : item.number;
+      expectedNumbers.add(target);
+      const counterpart = afterByNumber.get(target);
+      if (!counterpart) {
+        violations.push(`missing chapter ${target} (${item.fileName}) after split renumbering`);
+      } else if (counterpart.fingerprint !== item.fingerprint) {
+        violations.push(changed(item, counterpart, "split only renumbers it"));
+      }
+    }
+    for (const item of after) {
+      if (!expectedNumbers.has(item.number)) {
+        violations.push(`unexpected chapter ${item.number} (${item.fileName}) appeared in the after set`);
+      }
+    }
+  } else {
+    const expectedNumbers = new Set<number>();
+    for (const item of before) {
+      if (item.number === op.removed) continue; // 被并章消失
+      const target = item.number > op.removed ? item.number - 1 : item.number;
+      expectedNumbers.add(target);
+      const counterpart = afterByNumber.get(target);
+      if (!counterpart) {
+        violations.push(`missing chapter ${target} (${item.fileName}) after merge renumbering`);
+      } else if (item.number !== op.removed - 1 && counterpart.fingerprint !== item.fingerprint) {
+        // keep 号（removed-1）被合并覆写，允许变。
+        violations.push(changed(item, counterpart, "merge only renumbers it"));
+      }
+    }
+    for (const item of after) {
+      if (!expectedNumbers.has(item.number)) {
+        violations.push(`unexpected chapter ${item.number} (${item.fileName}) survived the merge`);
+      }
+    }
+  }
+  return { ok: violations.length === 0, violations };
+}
+
+/** 提交前守卫：清单级违反或内容级额外违反非空即抛（调用方保证此刻零落盘）。 */
+export function assertStructureInvariants(
+  op: StructureOp,
+  before: ReadonlyArray<ChapterFingerprint>,
+  after: ReadonlyArray<ChapterFingerprint>,
+  extraViolations: ReadonlyArray<string>,
+): void {
+  const { violations } = structureInvariant(op, before, after);
+  const all = [...violations, ...extraViolations];
+  if (all.length > 0) {
+    throw new ChapterStructureError(500, `Structure invariant violated: ${all.join("; ")}`);
+  }
+}
+
+/** 成功提交后追加操作日志（append-only；读改写整文件 + 原子写，writing-log 同族）。 */
+export async function appendStructureOpsLog(
+  bookDir: string,
+  op: StructureOp,
+  before: ReadonlyArray<ChapterFingerprint>,
+  after: ReadonlyArray<ChapterFingerprint>,
+  ts: string,
+): Promise<StructureOperationRecord> {
+  const record: StructureOperationRecord = {
+    ts,
+    opId: `${op.kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    kind: op.kind,
+    before,
+    after,
+    undone: false,
+  };
+  const path = join(bookDir, "story", "structure-ops.jsonl");
+  await mkdir(join(bookDir, "story"), { recursive: true });
+  let lines: string[] = [];
+  try {
+    lines = (await readFile(path, "utf-8")).split("\n").filter((line) => line.trim() !== "");
+  } catch {
+    // 首笔：文件尚不存在。
+  }
+  lines.push(JSON.stringify(record));
+  await writeTextAtomic(path, `${lines.join("\n")}\n`);
+  return record;
+}
+
+/** 操作前全书指纹清单（撤销批二的全量回位依据；结构操作低频，逐章重读可承受）。 */
+async function collectFingerprints(
+  bookDir: string,
+  numbers: ReadonlyArray<number>,
+  index: ReadonlyArray<ChapterMeta>,
+): Promise<ReadonlyArray<ChapterFingerprint>> {
+  const files = await collectChapterFiles(bookDir, numbers, index);
+  const out: ChapterFingerprint[] = [];
+  for (const number of [...numbers].sort((a, b) => a - b)) {
+    const file = files.get(number)!;
+    const content = await readFile(join(bookDir, "chapters", file.fileName), "utf-8");
+    out.push({ number, fileName: file.fileName, fingerprint: contentFingerprint(content) });
+  }
+  return out;
+}
+
+/** 提交面指纹清单：nextIndex 逐行取 planned 写入内容，未动章回读现盘。 */
+async function plannedFingerprints(
+  bookDir: string,
+  nextIndex: ReadonlyArray<ChapterMeta>,
+  writes: ReadonlyArray<{ readonly relativePath: string; readonly content: string }>,
+): Promise<ReadonlyArray<ChapterFingerprint>> {
+  const planned = new Map(writes.map((write) => [write.relativePath, write.content]));
+  const out: ChapterFingerprint[] = [];
+  for (const meta of [...nextIndex].sort((a, b) => a.number - b.number)) {
+    const fileName = chapterFileName(meta.number, meta.title);
+    const content = planned.get(`chapters/${fileName}`)
+      ?? await readFile(join(bookDir, "chapters", fileName), "utf-8");
+    out.push({ number: meta.number, fileName, fingerprint: contentFingerprint(content) });
+  }
+  return out;
+}
+
 // ── 事务 ─────────────────────────────────────────────────────────
 
 export interface ChapterStructureDeps {
@@ -259,6 +473,8 @@ export async function splitChapter(
   const files = await collectChapterFiles(deps.bookDir, [chapterNumber], index);
   const source = files.get(chapterNumber)!;
   const content = await readFile(join(deps.bookDir, "chapters", source.fileName), "utf-8");
+  // R61：操作前全书指纹清单（staging/归档之前采集，内容未动）。
+  const beforeList = await collectFingerprints(deps.bookDir, numbers, index);
   const [head, tail] = splitUtf16(content, offset);
   const renumber = renumberAfterSplit(numbers, chapterNumber);
   const newChapter = chapterNumber + 1;
@@ -335,11 +551,22 @@ export async function splitChapter(
   });
   nextIndex.sort((a, b) => a.number - b.number);
 
+  // R61：提交前不变量守卫（抛在 commitAtomicFileSet 之前=零落盘）。
+  const afterList = await plannedFingerprints(deps.bookDir, nextIndex, writes);
+  const contentChecks: string[] = [];
+  // 拼回校验用未规范化的原始切分（head+tail 恒等于 content——slice 无损）；
+  // 写入侧的补尾换行是展示规范化，不参与「两片拼回」语义。
+  if (head + tail !== content) {
+    contentChecks.push("split pieces do not reassemble the chapter content");
+  }
+  assertStructureInvariants({ kind: "split", at: chapterNumber }, beforeList, afterList, contentChecks);
+
   await commitAtomicFileSet({
     rootDir: deps.bookDir,
     writes: [...writes, { relativePath: "chapters/index.json", content: JSON.stringify(nextIndex) }],
     deletes,
   });
+  await appendStructureOpsLog(deps.bookDir, { kind: "split", at: chapterNumber }, beforeList, afterList, new Date().toISOString());
 
   return {
     op: "split",
@@ -380,6 +607,8 @@ export async function mergeChapters(
   const removedContent = await readFile(join(deps.bookDir, "chapters", removedFile.fileName), "utf-8");
   const merged = mergeContent(keepContent.trimEnd(), removedContent.trimStart(), separator ?? "\n\n");
   const renumber = renumberAfterMerge(numbers, removed);
+  // R61：操作前全书指纹清单（归档/提交之前采集）。
+  const beforeList = await collectFingerprints(deps.bookDir, numbers, index);
 
   await archiveChapterVersion(deps.bookDir, keep, keepContent, "structure");
 
@@ -448,11 +677,22 @@ export async function mergeChapters(
     wordOverrides,
   );
 
+  // R61：提交前不变量守卫（抛在 commitAtomicFileSet 之前=零落盘）。
+  const afterList = await plannedFingerprints(deps.bookDir, nextIndex, writes);
+  const contentChecks: string[] = [];
+  const expectedKeep = `${mergeContent(keepContent.trimEnd(), removedContent.trimStart(), separator ?? "\n\n").trimEnd()}\n`;
+  const keepWrite = writes.find((write) => write.relativePath === `chapters/${keepFile.fileName}`);
+  if (!keepWrite || keepWrite.content !== expectedKeep) {
+    contentChecks.push("merged chapter content does not match merge_content(keep, removed)");
+  }
+  assertStructureInvariants({ kind: "merge", removed }, beforeList, afterList, contentChecks);
+
   await commitAtomicFileSet({
     rootDir: deps.bookDir,
     writes: [...writes, { relativePath: "chapters/index.json", content: JSON.stringify(nextIndex) }],
     deletes,
   });
+  await appendStructureOpsLog(deps.bookDir, { kind: "merge", removed }, beforeList, afterList, new Date().toISOString());
 
   return {
     op: "merge",
@@ -482,6 +722,8 @@ export async function reorderChapters(
   }
   const files = await collectChapterFiles(deps.bookDir, numbers, index);
   const artifacts = await collectArtifactFiles(deps.bookDir, numbers);
+  // R61：操作前全书指纹清单（提交之前采集）。
+  const beforeList = await collectFingerprints(deps.bookDir, numbers, index);
 
   const mapping = new Map(renumber.map((entry) => [entry.from, entry.to]));
   const writes: Array<{ relativePath: string; content: string }> = [];
@@ -516,11 +758,16 @@ export async function reorderChapters(
 
   const nextIndex = buildNextIndex(index, mapping);
 
+  // R61：提交前不变量守卫（reorder 不得改写任何章正文）。
+  const afterList = await plannedFingerprints(deps.bookDir, nextIndex, writes);
+  assertStructureInvariants({ kind: "reorder" }, beforeList, afterList, []);
+
   await commitAtomicFileSet({
     rootDir: deps.bookDir,
     writes: [...writes, { relativePath: "chapters/index.json", content: JSON.stringify(nextIndex) }],
     deletes,
   });
+  await appendStructureOpsLog(deps.bookDir, { kind: "reorder" }, beforeList, afterList, new Date().toISOString());
 
   return {
     op: "reorder",

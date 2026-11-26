@@ -313,6 +313,23 @@ async fn stage_affected(
 }
 
 /// 失败还原：staging 全量回原位 + 清 staging（索引在最后才写，零落盘）。
+/// R61：不变量守卫失败的回位——删本轮新写文件 → 逆序撤销已回名 rename →
+/// staging 全量回原位（与既有 rename_fail 路径同一序列）。
+async fn rollback_structure_tx(
+    written: &[PathBuf],
+    executed_renames: &[(PathBuf, PathBuf)],
+    chapters_dir: &Path,
+    staging: &Path,
+) {
+    for path in written {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    for (dest, staged_src) in executed_renames.iter().rev() {
+        let _ = tokio::fs::rename(dest, staged_src).await;
+    }
+    restore_from_staging(chapters_dir, staging).await;
+}
+
 async fn restore_from_staging(chapters_dir: &Path, staging: &Path) {
     for sub in ["", "runtime", "drafts"] {
         let dir = if sub.is_empty() {
@@ -411,6 +428,8 @@ pub async fn split_chapter(
     let content = tokio::fs::read_to_string(&source.path)
         .await
         .map_err(|e| StructureError::bad_request(format!("chapter unreadable: {e}")))?;
+    // R61：操作前全书指纹清单（staging/归档之前采集，内容未动）。
+    let before_list = collect_fingerprints(&chapters_dir, &numbers, &index).await?;
     let (head, tail) = split_utf16(&content, offset)?;
     let renumber = renumber_after_split(&numbers, chapter_number);
     // 新号 = at+1：重编号把全部 >at 的章 +1 后该位必然空出（重复号坏数据
@@ -583,10 +602,60 @@ pub async fn split_chapter(
         token_usage: None,
     });
     next_index.sort_by_key(|meta| meta.number);
+
+    // R61：提交前不变量守卫（违反=从 staging 全量回位、零落盘、错误点名缺失项）。
+    let next_numbers: Vec<u32> = next_index.iter().map(|meta| meta.number).collect();
+    let hook = async {
+        let after_list = collect_fingerprints(&chapters_dir, &next_numbers, &next_index).await?;
+        let mut violations = structure_invariant(
+            &StructureOp::Split { at: chapter_number },
+            &before_list,
+            &after_list,
+        );
+        // 拼回校验用未规范化的原始切分（head+tail 恒等于 content——slice 无损）；
+        // 写入侧的补尾换行是展示规范化，不参与「两片拼回」语义。
+        if head.clone() + tail.as_str() != content {
+            violations.push("split pieces do not reassemble the chapter content".to_string());
+        }
+        Ok::<_, StructureError>((after_list, violations))
+    }
+    .await;
+    let (after_list, violations) = match hook {
+        Ok(pair) => pair,
+        Err(error) => {
+            rollback_structure_tx(&written, &executed_renames, &chapters_dir, &staging).await;
+            return Err(StructureError::bad_request(format!(
+                "structure invariant violated: {}",
+                error.message
+            )));
+        }
+    };
+    if !violations.is_empty() {
+        rollback_structure_tx(&written, &executed_renames, &chapters_dir, &staging).await;
+        return Err(StructureError::bad_request(format!(
+            "structure invariant violated: {}",
+            violations.join("; ")
+        )));
+    }
+
     state
         .save_chapter_index_at(&root, &next_index, false)
         .await
         .map_err(|e| StructureError::bad_request(e.to_string()))?;
+
+    // 操作日志（append-only；撤销批二的回位依据）。写失败不回滚已提交的事务
+    // （内容面已落盘），记 stderr——批二撤销遇缺日志会拒绝并说明原因。
+    if let Err(error) = append_structure_ops(
+        &root,
+        &StructureOp::Split { at: chapter_number },
+        &before_list,
+        &after_list,
+        now_iso,
+    )
+    .await
+    {
+        eprintln!("structure ops log write failed: {error}");
+    }
 
     Ok(StructureOutcome {
         op: "split",
@@ -653,6 +722,8 @@ pub async fn merge_chapter(
     let sep = separator.unwrap_or("\n\n");
     let merged = merge_content(keep_content.trim_end(), removed_content.trim_start(), sep);
     let renumber = renumber_after_merge(&numbers, removed);
+    // R61：操作前全书指纹清单（归档/提交之前采集）。
+    let before_list = collect_fingerprints(&chapters_dir, &numbers, &index).await?;
 
     // 归档先于落盘：保留章旧文（structure 来源）。
     let book_dir = root.to_string_lossy().into_owned();
@@ -825,10 +896,62 @@ pub async fn merge_chapter(
         .cloned()
         .collect();
     let next_index: Vec<ChapterMeta> = apply_renumber(&kept, &mapping, &word_overrides, now_iso);
+
+    // R61：提交前不变量守卫（违反=从 staging 全量回位、零落盘、错误点名缺失项）。
+    let next_numbers: Vec<u32> = next_index.iter().map(|meta| meta.number).collect();
+    let hook = async {
+        let after_list = collect_fingerprints(&chapters_dir, &next_numbers, &next_index).await?;
+        let mut violations =
+            structure_invariant(&StructureOp::Merge { removed }, &before_list, &after_list);
+        // 内容级：keep 章写入值 == 合并拼接的收尾规范形（与写入表达式同源，防御未来改动）。
+        let keep_write = keep_file.path.clone();
+        let actual = tokio::fs::read_to_string(&keep_write)
+            .await
+            .map_err(|e| StructureError::bad_request(format!("chapter unreadable: {e}")))?;
+        if actual != format!("{}\n", merged.trim_end()) {
+            violations.push(
+                "merged chapter content does not match merge_content(keep, removed)".to_string(),
+            );
+        }
+        Ok::<_, StructureError>((after_list, violations))
+    }
+    .await;
+    let (after_list, violations) = match hook {
+        Ok(pair) => pair,
+        Err(error) => {
+            rollback_structure_tx(&written, &executed_renames, &chapters_dir, &staging).await;
+            return Err(StructureError::bad_request(format!(
+                "structure invariant violated: {}",
+                error.message
+            )));
+        }
+    };
+    if !violations.is_empty() {
+        rollback_structure_tx(&written, &executed_renames, &chapters_dir, &staging).await;
+        return Err(StructureError::bad_request(format!(
+            "structure invariant violated: {}",
+            violations.join("; ")
+        )));
+    }
+
     state
         .save_chapter_index_at(&root, &next_index, false)
         .await
         .map_err(|e| StructureError::bad_request(e.to_string()))?;
+
+    // 操作日志（append-only；撤销批二的回位依据）。写失败不回滚已提交的事务
+    // （内容面已落盘），记 stderr——批二撤销遇缺日志会拒绝并说明原因。
+    if let Err(error) = append_structure_ops(
+        &root,
+        &StructureOp::Merge { removed },
+        &before_list,
+        &after_list,
+        now_iso,
+    )
+    .await
+    {
+        eprintln!("structure ops log write failed: {error}");
+    }
 
     Ok(StructureOutcome {
         op: "merge",
@@ -876,6 +999,8 @@ pub async fn reorder_chapters(
     let affected: Vec<u32> = renumber.iter().map(|(from, _)| *from).collect();
     let files = collect_chapter_files(&chapters_dir, &affected, &index).await?;
     let artifacts = collect_artifact_files(&root, &affected).await;
+    // R61：操作前全书指纹清单（staging 之前采集，内容未动）。
+    let before_list = collect_fingerprints(&chapters_dir, &numbers, &index).await?;
     let staging = stage_affected(&chapters_dir, &root, &files, &artifacts).await?;
 
     let mapping: BTreeMap<u32, u32> = renumber.iter().copied().collect();
@@ -948,10 +1073,51 @@ pub async fn reorder_chapters(
     let _ = tokio::fs::remove_dir_all(&staging).await;
 
     let next_index = apply_renumber(&index, &mapping, &BTreeMap::new(), now_iso);
+
+    // R61：提交前不变量守卫（reorder 不得改写任何章正文；违反=全量回位）。
+    let next_numbers: Vec<u32> = next_index.iter().map(|meta| meta.number).collect();
+    let hook = async {
+        let after_list = collect_fingerprints(&chapters_dir, &next_numbers, &next_index).await?;
+        let violations = structure_invariant(&StructureOp::Reorder, &before_list, &after_list);
+        Ok::<_, StructureError>((after_list, violations))
+    }
+    .await;
+    let (after_list, violations) = match hook {
+        Ok(pair) => pair,
+        Err(error) => {
+            rollback_structure_tx(&[], &executed_renames, &chapters_dir, &staging).await;
+            return Err(StructureError::bad_request(format!(
+                "structure invariant violated: {}",
+                error.message
+            )));
+        }
+    };
+    if !violations.is_empty() {
+        rollback_structure_tx(&[], &executed_renames, &chapters_dir, &staging).await;
+        return Err(StructureError::bad_request(format!(
+            "structure invariant violated: {}",
+            violations.join("; ")
+        )));
+    }
+
     state
         .save_chapter_index_at(&root, &next_index, false)
         .await
         .map_err(|e| StructureError::bad_request(e.to_string()))?;
+
+    // 操作日志（append-only；撤销批二的回位依据）。写失败不回滚已提交的事务
+    // （内容面已落盘），记 stderr——批二撤销遇缺日志会拒绝并说明原因。
+    if let Err(error) = append_structure_ops(
+        &root,
+        &StructureOp::Reorder,
+        &before_list,
+        &after_list,
+        now_iso,
+    )
+    .await
+    {
+        eprintln!("structure ops log write failed: {error}");
+    }
 
     Ok(StructureOutcome {
         op: "reorder",
@@ -967,9 +1133,452 @@ pub async fn reorder_chapters(
     })
 }
 
+// ── R61 批一（1687 号）：结构事务不变量守卫 + 操作日志 ─────────────────
+// 镜像 `packages/core/src/state/chapter-structure.ts` 同名段；纯函数双端 golden
+// 同读（packages/studio/src/__tests__/golden/structure-invariant-vectors.json，
+// TS 测试 readFileSync、本侧 include_str!）。撤销端点与 undo_eligible 归批二。
+
+/// 章内容指纹：UTF-8 sha256 前 16 hex（chapter_set_revision 同族；只在结构操作时计算）。
+pub fn content_fingerprint(content: &str) -> String {
+    let digest = Sha256::digest(content.as_bytes());
+    format!("{:x}", digest)[..16].to_string()
+}
+
+/// 清单项：章号 + 现文件名 + 内容指纹（只有这三样，无正文）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterFingerprint {
+    pub number: u32,
+    pub file_name: String,
+    pub fingerprint: String,
+}
+
+/// 结构操作类型（golden 向量同形：`{"kind":"split","at":2}`）。
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StructureOp {
+    Reorder,
+    Split { at: u32 },
+    Merge { removed: u32 },
+}
+
+/// 操作日志行（`story/structure-ops.jsonl`；append-only，撤销批二消费）。
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructureOperationRecord {
+    pub ts: String,
+    pub op_id: String,
+    pub kind: String,
+    pub before: Vec<ChapterFingerprint>,
+    pub after: Vec<ChapterFingerprint>,
+    pub undone: bool,
+}
+
+/// 清单级不变量判定（镜像 TS `structureInvariant` 逐字消息；多指纹违反按指纹
+/// 字典序输出，两端同序）：reorder = 号集合相等 + 指纹多重集相等（内容只换位
+/// 不改写）；split 被拆号允许变、新号 at+1 出现、其余 +1 移位保指纹；merge 被
+/// 并号消失、keep 号（removed-1）允许变、其余 -1 移位保指纹。内容级校验（两片
+/// 拼回 / 合并拼接）由事务钩子携带内容做，不进本函数。
+pub fn structure_invariant(
+    op: &StructureOp,
+    before: &[ChapterFingerprint],
+    after: &[ChapterFingerprint],
+) -> Vec<String> {
+    let mut violations: Vec<String> = Vec::new();
+    let expected_count = match op {
+        StructureOp::Split { .. } => before.len() + 1,
+        StructureOp::Merge { .. } => before.len().saturating_sub(1),
+        StructureOp::Reorder => before.len(),
+    };
+    if after.len() != expected_count {
+        let expectation = match op {
+            StructureOp::Split { .. } => "split must add exactly one",
+            StructureOp::Merge { .. } => "merge must remove exactly one",
+            StructureOp::Reorder => "reorder must keep the count",
+        };
+        violations.push(format!(
+            "chapter count changed: {} -> {} ({expectation})",
+            before.len(),
+            after.len()
+        ));
+    }
+    let find_after = |number: u32| after.iter().find(|item| item.number == number);
+    match op {
+        StructureOp::Reorder => {
+            let before_numbers: std::collections::BTreeSet<u32> =
+                before.iter().map(|item| item.number).collect();
+            let after_numbers: std::collections::BTreeSet<u32> =
+                after.iter().map(|item| item.number).collect();
+            for number in &before_numbers {
+                if !after_numbers.contains(number) {
+                    let name = before
+                        .iter()
+                        .find(|item| item.number == *number)
+                        .map(|item| item.file_name.clone())
+                        .unwrap_or_default();
+                    violations.push(format!(
+                        "missing chapter {number} ({name}) has no counterpart in the after set"
+                    ));
+                }
+            }
+            for number in &after_numbers {
+                if !before_numbers.contains(number) {
+                    let name = after
+                        .iter()
+                        .find(|item| item.number == *number)
+                        .map(|item| item.file_name.clone())
+                        .unwrap_or_default();
+                    violations.push(format!(
+                        "unexpected chapter {number} ({name}) appeared in the after set"
+                    ));
+                }
+            }
+            let mut before_counts: BTreeMap<&str, usize> = BTreeMap::new();
+            for item in before {
+                *before_counts.entry(item.fingerprint.as_str()).or_default() += 1;
+            }
+            let mut after_counts: BTreeMap<&str, usize> = BTreeMap::new();
+            for item in after {
+                *after_counts.entry(item.fingerprint.as_str()).or_default() += 1;
+            }
+            for (fingerprint, count) in &before_counts {
+                if after_counts.get(fingerprint).copied().unwrap_or(0) < *count {
+                    let owners = before
+                        .iter()
+                        .filter(|item| item.fingerprint == *fingerprint)
+                        .map(|item| format!("{} ({})", item.number, item.file_name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    violations.push(format!(
+                        "fingerprint {fingerprint} (chapter {owners}) is missing from the after set but reorder must not rewrite any chapter"
+                    ));
+                }
+            }
+            for (fingerprint, count) in &after_counts {
+                if before_counts.get(fingerprint).copied().unwrap_or(0) < *count {
+                    let owners = after
+                        .iter()
+                        .filter(|item| item.fingerprint == *fingerprint)
+                        .map(|item| format!("{} ({})", item.number, item.file_name))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    violations.push(format!(
+                        "fingerprint {fingerprint} (after chapter {owners}) matches no before chapter"
+                    ));
+                }
+            }
+        }
+        StructureOp::Split { at } => {
+            let mut expected_numbers: std::collections::BTreeSet<u32> =
+                [*at, *at + 1].into_iter().collect();
+            for item in before {
+                if item.number == *at {
+                    continue; // 被拆章允许变（截断成前段）
+                }
+                let target = if item.number > *at {
+                    item.number + 1
+                } else {
+                    item.number
+                };
+                expected_numbers.insert(target);
+                let Some(counterpart) = find_after(target) else {
+                    violations.push(format!(
+                        "missing chapter {target} ({}) after split renumbering",
+                        item.file_name
+                    ));
+                    continue;
+                };
+                if counterpart.fingerprint != item.fingerprint {
+                    violations.push(format!(
+                        "chapter {} ({}) content changed ({} -> {}) but split only renumbers it",
+                        item.number, item.file_name, item.fingerprint, counterpart.fingerprint
+                    ));
+                }
+            }
+            for item in after {
+                if !expected_numbers.contains(&item.number) {
+                    violations.push(format!(
+                        "unexpected chapter {} ({}) appeared in the after set",
+                        item.number, item.file_name
+                    ));
+                }
+            }
+        }
+        StructureOp::Merge { removed } => {
+            let mut expected_numbers: std::collections::BTreeSet<u32> =
+                std::collections::BTreeSet::new();
+            for item in before {
+                if item.number == *removed {
+                    continue; // 被并章消失
+                }
+                let target = if item.number > *removed {
+                    item.number - 1
+                } else {
+                    item.number
+                };
+                expected_numbers.insert(target);
+                let Some(counterpart) = find_after(target) else {
+                    violations.push(format!(
+                        "missing chapter {target} ({}) after merge renumbering",
+                        item.file_name
+                    ));
+                    continue;
+                };
+                // keep 号（removed-1）被合并覆写，允许变。
+                if item.number != removed.saturating_sub(1)
+                    && counterpart.fingerprint != item.fingerprint
+                {
+                    violations.push(format!(
+                        "chapter {} ({}) content changed ({} -> {}) but merge only renumbers it",
+                        item.number, item.file_name, item.fingerprint, counterpart.fingerprint
+                    ));
+                }
+            }
+            for item in after {
+                if !expected_numbers.contains(&item.number) {
+                    violations.push(format!(
+                        "unexpected chapter {} ({}) survived the merge",
+                        item.number, item.file_name
+                    ));
+                }
+            }
+        }
+    }
+    violations
+}
+
+/// 操作前全书指纹清单（撤销批二的全量回位依据；结构操作低频，逐章重读可承受）。
+async fn collect_fingerprints(
+    chapters_dir: &Path,
+    numbers: &[u32],
+    index: &[ChapterMeta],
+) -> Result<Vec<ChapterFingerprint>, StructureError> {
+    let files = collect_chapter_files(chapters_dir, numbers, index).await?;
+    let mut sorted = numbers.to_vec();
+    sorted.sort_unstable();
+    let mut out = Vec::with_capacity(sorted.len());
+    for number in sorted {
+        let file = files
+            .get(&number)
+            .ok_or_else(|| StructureError::not_found(format!("Chapter {number} not found")))?;
+        let content = tokio::fs::read_to_string(&file.path)
+            .await
+            .map_err(|e| StructureError::bad_request(format!("chapter unreadable: {e}")))?;
+        out.push(ChapterFingerprint {
+            number,
+            file_name: file.file_name.clone(),
+            fingerprint: content_fingerprint(&content),
+        });
+    }
+    Ok(out)
+}
+
+/// 成功提交后追加操作日志（读改写整文件 + 原子写，writing-log 同族）。
+pub async fn append_structure_ops(
+    book_dir: &Path,
+    op: &StructureOp,
+    before: &[ChapterFingerprint],
+    after: &[ChapterFingerprint],
+    ts: &str,
+) -> std::io::Result<StructureOperationRecord> {
+    let kind = match op {
+        StructureOp::Reorder => "reorder",
+        StructureOp::Split { .. } => "split",
+        StructureOp::Merge { .. } => "merge",
+    }
+    .to_string();
+    let record = StructureOperationRecord {
+        ts: ts.to_string(),
+        op_id: format!("{kind}-{}", uuid::Uuid::new_v4().simple()),
+        kind,
+        before: before.to_vec(),
+        after: after.to_vec(),
+        undone: false,
+    };
+    let path = book_dir.join("story").join("structure-ops.jsonl");
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let mut lines: Vec<String> = match tokio::fs::read_to_string(&path).await {
+        Ok(raw) => raw
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(String::from)
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    lines.push(serde_json::to_string(&record).unwrap_or_default());
+    write_file_atomic(&path, &format!("{}\n", lines.join("\n"))).await?;
+    Ok(record)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R61 批一/1687 号：不变量纯函数双端向量（与 TS 测试同一份文件）。
+    const INVARIANT_VECTORS: &str = include_str!(
+        "../../../packages/studio/src/__tests__/golden/structure-invariant-vectors.json"
+    );
+
+    #[test]
+    fn content_fingerprint_matches_golden_vectors() {
+        let vectors: serde_json::Value = serde_json::from_str(INVARIANT_VECTORS).unwrap();
+        for vector in vectors["contentFingerprint"].as_array().unwrap() {
+            assert_eq!(
+                content_fingerprint(vector["content"].as_str().unwrap()),
+                vector["fingerprint"].as_str().unwrap(),
+                "content {}",
+                vector["content"]
+            );
+        }
+    }
+
+    #[test]
+    fn structure_invariant_matches_golden_vectors() {
+        let vectors: serde_json::Value = serde_json::from_str(INVARIANT_VECTORS).unwrap();
+        for vector in vectors["structureInvariant"].as_array().unwrap() {
+            let op: StructureOp = serde_json::from_value(vector["op"].clone()).unwrap();
+            let before: Vec<ChapterFingerprint> =
+                serde_json::from_value(vector["before"].clone()).unwrap();
+            let after: Vec<ChapterFingerprint> =
+                serde_json::from_value(vector["after"].clone()).unwrap();
+            let violations = structure_invariant(&op, &before, &after);
+            let expected: Vec<String> = vector["violations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item.as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(violations, expected, "vector: {}", vector["name"]);
+            assert_eq!(
+                violations.is_empty(),
+                vector["ok"].as_bool().unwrap(),
+                "vector: {}",
+                vector["name"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn structure_ops_log_appends_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let book_dir = dir.path().to_path_buf();
+        let before = vec![ChapterFingerprint {
+            number: 1,
+            file_name: "0001_甲.md".into(),
+            fingerprint: "fp-1".into(),
+        }];
+        let after = before.clone();
+        let record = append_structure_ops(
+            &book_dir,
+            &StructureOp::Reorder,
+            &before,
+            &after,
+            "2026-11-26T00:00:00.000Z",
+        )
+        .await
+        .unwrap();
+        assert!(!record.undone);
+        let raw =
+            std::fs::read_to_string(book_dir.join("story").join("structure-ops.jsonl")).unwrap();
+        let line: StructureOperationRecord = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(line.kind, "reorder");
+        assert!(!line.undone);
+        assert_eq!(line.ts, "2026-11-26T00:00:00.000Z");
+        assert_eq!(line.before, before);
+        assert_eq!(line.after, after);
+    }
+
+    #[tokio::test]
+    async fn split_appends_structure_ops_log() {
+        // 事务级接线咬合：摘除 split 内的守卫/日志接线，本测试与守卫注入测试一起红。
+        let dir = tempfile::tempdir().unwrap();
+        let state = seed_book(dir.path()).await;
+        let original = tokio::fs::read_to_string(dir.path().join("books/b1/chapters/0002_灵脉.md"))
+            .await
+            .unwrap();
+        let revision_before = chapter_set_revision(&state.load_chapter_index("b1").await.unwrap());
+        split_chapter(
+            &state,
+            "b1",
+            2,
+            8,
+            Some(&revision_before),
+            1700000000000,
+            "2026-11-21T01:00:00.000Z",
+        )
+        .await
+        .expect("split");
+        let raw =
+            std::fs::read_to_string(dir.path().join("books/b1/story/structure-ops.jsonl")).unwrap();
+        let line: StructureOperationRecord = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(line.kind, "split");
+        assert!(!line.undone);
+        assert_eq!(
+            line.before
+                .iter()
+                .map(|item| item.number)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            line.after
+                .iter()
+                .map(|item| item.number)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        // before 指纹 = 操作前原文（拆分截断只是提交后的事）。
+        assert_eq!(
+            line.before
+                .iter()
+                .find(|item| item.number == 2)
+                .unwrap()
+                .fingerprint,
+            content_fingerprint(&original)
+        );
+    }
+
+    #[test]
+    fn invariant_hook_names_the_lost_member() {
+        // 故障注入（施工图验收）：after 清单丢一章 → 违反项点名缺失章。
+        let before = vec![
+            ChapterFingerprint {
+                number: 1,
+                file_name: "0001_甲.md".into(),
+                fingerprint: "fp-1".into(),
+            },
+            ChapterFingerprint {
+                number: 2,
+                file_name: "0002_乙.md".into(),
+                fingerprint: "fp-2".into(),
+            },
+            ChapterFingerprint {
+                number: 3,
+                file_name: "0003_丙.md".into(),
+                fingerprint: "fp-3".into(),
+            },
+        ];
+        let after = vec![
+            ChapterFingerprint {
+                number: 1,
+                file_name: "0001_甲.md".into(),
+                fingerprint: "fp-1".into(),
+            },
+            ChapterFingerprint {
+                number: 3,
+                file_name: "0003_丙.md".into(),
+                fingerprint: "fp-3".into(),
+            },
+        ];
+        let violations = structure_invariant(&StructureOp::Reorder, &before, &after);
+        assert!(
+            violations.iter().any(|item| item.contains("chapter 2")),
+            "violations must name the lost member: {violations:?}"
+        );
+        assert!(!violations.is_empty());
+    }
 
     fn meta(number: u32, title: &str, word_count: u32) -> ChapterMeta {
         ChapterMeta {
