@@ -1,6 +1,7 @@
 {
  "_comment": [
-  "跨腿路由 parity 基线：1693 号全仓扫定性（9 惰性路由+2 单腿设计有消费面）；新不对称必须显式加表并定性。"
+  "跨腿路由 parity 基线：1693 号全仓扫定性（9 惰性路由+2 单腿设计有消费面）；新不对称必须显式加表并定性。",
+  "1696 号勘误+收缩：sessions branch/branches 两条系解析器注释漏抓产生的假阳性（Rust mod.rs 925/930 行 .route( 与路径间有整行 // 注释——两腿都有、R36 636 号会话树化真双打，非单腿设计），解析器注释容忍修复后已配对，条目删除（stale 哨强制基线只许收缩）。"
  ],
  "rustOnly": [
   "/api/v1/books/:id/settle",
@@ -16,8 +17,6 @@
  ],
  "tsOnly": [
   "*",
-  "/api/v1/sessions/:sessionId/branch",
-  "/api/v1/sessions/:sessionId/branches",
   "/api/v1/writing-stats",
   "/assets/*"
  ]

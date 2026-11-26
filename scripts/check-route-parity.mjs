@@ -41,48 +41,71 @@ function parseTs(source) {
 }
 
 /** 解析 Rust mod.rs：`.route("字面", <handler>)`（多行容忍；method 位可以是
- * 变量名——同样只收路径）。 */
+ * 变量名——同样只收路径）。1696 号补强：容忍 .route( 与路径字面量之间的整行
+ * // 注释——sessions branch/branches 的「R36 会话树化（636 号）」注释行此前
+ * `\s*` 不吃注释漏抓两条→被误判「TS 单腿双打」收进基线成静默假绿（1695 号
+ * 实测：Rust=189 vs 真值 191）。1576 号教训：基线不许收解析器误报产物。 */
 function parseRust(source) {
   const routes = new Set();
-  const re = /\.route\(\s*"([^"]+)",/gu;
+  const re = /\.route\(\s*(?:\/\/[^\n]*\n\s*)*"([^"]+)",/gu;
   for (const match of source.matchAll(re)) {
     routes.add(normalize(match[1]));
   }
   return routes;
 }
 
-/** 差集：新不对称 = 差集 − 基线（基线键逐字）。 */
+/** 差集：新不对称 = 差集 − 基线（基线键逐字）。1696 号加 stale 哨：基线条目
+ * 不再「恰好单腿存在」（两腿已配对或两侧均消失）=失效——基线只许收缩，修复
+ * 不对称必须清条目（1695 号 sessions 两条假阳性条目即靠本哨强制出清）。 */
 function diffAgainstBaseline(rustRoutes, tsRoutes, baseline) {
   const baselineRust = new Set(baseline.rustOnly ?? []);
   const baselineTs = new Set(baseline.tsOnly ?? []);
   const rustOnly = [...rustRoutes].filter((route) => !tsRoutes.has(route) && !baselineRust.has(route)).sort();
   const tsOnly = [...tsRoutes].filter((route) => !rustRoutes.has(route) && !baselineTs.has(route)).sort();
-  return { rustOnly, tsOnly };
+  const stale = [...baselineRust, ...baselineTs].filter(
+    (route) =>
+      !(
+        (rustRoutes.has(route) && !tsRoutes.has(route)) ||
+        (!rustRoutes.has(route) && tsRoutes.has(route))
+      ),
+  );
+  return { rustOnly, tsOnly, stale };
 }
 
-// ── 自检四夹具（--self-check：合成输入走同一解析/比对路径）──
-if (selfCheck) {
+// ── 自检夹具（847 号精神：主跑前自动执行走同一解析/比对路径——1696 号从
+// 手动 --self-check 改入主跑前置；--self-check 保留为独立调用形态）──
+function runSelfcheck() {
   const fixturesTsClean = 'app.get("/api/v1/ok", async (c) => {});\napp.get("/api/v1/books/:id/chapters/:chapters{.+}", async (c) => {});';
   const fixturesRust = '.route("/api/v1/ok", get(ok_handler))\n.route("/api/v1/books/:id/chapters/*chapters", get(wild_handler))';
   const fixturesTsGhost = 'app.get("/api/v1/ts-ghost", async (c) => {});';
+  const fail = (msg) => {
+    console.error(`[route-parity] 自检失败——本次结论作废（847 号语义）：${msg}`);
+    process.exit(3);
+  };
   // 绿：两腿一致 + 通配符归一后无差。
   const clean = diffAgainstBaseline(parseRust(fixturesRust), parseTs(fixturesTsClean), { rustOnly: [], tsOnly: [] });
-  if (clean.rustOnly.length !== 0 || clean.tsOnly.length !== 0) {
-    console.error("[route-parity] 自检绿例失败：一致输入报不对称", clean);
-    process.exit(3);
-  }
+  if (clean.rustOnly.length !== 0 || clean.tsOnly.length !== 0) fail(`绿例失败：一致输入报不对称 ${JSON.stringify(clean)}`);
   // 必红：TS 单腿假路由（不在 Rust、不在基线）必须检出。
   const red = diffAgainstBaseline(parseRust(fixturesRust), parseTs(fixturesTsClean + fixturesTsGhost), { rustOnly: [], tsOnly: [] });
-  if (red.tsOnly.length !== 1 || !red.tsOnly[0].includes("ts-ghost")) {
-    console.error("[route-parity] 自检必红例失败：TS 单腿假路由未检出", red);
-    process.exit(3);
-  }
+  if (red.tsOnly.length !== 1 || !red.tsOnly[0].includes("ts-ghost")) fail(`必红例失败：TS 单腿假路由未检出 ${JSON.stringify(red)}`);
   // 解析活体哨：夹具解析产出空集 = 解析路径死链（结论作废）。
-  if (parseTs(fixturesTsClean).size === 0 || parseRust(fixturesRust).size === 0) {
-    console.error("[route-parity] 自检解析死链：源解析产出空集（作废语义）");
-    process.exit(3);
-  }
-  console.log("[route-parity] 自检四夹具全过（绿/必红/通配符归一/解析活体）。");
+  if (parseTs(fixturesTsClean).size === 0 || parseRust(fixturesRust).size === 0) fail("解析死链：源解析产出空集");
+  // 注释容忍例（1696 号，回归哨）：带整行注释的 .route( 必须抓到——漏抓形态
+  // 即 1695 号 sessions 两条假阳性进基线的事故。
+  const commented = parseRust('.route(\n            // R36 会话树化（636 号）：分支 head 指针移动（append-only）\n            "/api/v1/with-comment",\n            post(handler)\n        )');
+  if (commented.size !== 1 || !commented.has("/api/v1/with-comment")) fail(`注释容忍例失败：${JSON.stringify([...commented])}`);
+  // 吞尾例（头注释自 1695 起声称的夹具，1696 号补实现）：非 route 普通文本
+  // 不得误产出路径；其后真 route 不得被吞。
+  const tail = parseRust('fn helper(x: &str) -> bool {\n    x.contains(".route(");\n}\n\n.route("/api/v1/real-after-helper", get(real_handler)),');
+  if (tail.size !== 1 || !tail.has("/api/v1/real-after-helper")) fail(`吞尾例失败：${JSON.stringify([...tail])}`);
+  // stale 例（1696 号）：基线条目两腿都有（已配对）必须报失效——基线只许收缩。
+  const staled = diffAgainstBaseline(parseRust('.route("/api/v1/paired", get(x))'), parseTs('app.get("/api/v1/paired", (c) => {});'), { rustOnly: ["/api/v1/paired"], tsOnly: [] });
+  if (staled.stale.length !== 1 || staled.rustOnly.length !== 0) fail(`stale 例失败：${JSON.stringify(staled)}`);
+  console.log("[route-parity] 自检七夹具全过（绿/必红/解析活体/注释容忍/吞尾/stale/通配归一）。");
+}
+
+if (selfCheck) {
+  runSelfcheck();
   process.exit(0);
 }
 
@@ -91,8 +114,18 @@ if (!existsSync(tsServerPath) || !existsSync(rustModPath)) {
   console.error("[route-parity] 源文件缺失——解析死链（作废语义）");
   process.exit(3);
 }
-const tsRoutes = parseTs(readFileSync(tsServerPath, "utf8"));
-const rustRoutes = parseRust(readFileSync(rustModPath, "utf8"));
+const tsSource = readFileSync(tsServerPath, "utf8");
+const rustSource = readFileSync(rustModPath, "utf8");
+runSelfcheck();
+// 1696 号：TS 别形注册哨——解析覆盖面假设（1693 实测 .on/.route/反引号零
+// 别形）不许静默失效，出现即 exit 3 作废。
+const TS_ALIAS_RE = /\bapp\.(?:route|on)\(/;
+if (TS_ALIAS_RE.test(tsSource)) {
+  console.error("[route-parity] TS 腿出现解析器覆盖外的注册形态（app.route(/app.on()——解析失效，结论作废（exit 3）");
+  process.exit(3);
+}
+const tsRoutes = parseTs(tsSource);
+const rustRoutes = parseRust(rustSource);
 if (tsRoutes.size === 0 || rustRoutes.size === 0) {
   console.error("[route-parity] 解析产出空集（TS=" + tsRoutes.size + " Rust=" + rustRoutes.size + "）——源形态变化，结论作废");
   process.exit(3);
@@ -102,7 +135,7 @@ const baseline = existsSync(baselinePath)
   ? JSON.parse(readFileSync(baselinePath, "utf8"))
   : { _comment: ["跨腿路由 parity 基线：1693 号全仓扫定性（9 惰性路由+2 单腿设计有消费面）；新不对称必须显式加表并定性。"], rustOnly: [], tsOnly: [] };
 
-const { rustOnly, tsOnly } = diffAgainstBaseline(rustRoutes, tsRoutes, baseline);
+const { rustOnly, tsOnly, stale } = diffAgainstBaseline(rustRoutes, tsRoutes, baseline);
 
 if (updateMode) {
   const merged = {
@@ -116,11 +149,22 @@ if (updateMode) {
 }
 
 console.log(`[route-parity] TS=${tsRoutes.size} Rust=${rustRoutes.size} 基线 rustOnly=${baseline.rustOnly?.length ?? 0} tsOnly=${baseline.tsOnly?.length ?? 0}`);
-if (rustOnly.length > 0 || tsOnly.length > 0) {
-  for (const route of rustOnly) console.log(`  NEW RUST-ONLY ${route}`);
-  for (const route of tsOnly) console.log(`  NEW TS-ONLY ${route}`);
-  console.error("[route-parity] 新不对称——两腿路由须成对（或定性后加基线表）");
+let bad = false;
+for (const route of rustOnly) {
+  bad = true;
+  console.log(`  NEW RUST-ONLY ${route}`);
+}
+for (const route of tsOnly) {
+  bad = true;
+  console.log(`  NEW TS-ONLY ${route}`);
+}
+for (const route of stale) {
+  bad = true;
+  console.log(`  STALE BASELINE ${route} — 条目已失效（两腿已配对或两侧均消失），请从基线删除`);
+}
+if (bad) {
+  console.error("[route-parity] 新不对称/stale 基线——两腿路由须成对（或定性后加基线表；失效条目必须清除）");
   process.exit(1);
 }
-console.log("[route-parity] 无新不对称（基线外的两腿路由全成对）。");
+console.log("[route-parity] 无新不对称（基线外的两腿路由全成对，基线无失效条目）。");
 process.exit(0);
