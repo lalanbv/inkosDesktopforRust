@@ -1,0 +1,2750 @@
+{
+  "_comment": [
+    "R62（1691 号，让号）：LCG 共享语料——结构不变量随机种子语料，两腿同读逐字 parity。",
+    "Node 腿：packages/core/src/__tests__/chapter-structure-property.test.ts；产品引擎：engine-rs/src/interaction/chapter_structure.rs（include_str! 同读）。",
+    "生成算法（可复现；脚本一次性运行后已删，此处即完整 spec）：",
+    "  seed=5776(0x1690，字面种子值、与轮号无关)；next(): state=(state*1664525+1013904223)>>>0（u32 回绕）；draw(n)=next()%n（n≥1）；",
+    "  指纹字母表 [fa,bb,cc,dd]（4 值，强制重复指纹进多重集分支）；fileName=ch{NN}.md；",
+    "  makeManifest(size)：章号 1..size、逐章独立 draw(4) 取指纹；",
+    "  fisherYates(arr)：for i=len-1..1: j=draw(i+1) 交换（对 after 盘面洗牌，钉数组序无关性）；",
+    "  splitAfter(at,head,tail)：被拆号换 head、插 {at+1,tail,'ch-new.md'}、其余 >at 移 +1 保指纹；",
+    "  mergeAfter(removed,keep)：removed 消失、removed-1 换 keep、其余 >removed 移 -1 保指纹；",
+    "  每 size（1..8）按序六步（size=1 只做前两步），另加 size0 空清单 reorder：",
+    "    ①reorder 正向（洗牌）；②split 正向 at=1+draw(size)、head/tail 各 draw(4)（洗牌）；",
+    "    ③merge 正向 removed=2+draw(size-1)、keep=draw(4)（洗牌）；",
+    "    ④reorder 双指纹负向：i=draw(size)，j 重 draw 至 j≠i 且指纹不同；洗牌后按号篡 i+1→zz1、j+1→zz2",
+    "      （同侧各 2 条指纹违反——违反条按指纹字典序输出的契约钉，摘 sort 即红）；",
+    "    ⑤split 负向 at=1+draw(size-1)、head/tail 各 draw(4)（洗牌）、最小移位章对位篡 zs；",
+    "    ⑥merge 负向（size≥3 才有 2..size-1 的 removed 且存在移位章；size=2 跳过——draw(0) 模零）：",
+    "      removed=2+draw(size-2)、keep=draw(4)（洗牌）、最小移位章对位篡 zm。",
+    "ok/violations 由 Node 腿生产函数 structureInvariant 捕获（生产派生，契约样例不手打）；",
+    "两腿测试逐字对齐：改判定规则先按本 spec 重生成，两腿测试各跑一遍。"
+  ],
+  "cases": [
+    {
+      "name": "size0 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [],
+      "after": [],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size1 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size1 split positive at1",
+      "op": {
+        "kind": "split",
+        "at": 1
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch-new.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size2 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size2 split positive at2",
+      "op": {
+        "kind": "split",
+        "at": 2
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch-new.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size2 merge positive removed2",
+      "op": {
+        "kind": "merge",
+        "removed": 2
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size2 reorder negative two fingerprints",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "zz2"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "zz1"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint bb (chapter 2 (ch02.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint cc (chapter 1 (ch01.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint zz1 (after chapter 1 (ch01.md)) matches no before chapter",
+        "fingerprint zz2 (after chapter 2 (ch02.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "size2 split negative shifted2",
+      "op": {
+        "kind": "split",
+        "at": 1
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch02.md",
+          "fingerprint": "zs"
+        },
+        {
+          "number": 2,
+          "fileName": "ch-new.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 2 (ch02.md) content changed (bb -> zs) but split only renumbers it"
+      ]
+    },
+    {
+      "name": "size3 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size3 split positive at1",
+      "op": {
+        "kind": "split",
+        "at": 1
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 3,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch-new.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size3 merge positive removed3",
+      "op": {
+        "kind": "merge",
+        "removed": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size3 reorder negative two fingerprints",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "zz2"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "zz1"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint dd (chapter 2 (ch02.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint fa (chapter 1 (ch01.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint zz1 (after chapter 2 (ch02.md)) matches no before chapter",
+        "fingerprint zz2 (after chapter 1 (ch01.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "size3 split negative shifted2",
+      "op": {
+        "kind": "split",
+        "at": 1
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch02.md",
+          "fingerprint": "zs"
+        },
+        {
+          "number": 4,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch-new.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 2 (ch02.md) content changed (dd -> zs) but split only renumbers it"
+      ]
+    },
+    {
+      "name": "size3 merge negative shifted3",
+      "op": {
+        "kind": "merge",
+        "removed": 2
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch03.md",
+          "fingerprint": "zm"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 3 (ch03.md) content changed (cc -> zm) but merge only renumbers it"
+      ]
+    },
+    {
+      "name": "size4 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size4 split positive at3",
+      "op": {
+        "kind": "split",
+        "at": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 4,
+          "fileName": "ch-new.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size4 merge positive removed2",
+      "op": {
+        "kind": "merge",
+        "removed": 2
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size4 reorder negative two fingerprints",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "zz2"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "zz1"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint cc (chapter 4 (ch04.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint dd (chapter 3 (ch03.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint zz1 (after chapter 4 (ch04.md)) matches no before chapter",
+        "fingerprint zz2 (after chapter 3 (ch03.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "size4 split negative shifted2",
+      "op": {
+        "kind": "split",
+        "at": 1
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 3,
+          "fileName": "ch02.md",
+          "fingerprint": "zs"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch-new.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 4,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 2 (ch02.md) content changed (fa -> zs) but split only renumbers it"
+      ]
+    },
+    {
+      "name": "size4 merge negative shifted4",
+      "op": {
+        "kind": "merge",
+        "removed": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch04.md",
+          "fingerprint": "zm"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 4 (ch04.md) content changed (cc -> zm) but merge only renumbers it"
+      ]
+    },
+    {
+      "name": "size5 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size5 split positive at3",
+      "op": {
+        "kind": "split",
+        "at": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 6,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 4,
+          "fileName": "ch-new.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size5 merge positive removed4",
+      "op": {
+        "kind": "merge",
+        "removed": 4
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size5 reorder negative two fingerprints",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "zz2"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "zz1"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint bb (chapter 3 (ch03.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint dd (chapter 1 (ch01.md), 5 (ch05.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint zz1 (after chapter 3 (ch03.md)) matches no before chapter",
+        "fingerprint zz2 (after chapter 1 (ch01.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "size5 split negative shifted4",
+      "op": {
+        "kind": "split",
+        "at": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 6,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch04.md",
+          "fingerprint": "zs"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch-new.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 4 (ch04.md) content changed (fa -> zs) but split only renumbers it"
+      ]
+    },
+    {
+      "name": "size5 merge negative shifted4",
+      "op": {
+        "kind": "merge",
+        "removed": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch04.md",
+          "fingerprint": "zm"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 4 (ch04.md) content changed (fa -> zm) but merge only renumbers it"
+      ]
+    },
+    {
+      "name": "size6 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "after": [
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size6 split positive at3",
+      "op": {
+        "kind": "split",
+        "at": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 6,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch-new.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size6 merge positive removed3",
+      "op": {
+        "kind": "merge",
+        "removed": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "after": [
+        {
+          "number": 5,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size6 reorder negative two fingerprints",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "after": [
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "zz2"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "zz1"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint bb (chapter 1 (ch01.md), 5 (ch05.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint cc (chapter 4 (ch04.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint zz1 (after chapter 4 (ch04.md)) matches no before chapter",
+        "fingerprint zz2 (after chapter 5 (ch05.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "size6 split negative shifted5",
+      "op": {
+        "kind": "split",
+        "at": 4
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch-new.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 6,
+          "fileName": "ch05.md",
+          "fingerprint": "zs"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 7,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 5 (ch05.md) content changed (bb -> zs) but split only renumbers it"
+      ]
+    },
+    {
+      "name": "size6 merge negative shifted6",
+      "op": {
+        "kind": "merge",
+        "removed": 5
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "after": [
+        {
+          "number": 5,
+          "fileName": "ch06.md",
+          "fingerprint": "zm"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 6 (ch06.md) content changed (fa -> zm) but merge only renumbers it"
+      ]
+    },
+    {
+      "name": "size7 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size7 split positive at5",
+      "op": {
+        "kind": "split",
+        "at": 5
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 8,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 6,
+          "fileName": "ch-new.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 7,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size7 merge positive removed4",
+      "op": {
+        "kind": "merge",
+        "removed": 4
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 6,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size7 reorder negative two fingerprints",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "zz1"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "zz2"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint cc (chapter 4 (ch04.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint fa (chapter 2 (ch02.md), 6 (ch06.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint zz1 (after chapter 2 (ch02.md)) matches no before chapter",
+        "fingerprint zz2 (after chapter 4 (ch04.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "size7 split negative shifted3",
+      "op": {
+        "kind": "split",
+        "at": 2
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 7,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 8,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 4,
+          "fileName": "ch03.md",
+          "fingerprint": "zs"
+        },
+        {
+          "number": 3,
+          "fileName": "ch-new.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 3 (ch03.md) content changed (dd -> zs) but split only renumbers it"
+      ]
+    },
+    {
+      "name": "size7 merge negative shifted4",
+      "op": {
+        "kind": "merge",
+        "removed": 3
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch05.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch06.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 6,
+          "fileName": "ch07.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch04.md",
+          "fingerprint": "zm"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 4 (ch04.md) content changed (cc -> zm) but merge only renumbers it"
+      ]
+    },
+    {
+      "name": "size8 reorder positive",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size8 split positive at4",
+      "op": {
+        "kind": "split",
+        "at": 4
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 6,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 7,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 8,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 5,
+          "fileName": "ch-new.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 9,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size8 merge positive removed7",
+      "op": {
+        "kind": "merge",
+        "removed": 7
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 7,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        }
+      ],
+      "ok": true,
+      "violations": []
+    },
+    {
+      "name": "size8 reorder negative two fingerprints",
+      "op": {
+        "kind": "reorder"
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "zz2"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "zz1"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "fingerprint cc (chapter 1 (ch01.md), 5 (ch05.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint dd (chapter 4 (ch04.md), 8 (ch08.md)) is missing from the after set but reorder must not rewrite any chapter",
+        "fingerprint zz1 (after chapter 1 (ch01.md)) matches no before chapter",
+        "fingerprint zz2 (after chapter 8 (ch08.md)) matches no before chapter"
+      ]
+    },
+    {
+      "name": "size8 split negative shifted2",
+      "op": {
+        "kind": "split",
+        "at": 1
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 8,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 9,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 7,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 2,
+          "fileName": "ch-new.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 3,
+          "fileName": "ch02.md",
+          "fingerprint": "zs"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 2 (ch02.md) content changed (bb -> zs) but split only renumbers it"
+      ]
+    },
+    {
+      "name": "size8 merge negative shifted7",
+      "op": {
+        "kind": "merge",
+        "removed": 6
+      },
+      "before": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 6,
+          "fileName": "ch06.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 7,
+          "fileName": "ch07.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 8,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "after": [
+        {
+          "number": 1,
+          "fileName": "ch01.md",
+          "fingerprint": "cc"
+        },
+        {
+          "number": 3,
+          "fileName": "ch03.md",
+          "fingerprint": "fa"
+        },
+        {
+          "number": 6,
+          "fileName": "ch07.md",
+          "fingerprint": "zm"
+        },
+        {
+          "number": 7,
+          "fileName": "ch08.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 4,
+          "fileName": "ch04.md",
+          "fingerprint": "dd"
+        },
+        {
+          "number": 2,
+          "fileName": "ch02.md",
+          "fingerprint": "bb"
+        },
+        {
+          "number": 5,
+          "fileName": "ch05.md",
+          "fingerprint": "dd"
+        }
+      ],
+      "ok": false,
+      "violations": [
+        "chapter 7 (ch07.md) content changed (fa -> zm) but merge only renumbers it"
+      ]
+    }
+  ]
+}
